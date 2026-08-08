@@ -202,6 +202,14 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
+        # Optional vLLM-managed recurrent-state storage. vLLM's MambaSpec
+        # supplies logical state ownership independently of decode batch rows;
+        # these compact pools hold the live states while rec_state/conv_states
+        # remain fixed-address decode work buffers captured by the trace.
+        self.managed_rec_state_pool = None
+        self.managed_conv_state_pool = None
+        self.managed_state_indices = None
+        self.managed_state_pool_slots = 0
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
@@ -268,6 +276,192 @@ class TPGatedDeltaNet:
         ttnn.copy(self._zero_rec, self.rec_state)
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
+
+    def allocate_managed_state_pool(self, num_live_slots):
+        """Allocate compact vLLM state pools plus per-row dummy slots.
+
+        The scheduler's Mamba block IDs can range over the global KV block
+        pool, but cache mode ``none`` has at most ``num_live_slots`` live
+        request states. The plugin maps those logical blocks to compact slots.
+        A second bank of ``num_live_slots`` slots is reserved for padded decode
+        rows and warmup so trace capture never mutates a future request slot.
+        """
+        assert self.rec_state is not None and self.conv_states is not None, "reset_state must run first"
+        assert num_live_slots == self.B, f"managed state slots {num_live_slots} must match decode batch {self.B}"
+        if self.managed_rec_state_pool is not None:
+            return
+
+        slots = 2 * num_live_slots
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh)
+        rec_torch_dtype = torch.float32 if self.rec_state.dtype == ttnn.float32 else torch.bfloat16
+        self.managed_rec_state_pool = ttnn.from_torch(
+            torch.zeros(slots, self.Nv, self.Dk, self.Dv, dtype=rec_torch_dtype),
+            dtype=self.rec_state.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        self.managed_conv_state_pool = ttnn.from_torch(
+            # conv_states[0] is the shifted-out tap and is overwritten from
+            # conv_states[1] before every decode. Persist only the K-1 values
+            # that are part of upstream's logical GDN convolution state.
+            torch.zeros(slots, 1, self.K - 1, self.qkv_dim_tp, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        self.managed_state_pool_slots = slots
+
+    @property
+    def uses_managed_state_pool(self):
+        return self.managed_rec_state_pool is not None
+
+    def bind_managed_state_indices(self, state_indices):
+        """Bind the persistent runtime index tensor used by the decode trace."""
+        if self.uses_managed_state_pool:
+            self.managed_state_indices = state_indices
+
+    def _load_managed_state(self):
+        """Gather scheduler-owned state into fixed decode work buffers."""
+        if not self.uses_managed_state_pool:
+            return
+        assert self.managed_state_indices is not None, "managed state indices were not bound"
+
+        rec_table = ttnn.reshape(
+            self.managed_rec_state_pool,
+            (self.managed_state_pool_slots, self.Nv * self.Dk * self.Dv),
+        )
+        rec = ttnn.embedding(
+            self.managed_state_indices,
+            rec_table,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        rec = ttnn.reshape(rec, (self.B, self.Nv, self.Dk, self.Dv))
+        rec_tiled = ttnn.to_layout(rec, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.copy(rec_tiled, self.rec_state)
+        ttnn.deallocate(rec_tiled)
+        ttnn.deallocate(rec)
+
+        conv_table = ttnn.reshape(
+            self.managed_conv_state_pool,
+            (self.managed_state_pool_slots, (self.K - 1) * self.qkv_dim_tp),
+        )
+        conv = ttnn.embedding(
+            self.managed_state_indices,
+            conv_table,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv = ttnn.reshape(conv, (self.B, self.K - 1, self.qkv_dim_tp))
+        for stored_tap, tap in enumerate(range(1, self.K)):
+            tap_state = ttnn.slice(
+                conv,
+                (0, stored_tap, 0),
+                (self.B, stored_tap + 1, self.qkv_dim_tp),
+            )
+            tap_state = ttnn.reshape(tap_state, (1, self.B, self.qkv_dim_tp))
+            tap_tiled = ttnn.to_layout(
+                tap_state,
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(tap_tiled, self.conv_states[tap])
+            ttnn.deallocate(tap_tiled)
+            ttnn.deallocate(tap_state)
+        ttnn.deallocate(conv)
+
+    def _store_managed_state(self):
+        """Scatter updated decode work state back to its compact pool slots."""
+        if not self.uses_managed_state_pool:
+            return
+        assert self.managed_state_indices is not None, "managed state indices were not bound"
+
+        rec_rm = ttnn.to_layout(
+            self.rec_state,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        updated_rec_pool = ttnn.indexed_fill(
+            self.managed_state_indices,
+            self.managed_rec_state_pool,
+            rec_rm,
+            dim=0,
+        )
+        ttnn.copy(updated_rec_pool, self.managed_rec_state_pool)
+        ttnn.deallocate(updated_rec_pool)
+        ttnn.deallocate(rec_rm)
+
+        conv_taps = []
+        for tap in range(1, self.K):
+            tap_rm = ttnn.to_layout(
+                self.conv_states[tap],
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            conv_taps.append(ttnn.reshape(tap_rm, (self.B, 1, 1, self.qkv_dim_tp)))
+        conv_rm = ttnn.concat(conv_taps, dim=2)
+        updated_conv_pool = ttnn.indexed_fill(
+            self.managed_state_indices,
+            self.managed_conv_state_pool,
+            conv_rm,
+            dim=0,
+        )
+        ttnn.copy(updated_conv_pool, self.managed_conv_state_pool)
+        ttnn.deallocate(updated_conv_pool)
+        ttnn.deallocate(conv_rm)
+        for tap in conv_taps:
+            ttnn.deallocate(tap)
+
+    def store_managed_prefill_state(self, state_index):
+        """Write the currently bound B=1 prefill scratch into one pool slot.
+
+        ``state_index`` is a persistent one-element device tensor whose content
+        is refreshed per request. The indexed programs therefore compile once
+        and do not bake a Python slot number into a parked trace.
+        """
+        if not self.uses_managed_state_pool:
+            return
+        assert self.rec_state.shape[0] == 1, "prefill state write requires the B=1 scratch binding"
+
+        rec_rm = ttnn.to_layout(
+            self.rec_state,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        updated_rec_pool = ttnn.indexed_fill(
+            state_index,
+            self.managed_rec_state_pool,
+            rec_rm,
+            dim=0,
+        )
+        ttnn.copy(updated_rec_pool, self.managed_rec_state_pool)
+        ttnn.deallocate(updated_rec_pool)
+        ttnn.deallocate(rec_rm)
+
+        conv_taps = []
+        for tap in range(1, self.K):
+            tap_rm = ttnn.to_layout(
+                self.conv_states[tap],
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            conv_taps.append(ttnn.reshape(tap_rm, (1, 1, 1, self.qkv_dim_tp)))
+        conv_rm = ttnn.concat(conv_taps, dim=2)
+        updated_conv_pool = ttnn.indexed_fill(
+            state_index,
+            self.managed_conv_state_pool,
+            conv_rm,
+            dim=0,
+        )
+        ttnn.copy(updated_conv_pool, self.managed_conv_state_pool)
+        ttnn.deallocate(updated_conv_pool)
+        ttnn.deallocate(conv_rm)
+        for tap in conv_taps:
+            ttnn.deallocate(tap)
 
     def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
@@ -975,6 +1169,7 @@ class TPGatedDeltaNet:
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
         if self.conv_states is None:
             self.reset_state()
+        self._load_managed_state()
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
 
@@ -1032,6 +1227,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(new_rec)
         else:
             self.rec_state = new_rec
+        self._store_managed_state()
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)

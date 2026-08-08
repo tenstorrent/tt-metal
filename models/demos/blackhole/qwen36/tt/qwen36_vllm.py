@@ -55,6 +55,152 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     }
 
     @classmethod
+    def get_mamba_state_shape_from_config(cls, vllm_config):
+        """Logical per-request GDN state shape used by upstream's block manager."""
+        from vllm.model_executor.layers.mamba.mamba_utils import MambaStateShapeCalculator
+
+        text_config = vllm_config.model_config.hf_text_config
+        return MambaStateShapeCalculator.gated_delta_net_state_shape(
+            vllm_config.parallel_config.tensor_parallel_size,
+            text_config.linear_num_key_heads,
+            text_config.linear_num_value_heads,
+            text_config.linear_key_head_dim,
+            text_config.linear_value_head_dim,
+            text_config.linear_conv_kernel_dim,
+        )
+
+    @classmethod
+    def get_mamba_state_dtype_from_config(cls, vllm_config):
+        # This describes upstream's logical shared raw slab. TT lowers it to
+        # separate typed pools and may retain its recurrent accumulator in fp32.
+        from vllm.model_executor.layers.mamba.mamba_utils import MambaStateDtypeCalculator
+
+        mamba_state_dtype = getattr(
+            vllm_config.model_config.hf_text_config,
+            "mamba_ssm_dtype",
+            vllm_config.cache_config.mamba_cache_dtype,
+        )
+        return MambaStateDtypeCalculator.gated_delta_net_state_dtype(
+            vllm_config.model_config.dtype,
+            mamba_state_dtype,
+        )
+
+    @classmethod
+    def get_managed_state_pool_bytes(cls, vllm_config, max_batch_size: int) -> int:
+        """Incremental per-device DRAM used by TT's managed GDN pools."""
+        if int(max_batch_size) <= 1:
+            return 0
+        conv_shape, recurrent_shape = cls.get_mamba_state_shape_from_config(vllm_config)
+        conv_elements = math.prod(conv_shape)
+        recurrent_elements = math.prod(recurrent_shape)
+        recurrent_element_bytes = 2 if os.environ.get("QWEN35_GDN_STATE_BF16") == "1" else 4
+        num_gdn_layers = vllm_config.model_config.hf_text_config.layer_types.count("linear_attention")
+        # One live bank and one row-unique dummy bank are allocated per layer.
+        return (
+            2
+            * int(max_batch_size)
+            * num_gdn_layers
+            * (conv_elements * 2 + recurrent_elements * recurrent_element_bytes)
+        )
+
+    @staticmethod
+    def _trace_compatible_block_size(minimum_block_size: int) -> int:
+        """Round a hybrid-cache block up to a page boundary used by TT prefill.
+
+        Upstream may enlarge the attention block until one attention page can
+        share a KV-cache group with one Mamba page.  TT's traced paged prefill
+        writes fixed 2048-token chunks and its fill operation has no in-page
+        destination offset, so every chunk start must also start a cache page.
+        """
+        block_size = 1 << (int(minimum_block_size) - 1).bit_length()
+        if block_size > _PREFILL_WARMUP_CHUNK:
+            raise ValueError(
+                "Qwen hybrid-cache state requires an attention block of at least "
+                f"{minimum_block_size} tokens, but TT's {_PREFILL_WARMUP_CHUNK}-token "
+                "traced prefill cannot page-align that layout"
+            )
+        assert _PREFILL_WARMUP_CHUNK % block_size == 0
+        return block_size
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """Expose full-attention KV and GDN recurrent state to vLLM."""
+        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
+
+        cache_config = vllm_config.cache_config
+        if cache_config.mamba_cache_mode != "none":
+            raise NotImplementedError(
+                "TT Qwen currently supports MambaSpec cache mode 'none'; "
+                "'align'/'all' require token-chunked prefill and state-copy support"
+            )
+        if vllm_config.speculative_config is not None:
+            raise NotImplementedError("TT Qwen MambaSpec does not yet support speculative state blocks")
+
+        model_config = vllm_config.model_config
+        text_config = model_config.hf_text_config
+        layer_types = text_config.layer_types
+        dtype = (
+            model_config.dtype
+            if cache_config.cache_dtype == "auto"
+            else STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        )
+
+        # HybridAttentionMambaModelConfig has already raised block_size enough
+        # for the raw GDN page.  Round it to a divisor of the traced prefill
+        # chunk before materializing either spec.  Merely accepting an arbitrary
+        # enlarged block would corrupt chunks after the first: paged_fill_cache
+        # starts at the beginning of chunk_page_table[0] and cannot express the
+        # in-page offset of (2048 % block_size).
+        minimum_block_size = cache_config.block_size or _BLOCK_SIZE
+        block_size = cls._trace_compatible_block_size(minimum_block_size)
+        if block_size != cache_config.block_size:
+            logger.info(
+                "Rounding Qwen attention block size from {} to {} tokens for TT traced-prefill page alignment",
+                cache_config.block_size,
+                block_size,
+            )
+            cache_config.block_size = block_size
+
+        attention = FullAttentionSpec(
+            block_size=block_size,
+            num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
+            head_size=model_config.get_head_size(),
+            dtype=dtype,
+        )
+        raw_mamba = MambaSpec(
+            shapes=cls.get_mamba_state_shape_from_config(vllm_config),
+            dtypes=cls.get_mamba_state_dtype_from_config(vllm_config),
+            block_size=cache_config.mamba_block_size or model_config.max_model_len,
+            mamba_type="gdn_attention",
+            mamba_cache_mode="none",
+        )
+        if raw_mamba.page_size_bytes > attention.page_size_bytes:
+            raise ValueError(
+                f"Qwen GDN page ({raw_mamba.page_size_bytes} bytes) does not fit the "
+                f"trace-compatible attention page ({attention.page_size_bytes} bytes)"
+            )
+        cache_config.mamba_page_size_padded = attention.page_size_bytes
+        mamba = MambaSpec(
+            shapes=raw_mamba.shapes,
+            dtypes=raw_mamba.dtypes,
+            block_size=raw_mamba.block_size,
+            page_size_padded=attention.page_size_bytes,
+            mamba_type=raw_mamba.mamba_type,
+            mamba_cache_mode=raw_mamba.mamba_cache_mode,
+        )
+
+        specs = {}
+        for i, layer_type in enumerate(layer_types):
+            if layer_type == "full_attention":
+                specs[f"model.layers.{i}.self_attn"] = attention
+            elif layer_type == "linear_attention":
+                specs[f"model.layers.{i}.linear_attn"] = mamba
+            else:
+                raise ValueError(f"Unsupported Qwen layer type {layer_type!r} at layer {i}")
+        return specs
+
+    @classmethod
     def get_max_tokens_all_users(
         cls,
         model_name: str = "",
@@ -129,7 +275,37 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
         GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
         batch_size = self.model[0].args.max_batch_size
-        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
+        return self.model[0].allocate_kv_caches(
+            kv_cache_shape,
+            ttnn.bfloat16,
+            batch_size=batch_size,
+            managed_gdn_state=batch_size > 1,
+        )
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """Lower heterogeneous vLLM cache descriptors to the Qwen TT model.
+
+        Attention layers share one uniform paged-KV geometry. Mamba descriptors
+        establish scheduler ownership, while their physical state is lowered to
+        the compact concurrency-sized pools allocated by ``Qwen36Model``.
+        """
+        attention_specs = [
+            spec for spec in per_layer_specs
+            if isinstance(spec, dict) and spec.get("type") == "attention"
+        ]
+        if not attention_specs:
+            raise ValueError("Qwen cache config contains no full-attention layers")
+        shape = attention_specs[0]["shape"]
+        dtype = attention_specs[0]["dtype"]
+        if any((spec["shape"], spec["dtype"]) != (shape, dtype) for spec in attention_specs[1:]):
+            raise NotImplementedError("Qwen full-attention layers require one uniform TT KV geometry")
+        batch_size = self.model[0].args.max_batch_size
+        return self.model[0].allocate_kv_caches(
+            shape,
+            ttnn.bfloat16,
+            batch_size=batch_size,
+            managed_gdn_state=batch_size > 1,
+        )
 
     @staticmethod
     def _has_visual(kwargs, pixel_key):
@@ -182,6 +358,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
+        page_tables_per_layer = kwargs.get("page_tables_per_layer")
+        if page_tables_per_layer is not None:
+            attention_layer = next(i for i, layer in enumerate(model.layers) if layer.is_full_attention)
+            page_table = page_tables_per_layer[attention_layer]
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched serving (max_num_seqs > 1): prefill each request in this step into its decode
             # slot. Text-only — multimodal is single-sequence (get_supported_mm_limits: B=1). Check
@@ -283,39 +463,59 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
         model = self.model[0]
-        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state
-        # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
-        # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
-        # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
+        page_tables_per_layer = kwargs.pop("page_tables_per_layer", None)
+        if page_tables_per_layer is not None:
+            attention_layer = next(i for i, layer in enumerate(model.layers) if layer.is_full_attention)
+            kwargs["page_table"] = page_tables_per_layer[attention_layer]
+        state_indices = kwargs.pop("gdn_state_indices", None)
         if model.num_devices > 1 and model.args.max_batch_size > 1:
-            slot_remap = kwargs.get("slot_remap")
-            if slot_remap is not None:
-                model._remap_gdn_slots(slot_remap)
+            if state_indices is None:
+                if not getattr(self, "_warming_managed_gdn", False):
+                    raise ValueError("managed Qwen decode requires gdn_state_indices")
+            else:
+                model.set_gdn_state_indices(state_indices)
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
         # pre-compiled programs (compile-clobbers-trace fix). Guard name must match the plugin's reset.
-        if not enable_trace:
-            return
-        if getattr(self, "already_warmed_up_prefill", False):
-            return
-        self.already_warmed_up_prefill = True
-        # Size the chunk-trace page table to the full KV cache (not a hardcoded 4096) so served ISL
-        # isn't capped; still captures one chunk — just a bigger page-table tensor.
+        model = self.model[0]
+        batched = model.num_devices > 1 and model.args.max_batch_size > 1
+        # Use one identical page-table shape for prepare and capture so phase 2
+        # can reuse every phase-1 persistent buffer.
         if kv_cache:
             # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
             num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
+            block_size = model._paged_kv_block_size or _BLOCK_SIZE
+            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / block_size)
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        model = self.model[0]
+
+        if not enable_trace:
+            # Allocate every persistent prefill input and compile the exact
+            # chunk/masked/finalization paths before any trace is parked.
+            prev = model._bind_gdn_prefill_scratch() if batched else None
+            try:
+                if batched and model._managed_gdn_state:
+                    model._store_gdn_prefill_state(model.args.max_batch_size)
+                model.capture_prefill_trace_chunked(
+                    self.mesh_device,
+                    page_table,
+                    chunk_size=_PREFILL_WARMUP_CHUNK,
+                    capture_chunk_trace=False,
+                )
+            finally:
+                if prev is not None:
+                    model._unbind_gdn_prefill_scratch(prev)
+            return
+        if getattr(self, "already_warmed_up_prefill", False):
+            return
+        self.already_warmed_up_prefill = True
         # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
         # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
         # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
         # The scratch is not freed (prefill_paged_slots rebinds it per request); the batched decode
         # buffers are restored before the decode-trace warmup captures at [B,...].
-        batched = model.num_devices > 1 and model.args.max_batch_size > 1
         logger.info(
             f"Starting Qwen prefill warmup: chunk-prefill trace{' (batched, B=1 scratch)' if batched else ''} "
             f"(chunk={_PREFILL_WARMUP_CHUNK}, page_table_blocks={num_blocks})..."
@@ -333,4 +533,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Defer to WarmupForwardMixin, which captures the paged-SDPA + GDN decode trace at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
-        return super().warmup_model_decode(*args, **kwargs)
+        self._warming_managed_gdn = True
+        try:
+            return super().warmup_model_decode(*args, **kwargs)
+        finally:
+            self._warming_managed_gdn = False

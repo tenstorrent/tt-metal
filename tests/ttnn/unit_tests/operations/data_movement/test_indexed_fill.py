@@ -57,6 +57,39 @@ def test_indexed_fill_tile_layout(device, input_a_shape, input_b_shape):
     assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
 
 
+def test_indexed_fill_float32_row_major(device):
+    """The managed recurrent-state pool scatters fp32 rows at runtime."""
+    batch_id = torch.tensor([[[[3, 0]]]], dtype=torch.int32)
+    torch_a = torch.randn((6, 2, 4, 32), dtype=torch.float32)
+    torch_b = torch.randn((2, 2, 4, 32), dtype=torch.float32)
+
+    batch_id_ttnn = ttnn.from_torch(
+        batch_id,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    input_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    input_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    output = ttnn.indexed_fill(batch_id_ttnn, input_a, input_b)
+
+    assert_with_pcc(
+        golden_indexed_fill(torch_a, torch_b, batch_id, dim=0),
+        ttnn.to_torch(output),
+        0.99999,
+    )
+
+
 @pytest.mark.parametrize(
     "B, b, D",
     [
