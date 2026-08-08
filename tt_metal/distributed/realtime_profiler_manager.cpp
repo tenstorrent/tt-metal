@@ -342,18 +342,21 @@ void RealtimeProfilerManager::publish_pages(
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
     const DataCollector* const data_collector = data_collector_;
-    for (uint32_t page = 0; page < num_pages; ++page) {
-        const uint32_t* rp = page_buf + page * kPageWords;
-        if (!is_record(rp)) {
-            continue;
+    {
+        TTZoneScopedDN(RT_PROFILER, "BuildRecords");
+        for (uint32_t page = 0; page < num_pages; ++page) {
+            const uint32_t* rp = page_buf + page * kPageWords;
+            if (!is_record(rp)) {
+                continue;
+            }
+            records.emplace_back(
+                rp[2],
+                chip_id,
+                (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
+                (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
+                sync_frequency,
+                data_collector->GetKernelSourcesForRuntimeId(rp[2]));
         }
-        records.emplace_back(
-            rp[2],
-            chip_id,
-            (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
-            (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
-            sync_frequency,
-            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
     }
     if (records.empty()) {
         return;
