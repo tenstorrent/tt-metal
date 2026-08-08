@@ -1,0 +1,78 @@
+{
+  "component": "qwen2_v_l_decoder_layer",
+  "submodule_path": "model.language_model.layers.0",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1,
+          3584
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "attention_mask": {
+        "kind": "none"
+      },
+      "position_embeddings": {
+        "kind": "tuple",
+        "items": [
+          {
+            "kind": "tensor",
+            "shape": [
+              3,
+              1,
+              1,
+              128
+            ],
+            "dtype": "torch.bfloat16"
+          },
+          {
+            "kind": "tensor",
+            "shape": [
+              3,
+              1,
+              1,
+              128
+            ],
+            "dtype": "torch.bfloat16"
+          }
+        ]
+      },
+      "position_ids": {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1
+        ],
+        "dtype": "torch.int64"
+      },
+      "past_key_values": {
+        "kind": "scalar",
+        "type": "DynamicCache",
+        "repr": "DynamicCache(layers=[DynamicLayer, DynamicLayer, DynamicLayer, DynamicLayer, DynamicLayer, DynamicLayer, DynamicLayer, D"
+      },
+      "use_cache": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "True"
+      }
+    }
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      1,
+      3584
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}
