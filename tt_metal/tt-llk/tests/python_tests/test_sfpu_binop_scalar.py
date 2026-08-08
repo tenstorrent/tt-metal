@@ -29,18 +29,33 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-_DIVISOR = 2.0
-_SCALAR_BITS = {
-    MathOperation.ScalarAdd: _bits(2.0),
-    MathOperation.ScalarSub: _bits(2.0),
-    MathOperation.ScalarMul: _bits(2.0),
-    MathOperation.ScalarDiv: _bits(1.0 / _DIVISOR),
-    MathOperation.ScalarRsub: _bits(2.0),
-}
+# The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
+# small enough to matter against the tolerance. Kept deliberately small -- inputs are
+# uniform(-1, 1), so |scalar| <= 8 keeps every op's result inside the range where the
+# default bf16 tolerance is meaningful.
+_SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
+
+# ScalarDiv is the one op whose scalar is not the value the kernel sees: the host inverts the
+# divisor at compile time and the kernel only multiplies, so `d` never reaches the device.
+# That also means a divide-by-zero cannot be reached through this op at all -- 1/0 would be
+# computed on the host -- so 0.0 is not a legal divisor here rather than an untested edge.
+_ZERO_DIVISOR_UNREACHABLE = (
+    "ScalarDiv inverts the divisor on the host; d=0 is not a device path"
+)
 
 
-def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32]):
-    scalar_bits = _SCALAR_BITS[mathop]
+def _scalar_bits_for(mathop, scalar):
+    """The 32-bit pattern the kernel is given for *mathop* at *scalar*."""
+    if mathop == MathOperation.ScalarDiv:
+        return _bits(1.0 / scalar)
+    return _bits(scalar)
+
+
+def _run_sfpu_binop_scalar(
+    formats, dest_acc, mathop, scalar=2.0, input_dimensions=[32, 32]
+):
+    torch.manual_seed(0)
+    scalar_bits = _scalar_bits_for(mathop, scalar)
 
     # Keep inputs small and bounded so the bf16 result stays accurate across all
     # five scalar ops (add/sub/mul/div/rsub) and both dest-accumulation modes.
@@ -113,8 +128,9 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
         MathOperation.ScalarDiv,
         MathOperation.ScalarRsub,
     ],
+    scalar=list(_SCALARS),
 )
-def test_sfpu_binop_scalar(formats, dest_acc, mathop):
+def test_sfpu_binop_scalar(formats, dest_acc, mathop, scalar):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
@@ -122,5 +138,7 @@ def test_sfpu_binop_scalar(formats, dest_acc, mathop):
         and dest_acc == DestAccumulation.Yes
     ):
         pytest.skip("Float16_b not supported with DestAccumulation.Yes")
+    if mathop == MathOperation.ScalarDiv and scalar == 0.0:
+        pytest.skip(_ZERO_DIVISOR_UNREACHABLE)
 
-    _run_sfpu_binop_scalar(formats, dest_acc, mathop)
+    _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)

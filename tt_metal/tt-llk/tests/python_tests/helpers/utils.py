@@ -264,7 +264,11 @@ def _bfp_block_aware_compare(
     After quantization, treat differences up to ``max_ulp_diff`` steps as acceptable.
 
     ``mantissa_bits`` is the number of mantissa bits the format reconstructs
-    per element (3 for Bfp4_b, 1 for Bfp2_b).
+    per element (7 for Bfp8_b, 3 for Bfp4_b, 1 for Bfp2_b).
+
+    The lattice applies only where both sides are finite. Non-finite lanes are
+    accepted on exact agreement -- both NaN, or both infinite with the same sign --
+    and rejected otherwise, including a block that is entirely non-finite.
 
     Golden and result must already be in the same flat buffer order (tilized
     layout as produced by the tests).  We do not re-tilize here: inputs are
@@ -285,6 +289,20 @@ def _bfp_block_aware_compare(
 
         both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
 
+        # Non-finite lanes sit outside the lattice and cannot be judged by it: inf and
+        # NaN have no ULP, and the differences they produce defeat the check in both
+        # directions -- inf - inf is NaN and inf - (-inf) is inf, and neither compares
+        # <= anything, so even a matching pair of infinities fails. Judge them by exact
+        # agreement instead, and keep them out of the finite-lane verdict so a block that
+        # is entirely non-finite is not waved through: +inf against -inf, or NaN against
+        # inf, are mismatches, and the PCC pass that follows masks non-finite values too.
+        nonfinite_ok = both_nan | (
+            torch.isinf(g_blk)
+            & torch.isinf(r_blk)
+            & (torch.signbit(g_blk) == torch.signbit(r_blk))
+        )
+        both_finite = torch.isfinite(g_blk) & torch.isfinite(r_blk)
+
         finite_vals = torch.cat(
             [
                 g_blk[torch.isfinite(g_blk)].abs(),
@@ -292,14 +310,17 @@ def _bfp_block_aware_compare(
             ]
         )
         if finite_vals.numel() == 0:
-            is_valid[blk_start:blk_end] = True
+            # Nothing finite anywhere in the block, so there is no block max to size a
+            # ULP from. Every lane is non-finite and judged as such.
+            is_valid[blk_start:blk_end] = nonfinite_ok
             continue
 
         block_max = finite_vals.max().item()
         if block_max == 0:
-            is_valid[blk_start:blk_end] = (
-                torch.isclose(g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True)
-                | both_nan
+            is_valid[blk_start:blk_end] = torch.where(
+                both_finite,
+                torch.isclose(g_blk, r_blk, atol=1e-5, rtol=0.0),
+                nonfinite_ok,
             )
             continue
 
@@ -316,7 +337,9 @@ def _bfp_block_aware_compare(
         tiny_ok = (max_abs < 1e-4) & torch.isclose(
             g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
         )
-        is_valid[blk_start:blk_end] = ulp_ok | both_nan | tiny_ok
+        is_valid[blk_start:blk_end] = torch.where(
+            both_finite, ulp_ok | tiny_ok, nonfinite_ok
+        )
 
     return is_valid
 
@@ -554,7 +577,25 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    if output_data_format == DataFormat.Bfp4_b:
+    if output_data_format == DataFormat.Bfp8_b:
+        # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
+        # magnitude range the small elements quantize toward zero and a flat atol reads
+        # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
+        # tighter than the SFPU's own approximation error, so the lattice check cannot
+        # replace the tolerance check either. Quantization dominates far below the block
+        # max, approximation error near it — accept a result satisfying either one.
+        is_close = torch.isclose(
+            golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+        )
+        is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+        is_valid = (
+            is_close
+            | is_nan
+            | _bfp_block_aware_compare(
+                golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+            )
+        )
+    elif output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
         is_valid = _bfp_block_aware_compare(
             golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
