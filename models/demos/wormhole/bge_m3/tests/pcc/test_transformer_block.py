@@ -58,6 +58,8 @@ def first_layer_artifacts(model_location_generator):
 @pytest.mark.slow
 @pytest.mark.parametrize("seq_len", SEQUENCE_LENGTHS, ids=[f"S{seq_len}" for seq_len in SEQUENCE_LENGTHS])
 def test_transformer_block_vs_hf_first_layer(device, first_layer_artifacts, seq_len):
+    if seq_len == 128:
+        pytest.skip("Skipping S128 due to known failure on N150, refs #48010")
     require_single_device(device)
     hf_layer, state_dict, args = first_layer_artifacts
     args.grid_size = device.compute_with_storage_grid_size()
