@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Multi-tile extension of the U10 compute-intrinsics oracle: the MATH thread
-# computes through __builtin_rvtt_ttbh_ttelwmul (the compiler owns the ALU
+# computes through __builtin_xttbh_elwmul (the compiler owns the ALU
 # config: hw_configure baseline + per-compute reconfig) but now walks the dest
 # register across NUM_TILES_IN_BLOCK tiles.  Dest-walking is author-owned, per
 # the agreed programming model: per-tile dest base via math::set_dst_write_addr

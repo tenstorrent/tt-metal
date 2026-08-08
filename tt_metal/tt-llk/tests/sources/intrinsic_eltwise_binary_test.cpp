@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /* Elementwise binary test whose MATH thread drives the compute through the
- * compiler-managed Tensix compute intrinsics (__builtin_rvtt_tt*_ttelwmul)
+ * compiler-managed Tensix compute intrinsics (__builtin_xtt*_elwmul)
  * instead of the LLK's llk_math_eltwise_binary_* API.  The compiler's config
  * pass emits the ALU hw_configure baseline + per-compute reconfig (the LLK's
  * _llk_math_hw_configure_ / _llk_math_reconfig_data_format_ equivalents), so
@@ -89,9 +89,9 @@ using namespace ckernel;
 // J-format field widths differ per arch).  Selected by the harness's
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
-#define INTR_ELWMUL __builtin_rvtt_ttwh_ttelwmul
+#define INTR_ELWMUL __builtin_xttwh_elwmul
 #else
-#define INTR_ELWMUL __builtin_rvtt_ttbh_ttelwmul
+#define INTR_ELWMUL __builtin_xttbh_elwmul
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)

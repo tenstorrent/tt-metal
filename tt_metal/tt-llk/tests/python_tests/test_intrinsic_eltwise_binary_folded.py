@@ -5,7 +5,7 @@
 # U10 oracle, folded variant: the ORIGINAL eltwise-binary kernel structure is
 # preserved (sync init, the _llk_math_hw_configure_ call, the block/tile loops
 # with wait/done) but the MATH thread's compute is folded into the
-# compiler-managed Tensix compute intrinsics (__builtin_rvtt_ttbh_ttelwmul).
+# compiler-managed Tensix compute intrinsics (__builtin_xttbh_elwmul).
 # The kernel defines TT_COMPILER_EMITS_MATH_CONFIG, which makes the LLK's
 # _llk_math_hw_configure_ a no-op -- the compiler's config pass emits the ALU
 # hw_configure baseline + per-compute reconfig itself.  So the kernel still

@@ -4,7 +4,7 @@
 
 # U10 oracle (functional leg): run a kernel whose MATH thread computes through
 # the compiler-managed Tensix compute intrinsics
-# (__builtin_rvtt_ttbh_ttelwmul) and assert the packed result matches golden.
+# (__builtin_xttbh_elwmul) and assert the packed result matches golden.
 # The compiler's config pass emits the ALU hw_configure baseline + per-compute
 # reconfig; the sync primitives (_llk_math_pack_sync_init_ etc.) are still LLK
 # calls (semaphores / dest-section coordination are kernel-author concerns).

@@ -91,9 +91,9 @@ using namespace ckernel;
 // J-format field widths differ per arch).  Selected by the harness's
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
-#define INTR_ELWMUL __builtin_rvtt_ttwh_ttelwmul
+#define INTR_ELWMUL __builtin_xttwh_elwmul
 #else
-#define INTR_ELWMUL __builtin_rvtt_ttbh_ttelwmul
+#define INTR_ELWMUL __builtin_xttbh_elwmul
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)

@@ -58,7 +58,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     LLK_ASSERT(total_pacrs <= 16, "Replay buffer overflow: max 16 PACRs per tile");
 
     // Guard the subtraction to avoid unsigned underflow — the compiler's
-    // intrinsic range checker on __builtin_rvtt_ttreplay rejects UINT32_MAX
+    // intrinsic range checker on __builtin_xttwh_replay rejects UINT32_MAX
     // even in dead code paths.
     const std::uint32_t replay_len = (total_pacrs > 1) ? (total_pacrs - 1) : 0;
 
