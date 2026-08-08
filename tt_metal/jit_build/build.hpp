@@ -73,6 +73,12 @@ public:
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
+    // Refresh the cache entry's recency stamp. Rate limited internally, so this is one stat in
+    // the common case and safe to call whenever the entry is used. Without a call on the use
+    // path the stamp would only ever record process start, and a long-lived process's tree would
+    // look like the least recently used thing in the cache.
+    void mark_cache_entry_used() const;
+
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
     const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
@@ -87,6 +93,7 @@ private:
     // Paths
     std::string root_;
     std::string out_root_;
+    std::string cache_entry_root_;
     std::string out_firmware_root_;
     std::string out_kernel_root_;
     std::string firmware_binary_root_;
