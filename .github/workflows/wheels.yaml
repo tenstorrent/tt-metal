@@ -52,7 +52,7 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
-      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+      artifact_name: ${{ steps.set_artifact_name.outputs.name }}
     env:
       # S3 ccache config — lift to repo vars/secrets when ready
       CCACHE_S3_BUCKET: ccache
@@ -212,20 +212,26 @@ jobs:
 
       - name: Set wheel artifact name
         id: set_artifact_name
+        uses: ./.github/actions/compute-artifact-key
+        with:
+          kind: wheel
+          ref: ${{ inputs.ref || github.sha }}
+          build-type: ${{ inputs.build-type }}
+          build-image: ${{ inputs.docker-image }}
+          tracy: ${{ inputs.tracy }}
+          enable-lto: ${{ inputs.enable-lto }}
+          python-version: ${{ inputs.python-version }}
+
+      - name: Write wheel manifest
         run: |
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
-          # Sanitize ref/SHA by replacing invalid characters with hyphens
-          RAW_REF="${{ inputs.ref || github.sha }}"
-          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
-          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
+          cat > wheelhouse/build-manifest.json <<'MANIFEST_EOF'
+          ${{ steps.set_artifact_name.outputs.manifest-json }}
+          MANIFEST_EOF
 
       - name: ☁️ Upload wheel
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
-          name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+          name: ${{ steps.set_artifact_name.outputs.name }}
           path: wheelhouse
           if-no-files-found: error
