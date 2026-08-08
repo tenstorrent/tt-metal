@@ -18,8 +18,8 @@ struct SinkhornParams {
 };
 
 struct SinkhornInputs {
-    const Tensor& comb_w;     // [1,1,H,H] (reshaped comb projection), single tile.
-    const Tensor& comb_bias;  // [1,1,H,H] (reshaped comb bias), single tile.
+    const Tensor& comb_w;     // [1,T,H,H] (reshaped comb projection), one tile per token.
+    const Tensor& comb_bias;  // [1,1,H,H] (reshaped comb bias), single tile shared by all tokens.
 };
 
 using SinkhornTensorReturn = Tensor;

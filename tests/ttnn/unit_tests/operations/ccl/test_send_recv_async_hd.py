@@ -227,6 +227,7 @@ def _run_send_async_d2h(
         # Medium pages: FIFO holds multiple pages.
         (256, 4, 1024, 8),
         (512, 2, 1024, 8),
+        (1024, 2048, 1024, 8),
     ],
 )
 def test_send_async_d2h_basic(

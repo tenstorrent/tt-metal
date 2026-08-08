@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode-only (T == 1) comb / Sinkhorn-Knopp compute on a single [H,H] tile.
+// comb / Sinkhorn-Knopp compute, one independent [H,H] tile per token.
 //
 //   comb = softmax(comb_w * comb_scale + comb_bias, dim=-1) + eps
 //   comb = comb / (sum(comb, dim=-2) + eps)                     (initial column pass)
@@ -32,7 +32,8 @@ namespace {
 
 // logits = comb_w * scale + comb_bias  -> cb_comb.
 // Both operands are brought into DST and combined with an SFPU binary add, so the whole
-// expression costs a single pack instead of a scratch round trip through L1.
+// expression costs a single pack instead of a scratch round trip through L1. cb_bias is left
+// in place: the same bias tile serves every token this core owns.
 void produce_logits(uint32_t cb_w, uint32_t cb_bias, uint32_t cb_comb, uint32_t scale_bits) {
     cb_wait_front(cb_w, 1);
     cb_wait_front(cb_bias, 1);
@@ -49,7 +50,6 @@ void produce_logits(uint32_t cb_w, uint32_t cb_bias, uint32_t cb_comb, uint32_t 
     tile_regs_commit();
 
     cb_pop_front(cb_w, 1);
-    cb_pop_front(cb_bias, 1);
 
     cb_reserve_back(cb_comb, 1);
     tile_regs_wait();
@@ -170,6 +170,8 @@ void copy_to_out(uint32_t cb_comb, uint32_t cb_out) {
 }  // namespace
 
 void kernel_main() {
+    const uint32_t num_tiles = get_arg_val<uint32_t>(0);
+
     constexpr uint32_t cb_comb_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_comb_bias = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
@@ -187,27 +189,33 @@ void kernel_main() {
     binary_op_init_common(cb_comb_w, cb_comb_bias, cb_comb);
 
     cb_wait_front(cb_scaler, 1);
+    cb_wait_front(cb_comb_bias, 1);
 
-    // logits = comb_w * comb_scale + comb_bias.
-    produce_logits(cb_comb_w, cb_comb_bias, cb_comb, comb_scale_bits);
+    for (uint32_t tile = 0; tile < num_tiles; ++tile) {
+        // logits = comb_w * comb_scale + comb_bias.
+        produce_logits(cb_comb_w, cb_comb_bias, cb_comb, comb_scale_bits);
 
-    // softmax over the last dim (W), masked to the valid HxH block.
-    reduce_to_cb<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/false, eps_bits);
-    sub_max_exp_mask(cb_comb, cb_reduce, cb_mask);
-    reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
-    mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true, cb_eps_mask);
-
-    // initial column normalisation: comb /= (sum_rows(comb) + eps).
-    reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
-    mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/false);
-
-    // Sinkhorn-Knopp iterations: alternate row then column normalisation.
-    for (uint32_t i = 1; i < sinkhorn_iters; ++i) {
+        // softmax over the last dim (W), masked to the valid HxH block.
+        reduce_to_cb<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+            cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/false, eps_bits);
+        sub_max_exp_mask(cb_comb, cb_reduce, cb_mask);
         reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
-        mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true);
+        mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true, cb_eps_mask);
+
+        // initial column normalisation: comb /= (sum_rows(comb) + eps).
         reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
         mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/false);
-    }
 
-    copy_to_out(cb_comb, cb_out);
+        // Sinkhorn-Knopp iterations: alternate row then column normalisation.
+        for (uint32_t i = 1; i < sinkhorn_iters; ++i) {
+            reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
+            mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/true);
+            reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(
+                cb_comb, cb_scaler, cb_reduce, /*eps_recip=*/true, eps_bits);
+            mul_bcast_recip(cb_comb, cb_reduce, /*is_col=*/false);
+        }
+
+        copy_to_out(cb_comb, cb_out);
+    }
 }

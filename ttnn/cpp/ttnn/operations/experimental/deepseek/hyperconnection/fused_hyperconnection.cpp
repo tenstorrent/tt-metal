@@ -31,23 +31,25 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
     const uint32_t hc = num_streams;
     const uint32_t d = static_cast<uint32_t>(shape[-1]);
 
-    // Decode-only fused stage (T == 1):
-    //   post      = 2 * sigmoid(post_w * post_scale + post_bias)            [1,1,1,H]
-    //   collapsed = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden  [1,1,1,D]
-    //   comb_w_mat = comb_w slice of fused_w, laid out as [1,1,H,H]          [1,1,H,H]
+    // Fused stage over all T = B*S tokens:
+    //   post      = 2 * sigmoid(post_w * post_scale + post_bias)            [1,T,H,1]
+    //   collapsed = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden  [1,T,1,D]
+    //   comb_w_mat = comb_w slice of fused_w, laid out as the HxH grid      [1,T,H,H]
     // The pre/post/comb slices are split out of `fused_w` inside the device op; pre_w / post_w
-    // are consumed in-place, comb_w is returned already in the [1,1,H,H] grid layout the
-    // Sinkhorn stage expects (no host-side reshape).
+    // are consumed in-place, comb_w is returned already in the grid layout the Sinkhorn stage
+    // expects (no host-side reshape).
     auto [post, collapsed, comb_w_mat] = ttnn::prim::fused_hyperconnection_pre_post(
         fused_w, pre_bias, post_bias, hidden_streams, hc, pre_scale, post_scale, eps, memory_config);
 
     // comb: softmax(comb_w * comb_scale + comb_bias, dim=-1) + eps, then Sinkhorn (alternate
     // row/col normalisation) onto the doubly-stochastic manifold, fused into a single device op.
-    // comb_bias is [1,1,1,H*H]; reshape to the [1,1,H,H] comb matrix the op expects.
+    // comb_bias is [1,1,1,H*H]; reshape to the [1,1,H,H] comb matrix the op broadcasts over tokens.
     Tensor comb_bias_mat = ttnn::reshape(comb_bias, ttnn::Shape({1, 1, hc, hc}));
     Tensor comb = ttnn::prim::fused_hyperconnection_sinkhorn(
         comb_w_mat, comb_bias_mat, hc, sinkhorn_iters, comb_scale, eps, memory_config);
 
+    // The device ops keep tokens on dim 1 with the trailing two dims already in their final
+    // layout, so splitting T back into (B, S) is a metadata-only reshape.
     post = ttnn::reshape(post, ttnn::Shape({b, s, hc, 1}));
     comb = ttnn::reshape(comb, ttnn::Shape({b, s, hc, hc}));
     collapsed = ttnn::reshape(collapsed, ttnn::Shape({b, s, 1, d}));

@@ -38,6 +38,10 @@ struct MatmulDecodeDeviceOperation {
         // When set, the weight is a DRAM ND-sharded tensor (one slab per receiver)
         // and the receiver grid comes from the GCB, not from a legacy shard spec.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
+        // GCB pages per receiver slab. 1 keeps the whole slab in one page (the GCB must then hold
+        // a slab); > 1 cuts the slab into that many K-blocks and streams them, so the GCB only has
+        // to hold a couple of pages. Must equal the prefetch request's block_count.
+        uint32_t global_cb_k_blocks = 1;
     };
 
     struct tensor_args_t {
@@ -96,5 +100,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    uint32_t global_cb_k_blocks = 1);
 }  // namespace ttnn::prim

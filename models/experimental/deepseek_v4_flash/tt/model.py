@@ -12,11 +12,11 @@ from .attention import (
     build_static_layer_cache,
     host_decode_mask,
     int32_pos_tensor,
-    make_attention_prefetch_buffers,
     make_rope_table,
     sdpa_causal_cur_pos,
     sdpa_causal_ok,
 )
+from .decode_prefetch import make_decode_prefetch_buffers
 from .paged_cache import (
     PagedCacheFull,
     PagedGroup,
@@ -158,9 +158,16 @@ _PKT_SOCKET_CORE = (0, 2)
 _OUT_SOCKET_CORE = (0, 3)
 # The FIFO lives in physically-contiguous pinned host memory. Without an IOMMU the
 # driver pins a single system page at a time, so the FIFO is one 4 KB page minus the
-# trailing bytes_acked counter, PCIe-aligned. A whole output does not have to fit:
-# both sides move one page at a time, and the sender kernel waits for the host to
-# drain when it runs ahead.
+# trailing bytes_acked counter, PCIe-aligned. Asking for more is not merely wasteful, it
+# does not construct: on an IOMMU-less host ``D2HSocket`` fails in ``PinnedMemory`` with
+# "Failed to pin pages for DMA buffer" for any size past one page.
+#
+# A whole output does not have to fit: both sides move one page at a time, and the
+# sender kernel waits for the host to drain when it runs ahead, so the size of a
+# transfer is unbounded by the FIFO. What the FIFO does bound is how far the *device*
+# may run ahead of the host -- barely at all -- so a step's output has to be read back
+# promptly, and by someone who is not simultaneously dispatching the next step (see
+# :meth:`DeepSeekV4Model.decode_traced_async`).
 _OUT_FIFO_BYTES = 4032
 # So one output row — which *is* one socket page — has to fit the FIFO. The output is
 # reshaped into rows of at most this size (see :func:`_d2h_page_plan`) rather than sent
@@ -219,7 +226,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         require_cache: bool = False,
         pipeline_group_size: Optional[int] = None,
         use_prefetcher: Optional[bool] = None,
-        num_prefetch_slabs: int = 1,
+        num_prefetch_pages: int = 16,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -236,12 +243,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         locally-computed RoPE rotate matrix have no tile cache by design and are
         always materialised, so they are exempt.
 
-        ``use_prefetcher`` puts the attention projections (and their compressor) on
-        DRISC-prefetched weights instead of a DRAM->L1 copy per call; it defaults to whether the
-        device supports it. Decode must then run inside :meth:`prefetcher_session`. The GCBs are
-        built once per device and shared by every layer on it (see
-        :func:`make_attention_prefetch_buffers`), so the cost is ~342 KB of L1 per receiver core
-        for the whole model rather than per layer.
+        ``use_prefetcher`` puts the attention projections (with their compressor) and the MoE
+        shared expert on DRISC-prefetched weights instead of a DRAM->L1 copy per call; it
+        defaults to whether the device supports it. Decode must then run inside
+        :meth:`prefetcher_session`. One GCB is built per device and shared by every prefetched
+        weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1 per
+        receiver core for the whole model rather than per layer.
         """
         self.config = config
         self.loader = loader
@@ -376,7 +383,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     cache=layer_cache,
                     weight_dtype=weight_dtype,
                     use_prefetcher=self.use_prefetcher,
-                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_slabs),
+                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages),
                 )
             )
             _profile(current_device)
@@ -403,10 +410,25 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._out_torch_dtype: Optional[torch.dtype] = None
         self._paged_groups: dict[str, PagedGroup] = {}
         self._external_pools: Optional[dict[int, ttnn.Tensor]] = None
-        self._active_sid: Optional[int] = None
-        # session id -> (submesh index, layer) -> compressor window buffers, held while
-        # the session is not the active one (see :meth:`activate_session`).
-        self._session_state: dict[int, dict] = {}
+        # The sessions occupying the batch slots, slot order (``None`` where a session
+        # was closed without another taking its place). One entry unless
+        # :meth:`prepare_static_decode` was given ``batch > 1``.
+        self._resident: list[Optional[int]] = []
+        # Absolute position each session will decode next, so a batch whose users have
+        # drifted apart is caught rather than silently decoded at one user's phase.
+        self._session_pos: dict[int, int] = {}
+        # Users per step. Every shape below the packet is parameterised by it, and 1
+        # reproduces the single-user path exactly.
+        self._decode_batch = 1
+        # Compressor window buffers held while a batch is not resident, one block per seat
+        # group rather than per session, because a group is swapped as a unit (see
+        # :meth:`activate_sessions`). Keyed by the group's ordered session ids, with
+        # ``_group_of`` the reverse map and ``_resident_group`` the block currently seated.
+        self._group_state: dict[tuple[int, ...], dict] = {}
+        self._group_of: dict[int, tuple[int, ...]] = {}
+        self._resident_group: Optional[dict] = None
+        self._free_group_state: list[dict] = []
+        self._empty_row: dict = {}
 
         self.hc_head = DeepSeekV4HyperHead(
             config,
@@ -480,14 +502,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 return li
         return None
 
-    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_slabs) -> Optional[dict]:
-        """The GCBs for ``device``, built on first use and reused after.
+    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_pages) -> Optional[dict]:
+        """The GCB for ``device``, built on first use and reused after.
 
-        One set per device rather than per layer: a GCB is a permanent L1 allocation, and
-        every layer's weights have the same shapes, so they can all prefetch through the
-        same buffers. Building them per layer would multiply ~342 KB per receiver core by the
-        layer count and exhaust L1 -- and long before that, the DRISC senders' state zone, which
-        holds only about six GCBs per device however small they are.
+        One buffer per device, not per layer or per weight: a GCB is a permanent L1 allocation,
+        and every layer's weights have the same shapes, so they can all stream through the same
+        ring. Building one per layer would multiply 288 KB per receiver core by the layer count
+        and exhaust L1 -- and long before that, the DRISC senders' state zone, which holds only
+        about six GCBs per device however small they are.
         """
         if not self.use_prefetcher:
             return None
@@ -495,7 +517,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if key not in self._prefetch_buffers_by_device:
             self._prefetch_buffers_by_device[key] = (
                 device,
-                make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_slabs),
+                make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages),
             )
         return self._prefetch_buffers_by_device[key][1]
 
@@ -708,13 +730,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
     #     handed out on demand, so N conversations share a total token budget instead
     #     of reserving ``N x max_context`` (see :mod:`.paged_cache`).
     #   * The compressor window buffers (one window of projections, a few KB) stay
-    #     dense and are swapped in and out of the trace-addressed buffers on a
-    #     session switch, which happens per turn rather than per token.
+    #     dense and are copied in and out of the trace-addressed buffers when the
+    #     seated batch changes -- which a round-robin over batches does every step, so
+    #     the copy is held to one per buffer by keeping the state per *group* of
+    #     co-seated sessions rather than per session (see :meth:`activate_sessions`).
     #
-    # Everything a session needs is allocated up front by
+    # Everything either needs is allocated up front by
     # :meth:`prepare_static_decode`: allocating device buffers once a trace exists on
-    # the device is unsafe, so :meth:`open_session` only claims a pre-built slot and
-    # does host-side book-keeping.
+    # the device is unsafe, so opening a session and seating it only claim pre-built
+    # blocks and do host-side book-keeping.
     # ------------------------------------------------------------------ #
     @property
     def paged(self) -> bool:
@@ -722,8 +746,23 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return self._paged is not None
 
     @property
+    def decode_batch(self) -> int:
+        """Users a traced step decodes at once (1 unless ``prepare_static_decode``
+        was given a larger ``batch``)."""
+        return self._decode_batch
+
+    @property
     def active_session(self) -> Optional[int]:
-        return self._active_sid
+        """The resident session, for the single-user case. ``None`` if none is
+        active; see :attr:`resident_sessions` when the batch holds several."""
+        if len(self._resident) > 1:
+            raise RuntimeError(f"{len(self._resident)} sessions are resident; use resident_sessions")
+        return self._resident[0] if self._resident else None
+
+    @property
+    def resident_sessions(self) -> list[int]:
+        """The sessions occupying the batch slots, in slot order."""
+        return list(self._resident)
 
     def _require_paged(self) -> PagedKVManager:
         if self._paged is None:
@@ -739,21 +778,29 @@ class DeepSeekV4Model(DeepSeekV4Module):
         written yet, so a recycled block is never read.
         """
         paged = self._require_paged()
-        if not self._free_session_state:
+        if len(self._session_pos) >= self._max_sessions:
             raise PagedCacheFull(f"all {self._max_sessions} session slots are in use")
         sid = paged.open_session()
-        self._session_state[sid] = self._build_session_state(self._free_session_state.pop())
+        self._session_pos[sid] = 0
         return sid
 
     def close_session(self, sid: int) -> None:
         """Release a session's blocks back to the pool."""
         paged = self._require_paged()
-        if sid == self._active_sid:
-            self._active_sid = None
+        if sid in self._resident:
+            # Vacated, not removed: the slot a session sat in is where its window rows
+            # live, so compacting the list would misalign every slot after it.
+            self._resident[self._resident.index(sid)] = None
+        self._session_pos.pop(sid, None)
         paged.close_session(sid)
-        state = self._session_state.pop(sid, None)
-        if state is not None:
-            self._free_session_state.append(state)
+        # A group's block belongs to the group, so it is only recycled once every session
+        # in it has gone -- while any member is open, its rows are still that member's.
+        key = self._group_of.pop(sid, None)
+        if key is not None and all(s not in self._session_pos for s in key):
+            state = self._group_state.pop(key)
+            if state is self._resident_group:
+                self._resident_group = None
+            self._free_group_state.append(state)
 
     def reset_session(self, sid: int) -> None:
         """Rewind a session to position 0: free its compressed blocks and clear its
@@ -761,37 +808,88 @@ class DeepSeekV4Model(DeepSeekV4Module):
         until rewritten)."""
         paged = self._require_paged()
         paged.reset_session(sid)
-        if sid == self._active_sid:
-            self._clear_active_compressor_state()
+        self._session_pos[sid] = 0
+        if sid in self._resident:
+            self._clear_compressor_slot(self._resident.index(sid), None)
         else:
-            self._build_session_state(self._session_state[sid])
-        self._write_page_tables(sid, list(self._paged_groups))
+            key = self._group_of.get(sid)
+            # A session that has never been seated has no rows anywhere yet: the block it
+            # will get is blanked when its group claims one.
+            if key is not None:
+                self._clear_compressor_slot(key.index(sid), self._group_state[key])
+        self._write_page_tables(list(self._paged_groups))
 
     def activate_session(self, sid: int) -> None:
-        """Make ``sid`` the session the next :meth:`decode_traced` steps belong to:
-        point every page table at its blocks and swap its compressor window state into
-        the buffers the traces address."""
+        """Make ``sid`` the session the next :meth:`decode_traced` steps belong to.
+
+        The single-user form of :meth:`activate_sessions`, and only valid on a
+        single-user model -- a batched step decodes every slot, so it needs a session
+        for each.
+        """
+        self.activate_sessions([sid])
+
+    def activate_sessions(self, sids) -> None:
+        """Seat ``sids`` in the batch slots the next steps decode, in slot order.
+
+        Points every page table's row ``u`` at ``sids[u]``'s blocks and swaps their
+        compressor window state into the rows the traces address. Exactly
+        :attr:`decode_batch` sessions are required: a captured trace decodes all of its
+        slots unconditionally, so an empty slot would still write KV somewhere, and the
+        only somewhere it could write is another session's blocks.
+
+        The resident sessions step in lockstep -- one call to :meth:`decode_traced`
+        advances them all -- so they must agree on the position they resume at (see
+        :meth:`_variant_key`: one trace bakes in one pooling schedule for the whole
+        batch). Seating a set that disagrees raises here rather than silently decoding
+        some of them at another user's phase.
+
+        The set is also the unit the window state is *kept* in: these sessions become a
+        seat group, and a group's state is swapped as one block. So a session may be
+        seated with the same companions as before, in any order, but not mixed into a
+        different set -- which would leave its state in the block it was saved to. That is
+        rejected rather than silently decoding it from another user's window. The reason to
+        tie it this way is cost: a per-session swap moves one row per slot per compressor
+        buffer, which on a 43-layer stack is thousands of device ops on the critical path
+        of every step (measured at ~100 ms, more than the step itself), while a block swap
+        is one copy per buffer regardless of batch.
+        """
         paged = self._require_paged()
-        if not paged.has_session(sid):
-            raise KeyError(f"no such session {sid}")
-        if sid == self._active_sid:
+        sids = list(sids)
+        if len(sids) != self._decode_batch:
+            raise ValueError(f"batch decodes {self._decode_batch} users at a time, got {len(sids)} sessions")
+        if len(set(sids)) != len(sids):
+            raise ValueError(f"a session cannot occupy two slots at once: {sids}")
+        for sid in sids:
+            if not paged.has_session(sid):
+                raise KeyError(f"no such session {sid}")
+        at = {sid: self._session_pos.get(sid, 0) for sid in sids}
+        if len(set(at.values())) > 1:
+            raise ValueError(f"resident sessions must resume at one position, got {at}")
+        if sids == self._resident:
             return
-        if self._active_sid is not None:
-            self._save_active_compressor_state(self._active_sid)
-        self._load_compressor_state(sid)
-        self._active_sid = sid
-        self._write_page_tables(sid, list(self._paged_groups))
+
+        group = self._seat_group(sids)
+        if group is not self._resident_group:
+            if self._resident_group is not None:
+                self._save_group_state(self._resident_group)
+            self._load_group_state(group)
+        self._resident = sids
+        self._resident_group = group
+        self._write_page_tables(list(self._paged_groups))
 
     def ensure_session_capacity(self, pos: int) -> None:
-        """Give the active session blocks for every row a step at ``pos`` will touch,
-        refreshing only the page tables whose row actually changed (a compressor group
+        """Give every resident session blocks for the rows a step at ``pos`` touches,
+        refreshing only the page tables whose rows actually changed (a compressor group
         grows one block every ``compress_rate * block_size`` tokens)."""
         paged = self._require_paged()
-        if self._active_sid is None:
-            raise RuntimeError("call activate_session() before decoding")
-        changed = paged.ensure_capacity(self._active_sid, pos)
+        if not self._resident or None in self._resident:
+            raise RuntimeError("call activate_sessions() before decoding")
+        # Every session is grown before anything is written: a table refresh publishes
+        # all of its rows at once, so a short-circuit here would leave the rest of the
+        # batch pointing at blocks it has not been given yet.
+        changed = {group for sid in self._resident for group in paged.ensure_capacity(sid, pos)}
         if changed:
-            self._write_page_tables(self._active_sid, changed)
+            self._write_page_tables(sorted(changed))
 
     def session_usage(self) -> dict:
         """Per-group ``(blocks used, pool size)``, for status reporting."""
@@ -810,16 +908,26 @@ class DeepSeekV4Model(DeepSeekV4Module):
         group = self._paged_groups[self.config.layer_types[li]]
         return PagedLayerView(sm["pools"][li], sm["page_tables"][group.layer_type], group.position_modulo)
 
-    def _write_page_tables(self, sid: int, groups) -> None:
-        """Copy ``sid``'s page-table rows into the persistent device tables of every
-        submesh that hosts a layer of those groups."""
+    def _write_page_tables(self, groups) -> None:
+        """Copy the resident sessions' page-table rows into the persistent device
+        tables of every submesh that hosts a layer of those groups.
+
+        Row ``u`` of a table is slot ``u``'s mapping, which is how the paged ops give
+        each user of a step its own blocks out of the shared pool.
+        """
         paged = self._require_paged()
+        if len(self._resident) != self._decode_batch or None in self._resident:
+            # No full batch is seated (nothing has been activated yet, or a session was
+            # just closed), so there are no rows to publish. The next
+            # :meth:`activate_sessions` writes every table anyway.
+            return
         for group in groups:
-            row = ttnn.from_torch(paged.page_row(sid, group), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            rows = torch.cat([paged.page_row(sid, group) for sid in self._resident])
+            table_row = ttnn.from_torch(rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
             for sm in self.submeshes_io:
                 table = sm["page_tables"].get(group)
                 if table is not None:
-                    ttnn.copy_host_to_device_tensor(row, table)
+                    ttnn.copy_host_to_device_tensor(table_row, table)
 
     def _compressor_slots(self):
         """``(submesh, layer, buffer name)`` for every per-session compressor buffer."""
@@ -829,45 +937,120 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     if getattr(scache, name) is not None:
                         yield sm, li, name
 
-    def _build_session_state(self, into: Optional[dict] = None) -> dict:
-        """A session's held-aside compressor buffers, cleared to their empty values.
+    @staticmethod
+    def _empty_compressor_fill(name: str) -> float:
+        """The value an unwritten compressor window buffer holds.
 
         ``prev_gate`` starts at ``_MASK_NEG`` rather than 0 so the first window's
         absent Ca half carries softmax weight 0 (see :class:`_StaticLayerCache`).
-        ``into`` clears and reuses an existing slot's buffers rather than allocating,
-        which is what keeps :meth:`open_session` safe once traces exist; the allocating
-        form runs only from :meth:`prepare_static_decode`.
         """
-        state = {} if into is None else into
-        for sm, li, name in self._compressor_slots():
-            key = (sm["index"], li, name)
-            fill = _MASK_NEG if name == "prev_gate" else 0.0
-            if into is None:
-                buf = getattr(sm["scaches"][li], name)
-                state[key] = ttnn.from_torch(
-                    torch.full(list(buf.shape), fill),
-                    dtype=buf.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=sm["device"],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                ttnn.fill(state[key], fill, output_tensor=state[key])
-        return state
+        return _MASK_NEG if name == "prev_gate" else 0.0
 
-    def _clear_active_compressor_state(self) -> None:
-        """Clear the trace-addressed compressor buffers in place."""
+    def _build_group_state(self) -> dict:
+        """One seat group's held-aside compressor window buffers, at their empty values.
+
+        Shaped like the resident buffers, batch and all: a group is seated and unseated as
+        a unit (see :meth:`activate_sessions`), so its state moves as a unit, and one
+        whole-buffer copy per direction replaces a copy per slot. The memory is the same
+        either way -- ``num_sessions // batch`` groups of ``batch`` rows.
+
+        Allocating runs only from :meth:`prepare_static_decode`; a group claimed later is
+        blanked in place by :meth:`_empty_group_state`, which allocates nothing and so
+        stays legal once traces exist.
+
+        This state lives on device, and the swap moves it with device ops only. Holding it
+        on host would be simpler, but reading a device buffer back blocks the host until
+        the command queue drains -- and a caller that pipelines steps (see
+        :meth:`decode_traced_async`) has replays in flight whose output nobody has read
+        yet, so their in-trace D2H sends are waiting on the very host that would now be
+        waiting on the queue. That deadlocks.
+        """
+        state = {}
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
-            ttnn.fill(buf, _MASK_NEG if name == "prev_gate" else 0.0, output_tensor=buf)
+            state[(sm["index"], li, name)] = ttnn.from_torch(
+                torch.full(list(buf.shape), self._empty_compressor_fill(name)),
+                dtype=buf.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=sm["device"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return state
 
-    def _save_active_compressor_state(self, sid: int) -> None:
+    def _build_empty_rows(self) -> dict:
+        """One empty row per compressor buffer, the source for blanking a single slot."""
+        rows = {}
         for sm, li, name in self._compressor_slots():
-            ttnn.copy(getattr(sm["scaches"][li], name), self._session_state[sid][(sm["index"], li, name)])
+            buf = getattr(sm["scaches"][li], name)
+            rows[(sm["index"], li, name)] = ttnn.from_torch(
+                torch.full([1, *list(buf.shape)[1:]], self._empty_compressor_fill(name)),
+                dtype=buf.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=sm["device"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return rows
 
-    def _load_compressor_state(self, sid: int) -> None:
+    def _seat_group(self, sids: list[int]) -> dict:
+        """The held-aside block for the group ``sids``, claiming a free one on first seat.
+
+        A session is grouped by the set (and slot order) it is first seated with and stays
+        there, because that is where its rows are saved. Seating it with anyone else would
+        read another user's window, so it raises instead.
+        """
+        key = tuple(sids)
+        group = self._group_state.get(key)
+        if group is not None:
+            return group
+        for sid in sids:
+            held = self._group_of.get(sid)
+            if held is not None:
+                raise ValueError(
+                    f"session {sid} is seated as slot {held.index(sid)} of group {held} and cannot be "
+                    f"re-seated as {key}: its compressor window state is held at that slot of that "
+                    "group's block. Close and reopen the session to move it."
+                )
+        if not self._free_group_state:
+            raise PagedCacheFull(
+                f"all {self._max_sessions // self._decode_batch} seat groups are in use; "
+                "close a group's sessions to release one"
+            )
+        group = self._free_group_state.pop()
+        # Handed out blank: these sessions have never been seated, so they must find empty
+        # windows, and a block released by :meth:`close_session` still holds what its last
+        # members wrote.
+        self._empty_group_state(group)
+        self._group_state[key] = group
+        for sid in sids:
+            self._group_of[sid] = key
+        return group
+
+    def _empty_group_state(self, state: dict) -> None:
+        """Blank a group's held-aside buffers in place, for a group of fresh sessions."""
         for sm, li, name in self._compressor_slots():
-            ttnn.copy(self._session_state[sid][(sm["index"], li, name)], getattr(sm["scaches"][li], name))
+            key = (sm["index"], li, name)
+            ttnn.fill(state[key], self._empty_compressor_fill(name), output_tensor=state[key])
+
+    def _clear_compressor_slot(self, slot: int, state: Optional[dict]) -> None:
+        """Reset one batch slot's compressor window rows to their empty values.
+
+        Writes the resident buffers when ``state`` is ``None``, else that slot's row of a
+        group's held-aside copy.
+        """
+        for sm, li, name in self._compressor_slots():
+            key = (sm["index"], li, name)
+            target = getattr(sm["scaches"][li], name) if state is None else state[key]
+            ttnn.fill_cache(target, self._empty_row[key], slot)
+
+    def _save_group_state(self, state: dict) -> None:
+        """Hold the resident batch's window buffers aside as ``state``."""
+        for sm, li, name in self._compressor_slots():
+            ttnn.copy(getattr(sm["scaches"][li], name), state[(sm["index"], li, name)])
+
+    def _load_group_state(self, state: dict) -> None:
+        """Put a group's held-aside window buffers back into the resident ones."""
+        for sm, li, name in self._compressor_slots():
+            ttnn.copy(state[(sm["index"], li, name)], getattr(sm["scaches"][li], name))
 
     # -- per-layer RoPE tables / masks ------------------------------------------ #
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1037,6 +1220,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self._decode_max_seq,
             self.config.compress_rates,
             paged=self._paged is not None,
+            batch=self._decode_batch,
         )
 
     def _external_pool_blocks(self, pools: dict[int, ttnn.Tensor]) -> dict[str, int]:
@@ -1081,12 +1265,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         )
 
     def _build_page_tables(self, layer_types, device: ttnn.MeshDevice) -> dict:
-        """Persistent ``[1, logical_blocks]`` INT32 page tables, one per layer type on
-        this submesh. The traces bake in these addresses; :meth:`activate_session`
-        rewrites their contents."""
+        """Persistent ``[batch, logical_blocks]`` INT32 page tables, one per layer type
+        on this submesh: row ``u`` is the mapping the paged ops read for slot ``u``. The
+        traces bake in these addresses; :meth:`activate_sessions` rewrites their
+        contents."""
         return {
             lt: ttnn.from_torch(
-                torch.zeros(1, self._paged_groups[lt].logical_blocks, dtype=torch.int32),
+                torch.zeros(self._decode_batch, self._paged_groups[lt].logical_blocks, dtype=torch.int32),
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
@@ -1129,6 +1314,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         block_size: int = 32,
         tokens_per_block: int | None = None,
         pools: dict[int, ttnn.Tensor] | None = None,
+        batch: int = 1,
     ) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
         :meth:`decode_traced` once per prompt token into these empty caches).
@@ -1156,9 +1342,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ``pools`` supplies externally allocated block pools keyed by layer index, for a
         caller that owns the KV memory (the vLLM wrapper, whose pool size the serving
         stack decides); their block count then replaces the internal pool plan.
+
+        ``batch`` > 1 decodes that many users per step, one per slot: the packet carries
+        a token each, every cache and page table gains a leading user dimension, and a
+        step returns one output row per user. The users share the step's *position* --
+        a trace bakes in one compressor-pooling schedule and one SDPA mode for the whole
+        batch (see :meth:`_variant_key`), so they advance in lockstep. Everything below
+        is parameterised by it, and ``batch=1`` is the single-user path unchanged.
         """
         if not self.use_submeshes:
             raise NotImplementedError("traced decode requires use_submeshes=True")
+        if batch < 1:
+            raise ValueError(f"batch must be at least 1, got {batch}")
+        if batch > 1 and num_sessions and num_sessions < batch:
+            raise ValueError(f"a batch of {batch} needs at least that many sessions, got num_sessions={num_sessions}")
+        self._decode_batch = batch
         cfg = self.config
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
@@ -1210,18 +1408,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # :meth:`_decode_submesh_static`), so no submesh past the first sees any host
         # traffic at all.
         #
-        #   idx 0 : token (INT32; embedding/hash use it typecast to uint32)
-        #   idx 1 : pos_sliding (INT32)
-        #   idx 2 : pos_compress (INT32)
+        #   [0, B)     : one token per user (INT32; embedding/hash typecast to uint32)
+        #   [B, 2B)    : pos_sliding, the same value per user
+        #   [2B, 3B)   : pos_compress, the same value per user
+        #
+        # The two position regions are B wide even though a step's users share one
+        # position, because the ops that consume them want a value per user
+        # (``paged_update_cache``'s update index, SDPA-decode's ``cur_pos``). Repeating
+        # them on host costs a few INT32s of an already-padded page and saves the device
+        # a broadcast per step; at B=1 the layout is byte-for-byte the old one.
         #
         # The per-step RoPE rows and additive masks are *not* in the packet — they are
         # both generated on device from ``pos_compress`` against constant tables (see
         # :meth:`_device_rope` and :meth:`_device_mask`).
         # Slots past the prefix are padding: the packet's row is one H2D socket page,
-        # so its width is set by the PCIe alignment, not by the payload. Nothing reads
-        # them.
-        self._pkt_int_prefix = 3  # [token, pos_sliding, pos_compress]
-        self._pkt_page_bytes = _PKT_PCIE_ALIGNMENT
+        # so its width is rounded to the PCIe alignment, not set by the payload. Nothing
+        # reads them.
+        self._pkt_int_prefix = 3 * batch  # [tokens | pos_sliding | pos_compress]
+        self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / _PKT_PCIE_ALIGNMENT) * _PKT_PCIE_ALIGNMENT
         self._pkt_w = self._pkt_page_bytes // 4
         self._pkt_rd = rd
 
@@ -1334,7 +1538,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     # page size on every program-cache miss.
                     self._pkt_socket.set_page_size(self._pkt_page_bytes)
             if any(li > 0 and ids[li - 1] != k for li in layers_k):
-                sm["streams_in"] = _dev_zeros([1, 1, hc, d], device)
+                sm["streams_in"] = _dev_zeros([batch, 1, hc, d], device)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
         # Where the global-last layer (num_layers-1) landed: its trace produces the final
@@ -1353,11 +1557,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 _OUT_FIFO_BYTES,
             )
 
-        # Every session's held-aside compressor buffers, allocated now: once a trace
-        # exists on a device, allocating buffers there can corrupt it, so
-        # :meth:`open_session` may only claim one of these pre-built slots.
+        # The held-aside compressor buffers, allocated now: once a trace exists on a
+        # device, allocating buffers there can corrupt it, so seating may only claim one
+        # of these pre-built sets. One set per *seat group* rather than per session (see
+        # :meth:`activate_sessions`), each the full width of the resident buffers -- so
+        # the total is the same ``num_sessions`` rows either way, but a switch moves each
+        # buffer in one copy instead of one per slot.
         self._max_sessions = num_sessions
-        self._free_session_state = [self._build_session_state() for _ in range(num_sessions)]
+        self._free_group_state = [self._build_group_state() for _ in range(num_sessions // batch)]
+        # A single empty row per buffer, to blank one slot without disturbing the rest of
+        # the batch (see :meth:`reset_session`). Never written to.
+        self._empty_row = self._build_empty_rows()
 
     def _device_rope(self, inv_freq: ttnn.Tensor, scaling: float, pos_f: ttnn.Tensor) -> tuple:
         """Generate one decode step's RoPE rows on device from the absolute position.
@@ -1392,36 +1602,46 @@ class DeepSeekV4Model(DeepSeekV4Module):
             invalid = ttnn.add(invalid, ttnn.ge(b, thr))  # compressor: window >= completed count
         return ttnn.typecast(ttnn.multiply(invalid, _MASK_NEG), ttnn.bfloat16)
 
-    @staticmethod
-    def _device_index(value_f: ttnn.Tensor) -> ttnn.Tensor:
-        """A device-computed FP32 scalar tile ``[1,1,1,1]`` as the INT32 ``[1]`` row-major
-        tensor the in-place cache writers and SDPA-decode take for an index."""
-        return ttnn.reshape(ttnn.to_layout(ttnn.typecast(value_f, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [1])
+    def _device_index(self, value_f: ttnn.Tensor) -> ttnn.Tensor:
+        """A device-computed FP32 tile ``[1,1,1,batch]`` as the INT32 ``[batch]``
+        row-major tensor the in-place cache writers and SDPA-decode take for a per-user
+        index. One entry per user because those ops index each batch slot's cache
+        separately, even though the users of a step share a position."""
+        return ttnn.reshape(
+            ttnn.to_layout(ttnn.typecast(value_f, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [self._decode_batch]
+        )
 
-    def _device_causal_pos(self, cr: int, pos_f: ttnn.Tensor) -> ttnn.Tensor:
+    def _device_causal_pos(self, cr: int, pos_row_f: ttnn.Tensor) -> ttnn.Tensor:
         """Generate one decode step's causal SDPA ``cur_pos`` on device from the
         absolute position: ``sliding_window + (pos+1)//cr - 1``, the inclusive last
         valid index on the ``[sliding | compressor]`` KV axis (the device twin of
         :func:`sdpa_causal_cur_pos`)."""
-        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_f, 1.0), 1.0 / cr))  # (pos+1)//cr
+        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_row_f, 1.0), 1.0 / cr))  # (pos+1)//cr
         return self._device_index(ttnn.add(thr, float(self.sliding_window - 1)))
 
-    def _device_compressor_indices(self, cr: int, pos_f: ttnn.Tensor):
+    def _device_compressor_indices(self, cr: int, pos_row_f: ttnn.Tensor, pos_f: ttnn.Tensor):
         """Device twins of :func:`_window_indices`, plus the closing window's position.
 
-        Returns ``(win_slot, win_row, win_pos_f)``: the INT32 ``[1]`` slot ``pos % cr``
-        this token's projection is written to in the one-window buffer, the INT32 ``[1]``
-        row ``sliding_window + w`` of the combined KV buffer the pooled entry lands in,
-        and the FP32 ``[1,1,1,1]`` absolute position ``w * cr`` to RoPE that entry at,
-        for the window ``w = (pos+1)//cr - 1`` closing at this step.
+        Returns ``(win_slot, win_row, win_pos_f)``: the INT32 ``[batch]`` slot
+        ``pos % cr`` this token's projection is written to in the one-window buffer, the
+        INT32 ``[batch]`` row ``sliding_window + w`` of the combined KV buffer the pooled
+        entry lands in, and the FP32 ``[1,1,1,1]`` absolute position ``w * cr`` to RoPE
+        that entry at, for the window ``w = (pos+1)//cr - 1`` closing at this step.
+
+        The two indices come off the per-user ``pos_row_f`` because the cache writers
+        take one index per batch slot; ``win_pos_f`` comes off the scalar ``pos_f``
+        because a RoPE row is shared by the whole batch (the users are at one position).
 
         A trace cannot branch on the device-side position, so all three are pure
-        arithmetic on ``pos_f``. On steps that do not close a window ``w`` is one short
-        (or ``-1``), but nothing consumes these then (``pool_compressor`` is ``False``).
+        arithmetic. On steps that do not close a window ``w`` is one short (or ``-1``),
+        but nothing consumes these then (``pool_compressor`` is ``False``).
         """
-        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_f, 1.0), 1.0 / cr))  # (pos+1)//cr == w+1
-        slot_f = ttnn.subtract(pos_f, ttnn.multiply(ttnn.floor(ttnn.multiply(pos_f, 1.0 / cr)), float(cr)))
-        win_pos_f = ttnn.multiply(ttnn.subtract(thr, 1.0), float(cr))
+        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_row_f, 1.0), 1.0 / cr))  # (pos+1)//cr == w+1
+        slot_f = ttnn.subtract(pos_row_f, ttnn.multiply(ttnn.floor(ttnn.multiply(pos_row_f, 1.0 / cr)), float(cr)))
+        # At batch 1 the per-user row *is* the scalar, so reuse it rather than emitting
+        # the same arithmetic twice.
+        scalar_thr = thr if pos_row_f is pos_f else ttnn.floor(ttnn.multiply(ttnn.add(pos_f, 1.0), 1.0 / cr))
+        win_pos_f = ttnn.multiply(ttnn.subtract(scalar_thr, 1.0), float(cr))
         return (
             self._device_index(slot_f),
             self._device_index(ttnn.add(thr, float(self.sliding_window - 1))),
@@ -1475,14 +1695,31 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # launch cost); the tensors are read-only, so sharing them is exact.
         step_ctx: dict = {}
 
+        b = self._decode_batch
+
         def _build_step_ctx(pkt) -> dict:
             token = ttnn.typecast(
-                ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, 1]), [1, 1]), ttnn.uint32
-            )  # [1,1]
-            sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, 2]), [1])
-            compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1])
-            pos_f = ttnn.typecast(
-                ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+                ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, b]), [1, b]), ttnn.uint32
+            )  # [1,B]
+            sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, b], [1, 1, 1, 2 * b]), [b])
+            compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2 * b], [1, 1, 1, 3 * b]), [b])
+            # Two views of the same position. The scalar drives everything the batch
+            # shares -- the RoPE rows and the additive mask, both broadcast over users --
+            # while the per-user row drives the indices the cache writers and SDPA take
+            # one of per slot. They coincide at batch 1, where the row *is* the scalar.
+            pos_row_f = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, b]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            pos_f = (
+                pos_row_f
+                if b == 1
+                else ttnn.typecast(
+                    ttnn.to_layout(
+                        ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2 * b], [1, 1, 1, 2 * b + 1]), [1, 1, 1, 1]),
+                        ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.float32,
+                )
             )
             # One RoPE row triple per family present on this submesh ("main" / "compress").
             rope = {rt: self._device_rope(inv, sc, pos_f) for rt, (inv, sc) in sm["rope_invfreq"].items()}
@@ -1490,17 +1727,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
             curpos: dict = {}
             win_rope: dict = {}
             win_idx: dict = {}
-            for lt, (a, b, cr) in sm["mask_gen"].items():
+            for lt, (a, b_tbl, cr) in sm["mask_gen"].items():
                 # Bound the KV axis by a position (causal) where the valid set is a
                 # contiguous prefix, else by the additive mask. Sliding layers take
                 # neither here (their ring is bounded inside the attention block).
                 use_causal = causal and lt != "sliding_attention"
-                masks[lt] = None if use_causal else self._device_mask(a, b, cr, pos_f)
-                curpos[lt] = self._device_causal_pos(cr, pos_f) if use_causal else None
+                masks[lt] = None if use_causal else self._device_mask(a, b_tbl, cr, pos_f)
+                curpos[lt] = self._device_causal_pos(cr, pos_row_f) if use_causal else None
                 if lt != "sliding_attention":
                     # Incremental pooling emits one entry per closure, so generate just
                     # that entry's RoPE row (the "compress" family already in scope).
-                    ws, wr, win_pos_f = self._device_compressor_indices(cr, pos_f)
+                    ws, wr, win_pos_f = self._device_compressor_indices(cr, pos_row_f, pos_f)
                     inv, sc = sm["rope_invfreq"]["compress"]
                     cw, sw, _ = self._device_rope(inv, sc, win_pos_f)
                     win_idx[lt] = (ws, wr)
@@ -1562,9 +1799,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 cos_win, sin_win = step_ctx["win_rope"][lt]
 
             if is_first:
-                inputs_embeds = self.embed_tokens(token)  # [1, 1, D]
-                bb, ss, dd = inputs_embeds.shape
-                streams = ttnn.repeat(ttnn.reshape(inputs_embeds, [bb, ss, 1, dd]), ttnn.Shape([1, 1, cfg.hc_mult, 1]))
+                # ``[1,B]`` ids -> ``[1,B,D]``, laid back out as one user per batch row
+                # (the layout every block below runs on) and repeated over the streams.
+                inputs_embeds = self.embed_tokens(token)
+                dd = inputs_embeds.shape[-1]
+                streams = ttnn.repeat(ttnn.reshape(inputs_embeds, [b, 1, 1, dd]), ttnn.Shape([1, 1, cfg.hc_mult, 1]))
             elif recv:
                 streams = sm["streams_in"]
             # else: reuse the ``streams`` carried from the prior layer on this submesh.
@@ -1610,18 +1849,32 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     self.layers[next_on_device].prefetch_weights()
         return out if out is not None else streams
 
-    def _build_packet(self, token_id: int, pos: int) -> torch.Tensor:
+    def _step_tokens(self, token_id) -> list[int]:
+        """The step's token per user, from either a scalar or a length-``batch``
+        sequence (a scalar is accepted at any batch size, and feeds every user the
+        same token)."""
+        b = self._decode_batch
+        if isinstance(token_id, int):
+            return [token_id] * b
+        tokens = [int(t) for t in token_id]
+        if len(tokens) != b:
+            raise ValueError(f"expected {b} tokens for a batch of {b}, got {len(tokens)}")
+        return tokens
+
+    def _build_packet(self, token_id, pos: int) -> torch.Tensor:
         """Host-build the whole fused packet as one INT32 socket page
-        ``[1,1,1,_pkt_w]``: ``[token, pos_sliding, pos_compress]`` then padding. The
-        per-step RoPE rows and additive masks are *not* in the packet — they are
-        generated on device from ``pos_compress`` (see :meth:`_device_rope` /
-        :meth:`_device_mask`)."""
-        w = self.sliding_window
+        ``[1,1,1,_pkt_w]``: ``[tokens | pos_sliding | pos_compress]`` then padding, each
+        region ``batch`` wide. The per-step RoPE rows and additive masks are *not* in
+        the packet — they are generated on device from ``pos_compress`` (see
+        :meth:`_device_rope` / :meth:`_device_mask`)."""
+        b, w = self._decode_batch, self.sliding_window
         packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
-        packet[0, 0, 0, : self._pkt_int_prefix] = torch.tensor([token_id, pos % w, pos], dtype=torch.int32)
+        packet[0, 0, 0, : self._pkt_int_prefix] = torch.tensor(
+            self._step_tokens(token_id) + [pos % w] * b + [pos] * b, dtype=torch.int32
+        )
         return packet
 
-    def _write_packet(self, token_id: int, pos: int) -> None:
+    def _write_packet(self, token_id, pos: int) -> None:
         """Push one step's fused packet into the H2D socket FIFO.
 
         This is the only host->device transfer of a traced step, and it is *not* a
@@ -1656,7 +1909,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, list(self._out_plan)), self._out_socket)
 
     def read_decoded_output(self) -> torch.Tensor:
-        """Stage 3 of a step: read its output off the D2H socket, as ``[1, 1, N]``.
+        """Stage 3 of a step: read its output off the D2H socket, as ``[batch, 1, N]``
+        -- row ``u`` is slot ``u``'s user, and a single-user step returns ``[1, 1, N]``
+        as before.
 
         Returns the oldest in-flight step's output.
 
@@ -1668,9 +1923,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         rows, cols = self._out_plan
         out = torch.empty(rows, cols, dtype=self._out_torch_dtype)
         self._out_socket.read_tensor(out)
-        return out.reshape(1, 1, rows * cols)
+        # The pages carry the output in its own element order, so the users are already
+        # contiguous one after another and splitting the leading dim recovers them.
+        return out.reshape(self._decode_batch, 1, -1)
 
-    def _capture_traces(self, token_id: int, pos: int) -> None:
+    def _capture_traces(self, token_id, pos: int) -> None:
         """Capture the decode traces: per submesh, one variant per (SDPA mode, phase).
 
         ``token_id`` / ``pos`` describe the step about to be replayed; each compile run
@@ -1776,21 +2033,25 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["tids"][variant], sm["outputs"][variant] = sm["traces"][self._sm_pool_key(sm, flags, causal)]
         self._traced_captured = True
 
-    def decode_traced(self, token_id: int, pos: int) -> torch.Tensor:
+    def decode_traced(self, token_id, pos: int) -> torch.Tensor:
         """One traced decode step: feed ``token_id`` at absolute position ``pos`` and
         return the step's output, read back to host.
 
         Requires a prior :meth:`prepare_static_decode`. Equivalent to
         :meth:`decode_traced_async` followed by :meth:`read_decoded_output`, i.e. it
-        blocks until the output has arrived. The result is ``[1, 1, vocab]`` logits if
-        an ``lm_head`` was passed to :meth:`prepare_static_decode`, else the pre-head
-        hidden ``[1, 1, hidden]``; its dtype is the device dtype (bf16), so cast before
-        doing host math on it.
+        blocks until the output has arrived. The result is ``[batch, 1, vocab]`` logits
+        if an ``lm_head`` was passed to :meth:`prepare_static_decode`, else the pre-head
+        hidden ``[batch, 1, hidden]``; its dtype is the device dtype (bf16), so cast
+        before doing host math on it.
+
+        ``token_id`` is one token for a single-user model, or one per user (in slot
+        order) for a batched one; a scalar at batch > 1 feeds every user the same token.
+        The users share ``pos`` -- see :meth:`prepare_static_decode`.
         """
         self.decode_traced_async(token_id, pos)
         return self.read_decoded_output()
 
-    def decode_traced_async(self, token_id: int, pos: int) -> None:
+    def decode_traced_async(self, token_id, pos: int) -> None:
         """Dispatch one traced decode step without waiting for its output.
 
         Captures the per-submesh traces lazily on the first call, then (every call)
@@ -1803,6 +2064,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
         Nothing is returned: the output is in flight to the host, to be picked up by
         :meth:`read_decoded_output`. Every dispatched step must be read back exactly
         once, in dispatch order.
+
+        Whoever reads the outputs must not be the thread that dispatches, or the steps in
+        flight have to be kept to a handful. The output socket's FIFO is a single pinned
+        host page (:data:`_OUT_FIFO_BYTES`), so a step whose output nobody is reading
+        stalls the sender kernel inside the last submesh's trace; further steps back up
+        behind it through the cross-submesh sockets until every submesh's command queue is
+        full, at which point a host that is still dispatching blocks on a full queue while
+        the device waits for it to read. That is a deadlock, and how far ahead a
+        single-threaded caller can safely run shrinks as the submesh pipeline deepens (on
+        a 43-layer stack across eight submeshes: four steps in flight run, six wedge).
+
+        Calling :meth:`read_decoded_output` from a thread of its own lifts the limit
+        altogether -- the socket read releases the GIL, so the reader can sit on the
+        socket while this method keeps dispatching. Then a step per session is fine; see
+        ``_OutputReader`` in ``tests/test_multi_user_paged_decode_demo.py``.
 
         In paged mode the step belongs to whichever session is active (see
         :meth:`activate_session`), and its blocks are grown here as the compressor
@@ -1822,7 +2098,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # them independently — they touch disjoint state, so they can run concurrently (on
     # separate threads) for different steps: push step n+1's packet while step n's
     # traces replay and step n-1's output is read back.
-    def write_step_packet(self, token_id: int, pos: int) -> None:
+    def write_step_packet(self, token_id, pos: int) -> None:
         """Stage 1 of a step: push its input packet to the device.
 
         Talks only to the H2D socket (a direct PCIe write, no command queue work), and
@@ -1846,6 +2122,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
         if self._paged is not None:
             self.ensure_session_capacity(pos)
+            # One step advances every resident user, which is what lets
+            # :meth:`activate_sessions` tell a batch that has drifted apart from one
+            # that can share a trace.
+            for sid in self._resident:
+                self._session_pos[sid] = pos + 1
         # Pick the variant whose baked-in compressor-pool schedule and SDPA mode match
         # this position (see :meth:`_capture_traces`).
         variant = self._variant_key(pos)
