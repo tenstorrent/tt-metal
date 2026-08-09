@@ -563,7 +563,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                     .accessor_name = "out",
                     .endpoint_type = m2::DFBEndpointType::CONSUMER},
             },
-        .semaphore_bindings = {m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_REDUCER, .accessor_name = "reducer"}},
+        .semaphore_bindings = {m2::SemaphoreBinding{
+            .semaphore_spec_name = PRE2D_REDUCER,
+            .accessor_name = "reducer",
+            .access_type = m2::SemaphoreAccessType::SET}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
@@ -751,7 +754,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .name = "layernorm_pre_all_gather_2d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dfbs),
-        .semaphores = {m2::SemaphoreSpec{.unique_id = PRE2D_REDUCER, .target_nodes = all_cores}},
+        // SET-labeled binding (remote up + wait + reset-set): on Quasar, AUTO's racing-SET
+        // check would reject it -- forced EXTERNAL is the documented escape and preserves the
+        // scope AUTO resolves there today. Gen1 stays AUTO (resolves LOCAL_NONATOMIC; the
+        // racing-SET check is Gen2-only).
+        .semaphores = {m2::SemaphoreSpec{
+            .unique_id = PRE2D_REDUCER,
+            .target_nodes = all_cores,
+            .scope = device->arch() == tt::ARCH::QUASAR ? m2::SemaphoreScope::EXTERNAL : m2::SemaphoreScope::AUTO}},
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };

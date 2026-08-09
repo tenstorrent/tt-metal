@@ -100,7 +100,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"},
+                 .accessor_name = "sem_in",
+                 .access_type = experimental::SemaphoreAccessType::CONSUME},
                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem_out"},
             },
         .compile_time_args =
@@ -119,7 +121,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem"}},
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"},
+              .accessor_name = "sem",
+              .access_type = experimental::SemaphoreAccessType::CONSUME}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
@@ -263,7 +267,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .compiler_options = {.defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"},
+                 .accessor_name = "sem",
+                 .access_type = experimental::SemaphoreAccessType::CONSUME},
                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
             },
         .runtime_arg_schema =
@@ -284,7 +290,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .semaphore_bindings =
             {
                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem"},
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"},
+                 .accessor_name = "remote_sem",
+                 .access_type = experimental::SemaphoreAccessType::CONSUME},
             },
         .runtime_arg_schema =
             {
@@ -302,7 +310,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .compiler_options = {.defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"},
+                 .accessor_name = "sem_in",
+                 .access_type = experimental::SemaphoreAccessType::CONSUME},
                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem_out"},
             },
         .compile_time_args =
@@ -321,7 +331,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem"}},
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"},
+              .accessor_name = "sem",
+              .access_type = experimental::SemaphoreAccessType::CONSUME}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
