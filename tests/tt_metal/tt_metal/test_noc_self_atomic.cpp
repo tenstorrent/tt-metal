@@ -68,11 +68,9 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // Wormhole lacks the RISC-V AMOs half of this fixture, and the feature never selects
-        // these mechanisms on Gen1 (AUTO keeps the legacy word there).
-        if (arch_ == tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Wormhole lacks RISC-V AMOs; these mechanisms are Blackhole/Quasar-scoped";
-        }
+        // No fixture-wide Wormhole skip: the two pure-NoC keystones (self-targeted increment,
+        // self-vs-remote) use zero RISC-V AMOs and forced EXTERNAL is ungated on Wormhole, so
+        // they must run there too. The AMO/cacheline/CAS tests carry per-test skips.
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
@@ -206,9 +204,12 @@ protected:
     // Scratch layout from l1_unreserved_base: +0 sem word (preloaded to sem_init),
     // +16 lock word (own 16B atom), +32 per-hart pre-op return slots (8 x 4B); the
     // lock and every ret slot are zeroed. Returns the final sem word.
-    uint32_t run_cas_lock(uint32_t mode, uint32_t pairs, uint32_t sem_init) {
+    uint32_t run_cas_lock(uint32_t mode, uint32_t pairs, uint32_t sem_init, uint32_t lock_offset = 16) {
         const uint32_t sem_addr = l1_unreserved_base;
-        const uint32_t lock_addr = l1_unreserved_base + 16;
+        // lock_offset picks the CAS LANE: the 4-bit CAS acts on the 32-bit lane (addr>>2)&3 of a
+        // 16B row, and production lock words are 4B-packed (lane = id & 3) -- offsets 16/20/24/28
+        // exercise lanes 0..3.
+        const uint32_t lock_addr = l1_unreserved_base + lock_offset;
         const uint32_t ret_base = l1_unreserved_base + 32;
         std::vector<uint32_t> init(16, 0);  // sem word + lock word + 8 ret slots
         init[0] = sem_init;
@@ -380,6 +381,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
 // are reliable -- the DM_LOCAL_CACHED fast-path keystone. (The only AMO width
 // proven on Quasar today is 64-bit; semaphore words are 32-bit.)
 TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Wormhole lacks RISC-V AMOs (amoadd.w)";
+    }
     zero_counter(core, l1_unreserved_base);
 
     run_single_node(kernel_path_amo32, l1_unreserved_base);
@@ -399,6 +403,9 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
 // exact 0 proves no decrement was lost and no credit was consumed twice -- the
 // multi-consumer DM_LOCAL_CACHED down() keystone.
 TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Wormhole lacks RISC-V AMOs (lr.w/sc.w)";
+    }
     if (!is_quasar) {
         GTEST_SKIP() << "lr.w/sc.w needs Zalrsc; Blackhole DM cores are Zaamo-only";
     }
@@ -557,6 +564,24 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
            "credit wraps the word to the ret-slot sentinel and presents as a HANG instead) -- EXTERNAL "
            "multi-consumer "
            "down() cannot be enabled.";
+}
+
+// (6b) Same drain, lock word at each of the three remaining 4B offsets within its 16B row.
+// Production EXTERNAL lock words are 4B-packed (MEM_NOC_SEM_LOCK_BASE + id*4), so a semaphore
+// with id % 4 != 0 locks through CAS lane 1..3 -- an encoding leg (6a)'s 16B-aligned word never
+// touches. A lane-encoding bug would double-grant or never-grant: exact 0 catches both.
+TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes123) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
+    }
+    for (uint32_t lane = 1; lane <= 3; lane++) {
+        const uint32_t start = num_dms_ * iterations;
+        const uint32_t observed = run_cas_lock(0 /*mode: pure drain*/, 0, start, /*lock_offset=*/16 + lane * 4);
+        log_info(LogTest, "CAS-lock drain lane {}: {} (expected 0; started at {})", lane, observed, start);
+        EXPECT_EQ(observed, 0u) << "CAS lane " << lane << " (lock word at 16B-row offset " << lane * 4
+                                << ") lost or double-granted -- the 4-bit CAS lane encoding is wrong for "
+                                   "non-16B-aligned lock words, which production down() uses for id % 4 != 0";
+    }
 }
 
 // (6b) Producer/consumer hart pairs on one word starting at 0: even user harts do

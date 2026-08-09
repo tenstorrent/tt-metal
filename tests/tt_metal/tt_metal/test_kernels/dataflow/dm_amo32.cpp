@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t* counter = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(get_arg(args::sem_addr)));
     const uint32_t increment_times = get_arg(args::increment_times);
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     // Rerun safety: discard any cache-resident copy so the host's fresh TL1 preload is seen.
     // One thread invalidates, all rendezvous (see dm_cas32.cpp).
     if (get_my_thread_id() == 0u) {
@@ -36,7 +36,7 @@ void kernel_main() {
         __atomic_add_fetch(counter, 1u, __ATOMIC_SEQ_CST);  // 32-bit amoadd.w
     }
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     // Flush the write-back cache so the host readback of TL1 sees the updated word.
     // (Blackhole's L1 cache is write-through, so no flush is needed there.)
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(counter));

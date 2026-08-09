@@ -19,7 +19,7 @@
  * manipulated locally or remotely via the NoC.
  *
  * The Scope template parameter selects the physical path / atomicity guarantee — see
- * SemScope above. It defaults to LOCAL_NONATOMIC (legacy behavior).
+ * hostdevcommon/sem_scope.h. It defaults to LOCAL_NONATOMIC (legacy behavior).
  *
  * Usage:
  *   - Construct a Semaphore with a given semaphore ID.
@@ -62,20 +62,21 @@ class Semaphore {
     // Cache discipline: each scope keeps its word in exactly one view, so no flush or
     // invalidate is REQUIRED here. The uncached scopes bypass the cache; the cached pool is
     // written only by mutually-coherent DM cores (nothing NoC-writes it), so a flush would
-    // publish to nobody and an invalidate could discard a live count. The one mandatory cache
-    // op lives in the generated pool seeder (genfiles.cpp), which reads the dispatcher-written
-    // ring slot through the UNCACHED alias.
+    // publish to nobody and an invalidate could discard a live count. The one mandatory
+    // alias-discipline step lives in the generated pool seeder (genfiles.cpp), which reads the
+    // dispatcher-written ring slot through the UNCACHED alias before storing it to the pool.
     //
     // LOAD-BEARING: the invalidate_l1_cache() calls below (and in noc_semaphore_wait/wait_min)
     // are a documented NO-OP on Quasar DM cores (tt-2xx/risc_common.h). If that ever becomes a
     // real discard-without-writeback, a cached semaphore would silently lose increments.
     static constexpr bool kUseUncachedLocalView = (Scope != SemScope::DM_LOCAL_CACHED);
 
-    // DM_LOCAL_CACHED is Quasar-DM-only. The host FATALs only cover DECLARED bindings, so these
-    // asserts close the raw-id `Semaphore<..., DM_LOCAL_CACHED> s(raw_id)` back door at compile
-    // time. Off Quasar the pool does not exist; on Quasar TRISC the pool is in the DM cache
-    // domain and the seeder is not emitted, so a TRISC AMO would hit an unseeded word from
-    // outside the coherence domain.
+    // DM_LOCAL_CACHED is Quasar-DM-only. The host FATALs only cover DECLARED bindings, so the
+    // raw-id `Semaphore<..., DM_LOCAL_CACHED> s(raw_id)` back door is closed at compile time on
+    // ALL three axes: these class-scope asserts cover off-Quasar (no pool) and Quasar TRISC (pool
+    // is in the DM cache domain and the seeder is not emitted), and the raw-id ctor's body assert
+    // covers Quasar DM itself (a raw id has no declared binding, so no seeder runs -- the AMO
+    // would hit boot garbage or a stale count).
 #if !defined(ARCH_QUASAR)
     static_assert(
         Scope != SemScope::DM_LOCAL_CACHED,
@@ -95,8 +96,9 @@ class Semaphore {
     static uintptr_t sem_l1_offset(uint32_t id) {
 #ifdef ARCH_QUASAR
         if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
-            // Covers the raw-id ctor too; the token ctor also checks this at compile time.
-            ASSERT(id * L1_ALIGNMENT < MEM_DM_CACHED_SEM_SIZE);
+            // Reachable only via the token ctor (the raw-id ctor rejects cached scope), which
+            // also bounds-checks Id at compile time; kept as runtime defense-in-depth.
+            ASSERT(id < MEM_DM_CACHED_SEM_SIZE / L1_ALIGNMENT);
             return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * L1_ALIGNMENT;
         }
 #endif
@@ -124,7 +126,17 @@ class Semaphore {
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
     // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
-    explicit Semaphore(uint32_t semaphore_id) : l1_offset_(sem_l1_offset(semaphore_id)) {}
+    explicit Semaphore(uint32_t semaphore_id) : l1_offset_(sem_l1_offset(semaphore_id)) {
+        // Body assert (fires only when THIS ctor is used): a raw id has no declared binding, so
+        // the host never emits/injects the cached-pool seeder (sem::init_dm_cached()) -- the word
+        // would be boot garbage or a stale count. The class-scope asserts cover the other axes.
+        static_assert(
+            Scope != SemScope::DM_LOCAL_CACHED,
+            "a DM_LOCAL_CACHED semaphore must be constructed from its sem:: binding token "
+            "(`Semaphore s(sem::<name>);`): the declared binding is what makes the host emit and "
+            "auto-inject the cached-pool seeder. A raw id would address a stale/unseeded pool "
+            "word. For an id-addressed semaphore use the default scope or SemScope::EXTERNAL.");
+    }
 
     // Construct from a host-baked sem:: accessor token. Scope and ReadOnly come from the
     // token via CTAD (deduction guide after the class), so `Semaphore s(sem::x);` picks the
@@ -224,6 +236,9 @@ public:
      *   remains (the caller owns that invariant there).
      * INVARIANT (EXTERNAL, Quasar): the semaphore value must never legitimately be 0xFFFFFFFF —
      *   it is the CAS-return sentinel.
+     * EMULE (TT_EMULE_USE_L1_POOL): the emulator compiles the Gen1 single-consumer arm for
+     *   EXTERNAL — multi-consumer down() is NOT safe there (the host rejects that shape under
+     *   emule at config time).
      * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
      *
      * @param value The value to decrement the semaphore by.
@@ -272,7 +287,8 @@ public:
             const uint64_t sem_noc = ::get_noc_addr(l1_offset_);
             const uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset());
             const uint32_t ret_slot = cas_ret_slot();
-            auto* ret_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_UNCACHED_BASE + ret_slot);
+            auto* ret_word =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(MEM_L1_UNCACHED_BASE) + ret_slot);
             constexpr uint32_t kCasSentinel = 0xFFFFFFFFu;
             // One consumed NoC atomic: sentinel, issue, fence, poll the returned pre-op value.
             auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
@@ -288,6 +304,9 @@ public:
                     /*posted=*/false,
                     ret_slot);
                 noc_async_atomic_barrier();
+                // Re-arm: the barrier's internal waypoints overwrote ours, and this poll can
+                // block -- a hang here must dump as NSDD, not as the barrier's code.
+                WAYPOINT("NSDD");
                 while (*ret_word == kCasSentinel) {
                 }
                 return *ret_word;
@@ -311,6 +330,7 @@ public:
                     *ret_word = kCasSentinel;
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
+                    WAYPOINT("NSDD");  // re-arm past the barrier's internal waypoints
                     while (*ret_word == kCasSentinel) {
                     }
                 }

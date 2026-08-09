@@ -357,8 +357,10 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             return SemScope::DM_LOCAL_CACHED;
         }
         case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
-        case SemaphoreScope::AUTO:
-        default: {
+        default:
+            TT_THROW(
+                "SemaphoreSpec '{}' has an unknown SemaphoreScope ({})", sem.unique_id, static_cast<int>(sem.scope));
+        case SemaphoreScope::AUTO: {
             // AUTO: decision table in the function header. Gen1 keeps its historical
             // LOCAL_NONATOMIC (the Quasar DM cache has no Gen1 equivalent; a Gen1 user who wants
             // atomicity forces EXTERNAL -- the NoC atomic increment is a standard Gen1 primitive).
@@ -636,6 +638,14 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            // Codegen emits sem::init_dm_cached() (the cached-pool seeder) into the same
+            // namespace as the accessors; an accessor by that name would be a redefinition
+            // error inside generated code instead of a readable failure.
+            TT_FATAL(
+                binding.accessor_name != "init_dm_cached",
+                "Kernel '{}' semaphore accessor_name 'init_dm_cached' is reserved (generated "
+                "cached-pool seeder symbol). Pick another name.",
+                kernel.unique_id);
             TT_FATAL(
                 collected.semaphore_by_name.contains(binding.semaphore_spec_name),
                 "Kernel '{}' references unknown semaphore '{}'",

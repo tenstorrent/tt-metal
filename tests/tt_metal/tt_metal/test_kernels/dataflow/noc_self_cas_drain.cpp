@@ -80,7 +80,7 @@ void kernel_main() {
     // Every INCR_GET this hart issues ALSO returns its pre-op word to the sticky ret_slot.
     // Consume it with the same sentinel discipline as the CASes, or a late-landing return
     // could overwrite the NEXT CAS's sentinel and corrupt the lock verdict. (Sem pre-op is a
-    // small count plus 0x10000000-sized poisons -- never the sentinel, EXCEPT a double grant
+    // small count plus 0x10000001-sized poisons -- never the sentinel, EXCEPT a double grant
     // spending the last credit, which wraps to 0xFFFFFFFF and hangs this poll: see the host
     // EXPECT message.)
     auto consumed_inc = [&](uint64_t noc_addr, uint32_t incr) {
@@ -95,7 +95,7 @@ void kernel_main() {
     // lost or double-granted; poison the count so the host's exact-0 check fails.
     auto release_lock = [&]() {
         if (lock_cas(1 /*cmp*/, 0 /*swap*/) != 1) {
-            consumed_inc(sem_noc_addr, 0x10000000u);
+            consumed_inc(sem_noc_addr, 0x10000001u);  // not a divisor of 2^32: repeated poisons cannot sum to 0
         }
     };
 
