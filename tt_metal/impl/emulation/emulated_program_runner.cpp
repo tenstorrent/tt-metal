@@ -903,8 +903,8 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // emule does not model DM_LOCAL_CACHED (no pool seeder, no entry wrapper; only the ring
-        // slot is seeded), so a cached semaphore would read an unseeded pool word. Refuse loudly.
+        // emule does not model DM_LOCAL_CACHED (no seeder call in its entry wrapper; only the
+        // ring slot is seeded), so a cached semaphore would read an unseeded pool word. Refuse loudly.
         for (const auto& [name, h] : s.sem_accessors) {
             TT_FATAL(
                 h.scope != SemScope::DM_LOCAL_CACHED,

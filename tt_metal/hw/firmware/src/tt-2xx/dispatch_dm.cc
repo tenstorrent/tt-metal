@@ -109,6 +109,12 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
+        // Same sweep as dm.cc: EXTERNAL down()'s NoC-CAS lock words must start unlocked on every
+        // image that compiles the lock protocol. Unreachable today (Metal 2.0 kernels never land
+        // on dispatch cores), but a garbage lock word would spin the first down() forever.
+        for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE) / 4; w++) {
+            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
+        }
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];

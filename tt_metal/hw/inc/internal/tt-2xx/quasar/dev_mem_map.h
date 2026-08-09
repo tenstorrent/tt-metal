@@ -173,10 +173,10 @@
 // Packet header pool sizing constants
 #define PACKET_HEADER_MAX_SIZE 144  // sizeof(UDMHybridMeshPacketHeader)
 #define NUM_PACKET_HEADERS \
-    (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * (DM0, DM1)
+    (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * per-DM-hart
 
 // Packet header pool for fabric networking
-// Size: 144 * 6 * 2 * 2 = 3456
+// Size: 144 * (6 * 2 * 8) = 13824 on Quasar (MaxDMProcessorsPerCoreType = 8)
 #define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 #define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * NUM_PACKET_HEADERS)
 #if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
@@ -185,13 +185,14 @@
 
 // Per-hart NoC-atomic return slots (EXTERNAL down()'s CAS readback). The SCMDBUF R_SRC_ADDR
 // register is per-hart sticky, so each hart needs a private word for returned pre-op values.
-// 8 harts x 4B, padded to one 64B line; accessed only via NoC responses and the uncached
+// 8 harts x 4B, rounded up to one 64B line; accessed only via NoC responses and the uncached
 // alias (never cache-dirtied). No init needed: every use pre-writes a sentinel and polls.
 #define MEM_NOC_CAS_RET_BASE (((MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
 #define MEM_NOC_CAS_RET_SIZE 64
 
 // Per-semaphore EXTERNAL down() lock words (4-bit NoC-CAS spinlock; values only 0/1).
-// 16 semaphores x 4B, padded to one 64B line; touched only by NoC atomics. Zeroed once by
+// 16 semaphores x 4B = exactly one 64B line, no headroom (grow MEM_NOC_SEM_LOCK_SIZE with
+// NUM_SEMAPHORES; id 16's lock word would land on the cached pool). Touched only by NoC atomics. Zeroed once by
 // DM firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
 #define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
 #define MEM_NOC_SEM_LOCK_SIZE 64  // keep >= NUM_SEMAPHORES * 4
