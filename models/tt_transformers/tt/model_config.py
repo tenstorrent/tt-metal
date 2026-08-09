@@ -4154,11 +4154,12 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             if self.dim == 5120:
-                # Preserve Qwen's silicon-validated Galaxy user-gather layout.
+                # Qwen's unified attention output is [32, 1024] after the user
+                # gather, requiring one 32-wide shard on each of 32 cores.
                 self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                    shape=(32, 128),
+                    shape=(32 * mesh_cols, 32),
                     core_grid=num_to_coregrid(32),
-                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    strategy=ttnn.ShardStrategy.WIDTH,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
