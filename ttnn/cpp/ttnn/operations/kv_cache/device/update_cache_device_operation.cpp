@@ -141,6 +141,19 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
                 cache_tensor.padded_shape()[0]);
         } else {
             TT_FATAL(args.batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
+            // The multi-core program factory groups user rows in chunks of TILE_HEIGHT (32) per head, and always
+            // writes a full chunk of 32 rows for the final group. If the cache batch is not a multiple of 32, the
+            // surplus rows in that final group wrap back onto the first users' rows, overwriting their real data
+            // with the input tensor's tile padding. Reject the shape until per-group short-write support is added.
+            TT_FATAL(
+                cache_tensor.padded_shape()[0] % TILE_HEIGHT == 0,
+                "Cache tensor batch size ({}) must be a multiple of {} (TILE_HEIGHT) when >= {}; batch sizes that "
+                "are not a multiple of {} are not correctly supported by the multi-core update_cache kernel and "
+                "would silently corrupt user rows",
+                cache_tensor.padded_shape()[0],
+                TILE_HEIGHT,
+                TILE_HEIGHT,
+                TILE_HEIGHT);
         }
     }
 }
