@@ -48,8 +48,7 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
 // Generic in both baked token parameters (Scope, ReadOnly): the caller's Semaphore is
 // CTAD-deduced from its binding, so accept whatever the host picked rather than pin it here.
 template <SemScope SemS, bool SemRO = false>
-FORCE_INLINE
-void sort_noc_exchange_Wt_tiles(
+FORCE_INLINE void sort_noc_exchange_Wt_tiles(
     Noc& noc,
     Semaphore<ProgrammableCoreType::TENSIX, SemS, SemRO>& sem_self,
     uint32_t value_tensor_this_dfb_id,
@@ -176,8 +175,7 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  */
 // Generic in both token parameters, for the same reason as sort_noc_exchange_Wt_tiles above.
 template <SemScope SemS, bool SemRO = false>
-FORCE_INLINE
-void sort_barrier(
+FORCE_INLINE void sort_barrier(
     Noc& noc,
     Semaphore<ProgrammableCoreType::TENSIX, SemS, SemRO>& sem_barrier,
     uint32_t physical_core_lookup_table_dfb_id,
