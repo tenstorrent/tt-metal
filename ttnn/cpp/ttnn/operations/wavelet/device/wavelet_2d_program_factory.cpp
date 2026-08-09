@@ -603,9 +603,15 @@ void validate_2d_tensor(const Tensor& tensor, const char* tensor_name) {
     const size_t padded_width = round_up(static_cast<size_t>(shape.width), kTileWidth2D);
     TT_FATAL(
         padded_height <= std::numeric_limits<size_t>::max() / padded_width / sizeof(float),
-        "{} physical size calculation overflows size_t",
+        "{} per-batch physical size calculation overflows size_t",
         tensor_name);
-    const size_t required_bytes = static_cast<size_t>(shape.batch_count) * padded_height * padded_width * sizeof(float);
+    const size_t bytes_per_batch = padded_height * padded_width * sizeof(float);
+    TT_FATAL(
+        bytes_per_batch == 0 ||
+            static_cast<size_t>(shape.batch_count) <= std::numeric_limits<size_t>::max() / bytes_per_batch,
+        "{} batched physical size calculation overflows size_t",
+        tensor_name);
+    const size_t required_bytes = static_cast<size_t>(shape.batch_count) * bytes_per_batch;
     TT_FATAL(
         tensor.buffer()->size() >= required_bytes,
         "{} physical buffer has {} bytes but its padded tile shape requires {}",
