@@ -60,6 +60,23 @@ STATS_FIDELITY = ttnn.WormholeComputeKernelConfig(
 # which is why the fallback exists at all rather than an assert.
 ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
 
+# Folding the candidate axis into the last dim trades the collective's padded
+# payload against two permutes, so it only pays once the axis is wide enough to
+# have been paying for padding. Traced on `(2,4)` at 640 rows per chip, one
+# `all_reduce` folded against unfolded: C=2 costs 6.0 us, C=4 buys 2.7, C=8 buys
+# 12.5, C=16 buys 50.5, C=32 buys 96.0. `merge`'s live read crosses at C=2 — it
+# packs two statistics for one candidate — so an ungated fold is a straight loss
+# on the most frequent collective in the walk.
+FOLD_MIN_CANDIDATES = 4
+
+# `attn_res_stats` holds the same row of `v` that kernel does, double-buffered,
+# plus `q` and one transformed copy of the row, so its circular buffers step by
+# the same 8 192 B per tile of width at bf16. Only the fixed part differs — 10 240 B
+# against ~115 584 — which buys it 189 tiles where the statistics kernel clears 177.
+# fp32 doubles every one of those buffers, so it clears 94.
+FUSED_STATS_MAX_WIDTH = 189 * ttnn.TILE_SIZE
+FUSED_STATS_MAX_WIDTH_FP32 = 94 * ttnn.TILE_SIZE
+
 
 class TtAttnRes(LightweightModule):
     """The AttnRes read, composed from ttnn primitives.
@@ -99,7 +116,8 @@ class TtAttnRes(LightweightModule):
             the padding already paid for. Phase 9 P4: 348 us -> 47 us on `(2,4)`
             at `C = 18`, and the cost stops scaling with the candidate count.
             Costs two `ttnn.permute` calls, which is why it is off untraced —
-            there two extra launches cancel the saving exactly.
+            there two extra launches cancel the saving exactly — and why it is
+            width-gated even when on; see `FOLD_MIN_CANDIDATES`.
         one_pass_stats: take both `d`-reductions in a single pass over `v`, with
             `rms_norm_pre_all_gather` for the sum of squares and a matmul for the
             dot. Written as `mul` then `sum`, each reduction materializes a second
@@ -118,6 +136,34 @@ class TtAttnRes(LightweightModule):
             measured as unweighted `fast_reduce_nc` over the same tensor. The 29 us
             over that floor is what the weighting itself costs. Off is the composed
             form, kept because it is the reference the op is gated against.
+        fused_merge: take `merge`'s online-softmax fold with
+            `ttnn.experimental.attn_res_merge` instead of the eleven-op chain.
+            Only three of those ops are full-width; the rest are per-row scalar
+            work whose cost is almost entirely the launch. Folding the division
+            into the row scalars turns the full-width half into two column
+            broadcasts MAC'd into one accumulator, so the site reads `partial`
+            and `prefix_sum` once and writes the result once instead of moving
+            nine `[1, 1, N, d/tp]` planes. Off is the composed form, kept because
+            it is the reference the op is gated against.
+        fused_scores: take everything between the score collective and the score
+            itself with `ttnn.experimental.attn_res_scores` — the narrowing
+            typecast, the two `slice` calls that unpack the statistics pair, and
+            the four elementwise ops that normalize. All seven run on tensors
+            carrying one scalar per `(token, candidate)`, so each costs far more
+            to launch than to run. The op splits the pair by page arithmetic and
+            keeps the whole normalization in dest registers, so the result rounds
+            to `dtype` once instead of five times. Off is the composed form, kept
+            because it is the reference the op is gated against.
+        fused_stats: take everything between `v` and the score collective with
+            `ttnn.experimental.attn_res_stats` — the RMSNorm statistics kernel,
+            the `slice` that pulls its sum out of a 32-wide row, the query
+            transpose, the matmul, and the `concat` and typecast that stack the
+            pair for the crossing. `one_pass_stats` already reads `v` once per
+            statistic; this reads it once for both, and emits the packed layout
+            `attn_res_scores` expects rather than building it in DRAM. Requires
+            `fused_scores`, which is that layout's only consumer, and is width-gated
+            on its own — see `FUSED_STATS_MAX_WIDTH`. Off is the composed form,
+            kept because it is the reference the op is gated against.
     """
 
     def __init__(
@@ -135,6 +181,9 @@ class TtAttnRes(LightweightModule):
         fold_stats=True,
         one_pass_stats=True,
         fused_mix=True,
+        fused_merge=True,
+        fused_scores=True,
+        fused_stats=True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -148,6 +197,8 @@ class TtAttnRes(LightweightModule):
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
         self.fused_mix = fused_mix
+        self.fused_merge = fused_merge
+        self.fused_scores = fused_scores
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -169,6 +220,17 @@ class TtAttnRes(LightweightModule):
         ), f"shard width {self.shard_width} is not a multiple of {ttnn.TILE_SIZE}"
         # The matvec has no width limit; the RMSNorm statistics kernel does.
         self.one_pass_squares = one_pass_stats and self.shard_width <= ONE_PASS_SQUARES_MAX_WIDTH
+
+        # `attn_res_scores` is the only consumer of the packed layout the fused
+        # statistics op emits, so without it the pair would have to be unpacked
+        # and narrowed by hand — the chain the op exists to delete.
+        stats_width_limit = FUSED_STATS_MAX_WIDTH if dtype == ttnn.bfloat16 else FUSED_STATS_MAX_WIDTH_FP32
+        self.fused_stats = (
+            fused_stats
+            and fused_scores
+            and dtype in (ttnn.bfloat16, ttnn.float32)
+            and self.shard_width <= stats_width_limit
+        )
 
         # Both mappers are None at a single device, so placement there is exactly
         # what it was before distribution existed and every prior measurement
@@ -196,6 +258,12 @@ class TtAttnRes(LightweightModule):
                 mesh_device, dims=tuple(compose_dims), mesh_shape=mesh_device.shape
             )
 
+        # Query layouts the op owns: one column per query, one stack per block.
+        # Both key on identity because `ttnn.Tensor.__eq__` is elementwise, which
+        # makes a tensor hashable but not usable as a dict key; each value holds
+        # its queries so an address cannot be recycled under the key.
+        self._column_by_query_id = {}
+        self._stack_by_query_ids = {}
         self.queries = [self.to_query(q) for q in torch_queries] if torch_queries is not None else []
 
     def to_query(self, torch_query):
@@ -203,17 +271,27 @@ class TtAttnRes(LightweightModule):
 
         The query is folded from two `[d]` weights (`res_norm.weight` times
         `res_proj.weight`), so it shards on `d` exactly like the stream it is
-        dotted against."""
+        dotted against.
+
+        The transposed column the dot matmul contracts against is placed here too.
+        It is a function of the weight alone, so preparing it on first use instead
+        would land a permute per read site wherever the caller happens to be — and
+        a caller that captures a trace on its first forward would capture those
+        permutes and replay them for nothing. Weight layout belongs at weight
+        placement, which is the one point that is unambiguously outside a trace.
+        """
         assert (
             torch_query.numel() == self.hidden_size
         ), f"query has {torch_query.numel()} elements, expected {self.hidden_size}"
-        return ttnn.from_torch(
+        row = ttnn.from_torch(
             torch_query.reshape(1, 1, 1, self.hidden_size),
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             mesh_mapper=self.vector_mapper,
         )
+        self._query_column(row)
+        return row
 
     def _assert_shard_width(self, stream):
         assert stream.shape[-1] == self.shard_width, (
@@ -245,10 +323,11 @@ class TtAttnRes(LightweightModule):
     def _collective(self, wide):
         """One all-reduce over the TP axis. Does not consume `wide`.
 
-        With `fold_stats`, the candidate axis rides in the last dim for the
-        crossing: `[1, C, N, 1]` -> `[1, 1, N, C]` -> reduce -> back. The
-        collective charges for tile padding at the payload rate, so a 1-wide
-        last dim pays for 32 columns and uses one; folding fills them.
+        With `fold_stats` and an axis of at least `FOLD_MIN_CANDIDATES`, the
+        candidate axis rides in the last dim for the crossing: `[1, C, N, 1]` ->
+        `[1, 1, N, C]` -> reduce -> back. The collective charges for tile padding
+        at the payload rate, so a 1-wide last dim pays for 32 columns and uses
+        one; folding fills them.
 
         The fold is not bit-neutral. On reduce-scatter it reassociates the partial
         sums — measured against a replicated 4x reference it doubles the error,
@@ -260,7 +339,7 @@ class TtAttnRes(LightweightModule):
         186-read depth PCC in `test_tp_depth_walk`, not exactness: measured there,
         the two differ by <=5e-6 in *either* direction, which is reassociation
         noise rather than a precision cost."""
-        if not (self.fold_stats and wide.shape[-1] == 1 and wide.shape[1] <= ttnn.TILE_SIZE):
+        if not (self.fold_stats and wide.shape[-1] == 1 and FOLD_MIN_CANDIDATES <= wide.shape[1] <= ttnn.TILE_SIZE):
             return ttnn.all_reduce(
                 wide,
                 cluster_axis=self.tp_axis,
@@ -303,6 +382,25 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(reduced)
         return head, tail
 
+    def _reduce_stats_packed(self, first, second):
+        """Same one collective as `_reduce_stats_pair`, left stacked on dim 1.
+
+        Consumes both inputs. Stays at `stats_dtype` on the way out: the consumer
+        splits the pair by page arithmetic and normalizes in dest registers, so
+        neither the split nor the narrowing needs its own pass."""
+        packed = ttnn.concat([first, second], dim=1)
+        ttnn.deallocate(first)
+        ttnn.deallocate(second)
+        if self.tp_factor == 1:
+            return packed
+
+        wide = ttnn.typecast(packed, self.stats_dtype) if packed.dtype != self.stats_dtype else packed
+        reduced = self._collective(wide)
+        if wide is not packed:
+            ttnn.deallocate(wide)
+        ttnn.deallocate(packed)
+        return reduced
+
     def _local_sum_squares(self, v):
         """[1, C, N, d/tp] -> [1, C, N, 1]. Not yet summed across ranks.
 
@@ -341,10 +439,7 @@ class TtAttnRes(LightweightModule):
             ttnn.deallocate(projected)
             return dots
 
-        column = ttnn.permute(q, [0, 1, 3, 2])
-        dots = ttnn.matmul(v, column, compute_kernel_config=STATS_FIDELITY)
-        ttnn.deallocate(column)
-        return dots
+        return ttnn.matmul(v, self._query_columns([q]), compute_kernel_config=STATS_FIDELITY)
 
     def _local_dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R folded queries -> [1, C, N, R]. Rank-local.
@@ -363,11 +458,34 @@ class TtAttnRes(LightweightModule):
             per_site = [self._local_dots(v, q) for q in queries]
             return self._concat_sites(per_site)
 
-        columns = [ttnn.permute(q, [0, 1, 3, 2]) for q in queries]
-        stacked = self._concat_sites(columns)
-        dots = ttnn.matmul(v, stacked, compute_kernel_config=STATS_FIDELITY)
-        ttnn.deallocate(stacked)
-        return dots
+        return ttnn.matmul(v, self._query_columns(queries), compute_kernel_config=STATS_FIDELITY)
+
+    def _query_column(self, q):
+        """The `[1, 1, d/tp, 1]` transpose of one folded query, held by the op."""
+        if id(q) not in self._column_by_query_id:
+            self._column_by_query_id[id(q)] = (q, ttnn.permute(q, [0, 1, 3, 2]))
+        return self._column_by_query_id[id(q)][1]
+
+    def _query_columns(self, queries):
+        """R folded queries `[1, 1, 1, d/tp]` -> one `[1, 1, d/tp, R]` matmul operand.
+
+        The op owns what this returns; callers must not deallocate it. Queries are
+        folded weights, so both the transpose and the stack are functions of the
+        weights alone and neither belongs in a per-read-site cost.
+
+        Holding the stack means the first call for a block builds it, and only a
+        caller that captures a trace has to care where that lands. Capture already
+        requires a compile pass over the same call sequence — a program built
+        during capture is not the one replayed — so the stack is built in that
+        pass alongside the programs, and the concat never enters a trace. The
+        columns themselves are placed by `to_query` and do not even need that.
+        """
+        key = tuple(id(q) for q in queries)
+        if key not in self._stack_by_query_ids:
+            columns = [self._query_column(q) for q in queries]
+            stack = columns[0] if len(columns) == 1 else ttnn.concat(columns, dim=3)
+            self._stack_by_query_ids[key] = (list(queries), stack)
+        return self._stack_by_query_ids[key][1]
 
     def _dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
@@ -380,12 +498,12 @@ class TtAttnRes(LightweightModule):
         return self._reduce_stats(self._local_dots_by_site(v, queries))
 
     @staticmethod
-    def _concat_sites(per_site):
-        """Stack per-site tensors along the last dim, consuming them. R == 1 is
-        the identity — `ttnn.concat` of one tensor would be a copy."""
+    def _concat_sites(per_site, dim=3):
+        """Stack per-site tensors along `dim`, consuming them. R == 1 is the
+        identity — `ttnn.concat` of one tensor would be a copy."""
         if len(per_site) == 1:
             return per_site[0]
-        stacked = ttnn.concat(per_site, dim=3)
+        stacked = ttnn.concat(per_site, dim=dim)
         for tensor in per_site:
             ttnn.deallocate(tensor)
         return stacked
@@ -408,14 +526,16 @@ class TtAttnRes(LightweightModule):
 
     @staticmethod
     def _site_column(stacked, site):
-        """One read site's plane out of a `[R, ...]` batch, owned by the caller.
+        """One read site's plane out of a `[R, ...]` batch, borrowed from it.
 
-        A `ttnn.slice` that spans its input hands back a fresh handle onto the
-        *same* device buffer, so at `R == 1` the plane would die with the batch.
-        Copy in that one case; a narrower slice already writes its own."""
+        Only for the unfused paths — the fused ops take the site index and read
+        the plane themselves, which is why nothing on the production path calls
+        this. Never deallocate the result: at `R == 1` it *is* `stacked`, since a
+        `ttnn.slice` spanning its input hands back a fresh handle onto the same
+        device buffer. Dropping the reference releases a real slice's buffer."""
         shape = list(stacked.shape)
         if shape[0] == 1:
-            return ttnn.clone(stacked)
+            return stacked
         return ttnn.slice(stacked, [site, 0, 0, 0], [site + 1] + shape[1:])
 
     def _to_reciprocal_rms(self, sum_squares):
@@ -442,29 +562,60 @@ class TtAttnRes(LightweightModule):
 
         Both `d`-reductions ride one collective — this is the per-read cost on a
         TP mesh, and it is `2(S+1)` scalars per token."""
-        sum_squares, dots = self._reduce_stats_pair(self._local_sum_squares(v), self._local_dots(v, q))
+        if self.fused_stats:
+            packed = ttnn.experimental.attn_res_stats(v, q, dtype=self.stats_dtype)
+            if self.tp_factor == 1:
+                return self._scores_from_stats(packed)
+            crossed = self._collective(packed)
+            ttnn.deallocate(packed)
+            return self._scores_from_stats(crossed)
+
+        sum_squares = self._local_sum_squares(v)
+        dots = self._local_dots(v, q)
+
+        if self.fused_scores:
+            return self._scores_from_stats(self._reduce_stats_packed(sum_squares, dots))
+
+        sum_squares, dots = self._reduce_stats_pair(sum_squares, dots)
         reciprocal_rms = self._to_reciprocal_rms(sum_squares)
         scores = ttnn.mul(dots, reciprocal_rms)
         ttnn.deallocate(dots)
         ttnn.deallocate(reciprocal_rms)
         return scores
 
+    def _scores_from_stats(self, stats):
+        """Globally summed `[1, 2C, N, 1]` statistics -> `[1, C, N, 1]` scores.
+
+        Consumes `stats`. The op splits the pair itself, so the two halves never
+        exist as tensors."""
+        scores = ttnn.experimental.attn_res_scores(stats, 1.0 / self.hidden_size, self.eps, dtype=self.dtype)
+        ttnn.deallocate(stats)
+        return scores
+
     def _mix(self, v, weights):
-        """Weighted sum over the candidate axis. Values enter raw — the mixture
-        is over `v`, not over the normalized key.
+        """Weighted sum over the candidate axis, one per read site batched on
+        `weights`' dim 0: `[1, C, N, d/tp]` and `[R, C, N, 1]` -> `[R, 1, N, d/tp]`.
+
+        Values enter raw — the mixture is over `v`, not over the normalized key.
 
         Rank-local at every sharding: the weight is a per-(token, candidate)
         scalar and the sum is over candidates, so no `d`-wide tensor moves.
 
-        The fused op takes the fp32 `weights` directly — its weight operand
-        accepts fp32 precisely so this call site does not have to downcast the
-        score chain's output to hand it over. See `fused_mix`."""
+        Batching the sites into the op is what keeps `v` out of the loop. `v` is
+        the largest tensor in the module and every site weights the same one, so
+        a site-at-a-time mixture streams it R times; the fused op reads it once
+        per group of sites instead. It also takes the fp32 `weights` directly —
+        its weight operand accepts fp32 precisely so this call site does not have
+        to downcast the score chain's output to hand it over. See `fused_mix`."""
         if self.fused_mix:
             return ttnn.experimental.fast_weighted_reduce_nc(v, weights, dim=1)
-        weighted = ttnn.mul(v, weights)
-        mixed = ttnn.sum(weighted, dim=1, keepdim=True)
-        ttnn.deallocate(weighted)
-        return mixed
+
+        per_site = []
+        for site in range(weights.shape[0]):
+            weighted = ttnn.mul(v, self._site_column(weights, site))
+            per_site.append(ttnn.sum(weighted, dim=1, keepdim=True))
+            ttnn.deallocate(weighted)
+        return self._concat_sites(per_site, dim=0)
 
     def _softmax_over_candidates(self, scores):
         """[1, C, N, 1] -> [1, C, N, 1], hand-rolled rather than `ttnn.softmax`.
@@ -532,9 +683,11 @@ class TtAttnRes(LightweightModule):
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
 
         Returns:
-            Three lists, one entry per query: partials `[1, 1, N, d/tp_factor]`
-            holding `sum_i e_i v_i`, shifts `[1, 1, N, 1]`, masses `[1, 1, N, 1]`,
-            in the online-softmax convention `e_i = exp(s_i - m)`.
+            The partials `[R, 1, N, d/tp_factor]`, each site's holding `sum_i e_i v_i`,
+            and the shifts and masses `[R, 1, N, 1]`, all batched over read sites in
+            the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes the
+            batches whole and names the site; keep them alive until the block's last
+            read.
         """
         reciprocal_rms = self._reciprocal_rms(block_residual)
         dots = self._dots_by_site(block_residual, queries)
@@ -550,36 +703,45 @@ class TtAttnRes(LightweightModule):
         site_masses = ttnn.sum(exponentials, dim=1, keepdim=True)
 
         # Both reductions above contract dim 1, so the sites cannot move until here.
+        # Site-major is what makes a site addressable without an op: on dim 0 a site
+        # is a whole tile plane, so every consumer below reaches it as a page offset.
+        # It is also the axis the mixture batches over, which is what lets the whole
+        # block's sealed half be one dispatch.
         exponentials = self._site_major(exponentials)
         site_shifts = self._site_major(site_shifts)
         site_masses = self._site_major(site_masses)
 
-        partials, shifts, masses = [], [], []
-        for site in range(len(queries)):
-            weights = self._site_column(exponentials, site)
-            partials.append(self._mix(block_residual, weights))
-            ttnn.deallocate(weights)
-            shifts.append(self._site_column(site_shifts, site))
-            masses.append(self._site_column(site_masses, site))
+        partials = self._mix(block_residual, exponentials)
 
         ttnn.deallocate(exponentials)
-        ttnn.deallocate(site_shifts)
-        ttnn.deallocate(site_masses)
-        return partials, shifts, masses
+        return partials, site_shifts, site_masses
 
-    def merge(self, partial, shift, mass, prefix_sum, q):
+    def merge(self, partial, shift, mass, prefix_sum, q, site=0):
         """Fold the live stream into a precomputed sealed-snapshot partial.
 
         Args:
-            partial, shift, mass: this read site's entries from `inter_block`.
+            partial, shift, mass: `inter_block`'s batches over read sites, passed
+                whole. The fused op reads site `site` out of them itself, so the
+                batches survive the read and the caller frees them once per block.
             prefix_sum: `[1, 1, N, d/tp_factor]` live residual stream.
-            q: `[1, 1, 1, d/tp_factor]` folded query, the one that built `partial`.
+            q: `[1, 1, 1, d/tp_factor]` folded query, the one that built site
+                `site`'s partial.
+            site: which read site of the batches this is.
 
         Returns:
             `[1, 1, N, d/tp_factor]`, equal to `forward` up to rounding.
         """
         self._assert_shard_width(prefix_sum)
         live_scores = self._scores(prefix_sum, q)
+
+        if self.fused_merge:
+            merged = ttnn.experimental.attn_res_merge(partial, prefix_sum, shift, mass, live_scores, site=site)
+            ttnn.deallocate(live_scores)
+            return merged
+
+        partial = self._site_column(partial, site)
+        shift = self._site_column(shift, site)
+        mass = self._site_column(mass, site)
 
         merged_shift = ttnn.maximum(shift, live_scores)
         rescale = ttnn.exp(ttnn.sub(shift, merged_shift))
