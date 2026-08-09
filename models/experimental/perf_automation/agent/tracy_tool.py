@@ -187,6 +187,24 @@ def normalize_dispatch(gaps_ns: Sequence[float]) -> str:
     return "gappy" if median(gaps) > DISPATCH_GAP_NS else "ok"
 
 
+# The per-core column the raw CSV carries, in preference order. MIN is deliberately not here: it is
+# the fastest core, which is not the op's duration under any reading.
+_PER_CORE_NS_COLS = ("DEVICE KERNEL DURATION PER CORE MAX [ns]",)
+
+
+def _member_device_us(m: dict) -> float:
+    """One op's device time in MICROSECONDS, from the per-core column when the capture has it.
+
+    See the call site for why the cross-core column is wrong on Blackhole. Returns 0.0 only when
+    neither source parses, which is the same as the old behaviour for an unreadable row."""
+    raw = m.get("raw") or {}
+    for col in _PER_CORE_NS_COLS:
+        v = _to_float(raw.get(col))
+        if v is not None and v > 0:
+            return v / 1e3  # ns -> us, matching tt-perf-report's unit
+    return _to_float((m.get("report") or {}).get("Device Time")) or 0.0
+
+
 def _rank(count: int, device_ms: float) -> str:
     """time -> tune the op; count -> remove/fuse. TBD(count-thresh) provisional."""
     if count <= 0:
@@ -356,9 +374,24 @@ def build_buckets(
     buckets: list[dict[str, Any]] = []
     total_ms = 0.0
     for op_class, members in groups.items():
-        # tt-perf-report "Device Time" is in MICROSECONDS (verified against raw
-        # DEVICE KERNEL DURATION [ns] on a real capture: ratio exactly 1000).
-        device_ms = sum((_to_float(m["report"].get("Device Time")) or 0.0) for m in members) / 1e3
+        # PER-CORE DURATION, NOT THE CROSS-CORE ONE. tt-perf-report's "Device Time" comes from
+        # DEVICE KERNEL DURATION [ns], which process_device_log computes with `op_first_last`: the
+        # FIRST start seen on any core to the LAST end seen on any core. Where cores do not share a
+        # clock base -- Blackhole -- that span contains the inter-core offset as well as the op, so
+        # the "duration" can be the offset rather than the work, and the error is unbounded.
+        #
+        # tt-metal already computes the correct figure and writes it out: the same post-processing
+        # runs `op_core_first_last`, which pairs each core's own start and end and never crosses
+        # cores, and emits DEVICE KERNEL DURATION PER CORE MIN/MAX/AVG [ns]. Nothing here read it.
+        #
+        # MAX, not AVG: an op is not finished until its SLOWEST core is, so the max across cores is
+        # its duration -- averaging understates every multi-core op. On hardware where the cores do
+        # share a clock the two agree, so this changes nothing there; it only removes an error that
+        # exists on Blackhole.
+        #
+        # Falls back to Device Time when the per-core columns are absent (older captures), because a
+        # missing column must not zero a bucket -- a zero device_ms reads as "infinitely fast".
+        device_ms = sum(_member_device_us(m) for m in members) / 1e3
         total_ms += device_ms
         gaps = [_to_float(m["report"].get("Op-to-Op Gap")) for m in members]
         gaps = [g for g in gaps if g is not None]
