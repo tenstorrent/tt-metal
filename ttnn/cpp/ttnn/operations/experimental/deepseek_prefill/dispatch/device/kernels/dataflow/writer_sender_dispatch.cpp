@@ -108,10 +108,17 @@ void kernel_main() {
     constexpr uint32_t writer_cb_size = get_compile_time_arg_val(writer_extra_args_base + 0);
     constexpr uint32_t num_workers = get_compile_time_arg_val(writer_extra_args_base + 1);
 #ifdef SPARSE_MCAST_DISPATCH
-    // Grouped record (must match dispatch_program_factory.cpp grouped_route_info_u32 and the layout
-    // written by writer_worker_dispatch): [dir, num_dests, token_idx, page[4], dist[4], expert[4],
-    // k[4], weight[4]] = 23 u32, aligned up to the L1 alignment for the ring slot stride.
-    constexpr uint32_t grouped_route_info_u32 = 23;
+    // Grouped record: [dir, num_dests, token_idx, page[4], dist[4], k[4]] = 15 u32, aligned up to the
+    // L1 alignment for the ring slot stride.
+    //
+    // DANGER: this is a hand-duplicated copy of grouped_route_info_u32 in dispatch_program_factory.cpp.
+    // The factory sizes the c_4 ring slots and gives the producer its stride (writer_worker_dispatch
+    // compile-arg 10); this constant is what the CONSUMER strides by. If the two ever disagree, slot 0
+    // still lines up and every later slot is read from the wrong offset — the sender then decodes
+    // garbage as direction/num_dests, fans out bogus fabric writes, and never matches
+    // ROUTE_INFO_SENTINEL, so the drain loop never terminates and the device hangs. Keep in lockstep
+    // with the factory and with the layout written by writer_worker_dispatch.
+    constexpr uint32_t grouped_route_info_u32 = 15;
     constexpr uint32_t route_info_slot_stride =
         ((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment;
 #else
