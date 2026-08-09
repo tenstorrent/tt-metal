@@ -185,29 +185,40 @@ class Attention(LightweightModule):
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
+            bias_num_devices = self.num_devices_per_group if self.TG else configuration.num_devices
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wq_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wk_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wv_str}.bias"], bias_num_devices)[i],
                         ],
                         dim=-1,
                     )
-                    for i in range(configuration.num_devices)
+                    for i in range(bias_num_devices)
                 ],
                 dim=-1,
             )
+            bias_mesh_mapper = (
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(-1, None),
+                    mesh_shape=configuration.cluster_shape,
+                )
+                if self.TG
+                else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            )
+            bias_cache_suffix = "sharded_2d" if self.TG else "sharded"
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=bias_mesh_mapper,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+                cache_file_name=cache_name(f"wqkv_bias_prefill_{bias_cache_suffix}"),
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
@@ -228,11 +239,11 @@ class Attention(LightweightModule):
                 bias_tensor = ttnn.as_tensor(
                     qkv_bias_decode,
                     device=self.mesh_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    mesh_mapper=bias_mesh_mapper,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
-                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                    cache_file_name=cache_name(f"wqkv_bias_decode_{bias_cache_suffix}_{batch_size}"),
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
@@ -623,17 +634,7 @@ class Attention(LightweightModule):
             # select the bias tensor based on the number of tiles in the rows
             # WARNING: must not change the batch size between compiling and executing a trace
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
-            wqkv_bias = self.wqkv_bias_decode[num_tiles - 1]
-            if wqkv_bias.shape[-2] != xqkv_fused_sharded.shape[-2]:
-                # Keep the tile-padded storage while matching the linear output's logical batch height.
-                # The TG interleaved linear preserves sub-tile decode batch sizes, whereas the cached
-                # bias is expanded to a whole tile for trace execution.
-                wqkv_bias = ttnn.reshape(
-                    wqkv_bias,
-                    (xqkv_fused_sharded.shape[-2], wqkv_bias.shape[-1]),
-                    wqkv_bias.padded_shape,
-                )
-            xqkv_fused_sharded = xqkv_fused_sharded + wqkv_bias
+            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
         qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
