@@ -36,7 +36,7 @@ def test_untilize(ttnn_mesh_device, reset_seeds, name, shape):
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh, layout=ttnn.TILE_LAYOUT)
 
-    out = ttnn.untilize(x, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.experimental.quasar.untilize(x, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT, f"expected ROW_MAJOR output, got {out.layout}"
 
     # Value-preserving layout change -> compare against the original tensor.

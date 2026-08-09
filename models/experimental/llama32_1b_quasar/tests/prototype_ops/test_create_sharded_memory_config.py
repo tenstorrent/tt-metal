@@ -86,5 +86,5 @@ def test_create_sharded_memory_config(ttnn_mesh_device, reset_seeds, shape, stra
     h, w = shape
     x_torch = U.torch_rand((1, 1, h, w))
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
-    x_sharded = ttnn.to_memory_config(x, memcfg)
+    x_sharded = ttnn.experimental.quasar.to_memory_config(x, memcfg)
     U.assert_pcc(x_torch, x_sharded, pcc=0.999, mesh_device=mesh)

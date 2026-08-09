@@ -42,7 +42,7 @@ def test_typecast(ttnn_mesh_device, reset_seeds, name, src_dtype, tgt_dtype, pcc
     x_torch = U.torch_rand((1, 1, U.MAX_BATCH, U.DIM), dtype=torch.float32)
     x = U.to_tt(x_torch, mesh, dtype=src_dtype)
 
-    out = ttnn.typecast(x, dtype=tgt_dtype)
+    out = ttnn.experimental.quasar.typecast(x, dtype=tgt_dtype)
     assert out.dtype == tgt_dtype, f"expected dtype {tgt_dtype}, got {out.dtype}"
 
     ref = x_torch.float()

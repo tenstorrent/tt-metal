@@ -58,7 +58,7 @@ def test_linear(ttnn_mesh_device, reset_seeds, name, in_dim, out_dim, pcc, m):
     x = U.to_tt(x_torch, mesh)
     w = U.to_tt(w_torch, mesh)
 
-    out = ttnn.linear(x, w, dtype=ttnn.bfloat16)
+    out = ttnn.experimental.quasar.linear(x, w, dtype=ttnn.bfloat16)
 
     ref = x_torch.float() @ w_torch.float()
     U.assert_pcc(ref, out, pcc=pcc, mesh_device=mesh)

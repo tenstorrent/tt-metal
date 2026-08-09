@@ -36,7 +36,7 @@ def test_multiply_scalar(ttnn_mesh_device, reset_seeds, shape):
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)
 
-    out = ttnn.multiply(x, _EMBED_SCALE)
+    out = ttnn.experimental.quasar.multiply(x, _EMBED_SCALE)
 
     ref = x_torch.float() * _EMBED_SCALE
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
@@ -53,7 +53,7 @@ def test_multiply_tensor(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tt(a_torch, mesh)
     b = U.to_tt(b_torch, mesh)
 
-    out = ttnn.multiply(a, b)
+    out = ttnn.experimental.quasar.multiply(a, b)
 
     ref = a_torch.float() * b_torch.float()
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)

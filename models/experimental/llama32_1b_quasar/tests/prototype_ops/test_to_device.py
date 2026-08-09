@@ -46,6 +46,6 @@ def test_to_device(ttnn_mesh_device, reset_seeds, shape, uint):
         mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh),
     )
 
-    dev_t = ttnn.to_device(host_t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    dev_t = ttnn.experimental.quasar.to_device(host_t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     U.assert_pcc(torch_in, dev_t, pcc=0.999, mesh_device=mesh)

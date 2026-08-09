@@ -245,4 +245,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     to_layout/to_layout_nanobind.cpp
     reallocate/reallocate_nanobind.cpp
     to_device/to_device_nanobind.cpp
+    typecast/typecast_nanobind.cpp
+    sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
+    interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
 )

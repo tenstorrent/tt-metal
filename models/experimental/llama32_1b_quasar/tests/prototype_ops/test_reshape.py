@@ -49,7 +49,7 @@ def test_reshape(ttnn_mesh_device, reset_seeds, name, in_shape, out_shape):
     x_torch = U.torch_rand(in_shape)
     x = U.to_tt(x_torch, mesh)
 
-    out = ttnn.reshape(x, list(out_shape))
+    out = ttnn.experimental.quasar.reshape(x, list(out_shape))
 
     ref = torch.reshape(x_torch.float(), out_shape)
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

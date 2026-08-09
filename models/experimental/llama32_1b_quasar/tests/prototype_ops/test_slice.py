@@ -43,7 +43,7 @@ def test_slice(ttnn_mesh_device, reset_seeds, name, seq_len, last_token):
     x_torch = U.torch_rand((1, 1, seq_len, U.DIM))
     x = U.to_tt(x_torch, mesh)
 
-    out = ttnn.slice(x, (0, 0, floor, 0), (1, 1, floor + 32, x.shape[-1]))
+    out = ttnn.experimental.quasar.slice(x, (0, 0, floor, 0), (1, 1, floor + 32, x.shape[-1]))
 
     ref = x_torch.float()[0:1, 0:1, floor : floor + 32, : U.DIM]
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

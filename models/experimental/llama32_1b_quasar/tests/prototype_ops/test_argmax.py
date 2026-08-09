@@ -37,7 +37,7 @@ def test_argmax(ttnn_mesh_device, reset_seeds, batch, width):
     x = U.to_tt(x_torch, mesh)
 
     # Mirror the model: untilize before argmax (sampling_1d.py:283-289).
-    x_untilized = ttnn.untilize(x, use_multicore=True)
+    x_untilized = ttnn.experimental.quasar.untilize(x, use_multicore=True)
     out = ttnn.argmax(x_untilized, dim=-1, keepdim=False)
 
     # ttnn.argmax -> uint32, torch.argmax -> int64; normalize before compare.

@@ -97,7 +97,7 @@ def test_nlp_create_qkv_heads_decode_sharded(ttnn_mesh_device, reset_seeds, batc
         ttnn.BufferType.L1,
         ttnn.ShardSpec(one_core, [padded_batch, total_heads * U.HEAD_DIM], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    xqkv_fused = ttnn.to_device(xqkv_host, mesh, memory_config=in_memcfg)
+    xqkv_fused = ttnn.experimental.quasar.to_device(xqkv_host, mesh, memory_config=in_memcfg)
 
     q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,

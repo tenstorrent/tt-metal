@@ -36,7 +36,7 @@ def test_add(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tt(a_torch, mesh)
     b = U.to_tt(b_torch, mesh)
 
-    out = ttnn.add(a, b)
+    out = ttnn.experimental.quasar.add(a, b)
 
     ref = a_torch.float() + b_torch.float()
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

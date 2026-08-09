@@ -49,7 +49,7 @@ def test_pad(ttnn_mesh_device, reset_seeds, name, seq_len, pad_to):
 
     padding = [(0, 0)] * 4
     padding[2] = (0, pad_len)
-    out = ttnn.pad(x, padding=padding, value=0.0)
+    out = ttnn.experimental.quasar.pad(x, padding=padding, value=0.0)
 
     # F.pad pads from the last dim outward: (last_l, last_r, dim2_l, dim2_r).
     ref = F.pad(x_torch.float(), (0, 0, 0, pad_len), value=0.0)

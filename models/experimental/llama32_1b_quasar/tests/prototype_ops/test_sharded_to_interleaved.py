@@ -56,8 +56,10 @@ def test_sharded_to_interleaved(ttnn_mesh_device, reset_seeds, shape, strategy):
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
 
     memcfg = _sharded_cfg(shape[-2], shape[-1], strategy)
-    x_sharded = ttnn.interleaved_to_sharded(x, memcfg)
-    out = ttnn.sharded_to_interleaved(x_sharded, ttnn.L1_MEMORY_CONFIG)  # mlp_1d.py:445, attention_1d.py:1099
+    x_sharded = ttnn.experimental.quasar.interleaved_to_sharded(x, memcfg)
+    out = ttnn.experimental.quasar.sharded_to_interleaved(
+        x_sharded, ttnn.L1_MEMORY_CONFIG
+    )  # mlp_1d.py:445, attention_1d.py:1099
 
     assert not out.is_sharded(), "expected an interleaved output"
     U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)

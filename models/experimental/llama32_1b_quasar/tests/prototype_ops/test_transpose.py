@@ -40,7 +40,7 @@ def test_transpose(ttnn_mesh_device, reset_seeds, name, shape, dim0, dim1):
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)
 
-    out = ttnn.transpose(x, dim0, dim1)
+    out = ttnn.experimental.quasar.transpose(x, dim0, dim1)
 
     ref = torch.transpose(x_torch.float(), dim0, dim1)
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

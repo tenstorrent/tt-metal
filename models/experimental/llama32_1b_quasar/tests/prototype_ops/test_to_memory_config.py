@@ -60,7 +60,7 @@ def test_to_memory_config_placement(ttnn_mesh_device, reset_seeds, target_memcfg
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
-    out = ttnn.to_memory_config(x, target_memcfg)
+    out = ttnn.experimental.quasar.to_memory_config(x, target_memcfg)
     U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)
 
 
@@ -78,6 +78,6 @@ def test_to_memory_config_interleaved_to_sharded(ttnn_mesh_device, reset_seeds, 
     shape = (1, 1, U.TILE, width)  # decode: tile_padded_batch_rows=32
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
-    out = ttnn.to_memory_config(x, _width_sharded(U.TILE, width))
+    out = ttnn.experimental.quasar.to_memory_config(x, _width_sharded(U.TILE, width))
     assert out.is_sharded(), "expected a sharded output"
     U.assert_pcc(x_torch, out, pcc=0.999, mesh_device=mesh)

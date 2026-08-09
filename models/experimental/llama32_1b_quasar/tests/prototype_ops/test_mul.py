@@ -36,7 +36,7 @@ def test_mul_silu_gate(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tt(a_torch, mesh)
     b = U.to_tt(b_torch, mesh)
 
-    out = ttnn.mul(
+    out = ttnn.experimental.quasar.multiply(
         a,
         b,
         input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
