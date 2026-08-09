@@ -76,6 +76,11 @@ _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
 _DEFAULT_CCL_NUM_BUFFERS_PER_CHANNEL = 2
 _DEFAULT_CACHE_VERSION_FALLBACK = "unknown"
+# Bump when the tuning logic / config builders change in a way that can change the
+# winner for a shape but which the repo git hash might not reflect on its own (e.g. a
+# local kernel rebuild, or a change to how candidates are generated).  This is part of
+# the cache version, so bumping it correctly marks every existing entry stale.
+_SELECTOR_SCHEMA_VERSION = 1
 
 
 def _ttnn():
@@ -417,11 +422,8 @@ class WeightPlacement:
         }
 
 
-def _get_default_version() -> str:
-    override = os.environ.get("TTNN_AUTO_MATMUL_VERSION")
-    if override:
-        return override
-
+def _code_version() -> str:
+    """Repo/build code identity: git hash, else a CI SHA, else the ttnn package version."""
     try:
         return importlib.import_module("ttnn.model_preprocessing").git_hash()
     except Exception:
@@ -429,11 +431,37 @@ def _get_default_version() -> str:
             env_value = os.environ.get(env_var)
             if env_value:
                 return env_value
-
         try:
             return f"ttnn-{importlib_metadata.version('ttnn')}"
         except Exception:
             return _DEFAULT_CACHE_VERSION_FALLBACK
+
+
+def _tuning_arch_id() -> str:
+    """The device arch the cache was tuned on.  A config tuned on one arch must not be
+    served on another (different core grid / L1 / kernels), so it is part of the version."""
+    try:
+        arch = _ttnn().get_arch_name()
+        if arch:
+            return str(arch)
+    except Exception:
+        pass
+    return os.environ.get("ARCH_NAME", "unknown-arch")
+
+
+def _get_default_version() -> str:
+    """Cache version = the inputs that can change a tuned winner.
+
+    An explicit ``TTNN_AUTO_MATMUL_VERSION`` is honored verbatim (the caller owns
+    reproducibility).  Otherwise the version keys on **arch + code + schema**, not the
+    repo git hash alone -- so an arch change, or a tuning-logic change flagged by
+    ``_SELECTOR_SCHEMA_VERSION`` (e.g. a kernel rebuild the git hash doesn't reflect),
+    correctly marks existing entries stale instead of serving a wrong/suboptimal winner.
+    """
+    override = os.environ.get("TTNN_AUTO_MATMUL_VERSION")
+    if override:
+        return override
+    return f"{_code_version()}-{_tuning_arch_id()}-s{_SELECTOR_SCHEMA_VERSION}"
 
 
 class AutoMatmulCache:
@@ -1331,6 +1359,86 @@ def _subblock_candidates(per_core_m: int, per_core_n: int) -> list[tuple[int, in
     return out or [(1, 1)]
 
 
+def _scheme_per_core(mode: str, gx: int, gy: int, m_tiles: int, n_tiles: int) -> tuple[int, int]:
+    """(per_core_M, per_core_N) for a parallelism scheme on a gx*gy grid."""
+    num_cores = max(1, gx * gy)
+    if mode == "2d_mcast":  # M over grid rows, N over grid columns
+        return max(1, math.ceil(m_tiles / gy)), max(1, math.ceil(n_tiles / gx))
+    if mode == "1d_mcast_in0":  # all cores split N (best when M is small)
+        return m_tiles, max(1, math.ceil(n_tiles / num_cores))
+    return max(1, math.ceil(m_tiles / num_cores)), n_tiles  # 1d_mcast_in1: split M
+
+
+def _heuristic_in0_block_w(mode: str, gx: int, gy: int, k_tiles: int) -> int:
+    divisor = gy if mode == "2d_mcast" else max(1, gx * gy)
+    return _find_largest_divisor(max(1, k_tiles // divisor))
+
+
+def _program_config_descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w) -> dict[str, Any]:
+    return {
+        "kind": "program_config",
+        "mode": mode,
+        "grid": [gx, gy],
+        "in0_block_w": in0_block_w,
+        "per_core_M": per_core_m,
+        "per_core_N": per_core_n,
+        "out_subblock_h": sub_h,
+        "out_subblock_w": sub_w,
+    }
+
+
+def _rhs_batch_of(signature: AutoMatmulSignature) -> int:
+    rhs_shape = signature.input_tensor_b.get("shape", ())
+    rhs_batch = 1
+    for dim in rhs_shape[:-2]:
+        rhs_batch *= int(dim)
+    return rhs_batch
+
+
+def _per_batch_tile_counts(signature: AutoMatmulSignature) -> tuple[int, int, int]:
+    lhs_shape = signature.input_tensor_a.get("shape", ())
+    rhs_shape = signature.input_tensor_b.get("shape", ())
+    per_batch_m = int(lhs_shape[-1] if signature.transpose_a else lhs_shape[-2])
+    per_batch_k = int(lhs_shape[-2] if signature.transpose_a else lhs_shape[-1])
+    per_batch_n = int(rhs_shape[-2] if signature.transpose_b else rhs_shape[-1])
+    return _compute_tile_counts(per_batch_m, per_batch_k, per_batch_n)
+
+
+def _heuristic_program_config_descriptors(
+    signature: AutoMatmulSignature, grid_x: int, grid_y: int
+) -> list[dict[str, Any]]:
+    """The rank-0 heuristic descriptors (full grid, heuristic in0_block_w, single-pick
+    subblock) -- one per multicast scheme, or one MultiCoreReuse descriptor for a true
+    batched matmul.  This is the single source of truth for "the config family's default
+    shape", reused by both the tuning sweep and the offline predictor."""
+    if _rhs_batch_of(signature) > 1:
+        b_m, b_k, b_n = _per_batch_tile_counts(signature)
+        heur_ibw = _find_largest_divisor(max(1, b_k))
+        heur_sw = _pick_out_subblock_w(b_n, 1)
+        heur_sh = _pick_out_subblock_h(b_m, heur_sw)
+        return [_program_config_descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, heur_ibw, heur_sh, heur_sw)]
+
+    m_tiles, k_tiles, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    out: list[dict[str, Any]] = []
+    for mode in ("2d_mcast", "1d_mcast_in0", "1d_mcast_in1"):
+        per_core_m, per_core_n = _scheme_per_core(mode, grid_x, grid_y, m_tiles, n_tiles)
+        sub_w = _pick_out_subblock_w(per_core_n, 1)
+        sub_h = 1 if mode == "2d_mcast" else _pick_out_subblock_h(per_core_m, sub_w)
+        out.append(
+            _program_config_descriptor(
+                mode,
+                grid_x,
+                grid_y,
+                per_core_m,
+                per_core_n,
+                _heuristic_in0_block_w(mode, grid_x, grid_y, k_tiles),
+                sub_h,
+                sub_w,
+            )
+        )
+    return out
+
+
 def _build_program_config_candidates(
     signature: AutoMatmulSignature,
     prepared: PreparedMatmulInputs,
@@ -1368,88 +1476,33 @@ def _build_program_config_candidates(
 
     modes = ("2d_mcast", "1d_mcast_in0", "1d_mcast_in1")
 
-    def _scheme_per_core(mode: str, gx: int, gy: int) -> tuple[int, int]:
-        num_cores = max(1, gx * gy)
-        if mode == "2d_mcast":  # M over grid rows, N over grid columns
-            return max(1, math.ceil(m_tiles / gy)), max(1, math.ceil(n_tiles / gx))
-        if mode == "1d_mcast_in0":  # all cores split N (best when M is small)
-            return m_tiles, max(1, math.ceil(n_tiles / num_cores))
-        return max(1, math.ceil(m_tiles / num_cores)), n_tiles  # 1d_mcast_in1: split M
-
-    def _heuristic_in0_block_w(mode: str, gx: int, gy: int) -> int:
-        divisor = gy if mode == "2d_mcast" else max(1, gx * gy)
-        return _find_largest_divisor(max(1, k_tiles // divisor))
-
-    def _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w):
-        return {
-            "kind": "program_config",
-            "mode": mode,
-            "grid": [gx, gy],
-            "in0_block_w": in0_block_w,
-            "per_core_M": per_core_m,
-            "per_core_N": per_core_n,
-            "out_subblock_h": sub_h,
-            "out_subblock_w": sub_w,
-        }
-
-    heuristic_descriptors: list[dict[str, Any]] = []
+    # Rank-0 heuristic descriptors (full grid, heuristic in0_block_w, single-pick
+    # subblock) come from the shared derivation so the tuner and the offline predictor
+    # agree on "the config family's default shape".
+    heuristic_descriptors: list[dict[str, Any]] = _heuristic_program_config_descriptors(signature, grid_x, grid_y)
     sweep_descriptors: list[dict[str, Any]] = []
 
-    lhs_shape = signature.input_tensor_a.get("shape", ())
-    rhs_shape = signature.input_tensor_b.get("shape", ())
-    rhs_batch = 1
-    for dim in rhs_shape[:-2]:
-        rhs_batch *= int(dim)
+    rhs_batch = _rhs_batch_of(signature)
 
     if rhs_batch > 1:
-        # True batched matmul -> non-multicast MultiCoreReuse family: each core
-        # computes one batch's full [M,N] output, the batch distributed across the
-        # grid.  Use per-batch M/N/K from the operand shapes (signature.m folds the
-        # batch into M, which is only correct for the multicast fuse_batch path).
-        per_batch_m = int(lhs_shape[-1] if signature.transpose_a else lhs_shape[-2])
-        per_batch_k = int(lhs_shape[-2] if signature.transpose_a else lhs_shape[-1])
-        per_batch_n = int(rhs_shape[-2] if signature.transpose_b else rhs_shape[-1])
-        b_m, b_k, b_n = _compute_tile_counts(per_batch_m, per_batch_k, per_batch_n)
+        # True batched matmul -> non-multicast MultiCoreReuse family: each core computes
+        # one batch's full [M,N] output, the batch distributed across the grid.
+        b_m, b_k, b_n = _per_batch_tile_counts(signature)
         heur_ibw = _find_largest_divisor(max(1, b_k))
-        heur_sw = _pick_out_subblock_w(b_n, 1)
-        heur_sh = _pick_out_subblock_h(b_m, heur_sw)
-        heuristic_descriptors.append(
-            _descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, heur_ibw, heur_sh, heur_sw)
-        )
         for in0_block_w in _in0_block_w_candidates(b_k, heur_ibw):
             for sub_h, sub_w in _subblock_candidates(b_m, b_n):
                 sweep_descriptors.append(
-                    _descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, in0_block_w, sub_h, sub_w)
+                    _program_config_descriptor("multicore_reuse", grid_x, grid_y, b_m, b_n, in0_block_w, sub_h, sub_w)
                 )
     else:
-        # Non-batched (or broadcast-weight batch): the multicast families.  Rank-0
-        # heuristic descriptors (full grid, heuristic in0_block_w, single-pick
-        # subblock) are identical to the pre-widening configs, so the online
-        # candidate cap can never regress them.
-        for mode in modes:
-            per_core_m, per_core_n = _scheme_per_core(mode, grid_x, grid_y)
-            sub_w = _pick_out_subblock_w(per_core_n, 1)
-            sub_h = 1 if mode == "2d_mcast" else _pick_out_subblock_h(per_core_m, sub_w)
-            heuristic_descriptors.append(
-                _descriptor(
-                    mode,
-                    grid_x,
-                    grid_y,
-                    per_core_m,
-                    per_core_n,
-                    _heuristic_in0_block_w(mode, grid_x, grid_y),
-                    sub_h,
-                    sub_w,
-                )
-            )
         # Full valid sweep: grid partition x scheme x in0_block_w x out-subblock.
         for gx, gy in _grid_candidates(grid_x, grid_y):
             for mode in modes:
-                per_core_m, per_core_n = _scheme_per_core(mode, gx, gy)
-                for in0_block_w in _in0_block_w_candidates(k_tiles, _heuristic_in0_block_w(mode, gx, gy)):
+                per_core_m, per_core_n = _scheme_per_core(mode, gx, gy, m_tiles, n_tiles)
+                for in0_block_w in _in0_block_w_candidates(k_tiles, _heuristic_in0_block_w(mode, gx, gy, k_tiles)):
                     for sub_h, sub_w in _subblock_candidates(per_core_m, per_core_n):
                         sweep_descriptors.append(
-                            _descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
+                            _program_config_descriptor(mode, gx, gy, per_core_m, per_core_n, in0_block_w, sub_h, sub_w)
                         )
 
     # L1-prune (dtype-aware) + de-duplicate.  Heuristics are a subset of the sweep
@@ -2733,6 +2786,227 @@ def _append_recommendation(recommendations: list[str], message: str) -> list[str
     return [*recommendations, message]
 
 
+# ---------------------------------------------------------------------------
+# Offline predictor for unseen shapes (item #4)
+#
+# Tier-1: a regime-partitioned nearest-shape lookup that reuses a nearby tuned
+# winner's *scheme* (kind/mode) and re-derives the per-shape params for the new
+# dims.  It fills cache misses without an on-device sweep and without an online
+# fp32 golden -- a predicted config is only statically validated + run once
+# guarded (the caller falls back to the base op on any error).  The exact
+# offline-tuned disk cache stays authoritative; predictions live in the
+# in-process runtime record only (never written to disk).
+# ---------------------------------------------------------------------------
+
+_PREDICTOR_INDEX_FILENAME = "index.json"
+_PREDICT_SOURCE = "predicted"
+
+
+def _regime_bucket(signature: AutoMatmulSignature) -> str:
+    """Coarse family regime -- the boundary that *determines* the parallelism scheme,
+    so nearest-neighbor is only ever taken within one regime (a narrow shape's 1D
+    winner must never be grafted onto a square shape)."""
+    if _rhs_batch_of(signature) > 1:
+        return "batched"
+    m, n = int(signature.m), int(signature.n)
+    lo, hi = min(m, n), max(m, n)
+    if lo > 0 and hi / lo > 8:
+        return "narrow"
+    return "square"
+
+
+def _predictor_feature_key(signature: AutoMatmulSignature) -> dict[str, Any]:
+    """Everything that must match exactly for a neighbor to be comparable."""
+    return {
+        "arch": signature.arch,
+        "dtype_a": signature.input_tensor_a.get("dtype"),
+        "dtype_b": signature.input_tensor_b.get("dtype"),
+        "layout": signature.input_tensor_a.get("layout"),
+        "is_linear": bool(signature.is_linear),
+        "transpose_a": bool(signature.transpose_a),
+        "transpose_b": bool(signature.transpose_b),
+        "mesh_shape": list(signature.mesh_shape) if signature.mesh_shape else None,
+        "regime": _regime_bucket(signature),
+    }
+
+
+def _signature_from_dict(sig_dict: dict[str, Any]) -> "AutoMatmulSignature | None":
+    try:
+        return AutoMatmulSignature(**sig_dict)
+    except Exception:
+        return None
+
+
+def _predictor_index_record(signature: AutoMatmulSignature, winner: dict[str, Any]) -> dict[str, Any] | None:
+    """One index row for a tuned winner, or None if it isn't predictable.
+
+    Only single-device ``program_config`` winners are re-derivable on a new shape;
+    distributed / base-op / default winners are skipped (predictions for those fall
+    through to the base op)."""
+    if str(winner.get("kind", "")) != "program_config" or not winner.get("mode"):
+        return None
+    if _is_distributed(signature):
+        return None
+    m_tiles, k_tiles, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    return {"feature": _predictor_feature_key(signature), "tiles": [m_tiles, k_tiles, n_tiles], "mode": winner["mode"]}
+
+
+def build_predictor_index(cache: "AutoMatmulCache | None" = None) -> dict[str, Any]:
+    """Offline: scan the version's tuned cache and emit ``index.json`` (shape -> winning
+    scheme, bucketed by regime + feature key).  Pure post-processing, no device.  Returns
+    the index dict and writes it next to the cache entries for that version."""
+    cache = cache or AutoMatmulCache()
+    version_dir = cache.version_dir
+    records: list[dict[str, Any]] = []
+    if version_dir.exists():
+        for path in sorted(version_dir.glob(f"*{_CACHE_FILE_SUFFIX}")):
+            if path.name == _PREDICTOR_INDEX_FILENAME:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            sig_dict = payload.get("signature")
+            winner = payload.get("winner") or {}
+            if not isinstance(sig_dict, dict):
+                continue
+            signature = _signature_from_dict(sig_dict)
+            if signature is None:
+                continue
+            record = _predictor_index_record(signature, winner)
+            if record is not None:
+                records.append(record)
+    index = {"version": cache.version, "records": records}
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / _PREDICTOR_INDEX_FILENAME).write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
+    return index
+
+
+def _load_predictor_index(cache: "AutoMatmulCache") -> list[dict[str, Any]]:
+    path = cache.version_dir / _PREDICTOR_INDEX_FILENAME
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if payload.get("version") != cache.version:
+        return []
+    records = payload.get("records")
+    return records if isinstance(records, list) else []
+
+
+def _nearest_index_mode(signature: AutoMatmulSignature, records: list[dict[str, Any]]) -> str | None:
+    """The winning mode of the nearest cached shape *within the same regime + feature
+    key*, by L2 distance over log2 tile counts (scale-invariant).  None if the bucket
+    is empty -- the predictor then declines and the caller falls back to the base op."""
+    feature = _predictor_feature_key(signature)
+    candidates = [r for r in records if r.get("feature") == feature and r.get("mode")]
+    if not candidates:
+        return None
+    m_tiles, k_tiles, n_tiles = _compute_tile_counts(signature.m, signature.k, signature.n)
+    target = [math.log2(max(1, t)) for t in (m_tiles, k_tiles, n_tiles)]
+
+    def _dist(rec: dict[str, Any]) -> float:
+        tiles = rec.get("tiles") or [1, 1, 1]
+        pt = [math.log2(max(1, int(t))) for t in tiles]
+        return sum((a - b) ** 2 for a, b in zip(target, pt))
+
+    return min(candidates, key=_dist)["mode"]
+
+
+def predict_config(signature: AutoMatmulSignature, grid_x: int, grid_y: int) -> dict[str, Any] | None:
+    """Predict a program-config descriptor for an unseen shape by reusing the nearest
+    same-regime tuned winner's scheme and re-deriving the params for these dims.  Returns
+    None (caller falls back to the base op) when there is no comparable neighbor."""
+    if _is_distributed(signature) or not _supports_program_config_sweep(signature):
+        return None
+    records = _load_predictor_index(AutoMatmulCache())
+    mode = _nearest_index_mode(signature, records)
+    if mode is None:
+        return None
+    for descriptor in _heuristic_program_config_descriptors(signature, grid_x, grid_y):
+        if descriptor.get("mode") == mode:
+            return descriptor
+    return None
+
+
+def _static_config_valid(descriptor: dict[str, Any], signature: AutoMatmulSignature, bias: Any) -> bool:
+    """Cheap, device-free validity check for a predicted config (Critical-2: no online
+    fp32 golden).  The re-derived config comes from validity-aware helpers, so this only
+    re-checks the invariants: in0_block_w divides k_tiles, subblock rule, and L1 budget."""
+    try:
+        _, k_tiles, _ = _compute_tile_counts(signature.m, signature.k, signature.n)
+        ibw = int(descriptor["in0_block_w"])
+        sub_h, sub_w = int(descriptor["out_subblock_h"]), int(descriptor["out_subblock_w"])
+        pcm, pcn = int(descriptor["per_core_M"]), int(descriptor["per_core_N"])
+        if ibw < 1 or (k_tiles % ibw != 0 and ibw != 1):
+            return False
+        if sub_h * sub_w > 8 or pcm % sub_h != 0 or pcn % sub_w != 0:
+            return False
+        in0_bytes = _dtype_bytes(signature.input_tensor_a.get("dtype"))
+        in1_bytes = _dtype_bytes(signature.input_tensor_b.get("dtype"))
+        out_bytes = _dtype_bytes(signature.output_dtype or signature.input_tensor_a.get("dtype"))
+        return (
+            _estimate_l1_kb(pcm, ibw, pcn, bias, in0_bytes=in0_bytes, in1_bytes=in1_bytes, out_bytes=out_bytes)
+            <= _L1_BUDGET_KB
+        )
+    except Exception:
+        return False
+
+
+def _build_predicted_candidate(
+    descriptor: dict[str, Any],
+    *,
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    kwargs: dict[str, Any],
+    base_operation: Any,
+) -> Candidate | None:
+    if not _static_config_valid(descriptor, signature, prepared.bias):
+        return None
+    tagged = {**descriptor, "source": _PREDICT_SOURCE}
+    return Candidate(
+        descriptor=tagged,
+        run=lambda: _run_program_config_matmul(base_operation, signature, prepared, kwargs, descriptor=descriptor),
+    )
+
+
+def _predicted_selection(
+    signature: AutoMatmulSignature,
+    prepared: PreparedMatmulInputs,
+    kwargs: dict[str, Any],
+    *,
+    base_operation: Any,
+) -> dict[str, Any] | None:
+    """Build a selection dict from a predicted config, or None to fall back to base op.
+
+    NOT persisted to the on-disk cache -- the caller records it in the in-process runtime
+    record only (Important-5), so ``cache_hit`` always means an offline-tuned entry."""
+    device = prepared.input_tensor_a.device()
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    descriptor = predict_config(signature, int(grid.x), int(grid.y))
+    if descriptor is None:
+        return None
+    candidate = _build_predicted_candidate(
+        descriptor, signature=signature, prepared=prepared, kwargs=kwargs, base_operation=base_operation
+    )
+    if candidate is None:
+        return None
+    cache = AutoMatmulCache()
+    return {
+        "cache_hit": False,
+        "cache_path": str(cache.path_for(signature)),
+        "winner": candidate.descriptor,
+        "selection_metric": None,
+        "candidate_timings_us": [],
+        "recommendations": [f"Predicted config from nearest {descriptor['mode']} neighbor (source=predicted)."],
+        "candidate": candidate,
+    }
+
+
 def _make_passthrough_selection(
     signature: AutoMatmulSignature,
     prepared: PreparedMatmulInputs,
@@ -2843,8 +3117,18 @@ def _select_candidate(
         cache.invalidate(signature)
 
     if not allow_tuning:
+        # Default (offline-first) miss path: runtime record -> predict -> base op.  No
+        # on-device sweep here -- the inline online sweep is opt-in below via allow_tuning
+        # (TTNN_AUTO_MATMUL_ONLINE_TUNE).  A predicted winner rebuilds a runnable candidate
+        # from its own scheme; anything else serves candidate=None (base op).
         runtime_record = cache.load_runtime(signature)
         if runtime_record is not None:
+            winner = runtime_record.get("winner") or {}
+            candidate = None
+            if winner.get("source") == _PREDICT_SOURCE:
+                candidate = _build_predicted_candidate(
+                    winner, signature=signature, prepared=prepared, kwargs=kwargs, base_operation=base_operation
+                )
             return {
                 "cache_hit": False,
                 "cache_path": str(cache.path_for(signature)),
@@ -2852,15 +3136,18 @@ def _select_candidate(
                 "selection_metric": runtime_record.get("selection_metric"),
                 "candidate_timings_us": runtime_record.get("candidate_timings_us", []),
                 "recommendations": runtime_record.get("recommendations", []),
-                "candidate": None,
+                "candidate": candidate,
             }
+        predicted = _predicted_selection(signature, prepared, kwargs, base_operation=base_operation)
+        if predicted is not None:
+            return predicted
         return {
             "cache_hit": False,
             "cache_path": str(cache.path_for(signature)),
             "winner": None,
             "selection_metric": None,
             "candidate_timings_us": [],
-            "recommendations": ["No cache entry available and tuning was disabled."],
+            "recommendations": ["No cache entry and no comparable shape to predict from; running the base op."],
             "candidate": None,
         }
 
@@ -3642,12 +3929,16 @@ def dispatch_matmul(
         )
 
     cache = AutoMatmulCache()
+    # Default miss path is offline-first: cache lookup -> predict -> base op, NO on-device
+    # sweep on first touch of a shape.  The inline online sweep is opt-in for developers /
+    # the tuner via TTNN_AUTO_MATMUL_ONLINE_TUNE=1 (production ships an offline-tuned cache).
+    online_tune = _env_flag_enabled("TTNN_AUTO_MATMUL_ONLINE_TUNE")
     selection = _select_candidate(
         signature,
         prepared,
         kwargs,
         base_operation=base_operation,
-        allow_tuning=True,
+        allow_tuning=online_tune,
     )
 
     def _run_base() -> Any:
@@ -3660,6 +3951,9 @@ def dispatch_matmul(
             kwargs=kwargs,
         )
 
+    def _is_predicted(sel: dict[str, Any]) -> bool:
+        return (sel.get("winner") or {}).get("source") == _PREDICT_SOURCE
+
     # candidate is None => no validated tuned candidate (base-op fallback); run the plain
     # base op instead of executing an unvalidated candidate.
     if selection.get("candidate") is None:
@@ -3671,6 +3965,10 @@ def dispatch_matmul(
         cache.save_runtime(signature, _selection_summary(selection))
         return result
     except Exception:
+        # A predicted config is a best-guess statically-validated once-run candidate; if the
+        # guarded run fails, fall back to the base op (Critical-2 -- no online golden, no raise).
+        if _is_predicted(selection):
+            return _run_base()
         if not selection.get("cache_hit"):
             raise
         # A cached winner failed at real-execution time (a layout the tuned candidate
@@ -3684,12 +3982,18 @@ def dispatch_matmul(
             prepared,
             kwargs,
             base_operation=base_operation,
-            allow_tuning=True,
+            allow_tuning=online_tune,
         )
         if selection.get("candidate") is None:
             cache.save_runtime(signature, _selection_summary(selection))
             return _run_base()
-        result = _execute_selected_candidate(selection)
+        try:
+            result = _execute_selected_candidate(selection)
+        except Exception:
+            if _is_predicted(selection):
+                cache.save_runtime(signature, _selection_summary(selection))
+                return _run_base()
+            raise
         cache.save_runtime(signature, _selection_summary(selection))
         return result
 

@@ -3,13 +3,15 @@
 
 """Measured auto-configuration helpers exposed as ``ttnn.experimental.auto_config``."""
 
-from ._selector import WeightPlacement, explain_matmul, place_weight
+from ._selector import WeightPlacement, build_predictor_index, explain_matmul, place_weight, predict_config
 from .api import linear, matmul
 
 __all__ = [
     "WeightPlacement",
+    "build_predictor_index",
     "explain_matmul",
     "linear",
     "matmul",
     "place_weight",
+    "predict_config",
 ]

@@ -267,8 +267,12 @@ def test_default_version_falls_back_to_ci_sha_when_git_hash_unavailable(monkeypa
         return SimpleNamespace(git_hash=raise_git_hash)
 
     monkeypatch.setattr(auto_matmul.importlib, "import_module", fake_import_module)
+    # The version keys on code + arch + schema (item #4 Critical-3), so the CI SHA is the
+    # code component, not the whole version.
+    monkeypatch.setattr(auto_matmul, "_tuning_arch_id", lambda: "wormhole_b0")
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 1)
 
-    assert auto_matmul._get_default_version() == "0123456789abcdef"
+    assert auto_matmul._get_default_version() == "0123456789abcdef-wormhole_b0-s1"
 
 
 def test_default_version_falls_back_to_unknown_without_git_or_package_metadata(monkeypatch):
@@ -292,8 +296,10 @@ def test_default_version_falls_back_to_unknown_without_git_or_package_metadata(m
         "version",
         lambda package_name: (_ for _ in ()).throw(RuntimeError(f"Missing package metadata for {package_name}")),
     )
+    monkeypatch.setattr(auto_matmul, "_tuning_arch_id", lambda: "wormhole_b0")
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 1)
 
-    assert auto_matmul._get_default_version() == "unknown"
+    assert auto_matmul._get_default_version() == "unknown-wormhole_b0-s1"
 
 
 def test_infer_distributed_plan_for_all_gather():
@@ -1482,3 +1488,239 @@ def test_distributed_gate_excludes_wrong_recipe_and_fails_closed(monkeypatch, tm
     assert "incorrect" in statuses  # the wrong recipe was gated out...
     assert selection["candidate"] is None
     assert selection["winner"]["kind"] == auto_matmul.WINNER_KIND_BASE_OP_FALLBACK  # ...fail-closed
+
+
+# ---------------------------------------------------------------------------
+# Item #4 -- offline predictor + cache hit/miss/stale coverage
+# ---------------------------------------------------------------------------
+
+
+def _predictable_signature(*, m, k, n):
+    # Single-device, square/narrow via m/n, standard tile layout -> predictable.
+    return dataclasses.replace(_make_signature(), m=m, k=k, n=n)
+
+
+def _tuned_cache_record(signature, mode):
+    return {
+        "version": auto_matmul.AutoMatmulCache().version,
+        "signature": signature.to_dict(),
+        "winner": {"kind": "program_config", "mode": mode},
+        "selection_metric": "profiler",
+        "candidate_timings_us": [],
+        "recommendations": [],
+    }
+
+
+def _grid_device(x=8, y=8):
+    return SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=x, y=y))
+
+
+# --- cache hit / miss / stale ---------------------------------------------
+
+
+def test_cache_hit_serves_program_config_without_tuning(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    signature = _predictable_signature(m=1024, k=1024, n=1024)
+    cache = auto_matmul.AutoMatmulCache()
+    cache.save(signature, _tuned_cache_record(signature, "2d_mcast"))
+
+    prepared = SimpleNamespace(input_tensor_a=SimpleNamespace(device=_grid_device), input_tensor_b=None, bias=None)
+    # A real tuned winner carries the full descriptor; the rebuild is exercised elsewhere,
+    # so stub it here to a runnable candidate and assert the HIT is served without tuning.
+    monkeypatch.setattr(
+        auto_matmul,
+        "_build_candidate_from_descriptor",
+        lambda descriptor, **k: auto_matmul.Candidate(descriptor=descriptor, run=lambda: None),
+    )
+    monkeypatch.setattr(
+        auto_matmul, "_build_candidates", lambda *a, **k: (_ for _ in ()).throw(AssertionError("tuned on a hit"))
+    )
+    selection = auto_matmul._select_candidate(
+        signature, prepared, {}, base_operation=lambda *a, **k: None, allow_tuning=False
+    )
+    assert selection["cache_hit"] is True
+    assert selection["candidate"] is not None
+    assert selection["winner"] == {"kind": "program_config", "mode": "2d_mcast"}
+
+
+def test_cache_miss_returns_none():
+    # A never-tuned signature is absent from an isolated cache dir.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        import os
+
+        os.environ["TTNN_AUTO_MATMUL_CACHE_DIR"] = d
+        os.environ["TTNN_AUTO_MATMUL_VERSION"] = "miss-test"
+        try:
+            assert auto_matmul.AutoMatmulCache().load(_predictable_signature(m=777, k=777, n=777)) is None
+        finally:
+            os.environ.pop("TTNN_AUTO_MATMUL_CACHE_DIR", None)
+            os.environ.pop("TTNN_AUTO_MATMUL_VERSION", None)
+
+
+def test_stale_entry_on_version_bump_is_a_miss(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    signature = _predictable_signature(m=512, k=512, n=512)
+    cache = auto_matmul.AutoMatmulCache()
+    payload = _tuned_cache_record(signature, "2d_mcast")
+    cache.save(signature, payload)
+    assert cache.load(signature) == payload  # fresh: hit
+
+    # A record whose stored version != current is stale -> load returns None.
+    payload_stale = {**payload, "version": "some-old-version"}
+    cache.save(signature, payload_stale)
+    assert cache.load(signature) is None
+
+
+def test_cache_version_keys_on_arch_and_schema(monkeypatch):
+    # Critical-3: version must key on arch + schema, not just the repo hash.
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_VERSION", raising=False)
+    monkeypatch.setattr(auto_matmul, "_code_version", lambda: "abc123")
+
+    monkeypatch.setattr(auto_matmul, "_tuning_arch_id", lambda: "wormhole_b0")
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 1)
+    v_wh = auto_matmul._get_default_version()
+
+    monkeypatch.setattr(auto_matmul, "_tuning_arch_id", lambda: "blackhole")
+    v_bh = auto_matmul._get_default_version()
+    assert v_wh != v_bh  # arch change -> different version
+    assert "wormhole_b0" in v_wh and "blackhole" in v_bh
+
+    monkeypatch.setattr(auto_matmul, "_tuning_arch_id", lambda: "wormhole_b0")
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 2)
+    assert auto_matmul._get_default_version() != v_wh  # schema bump -> different version
+
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "pinned")
+    assert auto_matmul._get_default_version() == "pinned"  # explicit pin wins
+
+
+def test_internals_change_marks_entry_stale(monkeypatch, tmp_path):
+    # Critical-3, the real risk: same repo code, but a kernel/build change reflected by
+    # the arch/schema component -> the old entry is NOT served (recognized stale).
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_VERSION", raising=False)
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_FORCE_RETUNE", raising=False)
+    monkeypatch.setattr(auto_matmul, "_code_version", lambda: "same-code")
+    signature = _predictable_signature(m=256, k=256, n=256)
+
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 1)
+    cache_v1 = auto_matmul.AutoMatmulCache()
+    cache_v1.save(signature, _tuned_cache_record(signature, "2d_mcast"))
+    assert cache_v1.load(signature) is not None  # served under schema 1
+
+    monkeypatch.setattr(auto_matmul, "_SELECTOR_SCHEMA_VERSION", 2)  # internals changed
+    cache_v2 = auto_matmul.AutoMatmulCache()
+    assert cache_v2.load(signature) is None  # old entry is stale, not served
+
+
+# --- predictor: index build, regime-aware nearest-neighbor, cheap gate, storage ---
+
+
+def test_build_predictor_index_records_scheme_and_regime(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    cache = auto_matmul.AutoMatmulCache()
+    sq = _predictable_signature(m=1024, k=1024, n=1024)  # square
+    nr = _predictable_signature(m=32, k=4096, n=4096)  # narrow (ratio 128)
+    cache.save(sq, _tuned_cache_record(sq, "2d_mcast"))
+    cache.save(nr, _tuned_cache_record(nr, "1d_mcast_in0"))
+    # A base-op fallback and a distributed winner must be excluded from the index.
+    cache.save(
+        _predictable_signature(m=64, k=64, n=64),
+        {**_tuned_cache_record(sq, "2d_mcast"), "winner": {"kind": "base_op_fallback"}},
+    )
+
+    index = auto_matmul.build_predictor_index(cache)
+    regimes = {(r["feature"]["regime"], r["mode"]) for r in index["records"]}
+    assert ("square", "2d_mcast") in regimes
+    assert ("narrow", "1d_mcast_in0") in regimes
+    assert len(index["records"]) == 2  # base-op excluded
+
+
+def test_predict_config_reuses_nearest_same_regime_scheme(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda s: False)
+    cache = auto_matmul.AutoMatmulCache()
+    neighbor = _predictable_signature(m=2048, k=2048, n=2048)  # square, 2d winner
+    cache.save(neighbor, _tuned_cache_record(neighbor, "2d_mcast"))
+    auto_matmul.build_predictor_index(cache)
+
+    unseen = _predictable_signature(m=1024, k=1024, n=1024)  # square, unseen
+    descriptor = auto_matmul.predict_config(unseen, 8, 8)
+    assert descriptor is not None
+    assert descriptor["mode"] == "2d_mcast"  # reused the neighbor's scheme
+    # per-shape params are re-derived for the UNSEEN dims, not copied.
+    assert descriptor["grid"] == [8, 8]
+    assert descriptor["per_core_M"] >= 1 and descriptor["per_core_N"] >= 1
+
+
+def test_predict_config_is_regime_isolated(monkeypatch, tmp_path):
+    # Important-4: a square miss with only a NARROW neighbor must NOT graft the 1D scheme.
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda s: False)
+    cache = auto_matmul.AutoMatmulCache()
+    narrow = _predictable_signature(m=32, k=4096, n=4096)  # narrow, 1d winner
+    cache.save(narrow, _tuned_cache_record(narrow, "1d_mcast_in0"))
+    auto_matmul.build_predictor_index(cache)
+
+    square = _predictable_signature(m=1024, k=1024, n=1024)
+    assert auto_matmul.predict_config(square, 8, 8) is None  # no same-regime neighbor
+
+
+def test_predict_config_none_without_index(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda s: False)
+    assert auto_matmul.predict_config(_predictable_signature(m=1024, k=1024, n=1024), 8, 8) is None
+
+
+def test_static_config_valid_rejects_bad_configs():
+    signature = _predictable_signature(m=1024, k=1024, n=1024)  # k_tiles=32
+    good = {"in0_block_w": 4, "out_subblock_h": 2, "out_subblock_w": 2, "per_core_M": 4, "per_core_N": 4}
+    assert auto_matmul._static_config_valid(good, signature, None) is True
+    bad_ibw = {**good, "in0_block_w": 5}  # 32 % 5 != 0
+    assert auto_matmul._static_config_valid(bad_ibw, signature, None) is False
+    bad_sub = {**good, "out_subblock_h": 4, "out_subblock_w": 4}  # area 16 > 8
+    assert auto_matmul._static_config_valid(bad_sub, signature, None) is False
+
+
+def test_predicted_selection_is_runtime_only_and_skips_online_golden(monkeypatch, tmp_path):
+    # Important-5 + Critical-2: predicting serves a candidate, does NOT write the disk
+    # cache, and never computes an online fp32 golden.
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda s: False)
+    monkeypatch.setattr(
+        auto_matmul, "_fp32_reference", lambda *a, **k: (_ for _ in ()).throw(AssertionError("golden on predict path"))
+    )
+    cache = auto_matmul.AutoMatmulCache()
+    neighbor = _predictable_signature(m=2048, k=2048, n=2048)
+    cache.save(neighbor, _tuned_cache_record(neighbor, "2d_mcast"))
+    auto_matmul.build_predictor_index(cache)
+
+    unseen = _predictable_signature(m=1024, k=1024, n=1024)
+    prepared = SimpleNamespace(input_tensor_a=SimpleNamespace(device=_grid_device), input_tensor_b=None, bias=None)
+    selection = auto_matmul._select_candidate(
+        unseen, prepared, {}, base_operation=lambda *a, **k: None, allow_tuning=False
+    )
+
+    assert selection["candidate"] is not None
+    assert selection["winner"]["source"] == "predicted"
+    assert selection["cache_hit"] is False
+    assert auto_matmul.AutoMatmulCache().load(unseen) is None  # NOT persisted to disk
+
+
+def test_select_candidate_miss_falls_back_to_base_op_without_predictor(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_matmul, "_supports_program_config_sweep", lambda s: True)
+    monkeypatch.setattr(auto_matmul, "_is_distributed", lambda s: False)
+    unseen = _predictable_signature(m=1024, k=1024, n=1024)
+    prepared = SimpleNamespace(input_tensor_a=SimpleNamespace(device=_grid_device), input_tensor_b=None, bias=None)
+    selection = auto_matmul._select_candidate(
+        unseen, prepared, {}, base_operation=lambda *a, **k: None, allow_tuning=False
+    )
+    assert selection["candidate"] is None  # no index, no comparable shape -> base op
+    assert selection["winner"] is None
