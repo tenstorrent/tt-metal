@@ -177,17 +177,19 @@ void kernel_main() {
     uint32_t local_count = 0;
 
 #ifdef SPARSE_MCAST_DISPATCH
-#ifdef FP8_SCALED
-#error \
-    "SPARSE_MCAST_DISPATCH is incompatible with FP8_SCALED: the grouped path stages no metadata, so the sender cannot emit the per-token FP8 scale tail (metadata fields 3..metadata_len-1). The host factory gates these apart; see enable_sparse_mcast in dispatch_program_factory.cpp."
-#endif
     // Grouped sparse-multicast staging (1D Ring): a token's cross-device destinations are bucketed per
     // fabric direction (entry->route) for the current token, then flushed as grouped ring slots — one
     // sparse-multicast payload write per slot instead of one unicast per destination. The grouped
-    // route_info carries everything the sender needs to rebuild each destination's metadata, so no
-    // metadata is staged here. "Everything" is exactly the three documented routing fields — the
-    // metadata contract is [src chip, global token idx, top-k slot], optionally followed by the FP8
-    // scale tail, and that tail is why fp8 is excluded from this path rather than grouped.
+    // route_info carries the three documented routing fields the sender needs to rebuild each
+    // destination's metadata ([src chip, global token idx, top-k slot]), so on the default path no
+    // metadata is staged here at all.
+    //
+    // Under FP8_SCALED the metadata page additionally carries the token's fp32 scale tail (fields
+    // 3..metadata_len-1), which the sender cannot produce — the scales live in this worker's scales CB.
+    // A group is always one token fanned out to several chips, and of the metadata fields only the top-k
+    // slot varies per destination: [0], [1] and the whole tail are per-token constants. So the tail is
+    // staged once per slot here (see emit_slot) and the sender simply overwrites [0..2] per destination
+    // and forwards the full page. Cost is one extra NOC write per group slot, on the fp8 path only.
     //
     // One bound shapes a slot: at most MCAST_MAX_DESTS total pages (the fabric packet header holds that
     // many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits
@@ -213,6 +215,12 @@ void kernel_main() {
     uint32_t cur_token_valid = 0;  // 0 until the first cross-device entry of a token is bucketed
     uint32_t cur_token_t = 0;      // token row (into the current batch's untilize CB)
     uint32_t cur_token_idx = 0;    // global token index (shared metadata field for the group)
+#ifdef FP8_SCALED
+    // Current batch's scales CB read pointer. flush_group captures this by reference (like the other
+    // cur_* state) rather than taking it as a parameter, so the two call sites stay layout-agnostic;
+    // the per-batch loop republishes it alongside cb_scales.wait_front below.
+    uint32_t cur_scales_read_ptr = 0;
+#endif
 
     // Emit the buffered token's direction groups as grouped ring slots, then reset the buckets. Called
     // at each token boundary and at batch end (src base = this batch's untilize read pointer).
@@ -253,7 +261,31 @@ void kernel_main() {
                 noc_async_write_one_packet_with_trid(src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
                 off += chunk;
             }
+#ifdef FP8_SCALED
+            // Stage the metadata page so its fp8 scale tail reaches the sender. [0]/[1] and the tail are
+            // per-token constants shared by every destination in this group; [2] is per-destination and
+            // is overwritten by the sender from route_info, so the value written here is irrelevant.
+            // Reuses the single trailing xdev scratch slot — safe because the barrier below retires this
+            // write before the next emit_slot call can touch the scratch again.
+            {
+                volatile tt_l1_ptr int32_t* meta =
+                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                meta[0] = (int32_t)linearized_mesh_coord;
+                meta[1] = (int32_t)cur_token_idx;
+                meta[2] = 0;  // placeholder; sender writes the real top-k slot per destination
+                // Same bit-for-bit fp32 scale copy as the local and legacy cross-device paths.
+                tt_l1_ptr uint32_t* src_scales =
+                    reinterpret_cast<tt_l1_ptr uint32_t*>(cur_scales_read_ptr + cur_token_t * aligned_scales_page_size);
+                for (uint32_t w = 0; w < num_scale_words; w++) {
+                    meta[3 + w] = (int32_t)src_scales[w];
+                }
+                uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                noc_async_write_one_packet_with_trid(
+                    xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+            }
+#else
             // No metadata staged: the sender builds each destination's metadata from route_info.
+#endif
 
             noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
             noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
@@ -344,6 +376,10 @@ void kernel_main() {
         // Wait for the reader to publish this batch's per-token scale rows (lockstep with c_0).
         cb_scales.wait_front(read_batch_size);
         uint32_t scales_read_ptr = cb_scales.get_read_ptr();
+#ifdef SPARSE_MCAST_DISPATCH
+        // Republish for flush_group, which is defined before this loop and reads it by reference.
+        cur_scales_read_ptr = scales_read_ptr;
+#endif
 #endif
 
         // Wait for reader to publish the per-batch route plan
