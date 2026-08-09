@@ -868,6 +868,25 @@ def _prefill_tokens() -> int:
         return 0
 
 
+def _prefill_batch() -> int:
+    """How many requests the prefill stage processed at once. 1 when nothing says otherwise.
+
+    THE UNIT OF WORK IS A BATCH, NOT A SEQUENCE. Both the byte and the FLOP term were computed from
+    seq_len alone, so a run at batch 8 was priced as if it prefilled 128 tokens when it prefilled
+    1024. FLOPs are linear in the token count and the activation bytes are too, so the roof came out
+    8x low and the stage read memory-bound when it was compute-bound -- the binding roof is the one
+    thing this table exists to state, and batch decided it.
+
+    Declared rather than observed: trace_replay prints batch on its TRACE_REPLAY_PATH line but that
+    is not persisted, so the environment the harness set is the best available source. 1 is the
+    honest default -- every model has at least one request in flight."""
+    for var in ("TT_PERF_BATCH", "PERF_MCP_BATCH", "TT_PERF_BATCH_SIZE"):
+        raw = str(os.environ.get(var) or "").strip()
+        if raw.isdigit() and int(raw) > 0:
+            return int(raw)
+    return 1
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -960,10 +979,12 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
     # whole ceiling for a diffusion model, whose unit of work is a denoise STEP and which is exactly
     # as memory-bound per step as an LLM is per token. PREFILL is the part that is token-specific:
     # a model that does not consume a prompt has no prefill to price, so it gets one stage, not two.
+    # DECODE'S unit is one token per USER (tok/s/u is per user), so batch does not multiply it.
+    # PREFILL'S unit is the whole in-flight request set: seq_len tokens for each of `batch`.
     stages = [("decode", 1)]
     _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
     if _pt:
-        stages.insert(0, ("prefill", _pt))
+        stages.insert(0, ("prefill", _pt * max(1, _prefill_batch())))
     _L = int((mf or {}).get("layers") or 0)
     _H = int((mf or {}).get("hidden_size") or 0)
     for name, toks in stages:

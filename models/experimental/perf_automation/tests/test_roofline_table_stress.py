@@ -675,3 +675,49 @@ def test_prefill_crosses_from_memory_bound_to_compute_bound_with_the_prompt():
         assert binds[8192] == "compute", binds
     finally:
         S._model_facts, S._prefill_tokens = _saved_f, _saved_t
+
+
+def test_the_prefill_roof_prices_the_whole_batch_not_one_sequence():
+    """THE UNIT OF WORK IS A BATCH, NOT A SEQUENCE.
+
+    Both the byte and the FLOP term came from seq_len alone, so a run at batch 8 was priced as if it
+    prefilled 128 tokens when it prefilled 1024. FLOPs are linear in the token count and the
+    activation bytes are too, so the roof came out 8x low -- and the stage read memory-bound when it
+    was compute-bound. The binding roof is the one thing this table exists to state, and batch was
+    deciding it unseen.
+
+    decode is deliberately NOT multiplied: tok/s/u is per USER, so its unit is one token per user
+    however many users are in flight."""
+    import os
+
+    import summary as S
+
+    mf = {
+        "weight_bytes": 24374793024,
+        "total_params": 11180446320,
+        "dominant_dtype": "bfloat16",
+        "layers": 48,
+        "hidden_size": 3840,
+        "intermediate_size": 15360,
+        "kv_heads": 8,
+        "head_dim": 256,
+    }
+    _f, _t, _b = S._model_facts, S._prefill_tokens, os.environ.get("TT_PERF_BATCH")
+    try:
+        S._model_facts, S._prefill_tokens = (lambda: mf), (lambda: 128)
+        got = {}
+        for batch in (1, 8):
+            os.environ["TT_PERF_BATCH"] = str(batch)
+            r = S._stage_roofs(active_bytes=int(11.18e9), peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
+            got[batch] = r
+            assert r["decode"]["tokens"] == 1, "decode is per user; batch must not multiply it"
+        assert got[8]["prefill"]["tokens"] == 8 * got[1]["prefill"]["tokens"]
+        assert got[8]["prefill"]["compute_ms"] > got[1]["prefill"]["compute_ms"]
+        # the case that motivated it: batch 8 flips which roof binds
+        assert got[1]["prefill"]["binds"] == "memory", got[1]["prefill"]["binds"]
+        assert got[8]["prefill"]["binds"] == "compute", got[8]["prefill"]["binds"]
+    finally:
+        S._model_facts, S._prefill_tokens = _f, _t
+        os.environ.pop("TT_PERF_BATCH", None)
+        if _b is not None:
+            os.environ["TT_PERF_BATCH"] = _b
