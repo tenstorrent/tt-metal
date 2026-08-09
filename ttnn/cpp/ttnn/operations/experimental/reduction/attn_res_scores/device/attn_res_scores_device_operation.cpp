@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/reduction/attn_res_scores/device/attn_res_scores_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -17,6 +18,12 @@ using namespace tt::constants;
 void AttnResScoresDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& stats = tensor_args.stats;
+
+    // The compute config defaults to HiFi4 with fp32 dest accumulation, which is only
+    // correct on Blackhole; elsewhere the op compiles, runs, and returns silently wrong
+    // values. Reject the device rather than let a caller reach that path.
+    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "AttnResScores is only supported on Blackhole, got {}", arch);
 
     operations::check_tensor(stats, "AttnResScores", "stats", {DataType::BFLOAT16, DataType::FLOAT32});
     TT_FATAL(

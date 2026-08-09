@@ -7,6 +7,7 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -20,6 +21,12 @@ void AttnResMergeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& partial = tensor_args.partial;
     const auto& prefix_sum = tensor_args.prefix_sum;
+
+    // The compute config defaults to HiFi4 with fp32 dest accumulation, which is only
+    // correct on Blackhole; elsewhere the op compiles, runs, and returns silently wrong
+    // values. Reject the device rather than let a caller reach that path.
+    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "AttnResMerge is only supported on Blackhole, got {}", arch);
 
     // The full-width operands are BFLOAT16 only: the MAC path is
     // `mul_tiles_bcast_cols` with acc_to_dest, and that is the one numeric

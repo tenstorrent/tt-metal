@@ -184,8 +184,10 @@ def test_attn_res_stats_program_cache(device):
     (
         ("v_batched", "requires a leading dim of 1 on v"),
         ("q_candidates", "requires a single query row"),
-        ("q_rows", "must occupy exactly one tile row"),
+        ("q_rows", "broadcasts a single query row"),
+        ("q_rows_subtile", "broadcasts a single query row"),
         ("d_mismatch", "contracts v and q over d"),
+        ("d_mismatch_subtile", "contracts v and q over d"),
         ("rank", "requires a rank-4 v"),
         ("dtype", "only supports specific data types"),
     ),
@@ -208,8 +210,17 @@ def test_attn_res_stats_rejects(bad, message, device, expect_error):
         # Two tile rows of query: the kernel broadcasts one row down the tokens
         # and has no way to choose between them.
         tt_q = _place(torch.randn([1, 1, 64, 128], dtype=torch.bfloat16), device)
+    elif bad == "q_rows_subtile":
+        # Two rows inside one tile. Indistinguishable from one row by padded height,
+        # so only a logical check rejects it — and the second row would be dropped.
+        tt_q = _place(torch.randn([1, 1, 2, 128], dtype=torch.bfloat16), device)
     elif bad == "d_mismatch":
         tt_q = _place(torch.randn([1, 1, 1, 64], dtype=torch.bfloat16), device)
+    elif bad == "d_mismatch_subtile":
+        # Both widths pad to 64, so only a logical check rejects the pair; the dot
+        # would otherwise contract v's real values 33..62 against q's zero padding.
+        tt_v = _place(torch.randn([1, 9, 128, 63], dtype=torch.bfloat16), device)
+        tt_q = _place(torch.randn([1, 1, 1, 33], dtype=torch.bfloat16), device)
     elif bad == "rank":
         tt_v = _place(torch.randn([9, 128, 128], dtype=torch.bfloat16), device)
     elif bad == "dtype":
