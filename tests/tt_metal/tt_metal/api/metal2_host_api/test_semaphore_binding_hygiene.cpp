@@ -156,6 +156,9 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
         "get_semaphore(",                // turning a semaphore id into a raw address
         "get_semaphore<",                // same, templated spelling: get_semaphore<X>(id)
         "noc_semaphore_inc(",            // atomic increment at a raw address (local or remote)
+        "noc_semaphore_inc<",            // same, templated spelling
+        "noc_semaphore_inc_multicast<",  // templated multicast increment
+        "noc_semaphore_set_multicast_loopback_src(",  // multicast set incl. the source core
         "noc_semaphore_set(",            // raw set
         "noc_semaphore_set_remote(",     // remote set
         "noc_semaphore_set_multicast(",  // multicast set
@@ -232,6 +235,8 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         // ...but the same spelling over a RAW id uses the unaffected uint32_t ctor and is legal.
         {"pinned_scope_raw_id_ok", "void kernel_main() { Semaphore<> s(sem_id); }", false},
         {"multicast_set", "void kernel_main() { noc_semaphore_set_multicast(a, b, 1); }", true},
+        // Templated spelling of noc_semaphore_inc.
+        {"templated_inc", "void kernel_main() { noc_semaphore_inc<true>(a, 1); }", true},
         // Templated spelling of get_semaphore.
         {"templated_get_semaphore",
          "void kernel_main() { uint32_t a = get_semaphore<ProgrammableCoreType::TENSIX>(0); }",
