@@ -38,6 +38,8 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
                 * :attr:`output_dtype`: BFLOAT16 (default) or FLOAT32.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input_e4m3).
+                * :attr:`narrow_scales_to_bf16`: when True, narrow the fp32 scale to bf16 on-device and run the
+                  broadcast multiply in bf16 (HiFi2); when False (default), keep the fp32 (HiFi4) datapath.
                 * :attr:`token_count_aware`: enable the token-count-aware MoE-dispatch prefix path (default False).
                 * :attr:`expert_region_offsets`: UINT32 ROW_MAJOR DRAM interleaved, (1, num_routed_experts).
                   Required when token_count_aware=True.
@@ -61,6 +63,7 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
         nb::arg("input_scale") = nb::none(),
         nb::arg("output_dtype") = std::nullopt,
         nb::arg("memory_config") = std::nullopt,
+        nb::arg("narrow_scales_to_bf16") = false,
         nb::arg("token_count_aware") = false,
         nb::arg("expert_region_offsets") = nb::none(),
         nb::arg("expert_token_counts") = nb::none(),

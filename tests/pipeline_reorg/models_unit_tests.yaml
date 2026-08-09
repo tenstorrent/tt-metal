@@ -276,6 +276,41 @@
 # runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
 # 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
 
+# Tier 3: most-critical module only (decoder decode + prefill), matching
+# neighbouring tt_transformers Tier 3 entries (llama3.2-1b / qwen2.5-7b / phi-3-mini).
+- name: Gemma-2-2B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+  model: gemma-2-2b
+  model_family: Gemma
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+    wh_n300:
+      timeout: 8
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-2-9B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+  model: gemma-2-9b
+  model_family: Gemma
+  skus:
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Gemma-4-E2B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -1040,6 +1075,8 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
+    pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
