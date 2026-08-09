@@ -1105,8 +1105,14 @@ template <typename Scheme>
     const uint32_t signal_budget_bytes = planner_signal_budget_bytes(
         mesh_device, architecture_policy, initial_hybrid_tile_mirror, interleave_batch_sticks);
     TT_FATAL(architecture_policy.inverse_scale_inline, "ILWT must preserve inline FP32 inverse scaling");
+    LiftingInversePlan full_plan =
+        make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode);
+    TT_FATAL(
+        full_plan.forward_trace.preprocess_layout.padded_length() <=
+            static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+        "ILWT padded signal length exceeds the device signed-index range");
     IlwtExecutionPlan plan = make_ilwt_execution_plan(
-        make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode),
+        std::move(full_plan),
         core_limit(mesh_device),
         signal_budget_bytes,
         architecture_policy.ilwt_layout,

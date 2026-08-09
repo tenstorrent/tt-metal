@@ -151,11 +151,8 @@ LWT_BOUNDARY_CALLABLE float read_extended_value(
     const uint32_t out_idx) {
     static_assert(
         ttnn::operations::wavelet::is_supported_lwt_boundary_mode(Mode), "Unsupported compile-time boundary mode");
-#if defined(ARCH_BLACKHOLE)
-    // The host planner caps the padded 1D extent at INT32_MAX, so the compact
-    // antireflect descriptor preserves every reachable logical coordinate.
+    const int32_t logical = static_cast<int32_t>(out_idx) - static_cast<int32_t>(left_pad);
     if constexpr (Mode == ttnn::operations::wavelet::BoundaryMode::kAntireflect) {
-        const int32_t logical = static_cast<int32_t>(out_idx) - static_cast<int32_t>(left_pad);
         const auto extended = ttnn::operations::wavelet::make_antireflect_index_i32(logical, input_length);
         return ttnn::operations::wavelet::evaluate_antireflect_index_i32(
             extended,
@@ -165,26 +162,10 @@ LWT_BOUNDARY_CALLABLE float read_extended_value(
                 .cache = cache,
                 .source_length = input_length,
             });
-    } else
-#elif defined(ARCH_WORMHOLE)
-    if constexpr (Mode == ttnn::operations::wavelet::BoundaryMode::kAntireflect) {
-        const int32_t logical = static_cast<int32_t>(out_idx) - static_cast<int32_t>(left_pad);
-        const auto extended = ttnn::operations::wavelet::make_antireflect_index_i32(logical, input_length);
-        return ttnn::operations::wavelet::evaluate_antireflect_index_i32(
-            extended,
-            input_length,
-            CachedSourceReader<SrcAccessor>{
-                .src = src,
-                .cache = cache,
-                .source_length = input_length,
-            });
-    } else
-#endif
-    {
-        const int64_t logical = static_cast<int64_t>(out_idx) - static_cast<int64_t>(left_pad);
-        const ttnn::operations::wavelet::ExtendedIndex extended =
-            ttnn::operations::wavelet::make_extended_index<Mode>(logical, input_length);
-        return ttnn::operations::wavelet::evaluate_extended_index<Mode>(
+    } else {
+        const ttnn::operations::wavelet::ExtendedIndexI32 extended =
+            ttnn::operations::wavelet::make_extended_index_i32<Mode>(logical, input_length);
+        return ttnn::operations::wavelet::evaluate_extended_index_i32<Mode>(
             extended,
             input_length,
             CachedSourceReader<SrcAccessor>{

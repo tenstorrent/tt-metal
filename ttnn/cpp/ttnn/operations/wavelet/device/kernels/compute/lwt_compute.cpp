@@ -53,6 +53,12 @@ constexpr uint32_t kDstScale = 0;
 constexpr bool kInlineTerminalScale = LWT_INLINE_TERMINAL_SCALE != 0;
 constexpr bool kInlineInverseScale = ILWT_INLINE_INVERSE_SCALE != 0;
 
+#if defined(TRISC_MATH) || defined(LWT_SCHEME_HEADER)
+#define WAVELET_1D_STEP_ATTRIBUTES inline
+#else
+#define WAVELET_1D_STEP_ATTRIBUTES __attribute__((noinline, noclone))
+#endif
+
 #ifdef TRISC_MATH
 ALWI void copy_narrow_tile_math(const uint32_t dst_tile_index) {
     math::math_unpack_to_dest_math_ready();
@@ -171,7 +177,7 @@ template <
     bool ScaleBase,
     uint32_t SourceScalePacked,
     uint32_t BaseScalePacked>
-inline void run_predict_update_step(
+WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
     const uint32_t cb_input0,
     const uint32_t cb_input1,
     const uint32_t cb_base,
@@ -407,6 +413,8 @@ void lwt_compute() {
 }
 
 }  // namespace ttnn::operations::wavelet::kernels
+
+#undef WAVELET_1D_STEP_ATTRIBUTES
 
 void kernel_main() {
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);

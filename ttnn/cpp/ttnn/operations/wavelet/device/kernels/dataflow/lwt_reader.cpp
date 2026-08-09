@@ -64,12 +64,11 @@ ALWI void read_workspace_block(const volatile tt_l1_ptr float* src, WorkspaceInd
 
 template <bool BoundsChecked>
 ALWI void read_workspace_block(
-    const volatile tt_l1_ptr float* src, const int64_t logical_start, const uint32_t logical_end, float* dst) {
+    const volatile tt_l1_ptr float* src, const int32_t logical_start, const uint32_t logical_end, float* dst) {
     if constexpr (BoundsChecked) {
+        const uint32_t negative_magnitude = 0U - static_cast<uint32_t>(logical_start);
         const uint32_t zero_prefix =
-            logical_start < 0
-                ? static_cast<uint32_t>((-logical_start) < kBlockElements ? -logical_start : kBlockElements)
-                : 0;
+            logical_start < 0 ? (negative_magnitude < kBlockElements ? negative_magnitude : kBlockElements) : 0;
         const uint32_t valid_start = logical_start < 0 ? 0U : static_cast<uint32_t>(logical_start);
         WorkspaceIndexCursor cursor(valid_start);
 #pragma GCC unroll 8
@@ -343,13 +342,14 @@ ALWI void fill_source_row_major(
             block < 2 ? src_tiles01 + block * kNarrowTileElements : src_tiles23 + (block - 2) * kNarrowTileElements;
         for (uint32_t row = 0; row < kRowsPerGroup; ++row) {
             auto* tile_row = narrow_tile + row * kBlockElements;
-            const int64_t logical_start = static_cast<int64_t>(source_offset) + group_base +
-                                          (row * kOutputBlocksPerRow + block) * kBlockElements - source_left_pad;
+            const int32_t logical_start =
+                static_cast<int32_t>(source_offset) - static_cast<int32_t>(source_left_pad) +
+                static_cast<int32_t>(group_base + (row * kOutputBlocksPerRow + block) * kBlockElements);
 #pragma GCC unroll 8
             for (uint32_t lane = 0; lane < kBlockElements; ++lane) {
-                const int64_t logical_index = logical_start + lane;
+                const int32_t logical_index = logical_start + static_cast<int32_t>(lane);
                 if constexpr (BoundsChecked) {
-                    tile_row[lane] = logical_index >= 0 && static_cast<uint64_t>(logical_index) < source_end
+                    tile_row[lane] = logical_index >= 0 && static_cast<uint32_t>(logical_index) < source_end
                                          ? src[static_cast<uint32_t>(logical_index)]
                                          : 0.0F;
                 } else {
@@ -418,8 +418,9 @@ ALWI void fill_source_narrow_tiles(
             block < 2 ? src_tiles01 + block * kNarrowTileElements : src_tiles23 + (block - 2) * kNarrowTileElements;
         for (uint32_t row = 0; row < kRowsPerGroup; ++row) {
             auto* tile_row = narrow_tile + row * kBlockElements;
-            const int64_t logical_start = static_cast<int64_t>(source_offset) + group_base +
-                                          (row * kOutputBlocksPerRow + block) * kBlockElements - source_left_pad;
+            const int32_t logical_start =
+                static_cast<int32_t>(source_offset) - static_cast<int32_t>(source_left_pad) +
+                static_cast<int32_t>(group_base + (row * kOutputBlocksPerRow + block) * kBlockElements);
             read_workspace_block<BoundsChecked>(src, logical_start, source_end, tile_row);
         }
     }
@@ -448,10 +449,10 @@ ALWI void fill_output_narrow_tiles(
         for (uint32_t block = 0; block < kOutputBlocksPerRow; ++block) {
             auto* tile_block = narrow_tiles + block * kNarrowTileElements + row * kBlockElements;
             const uint32_t output_index = group_base + (row * kOutputBlocksPerRow + block) * kBlockElements;
-            const uint32_t logical_end =
-                source_offset + output_length < source_end ? source_offset + output_length : source_end;
+            const uint32_t available = source_offset < source_end ? source_end - source_offset : 0U;
+            const uint32_t logical_end = source_offset + (output_length < available ? output_length : available);
             read_workspace_block<BoundsChecked>(
-                src, static_cast<int64_t>(source_offset) + output_index, logical_end, tile_block);
+                src, static_cast<int32_t>(source_offset) + static_cast<int32_t>(output_index), logical_end, tile_block);
         }
     }
 }
@@ -491,9 +492,12 @@ ALWI void emit_predict_update_tiles(
         bool source_is_dense = group_base >= source_left_pad;
         uint32_t source_begin = 0;
         if (source_is_dense) {
-            const uint64_t candidate_begin = static_cast<uint64_t>(source_offset) + group_base - source_left_pad;
-            source_is_dense = candidate_begin + kSourcePackedElements <= source_end;
-            source_begin = static_cast<uint32_t>(candidate_begin);
+            const uint32_t group_offset = group_base - source_left_pad;
+            source_is_dense = source_offset <= source_end && group_offset <= source_end - source_offset &&
+                              kSourcePackedElements <= source_end - source_offset - group_offset;
+            if (source_is_dense) {
+                source_begin = source_offset + group_offset;
+            }
         }
         if constexpr (TileNative) {
             if (source_is_dense && source_begin % kGroupOutputElements == 0) {
@@ -542,8 +546,9 @@ ALWI void emit_predict_update_tiles(
 
         base_buffer.reserve_back(3);
         auto* base_tiles = reinterpret_cast<float*>(base_buffer.get_write_ptr());
-        const bool base_is_dense = static_cast<uint64_t>(group_base) + kGroupOutputElements <= output_length &&
-                                   static_cast<uint64_t>(base_offset) + group_base + kGroupOutputElements <= base_end;
+        const bool base_is_dense = group_base <= output_length && kGroupOutputElements <= output_length - group_base &&
+                                   base_offset <= base_end && group_base <= base_end - base_offset &&
+                                   kGroupOutputElements <= base_end - base_offset - group_base;
         const uint32_t base_begin = base_offset + group_base;
         if constexpr (TileNative) {
             if (base_is_dense && base_begin % kGroupOutputElements == 0) {
@@ -607,9 +612,10 @@ ALWI void emit_scale_tiles(
         const uint32_t group_base = group * kGroupOutputElements;
         scale_buffer.reserve_back(3);
         auto* scale_tiles = reinterpret_cast<float*>(scale_buffer.get_write_ptr());
-        const bool source_is_dense =
-            static_cast<uint64_t>(group_base) + kGroupOutputElements <= output_length &&
-            static_cast<uint64_t>(source_offset) + group_base + kGroupOutputElements <= source_end;
+        const bool source_is_dense = group_base <= output_length &&
+                                     kGroupOutputElements <= output_length - group_base &&
+                                     source_offset <= source_end && group_base <= source_end - source_offset &&
+                                     kGroupOutputElements <= source_end - source_offset - group_base;
         const uint32_t source_begin = source_offset + group_base;
         if constexpr (TileNative) {
             if (source_is_dense && source_begin % kGroupOutputElements == 0) {

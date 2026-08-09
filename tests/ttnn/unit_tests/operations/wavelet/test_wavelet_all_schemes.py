@@ -7,10 +7,22 @@ import pywt
 import torch
 import ttnn
 
+BOUNDARY_MODES: tuple[str, ...] = (
+    "zero",
+    "constant",
+    "symmetric",
+    "reflect",
+    "periodic",
+    "smooth",
+    "antisymmetric",
+    "antireflect",
+)
+
 
 @pytest.mark.slow
 @pytest.mark.timeout(1800)
-def test_all_106_discrete_schemes_jit_forward_inverse(device: ttnn.MeshDevice) -> None:
+@pytest.mark.parametrize("boundary_mode", BOUNDARY_MODES)
+def test_all_106_discrete_schemes_jit_forward_inverse(device: ttnn.MeshDevice, boundary_mode: str) -> None:
     schemes = pywt.wavelist(kind="discrete")
     assert len(schemes) == 106
 
@@ -23,16 +35,16 @@ def test_all_106_discrete_schemes_jit_forward_inverse(device: ttnn.MeshDevice) -
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     for scheme in schemes:
-        approximation, detail = ttnn.dwt(input_tensor, scheme, boundary_mode="symmetric")
+        approximation, detail = ttnn.dwt(input_tensor, scheme, boundary_mode=boundary_mode)
         reconstructed = ttnn.idwt(
             approximation,
             detail,
             scheme,
             signal.numel(),
-            boundary_mode="symmetric",
+            boundary_mode=boundary_mode,
         )
 
-        coefficient_length = pywt.dwt_coeff_len(signal.numel(), pywt.Wavelet(scheme).dec_len, mode="symmetric")
+        coefficient_length = pywt.dwt_coeff_len(signal.numel(), pywt.Wavelet(scheme).dec_len, mode=boundary_mode)
         assert ttnn.dwt_coeff_len(signal.numel(), scheme) == coefficient_length
         coefficient_sticks = (coefficient_length + 31) // 32
         signal_sticks = (signal.numel() + 31) // 32

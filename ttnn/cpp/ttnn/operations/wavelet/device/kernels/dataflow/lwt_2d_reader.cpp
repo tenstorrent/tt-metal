@@ -177,9 +177,9 @@ LWT_2D_BOUNDARY_FUNCTION void collect_boundary_source_axis_tiles(
     } else {
         for (uint32_t offset = 0; offset < 2 * kTileSide; ++offset) {
             const int32_t raw_index = raw_begin + static_cast<int32_t>(offset);
-            const ttnn::operations::wavelet::ExtendedIndex extended =
-                ttnn::operations::wavelet::make_extended_index<Mode>(raw_index, logical_length);
-            ttnn::operations::wavelet::visit_extended_source_indices<Mode>(extended, logical_length, collector);
+            const ttnn::operations::wavelet::ExtendedIndexI32 extended =
+                ttnn::operations::wavelet::make_extended_index_i32<Mode>(raw_index, logical_length);
+            ttnn::operations::wavelet::visit_extended_source_indices_i32<Mode>(extended, logical_length, collector);
         }
     }
 }
@@ -249,13 +249,13 @@ struct StagedInputColumnReader {
 
 template <ttnn::operations::wavelet::BoundaryMode Mode>
 struct StagedInputRowReader {
-    const ttnn::operations::wavelet::ExtendedIndex& x_extended;
+    const ttnn::operations::wavelet::ExtendedIndexI32& x_extended;
     uint32_t input_width;
     const SplitSourceTiles<Mode>& source_tiles;
     uint32_t scratch_addr;
 
     ALWI float operator()(const uint32_t source_y) const {
-        return ttnn::operations::wavelet::evaluate_extended_index<Mode>(
+        return ttnn::operations::wavelet::evaluate_extended_index_i32<Mode>(
             x_extended,
             input_width,
             StagedInputColumnReader<Mode>{
@@ -345,11 +345,11 @@ template <ttnn::operations::wavelet::BoundaryMode Mode>
             .scratch_addr = scratch_addr,
         }(source_x);
     }
-    const ttnn::operations::wavelet::ExtendedIndex y_extended =
-        ttnn::operations::wavelet::make_extended_index<Mode>(raw_y, input_height);
-    const ttnn::operations::wavelet::ExtendedIndex x_extended =
-        ttnn::operations::wavelet::make_extended_index<Mode>(raw_x, input_width);
-    return ttnn::operations::wavelet::evaluate_extended_index<Mode>(
+    const ttnn::operations::wavelet::ExtendedIndexI32 y_extended =
+        ttnn::operations::wavelet::make_extended_index_i32<Mode>(raw_y, input_height);
+    const ttnn::operations::wavelet::ExtendedIndexI32 x_extended =
+        ttnn::operations::wavelet::make_extended_index_i32<Mode>(raw_x, input_width);
+    return ttnn::operations::wavelet::evaluate_extended_index_i32<Mode>(
         y_extended,
         input_height,
         StagedInputRowReader<Mode>{
