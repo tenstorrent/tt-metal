@@ -1074,13 +1074,17 @@ def validate_dispatch_metadata(
     dispatch_group_size: int,
     experts_per_chip: int,
     verbose: bool = True,
+    num_scale_fields: int = 0,
 ) -> ValidationResult:
     """
     Validate dispatch metadata against torch reference.
 
-    Metadata is 3 fields per token; all are validated:
+    Metadata is 3 routing fields per token, plus an optional fp8 scale tail; all are validated:
     - Linearized mesh coord conversion (field 0)
     - Direct comparison of fields 1-2 (global token idx, top-k slot)
+    - With num_scale_fields > 0 (compressed fp8 dispatch), fields 3..3+num_scale_fields are
+      compared as fp32 (int32 bit-cast) with rtol=1e-2 — the device cast op's scales match
+      the torch reference only within ~1e-2 relative, not bit-exact.
 
     Args:
         torch_metadata: Reference metadata
@@ -1142,11 +1146,25 @@ def validate_dispatch_metadata(
                     out_linearized_mesh_coord.float(), ref_linearized_mesh_coord.float(), atol=1e-6
                 )
 
-                if metadata_match and coord_match:
+                scale_match = True
+                if num_scale_fields > 0 and count > 0:
+                    out_scales = (
+                        ttnn_metadata[r, dst_chip_id, start : start + count, 3 : 3 + num_scale_fields]
+                        .contiguous()
+                        .view(torch.float32)
+                    )
+                    ref_scales = (
+                        torch_metadata[r, dst_chip_id, start : start + count, 3 : 3 + num_scale_fields]
+                        .contiguous()
+                        .view(torch.float32)
+                    )
+                    scale_match = torch.allclose(out_scales, ref_scales, rtol=1e-2, atol=1e-9)
+
+                if metadata_match and coord_match and scale_match:
                     matches += 1
                     logger.debug(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
-                    error_detail = f"metadata={metadata_match}, coord={coord_match}"
+                    error_detail = f"metadata={metadata_match}, coord={coord_match}, scales={scale_match}"
                     logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({error_detail})")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail))
 
@@ -1162,6 +1180,16 @@ def validate_dispatch_metadata(
                                     f"out_coord={out_linearized_mesh_coord[slot].item()}, "
                                     f"torch={torch_data.tolist()}, kernel={kernel_data.tolist()}"
                                 )
+                        if not scale_match:
+                            rel = (out_scales - ref_scales).abs() / ref_scales.abs().clamp_min(1e-9)
+                            worst = rel.argmax()
+                            slot, field = divmod(int(worst.item()), num_scale_fields)
+                            logger.error(
+                                f"    Scale tail mismatch at chip={dst_chip_id}, expert={expert_id}: "
+                                f"max_rel={rel.max().item():.4f} (buffer slot {start + slot} "
+                                f"(region-relative {slot}), field {field}: "
+                                f"ref={ref_scales[slot, field].item():.6e}, out={out_scales[slot, field].item():.6e})"
+                            )
 
     passed = len(mismatches) == 0
     return ValidationResult(

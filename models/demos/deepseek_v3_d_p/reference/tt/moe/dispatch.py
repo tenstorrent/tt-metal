@@ -167,6 +167,9 @@ class TorchDispatchModule(torch.nn.Module):
                             ), "Dispatch table must be provided in multi-group configuration to determine expert chip mapping"
 
                         dst_index = offset_copy[chip, routed_expert]
+                        assert (
+                            dst_index < self.max_dispatch_buffer_token_size
+                        ), f"dispatch buffer overflow (expert {int(routed_expert)}: row {int(dst_index)} >= {self.max_dispatch_buffer_token_size}) — raise dispatch_buffer_capacity_factor"
 
                         dispatched_buffer[group, expert_chip, dst_index] = x[chip, token]
                         # Compute linearized mesh coord for combine module

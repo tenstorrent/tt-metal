@@ -493,6 +493,10 @@ def test_prefill_block_loop(
     block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
+        # Default-on for DS on Blackhole; PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch.
+        # This test has no PCC assertions, so it doubles as a per-iteration measurement of the
+        # fp8 dispatch round-trip's accuracy impact.
+        block_kwargs["compressed_fp8_dispatch"] = DSV3.resolve_compressed_fp8_dispatch()
         if not skip_reference:
             # bf16 everywhere for clean PCC comparison; skip_reference (perf mode) keeps
             # production defaults (bfp8 activations, bfp4 routed weights, bfp8 shared weights)

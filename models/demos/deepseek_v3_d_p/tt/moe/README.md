@@ -25,7 +25,7 @@ The MoE dispatch/combine operations implement expert-parallel token routing acro
 | `num_dispatch_groups` | Number of parallel dispatch groups (expert parallel dimension) |
 | `experts_per_chip` | `= num_routed_experts // dispatch_group_size` |
 | `expert_dispatch_table` | Maps expert ID → destination chip ID within dispatch axis |
-| `metadata_len` | 5 fields: `(src_chip, token_idx, topk_idx, expert_id, weight)` |
+| `metadata_len` | 3 routing fields `(src_chip, token_idx, topk_idx)`; with compressed fp8 dispatch, plus one fp32 scale word per 128-wide emb block: `3 + emb_dim/128` (see `compute_constants(fp8_scaled_input=True)`) |
 | `max_dispatched_tokens_per_expert` | Per-expert theoretical upper bound = `dispatch_group_size * seq_len_per_chip` (full sequence length of the dispatch group) |
 | `max_dispatch_buffer_token_size` | Total token capacity of the per-chip dispatch buffer (shared across all local experts); sized internally by `compute_constants` as a fixed multiple of `max_dispatched_tokens_per_expert` |
 
@@ -112,12 +112,14 @@ Shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip,
 Shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip,
         max_dispatched_tokens_per_expert, metadata_len)
 
-metadata_len = 5 fields:
-  [0]: src_chip      - Source chip ID (0 to dispatch_group_size-1)
+metadata_len = 3 routing fields:
+  [0]: src_chip      - Source chip ID (linearized mesh coord)
   [1]: token_idx     - Token index within source chip's sequence
   [2]: topk_idx      - Which of the K experts this token selected (0 to num_experts_per_tok-1)
-  [3]: expert_id     - Global expert ID (0 to num_routed_experts-1)
-  [4]: weight        - Router weight (bfloat16 stored as int16)
+
+With compressed fp8 dispatch (metadata_len = 3 + emb_dim/128):
+  [3..]: scale tail  - The token's per-128-block fp32 scales, bit-cast into int32 words.
+                       Written by dispatch, consumed by per_token_cast_back.
 ```
 
 ## 5. Input Tensor Sharding/Replication
@@ -215,7 +217,7 @@ experts_per_chip = 16 // 2 = 8
 max_dispatched_tokens_per_expert = 2 * 32 = 64        # per-expert upper bound (full sequence)
 max_dispatch_buffer_token_size = 128                  # total per-chip buffer capacity
 
-metadata_len = 5
+metadata_len = 3          # (3 + emb_dim/128 with compressed fp8 dispatch)
 ```
 
 ### Input Tensor Shapes
@@ -233,7 +235,7 @@ metadata_len = 5
 | Tensor | Shape | Description |
 |--------|-------|-------------|
 | `dispatched_buffer` | `(1, 2, 8, 32, 7168)` | Dispatched tokens per expert (emb_dim=7168) |
-| `dispatched_metadata` | `(1, 2, 8, 32, 5)` | Metadata per dispatched token |
+| `dispatched_metadata` | `(1, 2, 8, 32, 3)` | Metadata per dispatched token (last dim `3 + emb_dim/128` with fp8 dispatch) |
 | `combined_output` | `(2, 32, 4, 7168)` | Recombined output (emb_dim=7168) |
 
 ## 8. Data Flow Diagram

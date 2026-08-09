@@ -86,6 +86,10 @@ That is the entire adapter contract — four methods plus the attributes. The ad
 a factory + descriptor; it performs no device work or comms itself, and it does not
 hold the cache (the engine does).
 
+If your adapter sets `supports_compressed_fp8_dispatch = True`, the model runs FP8 MoE
+dispatch whenever it is on Blackhole. If you don't set it, the model always uses bf16
+dispatch. Kill switch: `PREFILL_COMPRESSED_FP8_DISPATCH=0` forces bf16 for a run.
+
 Test-only metadata (HF download coordinates, reference-model classes, PCC
 thresholds) is optional and only needed if you wire pytest coverage; see the
 attributes and lazy `reference_*_cls` properties on `PrefillModelAdapter`. Keep the

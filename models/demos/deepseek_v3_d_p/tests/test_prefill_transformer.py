@@ -397,6 +397,7 @@ def run_model(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)

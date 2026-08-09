@@ -31,10 +31,13 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from transformers.configuration_utils import PretrainedConfig
@@ -47,7 +50,10 @@ class PrefillRunParams:
     """The resolved (env-derived) knobs the engine hands an adapter to build a
     runtime. The runner fills this once from the environment + per-rank layer
     split; adapters read fields off it instead of re-reading os.environ, so the
-    adapter method signatures stay stable as new knobs are added.
+    adapter method signatures stay stable as new knobs are added. (Deliberate
+    exception: the adapter's ``resolve_*`` methods are the sanctioned home for
+    env + hardware policy that must be shared with the direct pytest entry
+    points, which never build ``PrefillRunParams``.)
 
     Layer fields are THIS rank's slice: ``num_layers`` is the rank's layer count
     (== model total for single-rank) and ``first_layer_idx`` is the global index
@@ -125,6 +131,9 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Model is validated for FP8 MoE dispatch: it runs by default on Blackhole, and
+    # PREFILL_COMPRESSED_FP8_DISPATCH=0 disables it. Read via resolve_compressed_fp8_dispatch().
+    supports_compressed_fp8_dispatch: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -150,6 +159,25 @@ class PrefillModelAdapter(ABC):
     def resolve_sparse_kv_cache_format(self, requested: Optional[object]) -> Optional[object]:
         """Return an explicit request, otherwise this adapter's model default."""
         return self.default_sparse_kv_cache_format if requested is None else requested
+
+    def resolve_compressed_fp8_dispatch(self) -> bool:
+        """True iff the model is validated for FP8 MoE dispatch, the hardware is Blackhole,
+        and ``PREFILL_COMPRESSED_FP8_DISPATCH=0`` did not kill it. Under ``tt-run`` set the
+        kill switch via the manifest ``env`` map — shell exports don't reach ranks."""
+        env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
+        if env not in (None, "0", "1"):
+            logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} ignored (only '0' has an effect)")
+        if env == "0":
+            return False
+
+        from models.common.utility_functions import is_blackhole  # lazy: keeps this module import-light
+
+        enabled = self.supports_compressed_fp8_dispatch and is_blackhole()
+        if env == "1" and not enabled:
+            logger.warning(
+                f"PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect for {self.name}: the env var can only disable"
+            )
+        return enabled
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:

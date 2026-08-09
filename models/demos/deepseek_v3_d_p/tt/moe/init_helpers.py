@@ -431,6 +431,24 @@ def get_gate_outputs(
     return global_expert_offsets, expert_token_counts, expert_region_offsets, expert_counter
 
 
+# DeepEP-style per-token fp8 quantization wire format, shared by the device ops
+# (per_token_cast_to_fp8 / dispatch / per_token_cast_back), TtMoe, and the torch
+# reference. One fp32 scale per 128-wide block per token:
+# scale = clamp(amax(|block|), FP8_SCALE_CLAMP_MIN) / E4M3_MAX.
+FP8_SCALE_BLOCK = 128
+E4M3_MAX = 448.0
+FP8_SCALE_CLAMP_MIN = 1e-4
+
+# Routing metadata fields that always lead each token's metadata row: chip, token, topk_idx.
+METADATA_ROUTING_FIELDS = 3
+
+
+def fp8_metadata_len(emb_dim: int) -> int:
+    """Metadata row length when fp8 scales ride in the tail: 3 routing fields + emb_dim/128 scales."""
+    assert emb_dim % FP8_SCALE_BLOCK == 0, f"fp8 dispatch requires emb_dim ({emb_dim}) divisible by {FP8_SCALE_BLOCK}"
+    return METADATA_ROUTING_FIELDS + emb_dim // FP8_SCALE_BLOCK
+
+
 def compute_constants(
     seq_len_per_chip,
     num_routed_experts,
@@ -484,11 +502,11 @@ def compute_constants(
         experts_per_chip = experts_per_chip_override
     else:
         experts_per_chip = num_routed_experts // num_devices
-    metadata_len = 3  # chip, token, topk_idx
+    metadata_len = METADATA_ROUTING_FIELDS  # chip, token, topk_idx
     if fp8_scaled_input:
         # Each token appends its emb_dim/128 fp32 scales (bit-cast int32) after the 3 routing fields.
         assert emb_dim is not None, "emb_dim is required when fp8_scaled_input is True"
-        metadata_len += emb_dim // 128
+        metadata_len = fp8_metadata_len(emb_dim)
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)

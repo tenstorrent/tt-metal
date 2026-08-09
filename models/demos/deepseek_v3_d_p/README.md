@@ -20,6 +20,7 @@ model, see
 - **`TT_DS_PREFILL_HOST_REF_CACHE`** — Directory for cached host reference snapshots used in PCC validation. Defaults to `/tmp/deepseek_v3_transformer_ref_cache`.
 - **`TT_DS_PREFILL_INFINITEBENCH_CACHE`** — Directory for cached InfiniteBench prompt data. Defaults to `/tmp/deepseek_v3_transformer_inputs`.
 - **`TT_DS_PREFILL_DEBUG_TOKEN_COUNT`** — Enable debug output for per-expert token counts in MoE forward pass. Set to `1`, `true`, or `yes` to enable. Defaults to disabled. Warning: enabling this adds device-to-host transfer overhead on every MoE layer forward.
+- **`PREFILL_COMPRESSED_FP8_DISPATCH`** — Kill switch for compressed FP8 MoE dispatch (e4m3 compression of activations around dispatch, per-token scales in the metadata tail). The feature is **default ON** for validated models (DeepSeek-V3, Kimi) on Blackhole and always OFF elsewhere; set `0` to disable it locally (debugging / bf16 comparison runs). The env var can only disable — it never enables fp8 for unvalidated models or non-Blackhole hardware. Note: under `tt-run`, shell-exported `PREFILL_*` vars are not propagated — set it via the manifest's `env` map.
 
 ## Weight Loading and TTNN Cache
 
