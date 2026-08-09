@@ -9,6 +9,8 @@
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <execinfo.h>  // backtrace() — busy-wait call-stack capture (TT_EMULE_TRACE_BUSYWAIT)
+#include <dlfcn.h>     // dladdr()
 
 #include <atomic>
 #include <chrono>
@@ -94,6 +96,13 @@ struct FiberSchedulerImpl {
                                                        // scheduler reaches quiescence (below)
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
+    // Low-perturbation occ-wipe probe (TT_EMULE_TRACE_WAKECOUNT). Per wake-key: total
+    // wake() calls over the run, and how many of those found occupied==0 at wake time
+    // (a reset/pop wipe rather than a push). Dumped per parked key at the deadlock to
+    // split "CB never produced" (total==0) from "produced then wiped" (total>0, occ=0).
+    std::unordered_map<const void*, uint64_t> wake_total_;
+    std::unordered_map<const void*, uint64_t> wake_occzero_;
+
     unsigned K_ = 1;           // persistent pool size (read once at pool creation)
     unsigned W_ = 0;           // workers ACTIVE this program = min(K_, fiber count); only
                                // ready_[0..W_) is used, fibers home to [0..W_), surplus
@@ -161,6 +170,7 @@ struct FiberSchedulerImpl {
         return false;
     }
     std::string dump_parked();               // single-threaded (post-join)
+    std::string dump_all();                  // full fiber census incl Done (TT_EMULE_TRACE_CENSUS)
     void watchdog();                         // tier-2
     std::atomic<bool> run_active_{false};
 };
@@ -416,6 +426,25 @@ void FiberScheduler::quiescence_park() {
 void FiberScheduler::wake(const void* key) {
     std::lock_guard<std::mutex> g(p_->mu_);
     auto it = p_->parked_.find(key);
+    static const bool trace_wc = std::getenv("TT_EMULE_TRACE_WAKECOUNT") != nullptr;
+    if (trace_wc) {
+        p_->wake_total_[key]++;
+        // Classify occ-at-wake only when a parked waiter proves the key is a CB in its
+        // cbs[] range — memory-safe (never deref an arbitrary sem key as a CBSyncState).
+        if (it != p_->parked_.end() && it->second) {
+            const auto* ctx = it->second->owned_ctx.get();
+            if (ctx && ctx->cbs) {
+                auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
+                auto k = reinterpret_cast<uintptr_t>(key);
+                if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
+                    if (reinterpret_cast<const tt_emule::CBSyncState*>(key)->occupied.load(
+                            std::memory_order_acquire) == 0) {
+                        p_->wake_occzero_[key]++;
+                    }
+                }
+            }
+        }
+    }
     if (it == p_->parked_.end()) {
         return;
     }
@@ -434,6 +463,36 @@ void FiberScheduler::wake(const void* key) {
 
 void FiberScheduler::yield() {
     Fiber* f = t_current;
+    // Busy-wait call-stack probe: a raw `while(*ptr) invalidate_l1_cache()` kernel loop yields
+    // here every iteration (never parks). Sample the fiber's backtrace on cores (9,8)/(10,8) —
+    // the deadlock busy-spin runs the whole watchdog window, so it dominates the samples. Map the
+    // JIT-.so frame offsets with addr2line to find the exact busy-loop. TT_EMULE_TRACE_BUSYWAIT.
+    static const bool trace_bw = std::getenv("TT_EMULE_TRACE_BUSYWAIT") != nullptr;
+    if (trace_bw && f &&
+        ((f->id.logical_x == 9 && f->id.logical_y == 8) || (f->id.logical_x == 10 && f->id.logical_y == 8))) {
+        static std::atomic<uint64_t> ctr{0};
+        static const uint64_t period = env_size("TT_EMULE_BUSYWAIT_PERIOD", 500000);
+        if (ctr.fetch_add(1, std::memory_order_relaxed) % period == 0) {
+            void* bt[20];
+            int n = backtrace(bt, 20);
+            const auto* ctx = f->owned_ctx.get();
+            std::fprintf(stderr, "[BUSYWAIT] dev %d core(%d,%d) proc %d kind=%s\n",
+                         ctx ? int(ctx->chip_id) : -1, int(f->id.logical_x), int(f->id.logical_y),
+                         int(f->id.proc_id),
+                         (ctx && ctx->kind == ThreadCommonCtx::Kind::Compute) ? "CMP" : "DM");
+            for (int i = 0; i < n; ++i) {
+                Dl_info di;
+                if (dladdr(bt[i], &di) && di.dli_fname) {
+                    std::fprintf(stderr, "    #%d %p %s+0x%lx  [%s]\n", i, bt[i],
+                                 di.dli_sname ? di.dli_sname : "?",
+                                 di.dli_saddr ? (unsigned long)((char*)bt[i] - (char*)di.dli_saddr) : 0ul,
+                                 di.dli_fname);
+                } else {
+                    std::fprintf(stderr, "    #%d %p ?\n", i, bt[i]);
+                }
+            }
+        }
+    }
     p_->mu_.lock();
     f->state = FiberState::Ready;
     p_->ready_[f->home].push_back(f);        // back to its pinned worker (== this worker)
@@ -482,22 +541,30 @@ std::string FiberSchedulerImpl::dump_parked() {
     os << "  " << parked_.size() << " distinct wait-key(s); parked fibers:\n";
     for (auto& [key, head] : parked_) {
         for (Fiber* f = head; f; f = f->park_link) {
-            os << "    core(log " << f->id.logical_x << "," << f->id.logical_y
+            const auto* ctx = f->owned_ctx.get();
+            os << "    dev " << (ctx ? int(ctx->chip_id) : -1)
+               << " core(log " << f->id.logical_x << "," << f->id.logical_y
                << " phys " << int(f->id.phys_x) << "," << int(f->id.phys_y) << ")"
-               << " risc/proc " << int(f->id.proc_id);
+               << " risc/proc " << int(f->id.proc_id)
+               << " kind=" << (ctx && ctx->kind == ThreadCommonCtx::Kind::Compute ? "CMP" : "DM");
             if (f->id.kernel_src) {
                 os << " kernel " << f->id.kernel_src;
             }
             // Best-effort key naming: a CB if the key lands in this fiber's cbs[] array.
-            const auto* ctx = f->owned_ctx.get();
             const char* name = nullptr;
             char buf[64];
             if (ctx && ctx->cbs) {
                 auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
-                    std::snprintf(buf, sizeof(buf), "CB %zu",
-                                  (k - base) / sizeof(tt_emule::CBSyncState));
+                    const auto* cb = reinterpret_cast<const tt_emule::CBSyncState*>(key);
+                    std::snprintf(buf, sizeof(buf),
+                                  "CB %zu occ=%u rcv_cmp=%u ackd=%u npages=%u",
+                                  (k - base) / sizeof(tt_emule::CBSyncState),
+                                  cb->occupied.load(std::memory_order_acquire),
+                                  cb->received_compute.load(std::memory_order_acquire),
+                                  cb->acked.load(std::memory_order_acquire),
+                                  cb->num_pages);
                     name = buf;
                 }
             }
@@ -511,11 +578,72 @@ std::string FiberSchedulerImpl::dump_parked() {
                     name = buf;
                 }
             }
-            os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")\n";
+            os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")";
+            auto wt = wake_total_.find(key);
+            if (wt != wake_total_.end()) {
+                auto wz = wake_occzero_.find(key);
+                os << " [wakes=" << wt->second
+                   << " occ0-wakes=" << (wz != wake_occzero_.end() ? wz->second : 0) << "]";
+            } else if (!wake_total_.empty()) {
+                os << " [wakes=0]";  // probe active, this key never signaled → never produced
+            }
+            os << "\n";
         }
     }
     if (!quiescence_deferred_.empty()) {
         os << "  " << quiescence_deferred_.size() << " fiber(s) deferred to quiescence\n";
+    }
+    return os.str();
+}
+
+// Full census of EVERY spawned fiber (Ready/Running/Parked/QuiescenceDeferred/Done), not just
+// the parked ones dump_parked() shows. The hang investigation needs to see a fiber that
+// FINISHED without producing (invisible in dump_parked). Single-threaded (post-join / at abort).
+std::string FiberSchedulerImpl::dump_all() {
+    static const char* const kState[] = {"Ready", "Running", "Parked", "QuiescenceDeferred", "Done"};
+    std::ostringstream os;
+    os << "  fiber census (" << all_.size() << " fibers):\n";
+    for (auto& up : all_) {
+        Fiber* f = up.get();
+        if (!f) continue;
+        const auto* ctx = f->owned_ctx.get();
+        const bool is_cmp = ctx && ctx->kind == ThreadCommonCtx::Kind::Compute;
+        os << "    [CENSUS] dev " << (ctx ? int(ctx->chip_id) : -1)
+           << " core(log " << f->id.logical_x << "," << f->id.logical_y
+           << " phys " << int(f->id.phys_x) << "," << int(f->id.phys_y) << ")"
+           << " proc " << int(f->id.proc_id)
+           << " kind=" << (is_cmp ? "CMP" : "DM")
+           << " state=" << kState[static_cast<int>(f->state)];
+        if (f->state == FiberState::Parked && f->park_key) {
+            const void* key = f->park_key;
+            const char* name = nullptr;
+            char buf[80];
+            if (ctx && ctx->cbs) {
+                auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
+                auto k = reinterpret_cast<uintptr_t>(key);
+                if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
+                    const auto* cb = reinterpret_cast<const tt_emule::CBSyncState*>(key);
+                    std::snprintf(buf, sizeof(buf), "CB %zu occ=%u rcv_cmp=%u npages=%u",
+                                  (k - base) / sizeof(tt_emule::CBSyncState),
+                                  cb->occupied.load(std::memory_order_acquire),
+                                  cb->received_compute.load(std::memory_order_acquire),
+                                  cb->num_pages);
+                    name = buf;
+                }
+            }
+            if (!name && ctx && ctx->bridge_l1) {
+                auto base = reinterpret_cast<uintptr_t>(ctx->bridge_l1);
+                auto k = reinterpret_cast<uintptr_t>(key);
+                if (k >= base) {
+                    std::snprintf(buf, sizeof(buf), "L1 sem @ 0x%lx (cur=%u)",
+                                  (unsigned long)(k - base),
+                                  *reinterpret_cast<const volatile uint32_t*>(key));
+                    name = buf;
+                }
+            }
+            os << " @ " << (name ? name : "sync object");
+        }
+        os << "\n";
     }
     return os.str();
 }
@@ -555,6 +683,10 @@ void FiberSchedulerImpl::watchdog() {
                 livelock ? "resumption window" : "wall-clock backstop",
                 livelock ? "livelock / wake-cycle" : "lost wakeup / hang",
                 [this] { std::lock_guard<std::mutex> g(mu_); return dump_parked(); }().c_str());
+            if (std::getenv("TT_EMULE_TRACE_CENSUS")) {
+                std::fprintf(stderr, "%s",
+                             [this] { std::lock_guard<std::mutex> g(mu_); return dump_all(); }().c_str());
+            }
             std::abort();
         }
         last_resump = r;
@@ -588,6 +720,8 @@ void FiberScheduler::launch_and_wait(bool initial) {
             // Clear the captured kernel exception only on a fresh run; a HostWait return bypasses
             // teardown_and_throw (its sole consumer), so it must survive across pump quanta.
             p_->first_eptr_ = nullptr;
+            p_->wake_total_.clear();     // occ-wipe probe: per-program (keys are reused across programs)
+            p_->wake_occzero_.clear();
         }
         p_->idle_ = 0;
         p_->running_ = 0;
@@ -660,6 +794,9 @@ void FiberScheduler::teardown_and_throw() {
         deadlock = p_->deadlock_;
         if (deadlock) {
             dump = p_->dump_parked();
+            if (std::getenv("TT_EMULE_TRACE_CENSUS")) {
+                std::fprintf(stderr, "%s", p_->dump_all().c_str());
+            }
         }
         p_->ready_.clear();
         p_->parked_.clear();

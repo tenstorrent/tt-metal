@@ -26,6 +26,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <execinfo.h>  // [STRAY] debug: backtrace on NOC access to the rt-args region
+#include <signal.h>    // [MPWATCH] mprotect page-watch on the rt-args page
+#include <sys/mman.h>
+#include <ucontext.h>  // [MPWATCH] REG_RIP: precise faulting PC
+static inline void __emule_stray_check(bool is_worker, uint32_t offset, const char* who);  // [STRAY] fwd
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -228,6 +233,7 @@ extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
             __emule_self->san.sem_l1_range_start,
             __emule_self->san.sem_l1_range_end);
     }
+    __emule_stray_check(true, offset, "local_l1_ptr");
     return __emule_self->bridge_l1 ? __emule_self->bridge_l1 + offset : nullptr;
 }
 
@@ -237,6 +243,8 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         uint64_t key = (uint64_t(x) << 32) | y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
+            bool nr_is_worker = it->second->role() == tt_emule::CoreRole::WORKER;
+            __emule_stray_check(nr_is_worker, static_cast<uint32_t>(addr), "noc_resolve");
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
@@ -312,6 +320,127 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
     return pcie_base;
 }
 
+// [STRAY] debug: backtrace when a NOC access resolves onto a WORKER core's kernel_config
+// rt-args region ([0xa080,0xa120] covers the observed 0xa0b4/0xa0d8 clobber). Legit code never
+// NOC-touches kernel_config, so any hit is the stray writer stomping merged_gather's sender_idx.
+static inline void __emule_stray_check(bool is_worker, uint32_t offset, const char* who) {
+    static const bool _tr = std::getenv("TT_EMULE_TRACE_STRAY") != nullptr;
+    static std::atomic<int> _cap{0};
+    // Widened window: a payload write starting up to ~8 KB below 0xa0b4 could overrun into the
+    // rt-args region; the point resolvers only see the start offset.
+    if (!_tr || !is_worker || offset < 0x8100u || offset > 0xa1c0u || _cap.fetch_add(1) >= 20) {
+        return;
+    }
+    fprintf(stderr, "[STRAY] %s NOC-access to rt-args region offset=0x%x chip=%u — backtrace:\n",
+            who, offset, (unsigned)__emule_self->chip_id);
+    void* bt[48];
+    int n = backtrace(bt, 48);
+    backtrace_symbols_fd(bt, n, 2);
+}
+
+// [MPWATCH] mprotect page-watch: catch the stray writer that clobbers the merged_gather rt-args
+// (~bridge_l1+0xa1b0) via a raw/cached pointer invisible to every emule resolver. We mprotect the
+// 4 KB L1 page holding the rt-args (PROT_READ) after launch and SIGSEGV-trap the store. CTXREG proved
+// kcb=0x9f00, so rt-args live on the 0xa000 page (0xa0b4=rt_args[0], sender_idx=rt_args[63]@0xa1b0);
+// we arm ONLY rt-args pages with L1 offset >= 0xa000 (the 0x9000 page also holds the legit
+// packet-header pool [0x9180,0x9f00] → would false-positive). Robust re-arm: on a fault we un-protect,
+// single-step the store (TF), and re-protect on the paired SIGTRAP — so a legit write on the page can't
+// permanently disarm the watch before the clobber (the earlier one-shot disarm lost the page).
+static constexpr size_t kMpwMax = 8192;
+static std::atomic<uintptr_t> g_mpw_page[kMpwMax];  // watched page base host addrs (0 = empty slot)
+static std::atomic<size_t> g_mpw_count{0};
+static std::atomic<int> g_mpw_logged{0};
+static struct sigaction g_mpw_old_sa;
+static const long g_mpw_pagesz = sysconf(_SC_PAGESIZE);
+static thread_local uintptr_t g_mpw_tl_rearm = 0;  // page to re-PROT_READ on this thread's next SIGTRAP
+
+static bool __emule_mpw_is_watched(uintptr_t page) {
+    size_t n = g_mpw_count.load(std::memory_order_acquire);
+    for (size_t i = 0; i < n && i < kMpwMax; ++i) {
+        if (g_mpw_page[i].load(std::memory_order_relaxed) == page) return true;
+    }
+    return false;
+}
+
+static void __emule_mpw_handler(int sig, siginfo_t* si, void* uctx) {
+    if (sig == SIGTRAP) {
+        // Single-step trap after a re-executed store: re-protect the page and clear TF.
+        if (g_mpw_tl_rearm != 0) {
+            mprotect(reinterpret_cast<void*>(g_mpw_tl_rearm), g_mpw_pagesz, PROT_READ);
+            g_mpw_tl_rearm = 0;
+            if (uctx) static_cast<ucontext_t*>(uctx)->uc_mcontext.gregs[REG_EFL] &= ~0x100L;
+            return;
+        }
+        return;  // stray SIGTRAP — swallow (debug build)
+    }
+    uintptr_t fault = reinterpret_cast<uintptr_t>(si->si_addr);
+    uintptr_t page = fault & ~static_cast<uintptr_t>(g_mpw_pagesz - 1);
+    if (__emule_mpw_is_watched(page)) {
+        uint32_t off_in_page = static_cast<uint32_t>(fault - page);
+        void* rip = uctx ? reinterpret_cast<void*>(static_cast<ucontext_t*>(uctx)->uc_mcontext.gregs[REG_RIP])
+                         : nullptr;
+        if (g_mpw_logged.fetch_add(1) < 24) {
+            char hdr[220];
+            int hn = snprintf(hdr, sizeof(hdr),
+                "[MPWATCH] WRITE to rt-args page: fault=%p page=%p off_in_page=0x%x RIP=%p — bt:\n",
+                (void*)fault, (void*)page, off_in_page, rip);
+            (void)!write(2, hdr, hn);
+            if (rip) backtrace_symbols_fd(&rip, 1, 2);
+            void* bt[48];
+            int bn = backtrace(bt, 48);
+            backtrace_symbols_fd(bt, bn, 2);
+        }
+        // Un-protect, single-step the faulting store, re-protect on the SIGTRAP (robust re-arm).
+        mprotect(reinterpret_cast<void*>(page), g_mpw_pagesz, PROT_READ | PROT_WRITE);
+        g_mpw_tl_rearm = page;
+        if (uctx) static_cast<ucontext_t*>(uctx)->uc_mcontext.gregs[REG_EFL] |= 0x100L;  // set TF
+        return;
+    }
+    // Not a watched page — a real fault. Chain to the previous handler.
+    if (g_mpw_old_sa.sa_flags & SA_SIGINFO) {
+        if (g_mpw_old_sa.sa_sigaction) g_mpw_old_sa.sa_sigaction(sig, si, uctx);
+    } else if (g_mpw_old_sa.sa_handler == SIG_DFL || g_mpw_old_sa.sa_handler == SIG_IGN) {
+        signal(sig, SIG_DFL);
+        raise(sig);
+    } else if (g_mpw_old_sa.sa_handler) {
+        g_mpw_old_sa.sa_handler(sig);
+    }
+}
+
+static void __emule_mpw_install_once() {
+    static std::atomic<bool> done{false};
+    bool exp = false;
+    if (!done.compare_exchange_strong(exp, true)) return;
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = __emule_mpw_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &g_mpw_old_sa);
+    struct sigaction sat;
+    std::memset(&sat, 0, sizeof(sat));
+    sat.sa_sigaction = __emule_mpw_handler;
+    sat.sa_flags = SA_SIGINFO;
+    sigemptyset(&sat.sa_mask);
+    sigaction(SIGTRAP, &sat, nullptr);
+}
+
+// Arm the watch on the L1 page containing `rt_args_host`. `l1off` is the rt-args L1 offset
+// (kcb+rta_off); we SKIP pages whose L1 offset is below 0xa000 (they share the packet-header pool
+// [0x9180,0x9f00] on the 0x9000 page → legit pool writes would false-positive). Call after all
+// launch-time writes to the page, before the fibers run. Gated by the caller on env.
+static void __emule_mpw_arm(uint8_t* rt_args_host, uint32_t l1off) {
+    if (rt_args_host == nullptr || g_mpw_pagesz <= 0) return;
+    if ((l1off & ~0xfffu) < 0xa000u) return;  // skip the pool-sharing 0x9000 page
+    uintptr_t page = reinterpret_cast<uintptr_t>(rt_args_host) & ~static_cast<uintptr_t>(g_mpw_pagesz - 1);
+    if (__emule_mpw_is_watched(page)) return;  // dedup
+    if (mprotect(reinterpret_cast<void*>(page), g_mpw_pagesz, PROT_READ) != 0) return;
+    size_t slot = g_mpw_count.fetch_add(1, std::memory_order_acq_rel);
+    if (slot < kMpwMax) {
+        g_mpw_page[slot].store(page, std::memory_order_release);
+    }
+}
+
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
@@ -341,9 +470,10 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
-            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
-                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                                  : static_cast<uint32_t>(local_addr);
+            bool is_worker = it->second->role() == tt_emule::CoreRole::WORKER;
+            uint32_t offset = is_worker ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
+                                        : static_cast<uint32_t>(local_addr);
+            __emule_stray_check(is_worker, offset, "resolve_noc_addr");
             return it->second->l1_ptr(offset);
         }
     }
@@ -389,6 +519,16 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     l1_offset &= L1_SLOT_MASK;
 
     emule_require_self(__func__);
+    {  // [STRAYM] size-aware: does this multicast payload overlap the rt-args region [0xa0b4,0xa1c0)?
+        static const bool _sm = std::getenv("TT_EMULE_TRACE_STRAY") != nullptr;
+        uint32_t mo = static_cast<uint32_t>(l1_offset);
+        if (_sm && size > 0 && mo < 0xa1c0u && (mo + size) > 0xa0b4u) {
+            fprintf(stderr, "[STRAYM] multicast off=0x%x size=0x%x OVERLAPS rt-args — backtrace:\n", mo, size);
+            void* bt[48];
+            int n = backtrace(bt, 48);
+            backtrace_symbols_fd(bt, n, 2);
+        }
+    }
     if (!__emule_self->core_map) {
         return;
     }
@@ -425,6 +565,11 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     };
     const uint32_t nx = axis_count(x_start, x_end);
     const uint32_t ny = axis_count(y_start, y_end);
+    // [MCASTTRACE] sender-side mcast delivery trace (env TT_EMULE_TRACE_MCAST):
+    // logs the decoded rectangle + the physical worker coords actually delivered to,
+    // so we can see whether a stuck receiver's core is inside the mcast rectangle.
+    static const bool __mctrace = std::getenv("TT_EMULE_TRACE_MCAST") != nullptr;
+    std::string __mcdelivered;
     uint32_t delivered = 0;
     for (uint32_t ix = 0; ix < nx; ix++) {
         const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
@@ -436,6 +581,9 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_self->core_map->find(key);
             if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
+                if (__mctrace) {
+                    __mcdelivered += "(" + std::to_string(x) + "," + std::to_string(y) + ")";
+                }
                 uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
@@ -454,6 +602,13 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                 delivered++;
             }
         }
+    }
+    if (__mctrace) {
+        fprintf(stderr,
+                "[MCASTTRACE] dev=%u from_phys(%u,%u) rect(%u,%u)-(%u,%u) noc=%u size=%u off=0x%lx self=%d delivered=%u %s\n",
+                __emule_self->chip_id, my_x[0], my_y[0], x_start, y_start, x_end, y_end, (unsigned)noc, size,
+                (unsigned long)l1_offset, include_self ? 1 : 0, delivered,
+                (size == sizeof(uint32_t)) ? __mcdelivered.c_str() : "");
     }
     static const bool mdbg = std::getenv("EMULE_DEBUG") != nullptr;
     if (delivered == 0 && mdbg) {
@@ -2241,9 +2396,10 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         }
         return nullptr;
     }
-    uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
-                          ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                          : static_cast<uint32_t>(local_addr);
+    bool fr_is_worker = cit->second->role() == tt_emule::CoreRole::WORKER;
+    uint32_t offset = fr_is_worker ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
+                                   : static_cast<uint32_t>(local_addr);
+    __emule_stray_check(fr_is_worker, offset, "fabric_resolve_remote");
     return cit->second->l1_ptr(offset);
 }
 
@@ -2307,21 +2463,25 @@ extern "C" void __emule_fabric_set_route_dir(
 // Carry a stamped route from a source header address to a destination when the header bytes are copied
 // (a worker staging a packet header into a forwarder relay slot). On silicon the routing fields ride inside
 // the header, so a byte copy carries them for free; emule keeps them in the address-keyed side-table, so the
-// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are 0-based L1 offsets
-// (the fabric shim passes bridge_l1-relative offsets); widen through emule_route_key to match the set/read
-// sides. See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
-    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
+// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are FULL host-pointer keys:
+// the callers (dataflow_api.h / dataflow_utils.hpp) pass __emule_local_l1_to_ptr(src) and
+// __emule_resolve_noc_addr(dst) — the dst lives on the DESTINATION core whose worker-L1 mmap may be >4 GB
+// from this fiber's bridge_l1, so the keys MUST be 64-bit and used DIRECTLY (a uint32 param truncated the
+// pointer and a re-wrap through emule_route_key re-added bridge_l1 → a key matching neither the set nor the
+// teleport-read side → the relay route was lost → wrong-neighbor fallback delivery → torus-wrap-hop
+// quiescent deadlock). These full pointers already match the emule_route_key(bridge_l1+off) space the
+// set_route / resolve_targets sides produce. See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint64_t src_key, uint64_t dst_key) {
     if (src_key == dst_key) {
         return;
     }
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto it = g_route_meta.find(emule_route_key(src_key));
+    auto it = g_route_meta.find(src_key);
     if (it == g_route_meta.end()) {
         return;  // src carries no route — not a packet-header copy; nothing to follow.
     }
     const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
-    g_route_meta[emule_route_key(dst_key)] = r;
+    g_route_meta[dst_key] = r;
 }
 
 // Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
@@ -2559,6 +2719,20 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
 static void __emule_fabric_deliver(
     uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg) {
     const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+    {  // [STRAYF] size-aware: does this fabric payload write overlap the rt-args region [0xa0b4,0xa1c0)?
+        static const bool _sf = std::getenv("TT_EMULE_TRACE_STRAY") != nullptr;
+        if (_sf && (noc_send_type == 0 || noc_send_type == 3) && size > 0) {
+            uint32_t off = static_cast<uint32_t>(noc_address & NOC_LOCAL_MASK) & L1_SLOT_MASK;
+            if (off < 0xa1c0u && (off + size) > 0xa0b4u) {
+                fprintf(stderr,
+                    "[STRAYF] fabric deliver dst_chip=%u type=%u off=0x%x size=0x%x OVERLAPS rt-args — backtrace:\n",
+                    dst_chip, (unsigned)noc_send_type, off, size);
+                void* bt[48];
+                int n = backtrace(bt, 48);
+                backtrace_symbols_fd(bt, n, 2);
+            }
+        }
+    }
     switch (noc_send_type) {
         case 0: {  // NOC_UNICAST_WRITE
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
@@ -2588,6 +2762,10 @@ static void __emule_fabric_deliver(
                             dst_chip, (void*)d, old, old + val, val);
                 }
                 __emule_fiber_wake(d);
+            } else if (getenv("TT_EMULE_FABRIC_DROP")) {
+                fprintf(stderr, "[FABRIC_DROP] atomic_inc chip=%u noc_addr=0x%llx off=0x%x UNRESOLVED val=%u DROPPED\n",
+                        dst_chip, (unsigned long long)noc_address,
+                        (unsigned)(noc_address & ((1ULL << 36) - 1)), val);
             }
             break;
         }
@@ -2604,6 +2782,10 @@ static void __emule_fabric_deliver(
             if (s != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
                 __emule_fiber_wake(s);
+            } else if (getenv("TT_EMULE_FABRIC_DROP")) {
+                fprintf(stderr, "[FABRIC_DROP] fused_atomic_inc chip=%u sem_addr=0x%llx off=0x%x UNRESOLVED val=%u DROPPED\n",
+                        dst_chip, (unsigned long long)sem_addr,
+                        (unsigned)(sem_addr & ((1ULL << 36) - 1)), val);
             }
             break;
         }
@@ -2633,11 +2815,27 @@ static void __emule_fabric_deliver(
                                     dst_chip, (void*)d, val);
                         }
                         __emule_fiber_wake(d);
+                    } else if (getenv("TT_EMULE_FABRIC_DROP")) {
+                        fprintf(stderr, "[FABRIC_DROP] scatter_seminc chip=%u noc_addr=0x%llx off=0x%x UNRESOLVED val=%u DROPPED\n",
+                                dst_chip, (unsigned long long)na[i],
+                                (unsigned)(na[i] & ((1ULL << 36) - 1)), val);
                     }
                     continue;  // no payload advance for a seminc chunk
                 }
                 // Write chunk. The last write chunk's size is implicit (remaining payload).
                 uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+                {  // [STRAYF] size-aware scatter-chunk overlap with rt-args [0xa0b4,0xa1c0)
+                    static const bool _sfc = std::getenv("TT_EMULE_TRACE_STRAY") != nullptr;
+                    uint32_t coff = static_cast<uint32_t>(na[i] & NOC_LOCAL_MASK) & L1_SLOT_MASK;
+                    if (_sfc && csz > 0 && coff < 0xa1c0u && (coff + csz) > 0xa0b4u) {
+                        fprintf(stderr,
+                            "[STRAYF] fabric scatter chunk dst_chip=%u off=0x%x size=0x%x OVERLAPS rt-args — backtrace:\n",
+                            dst_chip, coff, csz);
+                        void* bt[48];
+                        int n = backtrace(bt, 48);
+                        backtrace_symbols_fd(bt, n, 2);
+                    }
+                }
                 if (payload != nullptr && d != nullptr && csz > 0) {
                     std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
                     __emule_fiber_wake(d);
@@ -2737,6 +2935,20 @@ static void init_core_cb_sync(
             uint32_t cb_addr = cb_impl->address();
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
+            {  // [CBOVL] debug: does this CB's L1 range OVERLAP the kernel_config region [0x9f00,0x1b300]?
+               // Any CB placed there collides with the rt-args (the DRAM-stream clobber at ~0xa000).
+                static const bool _ov = std::getenv("TT_EMULE_TRACE_CBOVL") != nullptr;
+                if (_ov && page_size > 0) {
+                    uint32_t cb_end = cb_addr + page_size * num_pages;
+                    if (cb_addr < 0x1b300u && cb_end > 0x9f00u) {
+                        fprintf(stderr,
+                            "[CBOVL] core=(%u,%u) cb[%u] addr=0x%x size=0x%x end=0x%x IN kernel_config "
+                            "[0x9f00,0x1b300] (global=%d)\n",
+                            (unsigned)lc.x, (unsigned)lc.y, idx, cb_addr, page_size * num_pages, cb_end,
+                            (int)cb_impl->globally_allocated());
+                    }
+                }
+            }
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
             core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
             configured[idx] = true;
@@ -3309,6 +3521,34 @@ static void launch_cores(
             ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
                 ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                 : nullptr;
+            {  // [RTASETUP] debug: dump the merged_gather sender_idx slot (rt_args[63]) at ctx-setup,
+               // BEFORE any fiber runs. Discriminates wrong-read-offset/write-time-clobber (garbage here)
+               // vs runtime-clobber (sane here, garbage at the GOOB read).
+                static const bool _rs = std::getenv("TT_EMULE_TRACE_RTA_SETUP") != nullptr;
+                if (_rs && !ki.is_tensix && ctx->rt_args != nullptr &&
+                    (ki.kernel_config_base + ki.rta_offset_in_kc + 64u * 4u) < core->l1_size()) {
+                    uint32_t w63 = ctx->rt_args[63];
+                    if (w63 >= 512u) {
+                        fprintf(stderr,
+                            "[RTASETUP] core=(%u,%u) proc=%u kcb=0x%x rta_off=0x%x rt_args=%p "
+                            "ra[0..3]=%x %x %x %x ra[62..64]=%x %x %x kname=%s\n",
+                            lx, ly, ki.processor_id, ki.kernel_config_base, (unsigned)ki.rta_offset_in_kc,
+                            (void*)ctx->rt_args, ctx->rt_args[0], ctx->rt_args[1], ctx->rt_args[2],
+                            ctx->rt_args[3], ctx->rt_args[62], ctx->rt_args[63], ctx->rt_args[64],
+                            ki.kernel_name.c_str());
+                    }
+                }
+            }
+            {  // [MPWATCH] arm the mprotect page-watch on this DM ctx's rt-args page (after all
+               // launch-time L1 writes, before the fibers run). Catches the raw/cached-pointer
+               // stray write to 0xa0b4 that bypasses every emule resolver.
+                static const bool _mpw = std::getenv("TT_EMULE_MPROTECT_WATCH") != nullptr;
+                if (_mpw && !ki.is_tensix && ctx->rt_args != nullptr) {
+                    __emule_mpw_install_once();
+                    __emule_mpw_arm(reinterpret_cast<uint8_t*>(ctx->rt_args),
+                                    ki.kernel_config_base + ki.rta_offset_in_kc);
+                }
+            }
             ctx->bridge_l1 = l1_data;
             ctx->l1_size = static_cast<uint32_t>(core->l1_size());
             ctx->bridge_dram = dram_data;
@@ -3326,13 +3566,38 @@ static void launch_cores(
             ctx->my_thread_id = ki.thread_idx;
             ctx->core = &cstate;
 
+            // [CTXREG] Registry of every allocated fiber ctx: base pointer + the
+            // (rt_args,common_rt_args) pair + identity. Cross-ref the segfault's
+            // [BRIDGEPROBE] self=0x... and stomped rt_args value (0x400106680) to
+            // answer: is `self` a real ctx base (in-place stomp) vs not (wrong
+            // __emule_self); and which ctx legitimately owns rt_args=0x400106680
+            // (core A) and how its base relates to `self` (UAF/heap-reuse).
+            {
+                static const bool _ctxreg = std::getenv("TT_EMULE_TRACE_CTXREG") != nullptr;
+                if (_ctxreg) {
+                    fprintf(stderr,
+                        "[CTXREG] ctx=%p sz=%s kind=%d chip=%u dev=%u core=(%u,%u) proc=%u "
+                        "rt_args=%p crta=%p bridge_l1=%p l1_size=0x%x kcb=0x%x rta_off=0x%x crta_off=0x%x kname=%s\n",
+                        (void*)ctx.get(), ki.is_tensix ? "CT" : "DM", (int)ctx->kind, ctx->chip_id,
+                        (unsigned)device_id, lx, ly, ki.processor_id,
+                        (void*)ctx->rt_args, (void*)ctx->common_rt_args, (void*)ctx->bridge_l1,
+                        ctx->l1_size, ki.kernel_config_base,
+                        (unsigned)ki.rta_offset_in_kc, (unsigned)ki.crta_offset_in_kc,
+                        ki.kernel_name.c_str());
+                    // No per-line fflush: block-buffered to keep timing close to run-1
+                    // (the alignas confound is reverted; fflush syscalls were the residual cost).
+                }
+            }
+
             tt::tt_metal::emule_fiber::FiberIdentity id;
             id.phys_x = px;
             id.phys_y = py;
             id.logical_x = lx;
             id.logical_y = ly;
             id.proc_id = ki.processor_id;
-            id.kernel_src = nullptr;
+            // Tag the fiber with its kernel source path so the hang dump names the op each
+            // parked fiber is in. ki (via ki_ptr) outlives the fiber, so the c_str() is stable.
+            id.kernel_src = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
 
             // The fiber entry is the kernel body. __emule_self is set by the scheduler
             // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
@@ -3554,6 +3819,18 @@ static void dispatch_to_device(
 // ---------------------------------------------------------------------------
 void execute_program_emulated(IDevice* device, Program& program) {
     auto device_id = device->id();
+    {  // [ALLOCBASE] one-time: dump the L1/DRAM allocator base vs MEM_MAP_END/kernel_config to see if
+       // emule reserves the full kernel_config region (else L1 buffers overlap kernel_config rt-args).
+        static const bool _ab = std::getenv("TT_EMULE_TRACE_ALLOCBASE") != nullptr;
+        static std::atomic<bool> _abdone{false};
+        bool e = false;
+        if (_ab && _abdone.compare_exchange_strong(e, true)) {
+            uint32_t l1b = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+            uint32_t drb = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
+            fprintf(stderr, "[ALLOCBASE] L1_base=0x%x DRAM_base=0x%x (kcb/MEM_MAP_END observed ~0x9f00; "
+                            "bh_hal l1_unreserved should be ~MEM_MAP_END+69KB)\n", l1b, drb);
+        }
+    }
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
     // Mark the fabric connection-route table stale: the next op's first connection record clears it, so
     // routes stay scoped to the current op (this op's builds already recorded before this launch).
