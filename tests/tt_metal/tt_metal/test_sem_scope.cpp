@@ -414,9 +414,8 @@ protected:
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
         // Each kernel gets barrier slot = its index; only NUM_KERNEL_BARRIERS(3) slots exist and
-        // wait_threads() does not bounds-check. A 3rd kernel using slot 2 (the seeder's) is safe:
-        // every census kernel binds counter_sem, so a multi-kernel census has >= 2 binder kernels
-        // and can never resolve DM_LOCAL_CACHED -- no seeder coexists.
+        // wait_threads() does not bounds-check. All 3 slots are general-purpose (the injected
+        // cached-pool seeder rendezvouses on its own dedicated barrier, not an array slot).
         EXPECT_LE(kernels.size(), 3u) << "run_census supports at most 3 kernels (barrier slots)";
         if (kernels.size() > 3u) {
             return {kNoReport, 0u};
@@ -823,7 +822,7 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
 }
 
 // TWO cached-eligible semaphores, each with its own single binder kernel, on one node: the injected
-// pool seeder rendezvouses on ONE node-wide barrier slot, so caching both would mix rendezvous
+// pool seeders rendezvous on ONE node-wide dedicated barrier, so caching both would mix rendezvous
 // groups (unequal thread counts hang at entry; equal counts let a seed land after an increment).
 // Both must be demoted to EXTERNAL. Uses different thread counts -- the hanging variant.
 TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
@@ -899,7 +898,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
     EXPECT_EQ(result[0], scope_val(SemScope::EXTERNAL))
-        << "two co-resident cached-binder kernels share one node-wide seeder barrier slot -> both must "
+        << "two co-resident cached-binder kernels share one node-wide seeder barrier -> both must "
            "be demoted to EXTERNAL, not cached";
     EXPECT_EQ(result[1], threads_a * concurrent_iterations);
 }

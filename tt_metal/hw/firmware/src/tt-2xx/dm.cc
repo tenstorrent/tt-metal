@@ -143,6 +143,7 @@ thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
+volatile KernelBarrier g_cached_sem_init_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf

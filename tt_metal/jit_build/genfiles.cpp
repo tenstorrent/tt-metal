@@ -232,7 +232,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
             if (has_cached_sem) {
                 // Includes for sem::init_dm_cached()'s body, guarded exactly like that body:
-                // the pool and sync_threads are DM-only, so a compute kernel must not pull these in.
+                // the pool and wait_threads_on are DM-only, so a compute kernel must not pull these in.
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 content << "#include \"api/dataflow/dataflow_api.h\"\n";
                 content << "#include \"api/kernel_thread_globals.h\"\n";
@@ -297,10 +297,9 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                             << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
                 }
                 content << "    }\n";
-                // Rendezvous on the DEDICATED cached-sem-init barrier slot: slots 0/1 are the DFB
-                // producer/consumer role barriers, so sharing one with a co-resident DFB kernel
-                // deadlocks.
-                content << "    ::sync_threads(::KERNEL_BARRIER_CACHED_SEM_INIT);\n";
+                // Rendezvous on the dedicated seeder barrier -- not addressable via sync_threads(idx),
+                // so a co-resident kernel's barrier-slot choice can never mix with this rendezvous.
+                content << "    ::wait_threads_on(::g_cached_sem_init_barrier, ::get_num_threads());\n";
                 content << "#endif\n";
                 content << "}\n";
             }
