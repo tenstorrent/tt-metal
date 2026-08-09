@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <optional>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
 
@@ -71,7 +72,10 @@ protected:
     // kernel read back from the semaphore after `iterations` increments. The scope is set on
     // the SemaphoreSpec; the kernel is scope-agnostic and picks it up via CTAD on the emitted
     // sem::counter token.
-    uint32_t run_scope(SemaphoreScope scope, bool with_down = false) {
+    uint32_t run_scope(
+        SemaphoreScope scope,
+        bool with_down = false,
+        std::optional<experimental::SemaphoreAccessType> access_override = std::nullopt) {
         // Prefill with a sentinel, not 0: the with_down tests expect 0, so a zero prefill would
         // pass even if the kernel never reported.
         std::vector<uint32_t> sentinel(1, kNoReport);
@@ -104,8 +108,10 @@ protected:
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                   .accessor_name = "counter",
                   // Label matches what the kernel does: SEM_SCOPE_UPDOWN really down()s.
-                  .access_type = with_down ? experimental::SemaphoreAccessType::CONSUME
-                                           : experimental::SemaphoreAccessType::INCREMENT}},
+                  // (access_override exists ONLY for the enforcement-negative test.)
+                  .access_type = access_override.value_or(
+                      with_down ? experimental::SemaphoreAccessType::CONSUME
+                                : experimental::SemaphoreAccessType::INCREMENT)}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
@@ -478,7 +484,7 @@ protected:
             return {kNoReport, 0u};
         }
         census_ring_word_ = result[2];
-        census_read_only_ = result[3];
+        census_access_ = result[3];
         // Catch "the probe never reported" instead of silently reading it as LOCAL_NONATOMIC(0).
         EXPECT_NE(result[0], kNoReport) << "census probe never reported: the reporter kernel/thread did not run";
         return {result[0], result[1]};
@@ -499,9 +505,9 @@ protected:
     // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
     // semaphore this must stay at the initial value, proving the count lives in the pool.
     uint32_t census_ring_word_{kNoReport};
-    // The baked read_only bit as observed by the last run_census() (report word 3); only a device
+    // The baked SemAccess value as observed by the last run_census() (report word 3); only a device
     // readback can prove the host actually emitted the bit.
-    uint32_t census_read_only_{kNoReport};
+    uint32_t census_access_{kNoReport};
 
     // Where the binding kernel is placed (defaults to `core`). Set wider to build the
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
@@ -584,7 +590,7 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
 }
 
 // NOTE: token-CTAD deduction is exercised by every test here: sem::counter is a
-// SemaphoreBindingToken<id, baked-scope, read_only> and the kernels construct via plain
+// SemaphoreBindingToken<id, baked-scope, baked-access> and the kernels construct via plain
 // `Semaphore s(sem::counter)`.
 
 // ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
@@ -1078,29 +1084,39 @@ TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
     EXPECT_EQ(count, iterations);
 }
 
-// POSITIVE CONTROL for the OBSERVE->ReadOnly plumbing: every other assertion here still passes if
-// the host silently stops baking the read_only bit, so the bit is read back off the device (report
-// word 3). The OBSERVE kernel must be the REPORTER: read_only is a property of a BINDING, so a
-// writer kernel reporting on the same semaphore would correctly bake 0. Its count is not asserted.
-TEST_F(SemScopeFixture, TestObserveBindingBakesReadOnlyBit) {
+// POSITIVE CONTROL for the AccessType->SemAccess plumbing: every other assertion here still
+// passes if the host silently stops baking the access, so it is read back off the device (report
+// word 3). The OBSERVE kernel must be the REPORTER: access is a property of a BINDING, so a
+// writer kernel reporting on the same semaphore would correctly bake INCREMENT. Count unasserted.
+TEST_F(SemScopeFixture, TestObserveBindingBakesReadOnlyAccess) {
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = 1, .increments = iterations},
          {.num_threads = 1, .access = experimental::SemaphoreAccessType::OBSERVE, .increments = 0, .reporter = true}});
     (void)count;
-    log_info(LogTest, "observe binding: scope={} read_only={}", scope, census_read_only_);
-    EXPECT_EQ(census_read_only_, 1u)
-        << "an AccessType::OBSERVE binding must bake read_only=1 into its sem:: token; a 0 here means "
-           "the host is not emitting the bit, so every mutator static_assert is silently inert";
+    log_info(LogTest, "observe binding: scope={} access={}", scope, census_access_);
+    EXPECT_EQ(census_access_, static_cast<uint32_t>(SemAccess::OBSERVE))
+        << "an AccessType::OBSERVE binding must bake SemAccess::OBSERVE into its sem:: token; anything "
+           "else means the host is not emitting the label, so every mutator static_assert is silently "
+           "inert";
 }
 
-// ...and the negative half: a writer binding must NOT be baked read-only, or every mutating kernel in
-// the tree would fail to compile.
-TEST_F(SemScopeFixture, TestWriterBindingBakesMutable) {
+// ...and the writer half: a default binding must bake INCREMENT (mutable), or every mutating
+// kernel in the tree would fail to compile; a CONSUME binding must bake CONSUME, or down() would.
+TEST_F(SemScopeFixture, TestWriterBindingBakesDeclaredAccess) {
     const auto [scope, count] = run_census(core, {{.num_threads = 1, .increments = iterations, .reporter = true}});
     EXPECT_EQ(scope, scope_val(SemScope::LOCAL_NONATOMIC));
     EXPECT_EQ(count, iterations);
-    EXPECT_EQ(census_read_only_, 0u) << "a default (INCREMENT) binding must bake read_only=0";
+    EXPECT_EQ(census_access_, static_cast<uint32_t>(SemAccess::INCREMENT))
+        << "a default (INCREMENT) binding must bake SemAccess::INCREMENT";
+
+    const auto [c_scope, c_count] = run_census(
+        core,
+        {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}});
+    (void)c_scope;
+    (void)c_count;
+    EXPECT_EQ(census_access_, static_cast<uint32_t>(SemAccess::CONSUME))
+        << "a CONSUME binding must bake SemAccess::CONSUME (down() compiles only under it)";
 }
 
 // ...and an off-node OBSERVE reader also blocks the cached path: it would read that node's pool
@@ -1175,6 +1191,15 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
             << "forced DM_LOCAL_CACHED must bake as cached, not silently map to another mechanism";
         EXPECT_EQ(cached_count, 2 * concurrent_iterations);
     }
+}
+
+// ENFORCEMENT NEGATIVE: a kernel that down()s under an INCREMENT-labeled binding must fail at
+// JIT compile (Semaphore::down() static_asserts on SemAccess::CONSUME). Without this, the whole
+// access-enforcement could silently rot into accept-everything.
+TEST_F(SemScopeFixture, TestDownUnderIncrementLabelFailsToCompile) {
+    EXPECT_ANY_THROW(run_scope(SemaphoreScope::AUTO, /*with_down=*/true, experimental::SemaphoreAccessType::INCREMENT))
+        << "a down() through an INCREMENT-labeled binding compiled -- the SemAccess mutator "
+           "static_asserts are inert and the census labels are unenforced again";
 }
 
 // The two forced-cached guards that had no negative test: a second binder KERNEL on the same
