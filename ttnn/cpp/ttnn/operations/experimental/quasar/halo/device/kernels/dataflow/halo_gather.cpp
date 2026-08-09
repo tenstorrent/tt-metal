@@ -326,7 +326,9 @@ void kernel_main() {
             noc.write_zeros_l1_barrier();
         } else {
             fill_with_val<num_elements_to_fill, pad_val>(pad_fill_cb.get_write_ptr());
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+            // Quasar-only: flush the RISC CPU store to TL1 before push_back so the peer reader / unpacker
+            // sees it (WH/BH CPU stores are coherent to the consumer, and flush_l2_cache_range is tt-2xx-only).
             flush_l2_cache_range(
                 static_cast<uintptr_t>(pad_fill_cb.get_write_ptr()), static_cast<size_t>(aligned_stick_nbytes));
 #endif
