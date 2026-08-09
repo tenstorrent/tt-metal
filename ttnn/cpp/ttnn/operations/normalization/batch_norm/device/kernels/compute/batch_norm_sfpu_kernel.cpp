@@ -18,43 +18,45 @@ template <
     bool NeedsTypecast,
     uint32_t TcInFmt,
     uint32_t TcOutFmt,
-    uint32_t cb_bcast,
-    uint32_t cb_other,
-    uint32_t cb_batch_var,
-    uint32_t cb_eps,
-    uint32_t cb_den,
-    uint32_t cb_weight,
-    uint32_t cb_bias,
-    uint32_t cb_output_0,
-    uint32_t cb_output_final>
+    uint32_t dfb_bcast_id,
+    uint32_t dfb_other_id,
+    uint32_t dfb_batch_var_id,
+    uint32_t dfb_eps_id,
+    uint32_t dfb_den_id,
+    uint32_t dfb_weight_id,
+    uint32_t dfb_bias_id,
+    uint32_t dfb_output_0_id,
+    uint32_t dfb_output_final_id>
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     using namespace compute_kernel_lib;
 
     eltwise_chain(
         EltwiseShape::single(),
-        CopyTile<input(cb_batch_var, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
-        CopyTile<input(cb_eps, WaitPolicy::None, PopPolicy::None), Dst::D1>{},
+        CopyTile<input(dfb_batch_var_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
+        CopyTile<input(dfb_eps_id, WaitPolicy::None, PopPolicy::None), Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
-        PackTile<output(cb_den)>{});
+        PackTile<output(dfb_den_id)>{});
 
     const uint32_t inner_count = freq - tile_start;
 
-    constexpr uint32_t cb_final_out = NeedsTypecast ? cb_output_final : cb_output_0;
+    constexpr uint32_t dfb_final_out_id = NeedsTypecast ? dfb_output_final_id : dfb_output_0_id;
 
     eltwise_chain(
         EltwiseShape::tiles(inner_count),
-        CopyTile<input(cb_other)>{},
-        CopyTile<input(cb_bcast, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
+        CopyTile<input(dfb_other_id)>{},
+        CopyTile<input(dfb_bcast_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<input(cb_den, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
+        CopyTile<input(dfb_den_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        OptionalChainElement<WeightHas, CopyTile<input(cb_weight, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
+        OptionalChainElement<
+            WeightHas,
+            CopyTile<input(dfb_weight_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<BiasHas, CopyTile<input(cb_bias, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
+        OptionalChainElement<BiasHas, CopyTile<input(dfb_bias_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
-        PackTile<output(cb_final_out)>{});
+        PackTile<output(dfb_final_out_id)>{});
 }
 
 // The writer-facing output DFB is only bound when the accumulation format is wider than the output
@@ -63,10 +65,10 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 // dfb::writer_out simply does not exist on the untypecast build.
 #ifdef NEEDS_OUTPUT_TYPECAST
 constexpr bool needs_output_typecast = true;
-constexpr auto dfb_output_final = dfb::writer_out;
+constexpr auto dfb_output_final_binding = dfb::writer_out;
 #else
 constexpr bool needs_output_typecast = false;
-constexpr auto dfb_output_final = dfb::out;
+constexpr auto dfb_output_final_binding = dfb::out;
 #endif
 
 void kernel_main() {
@@ -80,21 +82,21 @@ void kernel_main() {
         return;
     }
 
-    constexpr auto cb_input = dfb::input;
-    constexpr auto cb_batch_mean = dfb::batch_mean;
-    constexpr auto cb_output_0 = dfb::out;
-    constexpr auto cb_batch_var = dfb::batch_var;
-    constexpr auto cb_eps = dfb::eps;
-    constexpr auto cb_den = dfb::den;
-    constexpr auto cb_weight = dfb::weight;
-    constexpr auto cb_bias = dfb::bias;
-    constexpr auto cb_output_final = dfb_output_final;
+    constexpr auto dfb_input_id = dfb::input;
+    constexpr auto dfb_batch_mean_id = dfb::batch_mean;
+    constexpr auto dfb_output_0_id = dfb::out;
+    constexpr auto dfb_batch_var_id = dfb::batch_var;
+    constexpr auto dfb_eps_id = dfb::eps;
+    constexpr auto dfb_den_id = dfb::den;
+    constexpr auto dfb_weight_id = dfb::weight;
+    constexpr auto dfb_bias_id = dfb::bias;
+    constexpr auto dfb_output_final_id = dfb_output_final_binding;
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
-    compute_kernel_hw_startup(cb_input, cb_batch_mean, cb_output_0);
+    compute_kernel_hw_startup(dfb_input_id, dfb_batch_mean_id, dfb_output_0_id);
 
-    DataflowBuffer(cb_eps).wait_front(1);
+    DataflowBuffer(dfb_eps_id).wait_front(1);
 
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
@@ -106,15 +108,15 @@ void kernel_main() {
             needs_output_typecast,
             tc_in_fmt,
             tc_out_fmt,
-            cb_batch_mean,
-            cb_input,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_output_0,
-            cb_output_final>(tile_freq, tile_start);
+            dfb_batch_mean_id,
+            dfb_input_id,
+            dfb_batch_var_id,
+            dfb_eps_id,
+            dfb_den_id,
+            dfb_weight_id,
+            dfb_bias_id,
+            dfb_output_0_id,
+            dfb_output_final_id>(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
         batchnorm_bcast_tiles<
@@ -123,16 +125,16 @@ void kernel_main() {
             needs_output_typecast,
             tc_in_fmt,
             tc_out_fmt,
-            cb_batch_mean,
-            cb_input,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_output_0,
-            cb_output_final>(remaining_iterations, tile_start);
+            dfb_batch_mean_id,
+            dfb_input_id,
+            dfb_batch_var_id,
+            dfb_eps_id,
+            dfb_den_id,
+            dfb_weight_id,
+            dfb_bias_id,
+            dfb_output_0_id,
+            dfb_output_final_id>(remaining_iterations, tile_start);
     }
 
-    DataflowBuffer(cb_eps).pop_front(1);
+    DataflowBuffer(dfb_eps_id).pop_front(1);
 }

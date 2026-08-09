@@ -17,29 +17,34 @@ constexpr bool kIsFloat = get_compile_time_arg_val(1) == 1;
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr auto dfb_input_id = tt::CBIndex::c_0;
+    constexpr auto dfb_output_id = tt::CBIndex::c_2;
 
-    compute_kernel_hw_startup(cb_input, cb_output);
+    compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::Hardsigmoid<ckl::Dst::D0>{},
         ckl::OptionalChainElement<
             kIsFloat32,
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D1>>{},
         ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
         ckl::OptionalChainElement<
             kIsFloat,
             ckl::DestReuseBinary<
-                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::BinaryFpuOp::Mul,
                 ckl::DestReuseType::DEST_TO_SRCA>>{},
         ckl::PackTile<ckl::output(
-            cb_output, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_output_id,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

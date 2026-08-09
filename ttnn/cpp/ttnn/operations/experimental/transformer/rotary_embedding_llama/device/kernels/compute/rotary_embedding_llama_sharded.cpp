@@ -40,24 +40,24 @@ void kernel_main() {
     constexpr auto out_dfb = dfb::out;
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto Ht = get_arg(args::Ht);  // How many rows (tiles) in n_heads dimension
-    constexpr auto bulk_block_input = [](auto cb) {
+    constexpr auto bulk_block_input = [](auto dfb_id) {
         return ckl::input(
-            cb,
+            dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::AtEnd,
             ckl::OperandKind::Block,
             ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto held_block_input = [](auto cb) {
+    constexpr auto held_block_input = [](auto dfb_id) {
         return ckl::input(
-            cb,
+            dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::None,
             ckl::OperandKind::Block,
             ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto bulk_output = [](auto cb) {
-        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    constexpr auto bulk_output = [](auto dfb_id) {
+        return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
 
     DataflowBuffer in_dfb_obj(in_dfb);
@@ -139,10 +139,10 @@ void kernel_main() {
             ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
     }
 
-    // Done with the sin/cos matrices, so remove from CB
+    // Done with the sin/cos matrices, so remove from DFB
     sin_dfb_obj.pop_front(Wt);
     cos_dfb_obj.pop_front(Wt);
 
-    // Done with the transformation matrix, so remove from CB
+    // Done with the transformation matrix, so remove from DFB
     trans_mat_dfb_obj.pop_front(onetile);
 }

@@ -13,32 +13,34 @@
 namespace ckl = compute_kernel_lib;
 
 inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_in2 = tt::CBIndex::c_2;
-    constexpr auto cb_out = tt::CBIndex::c_3;
+    constexpr auto dfb_in0_id = tt::CBIndex::c_0;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_in2_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out_id = tt::CBIndex::c_3;
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::BinaryFpu<
-            ckl::input(cb_in1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_in2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_in1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None>{},
         ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),
-        ckl::DestReuseBinary<ckl::input(cb_in0), ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::DestReuseBinary<ckl::input(dfb_in0_id), ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
         ckl::PackTile<ckl::output(
-            cb_out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_in2 = tt::CBIndex::c_2;
-    constexpr auto cb_out = tt::CBIndex::c_3;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_in2_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out_id = tt::CBIndex::c_3;
 
-    compute_kernel_hw_startup(cb_in1, cb_in2, cb_out);
+    compute_kernel_hw_startup(dfb_in1_id, dfb_in2_id, dfb_out_id);
 
     run_addcmul(num_tiles, scalar_arg);
 }

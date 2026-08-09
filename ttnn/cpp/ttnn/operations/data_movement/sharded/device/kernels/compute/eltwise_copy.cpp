@@ -11,19 +11,19 @@
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_in_id = tt::CBIndex::c_0;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
 
-    compute_kernel_hw_startup(cb_in, cb_out);
+    compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
     compute_kernel_lib::copy<
         compute_kernel_lib::input(
-            cb_in,
+            dfb_in_id,
             compute_kernel_lib::WaitPolicy::PerTile,
             compute_kernel_lib::PopPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            cb_out,
+            dfb_out_id,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled)>(

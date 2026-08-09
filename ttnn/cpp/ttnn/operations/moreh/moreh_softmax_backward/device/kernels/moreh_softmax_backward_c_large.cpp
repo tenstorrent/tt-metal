@@ -16,55 +16,55 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_y = tt::CBIndex::c_0;
-    constexpr auto cb_dy = tt::CBIndex::c_1;
-    constexpr auto cb_dx = tt::CBIndex::c_16;
+    constexpr auto dfb_y_id = tt::CBIndex::c_0;
+    constexpr auto dfb_dy_id = tt::CBIndex::c_1;
+    constexpr auto dfb_dx_id = tt::CBIndex::c_16;
 
-    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
-    constexpr auto cb_sum = tt::CBIndex::c_25;
-    DataflowBuffer cb_sum_obj(cb_sum);
-    constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
+    constexpr auto dfb_ydy_id = tt::CBIndex::c_24;  // y * dy
+    constexpr auto dfb_sum_id = tt::CBIndex::c_25;
+    DataflowBuffer dfb_sum_obj(dfb_sum_id);
+    constexpr auto dfb_dy_m_sum_id = tt::CBIndex::c_26;  // dy - sum
 
     constexpr uint32_t N = get_compile_time_arg_val(0);
     constexpr uint32_t dim_size = get_compile_time_arg_val(1);
 
-    compute_kernel_hw_startup(cb_dy, cb_y, cb_dx);
+    compute_kernel_hw_startup(dfb_dy_id, dfb_y_id, dfb_dx_id);
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                copy_tile_to_cb<cb_dy, cb_sum>();
+                copy_tile_to_dfb<dfb_dy_id, dfb_sum_id>();
             } else {
-                add_tiles_to_cb<cb_sum, cb_dy, cb_sum>();
+                add_tiles_to_dfb<dfb_sum_id, dfb_dy_id, dfb_sum_id>();
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
-            constexpr auto cb_exp = tt::CBIndex::c_24;
-            exp_tile_to_cb<cb_y, cb_exp>();
+            constexpr auto dfb_exp_id = tt::CBIndex::c_24;
+            exp_tile_to_dfb<dfb_y_id, dfb_exp_id>();
 
-            constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            mul_tiles_to_cb<cb_sum, cb_exp, cb_inter2>(0, 0, /*pop0=*/0, /*pop1=*/1);
+            constexpr auto dfb_inter2_id = tt::CBIndex::c_26;
+            mul_tiles_to_dfb<dfb_sum_id, dfb_exp_id, dfb_inter2_id>(0, 0, /*pop0=*/0, /*pop1=*/1);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb<cb_dy, cb_inter2, cb_dx>();
+            sub_tiles_to_dfb<dfb_dy_id, dfb_inter2_id, dfb_dx_id>();
         }
-        cb_sum_obj.pop_front(onetile);
+        dfb_sum_obj.pop_front(onetile);
 #else
         for (uint32_t i = 0; i < dim_size; ++i) {
-            mul_tiles_to_cb<cb_y, cb_dy, cb_ydy>();
+            mul_tiles_to_dfb<dfb_y_id, dfb_dy_id, dfb_ydy_id>();
 
             if (i == 0) {
-                copy_tile_to_cb<cb_ydy, cb_sum>();
+                copy_tile_to_dfb<dfb_ydy_id, dfb_sum_id>();
             } else {
-                add_tiles_to_cb<cb_sum, cb_ydy, cb_sum>();
+                add_tiles_to_dfb<dfb_sum_id, dfb_ydy_id, dfb_sum_id>();
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
-            sub_tiles_to_cb<cb_dy, cb_sum, cb_dy_m_sum>(
+            sub_tiles_to_dfb<dfb_dy_id, dfb_sum_id, dfb_dy_m_sum_id>(
                 /*itile0=*/0,
                 /*itile1=*/0,
                 /*pop0=*/1,
@@ -72,13 +72,13 @@ void kernel_main() {
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb<cb_dy_m_sum, cb_y, cb_dx>();
+            mul_tiles_to_dfb<dfb_dy_m_sum_id, dfb_y_id, dfb_dx_id>();
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb<cb_dy_m_sum, cb_y, cb_dx>();
+            mul_tiles_and_negative_to_dfb<dfb_dy_m_sum_id, dfb_y_id, dfb_dx_id>();
 #endif
         }
-        cb_sum_obj.pop_front(onetile);
+        dfb_sum_obj.pop_front(onetile);
 #endif
     }
 }

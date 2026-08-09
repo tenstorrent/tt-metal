@@ -26,34 +26,34 @@ namespace ckl = compute_kernel_lib;
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
+template <uint32_t dfb_in_id, uint32_t dfb_max_scaler_id, uint32_t dfb_max_id, uint32_t dfb_out_id>
 void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
-    auto cb_out_obj = DataflowBuffer(cb_out);
+    auto dfb_out_obj_id = DataflowBuffer(dfb_out_id);
 
     // calculate max val per row
     ckl::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        cb_in,
-        cb_max_scaler,
-        cb_max,
+        dfb_in_id,
+        dfb_max_scaler_id,
+        dfb_max_id,
         ckl::ReduceInputPolicy::WaitUpfrontNoPop,
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(Wt, ndst),
         ckl::BinaryFpu<
-            ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(cb_max, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb_max_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Sub,
             ckl::BroadcastDim::Col>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_out,
+            dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});
-    cb_out_obj.wait_front(Wt);
+    dfb_out_obj_id.wait_front(Wt);
 }
 
 void kernel_main() {
@@ -67,46 +67,46 @@ void kernel_main() {
     // reserve one tile for zeros on dfb_in2
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
-    // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto cb_max_scaler = dfb::max_scaler;
-    constexpr auto cb_sum_scaler = dfb::sum_scaler;
-    constexpr auto cb_exps = dfb::exps;
-    constexpr auto cb_recipsumexps = dfb::recip_sum_exps;
-    constexpr auto cb_in0 = dfb::in0;
-    constexpr auto cb_out0 = dfb::out0;
-    DataflowBuffer cb_max_scaler_obj(cb_max_scaler);
-    DataflowBuffer cb_sum_scaler_obj(cb_sum_scaler);
-    DataflowBuffer cb_in0_obj(cb_in0);
-    DataflowBuffer cb_out0_obj(cb_out0);
+    // Note that the entire W dimension must fit in the intermed0 DFB for this kernel to be correct
+    constexpr auto dfb_max_scaler_id = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler_id = dfb::sum_scaler;
+    constexpr auto dfb_exps_id = dfb::exps;
+    constexpr auto dfb_recipsumexps_id = dfb::recip_sum_exps;
+    constexpr auto dfb_in0_id = dfb::in0;
+    constexpr auto dfb_out0_id = dfb::out0;
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler_id);
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler_id);
+    DataflowBuffer dfb_in0_obj(dfb_in0_id);
+    DataflowBuffer dfb_out0_obj(dfb_out0_id);
 #if FUSED_SCALE_MASK
-    constexpr auto cb_fused_scale = dfb::fused_scale;
-    constexpr auto cb_fused_attn = dfb::fused_attn;
-    constexpr auto cb_scale_mask = dfb::scale_mask;
-    DataflowBuffer cb_fused_scale_obj(cb_fused_scale);
-    DataflowBuffer cb_fused_attn_obj(cb_fused_attn);
-    DataflowBuffer cb_scale_mask_obj(cb_scale_mask);
+    constexpr auto dfb_fused_scale_id = dfb::fused_scale;
+    constexpr auto dfb_fused_attn_id = dfb::fused_attn;
+    constexpr auto dfb_scale_mask_id = dfb::scale_mask;
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale_id);
+    DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn_id);
+    DataflowBuffer dfb_scale_mask_obj(dfb_scale_mask_id);
 #endif
 #ifdef MASK_PADDED_DATA
-    constexpr auto cb_mask_padded = dfb::mask_padded;
+    constexpr auto dfb_mask_padded_id = dfb::mask_padded;
 #endif
 
-    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_exps);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_max_scaler_id, dfb_exps_id);
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = dfb::max;
+    constexpr auto dfb_max_id = dfb::max;
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
-    constexpr auto cb_x = dfb::x;
-    DataflowBuffer cb_x_obj(cb_x);
+    constexpr auto dfb_x_id = dfb::x;
+    DataflowBuffer dfb_x_obj(dfb_x_id);
 #endif
 #else
-    constexpr auto cb_x = cb_exps;
-    DataflowBuffer cb_x_obj(cb_x);
+    constexpr auto dfb_x_id = dfb_exps_id;
+    DataflowBuffer dfb_x_obj(dfb_x_id);
 #endif
 
-    cb_max_scaler_obj.wait_front(1);  // comes from the reader
-    cb_sum_scaler_obj.wait_front(1);  // comes from the reader
+    dfb_max_scaler_obj.wait_front(1);  // comes from the reader
+    dfb_sum_scaler_obj.wait_front(1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
-    cb_fused_scale_obj.wait_front(1);
+    dfb_fused_scale_obj.wait_front(1);
 #endif
 
     constexpr int dst0 = 0;
@@ -125,15 +125,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
         ckl::mul<
-            ckl::input(cb_in0),
-            ckl::input(cb_fused_scale, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(cb_scale_mask),
+            ckl::input(dfb_in0_id),
+            ckl::input(dfb_fused_scale_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_scale_mask_id),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(Wt));
 #ifdef CAUSAL_MASK
-        cb_fused_attn_obj.wait_front(Wt);
+        dfb_fused_attn_obj.wait_front(Wt);
 #else
         if (wait_mask) {
-            cb_fused_attn_obj.wait_front(Wt);
+            dfb_fused_attn_obj.wait_front(Wt);
         }
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
@@ -141,16 +141,16 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(Wt, ndst),
             ckl::BinaryFpu<
                 ckl::input(
-                    cb_scale_mask,
+                    dfb_scale_mask_id,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
                     ckl::OperandKind::Block),
-                ckl::input(cb_fused_attn, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                ckl::input(dfb_fused_attn_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
                 mask_bcast>{},
             ckl::OptionalChainElement<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(
-                cb_x,
+                dfb_x_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Disabled)>{});
@@ -158,28 +158,28 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
+        calc_numeric_stable<dfb_x_id, dfb_max_scaler_id, dfb_max_id, dfb_exps_id>(Wt, ndst);
 #endif
 
 #ifdef CAUSAL_MASK
-        cb_fused_attn_obj.pop_front(Wt);
+        dfb_fused_attn_obj.pop_front(Wt);
 #else
         if (wait_mask) {
             wait_mask = false;
         }
         ht++;
         if (ht == Ht) {
-            cb_fused_attn_obj.pop_front(Wt);
+            dfb_fused_attn_obj.pop_front(Wt);
             ht = 0;
             wait_mask = true;
         }
 #endif  // CAUSAL_MASK
 
-        reconfig_data_format(cb_exps, cb_sum_scaler);
+        reconfig_data_format(dfb_exps_id, dfb_sum_scaler_id);
 #else
-        reconfig_data_format(cb_in0, cb_in0);
-        pack_reconfig_data_format(cb_exps);
-        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
+        reconfig_data_format(dfb_in0_id, dfb_in0_id);
+        pack_reconfig_data_format(dfb_exps_id);
+        copy_tile_to_dst_init_short(dfb_in0_id);  // need to copy from DFB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
 #endif
@@ -187,31 +187,37 @@ void kernel_main() {
         {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(Wt - 1),
-                ckl::CopyTile<ckl::input(cb_in0)>{},
+                ckl::CopyTile<ckl::input(dfb_in0_id)>{},
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
-                    cb_x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+                    dfb_x_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    ckl::input(cb_in0),
-                    ckl::input(cb_mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                    ckl::input(dfb_in0_id),
+                    ckl::input(dfb_mask_padded_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::Row>{},  // cb_mask_padded: held scalar, chain waits(1), no
+                    ckl::BroadcastDim::Row>{},  // dfb_mask_padded_id: held scalar, chain waits(1), no
                                                 // pop
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
-                    cb_x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+                    dfb_x_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
+            calc_numeric_stable<dfb_x_id, dfb_max_scaler_id, dfb_max_id, dfb_exps_id>(Wt, ndst);
 #endif
         }
 #else
@@ -219,14 +225,16 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
+            calc_numeric_stable<dfb_in0_id, dfb_max_scaler_id, dfb_max_id, dfb_exps_id>(Wt, ndst);
 #else
             ckl::unary<
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>,
-                ckl::input(cb_in0),
+                ckl::input(dfb_in0_id),
                 ckl::output(
-                    cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(Wt));
+                    dfb_exps_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>(ckl::EltwiseShape::tiles(Wt));
 #endif
         }
 #endif  // MASK_PADDED_DATA
@@ -236,9 +244,9 @@ void kernel_main() {
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_exps_id,
+            dfb_sum_scaler_id,
+            dfb_recipsumexps_id,
             ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
             ckl::ReduceInputBlockShape::row(Wt),
             ckl::ReduceInputMemoryLayout::contiguous(),
@@ -249,16 +257,16 @@ void kernel_main() {
             });
 
         ckl::mul<
-            ckl::input(cb_exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(cb_out0, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
+            ckl::input(dfb_exps_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
-    // the end so the CBs are left balanced.
-    cb_max_scaler_obj.pop_front(1);
-    cb_sum_scaler_obj.pop_front(1);
+    // the end so the DFBs are left balanced.
+    dfb_max_scaler_obj.pop_front(1);
+    dfb_sum_scaler_obj.pop_front(1);
 #if FUSED_SCALE_MASK
-    cb_fused_scale_obj.pop_front(1);
+    dfb_fused_scale_obj.pop_front(1);
 #endif
 }

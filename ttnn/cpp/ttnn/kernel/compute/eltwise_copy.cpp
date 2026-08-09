@@ -8,20 +8,20 @@
 
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_in_id = tt::CBIndex::c_0;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
 
-    compute_kernel_hw_startup(cb_in, cb_out);
+    compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt),
         compute_kernel_lib::CopyTile<compute_kernel_lib::input(
-            cb_in,
+            dfb_in_id,
             compute_kernel_lib::WaitPolicy::PerTile,
             compute_kernel_lib::PopPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled)>{},
         compute_kernel_lib::PackTile<compute_kernel_lib::output(
-            cb_out,
+            dfb_out_id,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled)>{});

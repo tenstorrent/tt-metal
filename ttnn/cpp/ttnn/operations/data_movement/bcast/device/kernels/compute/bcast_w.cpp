@@ -19,15 +19,16 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(B * Ht, Wt),
-        ckl::BinaryFpu<  // cb_lhs: one tile per (row,col)
+        ckl::BinaryFpu<  // dfb_lhs_id: one tile per (row,col)
             ckl::input(
                 dfb::in0,
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
-                ckl::DataFormatReconfig::Disabled),  // cb_rhs: streamed
+                ckl::DataFormatReconfig::Disabled),  // dfb_rhs_id: streamed
                                                      // broadcast, one
                                                      // per row
-            ckl::input(dfb::in1, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb::in1, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled),
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM>{},
         ckl::PackTile<ckl::output(

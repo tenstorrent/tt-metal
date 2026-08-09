@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     // Magic CB indices are gone: each buffer is a named DFB binding. The local
     // aliases keep the LLK/FIFO call sites readable; each is the dfb:: handle,
-    // which converts implicitly to a CB id at the LLK call sites.
+    // which converts implicitly to a DFB id at the LLK call sites.
     constexpr auto in_dfb = dfb::input;
     constexpr auto cos_dfb = dfb::cos;
     constexpr auto sin_dfb = dfb::sin;
@@ -47,20 +47,20 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
-    constexpr auto bulk_block_input = [](auto cb) {
+    constexpr auto bulk_block_input = [](auto dfb_id) {
         return ckl::input(
-            cb,
+            dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::AtEnd,
             ckl::OperandKind::Block,
             ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto bulk_output = [](auto cb) {
-        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    constexpr auto bulk_output = [](auto dfb_id) {
+        return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto sin_cos_input = [](auto cb) {
+    constexpr auto sin_cos_input = [](auto dfb_id) {
         return ckl::input(
-            cb,
+            dfb_id,
             RELOAD_IMPL == 0 ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront,
             RELOAD_IMPL == 0 ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd,
             ckl::OperandKind::Block,
@@ -103,7 +103,7 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             uint32_t sin_cos_row_cnt = 0;
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
-                // input cb wait and reserve
+                // input dfb_id wait and reserve
                 in_dfb_obj.wait_front(Wt);
 #if RELOAD_IMPL == 1
                 sin_dfb_obj.wait_front(Wt);
@@ -179,6 +179,6 @@ void kernel_main() {
 #endif
     }
 
-    // Done with the transformation matrix, so remove from CB
+    // Done with the transformation matrix, so remove from DFB
     trans_mat_dfb_obj.pop_front(onetile);
 }

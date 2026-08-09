@@ -23,69 +23,73 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
 void kernel_main() {
-    constexpr auto cb_in0 = dfb::in0;
-    constexpr auto cb_mask = dfb::mask;
-    DataflowBuffer cb_mask_obj(cb_mask);
-    constexpr auto cb_max_scaler = dfb::max_scaler;
-    DataflowBuffer cb_max_scaler_obj(cb_max_scaler);
-    constexpr auto cb_sum_scaler = dfb::sum_scaler;
-    DataflowBuffer cb_sum_scaler_obj(cb_sum_scaler);
-    constexpr auto cb_out0 = dfb::out0;
-    constexpr auto cb_exps = dfb::exps;
-    constexpr auto cb_recipsumexps = dfb::recip_sum_exps;
-    constexpr auto cb_max = dfb::max;
-    constexpr auto cb_x_m_max = dfb::x_minus_max;
-    DataflowBuffer cb_x_m_max_obj(cb_x_m_max);
-    constexpr auto cb_tmp = dfb::tmp;
+    constexpr auto dfb_in0_id = dfb::in0;
+    constexpr auto dfb_mask_id = dfb::mask;
+    DataflowBuffer dfb_mask_obj(dfb_mask_id);
+    constexpr auto dfb_max_scaler_id = dfb::max_scaler;
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler_id);
+    constexpr auto dfb_sum_scaler_id = dfb::sum_scaler;
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler_id);
+    constexpr auto dfb_out0_id = dfb::out0;
+    constexpr auto dfb_exps_id = dfb::exps;
+    constexpr auto dfb_recipsumexps_id = dfb::recip_sum_exps;
+    constexpr auto dfb_max_id = dfb::max;
+    constexpr auto dfb_x_m_max_id = dfb::x_minus_max;
+    DataflowBuffer dfb_x_m_max_obj(dfb_x_m_max_id);
+    constexpr auto dfb_tmp_id = dfb::tmp;
 
-    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_max_scaler_id, dfb_out0_id);
 
     constexpr uint32_t onetile = 1;
 
     uint32_t N = get_arg(args::N);
     uint32_t Wt = get_arg(args::Wt);
 
-    cb_mask_obj.wait_front(onetile);
-    cb_max_scaler_obj.wait_front(onetile);
-    cb_sum_scaler_obj.wait_front(onetile);
+    dfb_mask_obj.wait_front(onetile);
+    dfb_max_scaler_obj.wait_front(onetile);
+    dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Wt == 1) {
-            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_dfb<dfb_in0_id, dfb_mask_id, dfb_tmp_id>(0, 0, /*pop0=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp_id, dfb_max_scaler_id, dfb_max_id>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Phase 1: reduce Wt-1 full tiles into cb_max via the helper.
-            // cb_in0 holds all Wt tiles persistently for later steps, so use
+            // Phase 1: reduce Wt-1 full tiles into dfb_max_id via the helper.
+            // dfb_in0_id holds all Wt tiles persistently for later steps, so use
             // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
             ckl::reduce<
                 PoolType::MAX,
                 ReduceDim::REDUCE_ROW,
-                cb_in0,
-                cb_max_scaler,
-                cb_max,
+                dfb_in0_id,
+                dfb_max_scaler_id,
+                dfb_max_id,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::row(Wt - 1));
 
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
-            // into cb_max via Accumulate. The accumulator and output are both cb_max:
+            // into dfb_max_id via Accumulate. The accumulator and output are both dfb_max_id:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            mask_tile_to_dfb<dfb_in0_id, dfb_mask_id, dfb_tmp_id>(Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp_id, dfb_max_scaler_id, dfb_max_id>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
+                compute_kernel_lib::Accumulate::at(dfb_max_id, /*iter=*/1));
         }
 
         ckl::sub<
             ckl::input(
-                cb_in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_max, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(cb_x_m_max, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                dfb_in0_id,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::OperandKind::Block,
+                kDataFormatReconfig),
+            ckl::input(dfb_max_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(dfb_x_m_max_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 
-        cb_x_m_max_obj.wait_front(Wt);
+        dfb_x_m_max_obj.wait_front(Wt);
 #ifdef SOFTMAX
         constexpr bool is_softmax = true;
 #else
@@ -95,7 +99,7 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(Wt - 1),
             ckl::CopyTile<
                 ckl::input(
-                    cb_x_m_max,
+                    dfb_x_m_max_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Block,
@@ -104,13 +108,13 @@ void kernel_main() {
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_exps_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::CopyTile<
                 ckl::input(
-                    cb_x_m_max,
+                    dfb_x_m_max_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Block,
@@ -120,20 +124,20 @@ void kernel_main() {
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::CopyTile<
-                ckl::input(cb_mask, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::input(dfb_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::Dst::D1>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_exps_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_exps_id,
+            dfb_sum_scaler_id,
+            dfb_recipsumexps_id,
             ckl::ReduceInputPolicy::BulkWaitBulkPop>(
             ckl::ReduceInputBlockShape::row(Wt),
             ckl::ReduceInputMemoryLayout::contiguous(),
@@ -147,9 +151,9 @@ void kernel_main() {
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_exps_id,
+            dfb_sum_scaler_id,
+            dfb_recipsumexps_id,
             ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
             ckl::ReduceInputBlockShape::row(Wt),
             ckl::ReduceInputMemoryLayout::contiguous(),
@@ -160,22 +164,30 @@ void kernel_main() {
             });
 #endif
 
-        cb_x_m_max_obj.wait_front(Wt);
+        dfb_x_m_max_obj.wait_front(Wt);
 #ifdef LOG
         ckl::sub<
             ckl::input(
-                cb_x_m_max, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(cb_out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                dfb_x_m_max_id,
+                ckl::WaitPolicy::None,
+                ckl::PopPolicy::None,
+                ckl::OperandKind::Block,
+                kDataFormatReconfig),
+            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 #else
         ckl::mul<
             ckl::input(
-                cb_exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(cb_out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                dfb_exps_id,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::OperandKind::Block,
+                kDataFormatReconfig),
+            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 #endif
-        cb_x_m_max_obj.pop_front(Wt);
+        dfb_x_m_max_obj.pop_front(Wt);
     }
 }

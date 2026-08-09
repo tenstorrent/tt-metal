@@ -29,33 +29,33 @@ void kernel_main() {
     const auto recip_p = get_arg_val<uint32_t>(i++);
     const bool recip_p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;
-    constexpr uint32_t cb_one = tt::CBIndex::c_1;
-    DataflowBuffer dfb_one_obj(cb_one);
-    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
-    DataflowBuffer dfb_decimal_obj(cb_decimal);
-    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
-    DataflowBuffer dfb_recip_p_decimal_obj(cb_recip_p_decimal);
-    constexpr uint32_t cb_mask_w = tt::CBIndex::c_4;
-    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
+    constexpr uint32_t dfb_x_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_one_id = tt::CBIndex::c_1;
+    DataflowBuffer dfb_one_obj(dfb_one_id);
+    constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
+    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;
+    DataflowBuffer dfb_recip_p_decimal_obj(dfb_recip_p_decimal_id);
+    constexpr uint32_t dfb_mask_w_id = tt::CBIndex::c_4;
+    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
 
-    constexpr uint32_t cb_y = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_tmp0 = tt::CBIndex::c_24;
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
-    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
-    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_27;
-    constexpr uint32_t cb_tmp4 = tt::CBIndex::c_28;
-    constexpr uint32_t cb_tmp5 = tt::CBIndex::c_29;
-    constexpr uint32_t cb_tmp6 = tt::CBIndex::c_30;
+    constexpr uint32_t dfb_tmp0_id = tt::CBIndex::c_24;
+    constexpr uint32_t dfb_tmp1_id = tt::CBIndex::c_25;
+    constexpr uint32_t dfb_tmp2_id = tt::CBIndex::c_26;
+    constexpr uint32_t dfb_tmp3_id = tt::CBIndex::c_27;
+    constexpr uint32_t dfb_tmp4_id = tt::CBIndex::c_28;
+    constexpr uint32_t dfb_tmp5_id = tt::CBIndex::c_29;
+    constexpr uint32_t dfb_tmp6_id = tt::CBIndex::c_30;
 
-    constexpr uint32_t cb_xabs = cb_tmp0;
-    constexpr uint32_t cb_xpow = cb_tmp1;
-    constexpr uint32_t cb_logx = cb_tmp2;
-    constexpr uint32_t cb_exp_lxmd = cb_tmp3;
-    constexpr uint32_t cb_correct_xpow = cb_tmp4;
-    constexpr uint32_t cb_xpowadd = cb_tmp5;
-    constexpr uint32_t cb_xpowsum = cb_tmp6;
+    constexpr uint32_t dfb_xabs_id = dfb_tmp0_id;
+    constexpr uint32_t dfb_xpow_id = dfb_tmp1_id;
+    constexpr uint32_t dfb_logx_id = dfb_tmp2_id;
+    constexpr uint32_t dfb_exp_lxmd_id = dfb_tmp3_id;
+    constexpr uint32_t dfb_correct_xpow_id = dfb_tmp4_id;
+    constexpr uint32_t dfb_xpowadd_id = dfb_tmp5_id;
+    constexpr uint32_t dfb_xpowsum_id = dfb_tmp6_id;
 
     constexpr uint32_t onetile = 1;
 
@@ -79,30 +79,37 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<ckl::input(
-                    cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(
                     mask_this,
                     ckl::CopyTile<
-                        ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                        ckl::input(dfb_mask_w_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
                 ckl::Abs<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
-                    cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow>(p, p_is_negative);
+            power_tile_to_dfb<
+                dfb_xabs_id,
+                dfb_xpow_id,
+                dfb_logx_id,
+                dfb_decimal_id,
+                dfb_exp_lxmd_id,
+                dfb_correct_xpow_id>(p, p_is_negative);
 
             if (col_idx == 0) {
-                copy_tile_to_cb<cb_correct_xpow, cb_xpowadd>();
+                copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>();
             } else {
-                add_tiles_to_cb<cb_correct_xpow, cb_xpowadd, cb_xpowadd>();
+                add_tiles_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id, dfb_xpowadd_id>();
             }
         }
         // Sum(|x|^p)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb_xpowadd_id, dfb_one_id, dfb_xpowsum_id>(
             compute_kernel_lib::ReduceInputBlockShape::single());
 
-        power_tile_to_cb<cb_xpowsum, cb_xabs, cb_xpow, cb_recip_p_decimal, cb_logx, cb_y>(recip_p, recip_p_is_negative);
+        power_tile_to_dfb<dfb_xpowsum_id, dfb_xabs_id, dfb_xpow_id, dfb_recip_p_decimal_id, dfb_logx_id, dfb_y_id>(
+            recip_p, recip_p_is_negative);
     }
 
     dfb_one_obj.pop_front(onetile);

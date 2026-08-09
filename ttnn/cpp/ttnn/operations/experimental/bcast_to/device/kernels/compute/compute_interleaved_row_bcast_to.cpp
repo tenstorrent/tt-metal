@@ -26,9 +26,9 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
     uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(0);
-    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
+    constexpr auto dfb_id_src_id = get_compile_time_arg_val(0);
+    constexpr auto dfb_id_dst_id = get_compile_time_arg_val(1);
+    unary_bcast_init<BroadcastType::ROW>(dfb_id_src_id, dfb_id_dst_id);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -42,12 +42,12 @@ void kernel_main() {
                         ckl::UnaryBcast<
                             ckl::BroadcastDim::Row,
                             ckl::input(
-                                cb_id_src,
+                                dfb_id_src_id,
                                 ckl::WaitPolicy::PerTile,
                                 ckl::PopPolicy::PerTile,
                                 ckl::DataFormatReconfig::Disabled)>{},
                         ckl::PackTile<ckl::output(
-                            cb_id_dst,
+                            dfb_id_dst_id,
                             ckl::ReservePolicy::PerTile,
                             ckl::PushPolicy::PerTile,
                             ckl::DataFormatReconfig::Disabled)>{});

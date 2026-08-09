@@ -70,25 +70,25 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // CB indices - configurable via named compile-time args for kernel chaining support
-    constexpr auto cb_scaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr auto cb_eps = get_named_compile_time_arg_val("cb_eps");
-    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");
-    constexpr auto cb_inb = get_named_compile_time_arg_val("cb_inb");
-    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");
-    constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");
-    constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");
-    constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");
-    constexpr auto cb_xmm2 = get_named_compile_time_arg_val("cb_xmm2");
-    constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
-    constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
-    constexpr auto cb_im_or_out = (do_gamma || do_beta) ? cb_fusion : cb_out;
+    // DFB indices - configurable via named compile-time args for kernel chaining support
+    constexpr auto dfb_scaler_id = get_named_compile_time_arg_val("cb_scaler");
+    constexpr auto dfb_eps_id = get_named_compile_time_arg_val("cb_eps");
+    constexpr auto dfb_in_id = get_named_compile_time_arg_val("cb_in");
+    constexpr auto dfb_inb_id = get_named_compile_time_arg_val("cb_inb");
+    constexpr auto dfb_out_id = get_named_compile_time_arg_val("cb_out");
+    constexpr auto dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
+    constexpr auto dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
+    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");
+    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");
+    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");
+    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");
+    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");
+    constexpr auto dfb_fusion_id = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
+    constexpr auto dfb_im_or_out_id = (do_gamma || do_beta) ? dfb_fusion_id : dfb_out_id;
     constexpr auto scaler0 = 0;
-    constexpr auto cb_accumulate = get_named_compile_time_arg_val("cb_accumulate");
+    constexpr auto dfb_accumulate_id = get_named_compile_time_arg_val("cb_accumulate");
 
-    constexpr auto cb_in_rm =
+    constexpr auto dfb_in_rm_id =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
 
 #ifdef RMSNORM
@@ -104,40 +104,40 @@ void kernel_main() {
 
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
-    constexpr uint32_t cb_x = cb_xmm;
+    constexpr uint32_t dfb_x_id = dfb_xmm_id;
 #else
-    constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
+    constexpr uint32_t dfb_x_id = get_named_compile_time_arg_val("cb_x");
 #endif
 #else
-    constexpr uint32_t cb_x = cb_in;
+    constexpr uint32_t dfb_x_id = dfb_in_id;
 #endif
 
-    DataflowBuffer cb_eps_obj(cb_eps);
-    DataflowBuffer cb_scaler_obj(cb_scaler);
-    DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_in_rm_obj(cb_in_rm);
-    DataflowBuffer cb_inb_obj(cb_inb);
-    DataflowBuffer cb_out_obj(cb_out);
-    DataflowBuffer cb_ex_obj(cb_ex);
-    DataflowBuffer cb_ex2_obj(cb_ex2);
-    DataflowBuffer cb_xmm2_obj(cb_xmm2);
-    DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
-    DataflowBuffer cb_accumulate_obj(cb_accumulate);
+    DataflowBuffer dfb_eps_obj(dfb_eps_id);
+    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
+    DataflowBuffer dfb_in_obj(dfb_in_id);
+    DataflowBuffer dfb_in_rm_obj(dfb_in_rm_id);
+    DataflowBuffer dfb_inb_obj(dfb_inb_id);
+    DataflowBuffer dfb_out_obj(dfb_out_id);
+    DataflowBuffer dfb_ex_obj(dfb_ex_id);
+    DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
+    DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id);
+    DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
+    DataflowBuffer dfb_accumulate_obj(dfb_accumulate_id);
 
 #ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
 #else
     // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
 #ifdef RMSNORM
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_xmm2);
+    compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
+    compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
-    cb_eps_obj.wait_front(1);
+    dfb_eps_obj.wait_front(1);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -154,11 +154,11 @@ void kernel_main() {
             ReduceDim::REDUCE_ROW,
             FLOAT32_REDUCTION,
             policies::FullBlockWithPopPolicy>(
-            cb_in_obj, cb_inb_obj, cb_scaler_obj, cb_ex_obj, W, Wt, block_size, tile_width);
+            dfb_in_obj, dfb_inb_obj, dfb_scaler_obj, dfb_ex_obj, W, Wt, block_size, tile_width);
 #else
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                cb_in_obj, cb_scaler_obj, cb_ex_obj, W, Wt, block_size, tile_width);
+                dfb_in_obj, dfb_scaler_obj, dfb_ex_obj, W, Wt, block_size, tile_width);
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -171,11 +171,11 @@ void kernel_main() {
             const auto block_shape =
                 ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
-            tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
+            tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);
 #ifdef RMSNORM
-            compute_kernel_hw_startup(cb_in, cb_scaler, cb_xmm2);
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-            compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
             ckl::eltwise_chain(
@@ -184,57 +184,58 @@ void kernel_main() {
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
                         ckl::input(
-                            cb_in,
+                            dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
-                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
+                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_in,
+                            dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
-                        ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                        ckl::input(dfb_ex_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         ckl::input(
-                            cb_inb,
+                            dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::Square<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_xmm2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                ckl::PackTile<ckl::output(
+                    dfb_xmm2_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
-                cb_accumulate_obj.wait_front(onetile);
-                reconfig_data_format_srca(cb_accumulate);
-                copy_tile_init(cb_accumulate);
-                copy_tile(cb_accumulate, 0, dst0);
-                cb_accumulate_obj.pop_front(onetile);
+                dfb_accumulate_obj.wait_front(onetile);
+                reconfig_data_format_srca(dfb_accumulate_id);
+                copy_tile_init(dfb_accumulate_id);
+                copy_tile(dfb_accumulate_id, 0, dst0);
+                dfb_accumulate_obj.pop_front(onetile);
             }
-            cb_xmm2_obj.wait_front(block.full_block_size());
+            dfb_xmm2_obj.wait_front(block.full_block_size());
 
             // Accumulate (x-E[x])^2
-            reconfig_data_format(cb_scaler, cb_xmm2);
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_accumulate);
+            reconfig_data_format(dfb_scaler_id, dfb_xmm2_id);
+            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_xmm2_id, dfb_scaler_id, dfb_accumulate_id);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_xmm2_id, dfb_scaler_id, i, scaler_tile_idx, dst0);
             }
 
-            DataflowBuffer(cb_xmm2).pop_front(block.full_block_size());
+            DataflowBuffer(dfb_xmm2_id).pop_front(block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
-            const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
+            const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
@@ -245,11 +246,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            DataflowBuffer(pack_cb).reserve_back(onetile);
-            pack_reconfig_data_format(pack_cb);
-            pack_tile(dst0, pack_cb);
+            DataflowBuffer(pack_dfb_id).reserve_back(onetile);
+            pack_reconfig_data_format(pack_dfb_id);
+            pack_tile(dst0, pack_dfb_id);
             tile_regs_release();
-            DataflowBuffer(pack_cb).push_back(onetile);
+            DataflowBuffer(pack_dfb_id).push_back(onetile);
         }
 
         // End of
@@ -264,16 +265,16 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_ex2),
-                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::input(dfb_ex2_id),
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_ex2pe, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{});
+            ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{});
 
-        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(cb_ex2pe), ckl::output(cb_ex2pe)>(
+        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
             ckl::EltwiseShape::tiles(onetile));
-        cb_ex2pe_obj.wait_front(onetile);
+        dfb_ex2pe_obj.wait_front(onetile);
 
         // End of
         // Calculation
@@ -290,16 +291,16 @@ void kernel_main() {
                 ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             // Reader supplies this second pass of data after the variance data.
-            tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
+            tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);
 
 #ifdef RMSNORM
-            compute_kernel_hw_startup(cb_in, cb_scaler, cb_xmm2);
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-            compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
 #ifndef RMSNORM
-            cb_ex_obj.wait_front(1);
+            dfb_ex_obj.wait_front(1);
 #endif
             ckl::eltwise_chain(
                 block_shape,
@@ -307,58 +308,62 @@ void kernel_main() {
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
                         ckl::input(
-                            cb_in,
+                            dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
-                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
+                    !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_in,
+                            dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
-                        ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                        ckl::input(dfb_ex_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
                         ckl::input(
-                            cb_inb,
+                            dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
-                ckl::PackTile<ckl::output(cb_xmm, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                ckl::PackTile<ckl::output(
+                    dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
                     ckl::input(
-                        cb_xmm, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-                    ckl::input(cb_ex2pe, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                        dfb_xmm_id,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::OperandKind::Block),
+                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None>{},
                 ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
-                    cb_im_or_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
             if constexpr (do_gamma == 1) {
-                constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
+                constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion,
+                            dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::input(
-                            cb_gamma,
+                            dfb_gamma_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
@@ -366,19 +371,19 @@ void kernel_main() {
                         ckl::BroadcastDim::Row>{},
                     ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
-                        cb_gamma_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
             if constexpr (do_beta == 1) {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
                         ckl::input(
-                            cb_fusion,
+                            dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
                         ckl::input(
-                            cb_beta,
+                            dfb_beta_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::OperandKind::Block),
@@ -386,13 +391,13 @@ void kernel_main() {
                         ckl::BroadcastDim::Row>{},
                     ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
-                        cb_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
 
 #ifdef UNTILIZE_OUT
-            constexpr auto cb_out_rm = get_named_compile_time_arg_val("cb_out_rm");
-            DataflowBuffer cb_out_rm_obj(cb_out_rm);
-            untilize_row_major_block<decltype(block), block_size>(cb_out_obj, cb_out_rm_obj, block);
+            constexpr auto dfb_out_rm_id = get_named_compile_time_arg_val("cb_out_rm");
+            DataflowBuffer dfb_out_rm_obj(dfb_out_rm_id);
+            untilize_row_major_block<decltype(block), block_size>(dfb_out_obj, dfb_out_rm_obj, block);
 #endif
         }  // block loop
         // End of
@@ -401,8 +406,8 @@ void kernel_main() {
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
 #ifndef RMSNORM
-        cb_ex_obj.pop_front(onetile);
+        dfb_ex_obj.pop_front(onetile);
 #endif
-        cb_ex2pe_obj.pop_front(onetile);
+        dfb_ex2pe_obj.pop_front(onetile);
     }  // NCHt loop
 }

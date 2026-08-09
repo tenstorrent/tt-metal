@@ -21,12 +21,12 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    DataflowBuffer dfb_in1_obj(cb_in1);  // zero tile
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    constexpr auto dfb_in0_id = tt::CBIndex::c_0;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    DataflowBuffer dfb_in1_obj(dfb_in1_id);  // zero tile
+    constexpr auto dfb_scalar_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out0_id = tt::CBIndex::c_16;
+    constexpr auto dfb_intermed0_id = tt::CBIndex::c_24;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
@@ -45,17 +45,17 @@ void kernel_main() {
             ckl::OptionalChainElement<
                 has_bcast,
                 ckl::BinaryFpu<
-                    ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::input(cb_in0),
+                    ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(dfb_in0_id),
                     ckl::BinaryFpuOp::Add,
                     bcast_dim>>{},
-            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<ckl::input(cb_in0)>>{},
-            ckl::PackTile<ckl::output(cb_intermed0)>{});
+            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<ckl::input(dfb_in0_id)>>{},
+            ckl::PackTile<ckl::output(dfb_intermed0_id)>{});
 
         ckl::mul<
-            ckl::input(cb_intermed0),
-            ckl::input(cb_scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(cb_out0),
+            ckl::input(dfb_intermed0_id),
+            ckl::input(dfb_scalar_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_out0_id),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }
     dfb_in1_obj.pop_front(onetile);

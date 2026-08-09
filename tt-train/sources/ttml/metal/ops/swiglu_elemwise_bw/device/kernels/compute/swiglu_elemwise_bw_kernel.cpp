@@ -16,31 +16,31 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
-constexpr uint32_t cb_linear1 = tt::CBIndex::c_0;
-constexpr uint32_t cb_gate = tt::CBIndex::c_1;
-constexpr uint32_t cb_dL_dprod = tt::CBIndex::c_2;
-constexpr uint32_t cb_dL_dlinear1 = tt::CBIndex::c_3;
-constexpr uint32_t cb_dL_dgate = tt::CBIndex::c_4;
+constexpr uint32_t dfb_linear1_id = tt::CBIndex::c_0;
+constexpr uint32_t dfb_gate_id = tt::CBIndex::c_1;
+constexpr uint32_t dfb_dL_dprod_id = tt::CBIndex::c_2;
+constexpr uint32_t dfb_dL_dlinear1_id = tt::CBIndex::c_3;
+constexpr uint32_t dfb_dL_dgate_id = tt::CBIndex::c_4;
 
 void kernel_main() {
     namespace ckl = compute_kernel_lib;
     constexpr uint32_t one = 0x3F800000;
     constexpr uint32_t padded_Wt = ((Wt + block_size - 1) / block_size) * block_size;
 
-    compute_kernel_hw_startup(cb_linear1, cb_dL_dlinear1);
+    compute_kernel_hw_startup(dfb_linear1_id, dfb_dL_dlinear1_id);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(num_rows_per_core, padded_Wt, block_size),
         // D0 = U, D1 = sigmoid(U), D2 = dL/dprod.
         ckl::CopyTile<
             ckl::input(
-                cb_linear1, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_linear1_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
         ckl::Sigmoid<ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
-                cb_dL_dprod, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_dL_dprod_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D2>{},
         // D3 = dL/dgate = dL/dprod * U * sigmoid(U).
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D3>{},
@@ -49,7 +49,7 @@ void kernel_main() {
         // keep dL/dgate live until all computation is complete.
         ckl::PackTile<
             ckl::output(
-                cb_dL_dgate,
+                dfb_dL_dgate_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Disabled),
@@ -62,12 +62,13 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
         ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(cb_gate, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_gate_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D2>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<
             ckl::output(
-                cb_dL_dlinear1,
+                dfb_dL_dlinear1_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Disabled),

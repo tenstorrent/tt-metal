@@ -20,17 +20,17 @@ void kernel_main() {
     const auto Wt = get_arg(args::Wt);
     const auto origin_w = get_arg(args::origin_w);
 
-    constexpr uint32_t cb_x = dfb::x;
-    constexpr uint32_t cb_one = dfb::one;
-    constexpr uint32_t cb_mask_w = dfb::mask_w;
-    DataflowBuffer dfb_one_obj(cb_one);
-    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
+    constexpr uint32_t dfb_x_id = dfb::x;
+    constexpr uint32_t dfb_one_id = dfb::one;
+    constexpr uint32_t dfb_mask_w_id = dfb::mask_w;
+    DataflowBuffer dfb_one_obj(dfb_one_id);
+    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
 
-    constexpr uint32_t cb_y = dfb::y;
+    constexpr uint32_t dfb_y_id = dfb::y;
 
-    constexpr uint32_t cb_val = dfb::val;
-    constexpr uint32_t cb_cal = dfb::cal;
-    constexpr uint32_t cb_reduce = dfb::reduce;
+    constexpr uint32_t dfb_val_id = dfb::val;
+    constexpr uint32_t dfb_cal_id = dfb::cal;
+    constexpr uint32_t dfb_reduce_id = dfb::reduce;
 
     constexpr uint32_t onetile = 1;
 
@@ -62,36 +62,41 @@ void kernel_main() {
             const bool mask_this = do_mask_w && (col_idx == Wt - 1);
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(cb_x)>{},
+                ckl::CopyTile<ckl::input(dfb_x_id)>{},
                 ckl::runtime_if(
                     mask_this,
-                    ckl::CopyTile<ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None), ckl::Dst::D1>{},
+                    ckl::CopyTile<
+                        ckl::input(dfb_mask_w_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                        ckl::Dst::D1>{},
                     MaskOp{}),
                 ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                 ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(cb_val)>{});
+                ckl::PackTile<ckl::output(dfb_val_id)>{});
 
             if (col_idx == 0) {
-                ckl::copy<ckl::input(cb_val), ckl::output(cb_cal)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(dfb_val_id), ckl::output(dfb_cal_id)>(ckl::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
-                ckl::add<ckl::input(cb_val), ckl::input(cb_cal), ckl::output(cb_cal)>(
+                ckl::add<ckl::input(dfb_val_id), ckl::input(dfb_cal_id), ckl::output(dfb_cal_id)>(
                     ckl::EltwiseShape::tiles(onetile));
 #else
-                ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(cb_val), ckl::input(cb_cal), ckl::output(cb_cal)>(
-                    ckl::EltwiseShape::tiles(onetile));
+                ckl::binary_sfpu<
+                    ckl::BinaryMax<>,
+                    ckl::input(dfb_val_id),
+                    ckl::input(dfb_cal_id),
+                    ckl::output(dfb_cal_id)>(ckl::EltwiseShape::tiles(onetile));
 #endif
             }
         }
 
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_cal, cb_one, cb_reduce>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_cal_id, dfb_one_id, dfb_reduce_id>(ckl::ReduceInputBlockShape::single());
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(cb_reduce)>{},
+            ckl::CopyTile<ckl::input(dfb_reduce_id)>{},
             ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::PackTile<ckl::output(cb_y)>{});
+            ckl::PackTile<ckl::output(dfb_y_id)>{});
     }
 
     dfb_one_obj.pop_front(onetile);

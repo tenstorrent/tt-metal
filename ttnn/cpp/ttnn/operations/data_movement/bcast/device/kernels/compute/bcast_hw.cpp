@@ -17,11 +17,11 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
 
-    constexpr auto cb_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_lhs_id = tt::CBIndex::c_0;
+    constexpr auto dfb_rhs_id = tt::CBIndex::c_1;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
 
-    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
+    compute_kernel_hw_startup(dfb_lhs_id, dfb_rhs_id, dfb_out_id);
 
 #ifdef BCAST_SCALAR
     constexpr auto rhs_pop = ckl::PopPolicy::None;
@@ -32,10 +32,11 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(B * Ht * Wt),
         ckl::BinaryFpu<
-            ckl::input(cb_lhs, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_rhs, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_lhs_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_rhs_id, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled),
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM>{},
         ckl::PackTile<ckl::output(
-            cb_out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

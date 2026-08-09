@@ -14,11 +14,11 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto cb_grad_out = dfb::grad_out;
-    constexpr auto cb_input = dfb::input;
-    constexpr auto cb_grad_in = dfb::grad_in;
+    constexpr auto dfb_grad_out_id = dfb::grad_out;
+    constexpr auto dfb_input_id = dfb::input;
+    constexpr auto dfb_grad_in_id = dfb::grad_in;
 
-    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
+    compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
     const auto shape = ckl::EltwiseShape::tiles(num_tiles);
 
@@ -26,7 +26,7 @@ void kernel_main() {
         shape,
         ckl::CopyTile<
             ckl::input(
-                cb_grad_out,
+                dfb_grad_out_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
@@ -34,7 +34,7 @@ void kernel_main() {
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
-                cb_input,
+                dfb_input_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
@@ -43,7 +43,7 @@ void kernel_main() {
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_grad_in,
+            dfb_grad_in_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});

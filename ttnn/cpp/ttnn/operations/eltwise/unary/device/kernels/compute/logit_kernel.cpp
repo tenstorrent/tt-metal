@@ -18,11 +18,11 @@ void kernel_main() {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_tmp0 = tt::CBIndex::c_1;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr auto dfb_input_id = tt::CBIndex::c_0;
+    constexpr auto dfb_tmp0_id = tt::CBIndex::c_1;
+    constexpr auto dfb_output_id = tt::CBIndex::c_2;
 
-    compute_kernel_hw_startup(cb_input, cb_tmp0);
+    compute_kernel_hw_startup(dfb_input_id, dfb_tmp0_id);
 
 #ifdef CLAMP
     constexpr bool do_clamp = true;
@@ -32,23 +32,27 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
         ckl::PackTile<ckl::output(
-            cb_tmp0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_tmp0_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(cb_tmp0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_tmp0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(cb_tmp0, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_tmp0_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
         ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_output, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_output_id,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

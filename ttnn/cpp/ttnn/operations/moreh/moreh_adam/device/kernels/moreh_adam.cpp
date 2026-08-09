@@ -35,31 +35,31 @@ void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr auto cb_param_in = tt::CBIndex::c_0;
-    constexpr auto cb_grad_in = tt::CBIndex::c_1;
-    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
-    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
+    constexpr auto dfb_param_in_id = tt::CBIndex::c_0;
+    constexpr auto dfb_grad_in_id = tt::CBIndex::c_1;
+    constexpr auto dfb_exp_avg_in_id = tt::CBIndex::c_2;
+    constexpr auto dfb_exp_avg_sq_in_id = tt::CBIndex::c_3;
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
+    constexpr auto dfb_max_exp_avg_sq_in_id = tt::CBIndex::c_4;
 #endif
     // lr, beta1, beta2, eps, weight_decay
-    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
-    constexpr auto cb_one = tt::CBIndex::c_6;
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
-    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
-    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+    constexpr auto dfb_scalar_args_id = tt::CBIndex::c_5;
+    constexpr auto dfb_one_id = tt::CBIndex::c_6;
+    constexpr auto dfb_param_out_id = tt::CBIndex::c_16;
+    constexpr auto dfb_exp_avg_out_id = tt::CBIndex::c_17;
+    constexpr auto dfb_exp_avg_sq_out_id = tt::CBIndex::c_18;
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+    constexpr auto dfb_max_exp_avg_sq_out_id = tt::CBIndex::c_19;
 #endif
 
-    constexpr auto tmp_cb_grad = tt::CBIndex::c_24;
-    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
-    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
+    constexpr auto tmp_dfb_grad_id = tt::CBIndex::c_24;
+    constexpr auto tmp_dfb_exp_avg_id = tt::CBIndex::c_25;
+    constexpr auto tmp_dfb_exp_avg_sq_id = tt::CBIndex::c_26;
 #ifdef AMSGRAD
-    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
+    constexpr auto tmp_dfb_max_exp_avg_sq_id = tt::CBIndex::c_27;
 #endif
-    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
-    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
+    constexpr auto dfb_tmp1_id = tt::CBIndex::c_30;
+    constexpr auto dfb_tmp2_id = tt::CBIndex::c_31;
 
     constexpr uint32_t first_tile = 0;
     constexpr uint32_t lr_tile = 0;
@@ -69,83 +69,83 @@ void kernel_main() {
     constexpr uint32_t weight_decay_tile = 4;
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer cb_param_in_obj(cb_param_in);
-    DataflowBuffer cb_grad_in_obj(cb_grad_in);
-    DataflowBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
-    DataflowBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
+    DataflowBuffer dfb_param_in_obj(dfb_param_in_id);
+    DataflowBuffer dfb_grad_in_obj(dfb_grad_in_id);
+    DataflowBuffer dfb_exp_avg_in_obj(dfb_exp_avg_in_id);
+    DataflowBuffer dfb_exp_avg_sq_in_obj(dfb_exp_avg_sq_in_id);
 #ifdef AMSGRAD
-    DataflowBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
+    DataflowBuffer dfb_max_exp_avg_sq_in_obj(dfb_max_exp_avg_sq_in_id);
 #endif
-    DataflowBuffer cb_scalar_args_obj(cb_scalar_args);
-    DataflowBuffer cb_one_obj(cb_one);
+    DataflowBuffer dfb_scalar_args_obj(dfb_scalar_args_id);
+    DataflowBuffer dfb_one_obj(dfb_one_id);
 
-    cb_scalar_args_obj.wait_front(5);
-    cb_one_obj.wait_front(onetile);
+    dfb_scalar_args_obj.wait_front(5);
+    dfb_one_obj.wait_front(onetile);
 
-    compute_kernel_hw_startup(cb_param_in, cb_scalar_args, cb_param_out);
+    compute_kernel_hw_startup(dfb_param_in_id, dfb_scalar_args_id, dfb_param_out_id);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // grad += grad + param * weight_decay;
-        // cb_tmp1 : param * weight_decay;
-        cb_param_in_obj.wait_front(onetile);
-        cb_grad_in_obj.wait_front(onetile);
-        cb_exp_avg_in_obj.wait_front(onetile);
-        cb_exp_avg_sq_in_obj.wait_front(onetile);
+        // dfb_tmp1_id : param * weight_decay;
+        dfb_param_in_obj.wait_front(onetile);
+        dfb_grad_in_obj.wait_front(onetile);
+        dfb_exp_avg_in_obj.wait_front(onetile);
+        dfb_exp_avg_sq_in_obj.wait_front(onetile);
 #ifdef AMSGRAD
-        cb_max_exp_avg_sq_in_obj.wait_front(onetile);
+        dfb_max_exp_avg_sq_in_obj.wait_front(onetile);
 #endif
-        // cb_tmp1 : param * weight_decay;
-        mul_tiles_to_cb<cb_param_in, cb_scalar_args, cb_tmp1>(first_tile, weight_decay_tile, 0, 0);
+        // dfb_tmp1_id : param * weight_decay;
+        mul_tiles_to_dfb<dfb_param_in_id, dfb_scalar_args_id, dfb_tmp1_id>(first_tile, weight_decay_tile, 0, 0);
 
-        // tmp_cb_grad : cb_grad_in + cb_tmp1;
-        add_tiles_to_cb<cb_grad_in, cb_tmp1, tmp_cb_grad>(first_tile, first_tile, 0);
+        // tmp_dfb_grad_id : dfb_grad_in_id + dfb_tmp1_id;
+        add_tiles_to_dfb<dfb_grad_in_id, dfb_tmp1_id, tmp_dfb_grad_id>(first_tile, first_tile, 0);
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
-        // cb_tmp1 = (1 - beta1)
-        sub_tiles_to_cb<cb_one, cb_scalar_args, cb_tmp1>(first_tile, beta1_tile, 0, 0);
-        mul_tiles_to_cb<tmp_cb_grad, cb_tmp1, cb_tmp1>(first_tile, first_tile, 0);
+        // dfb_tmp1_id = (1 - beta1)
+        sub_tiles_to_dfb<dfb_one_id, dfb_scalar_args_id, dfb_tmp1_id>(first_tile, beta1_tile, 0, 0);
+        mul_tiles_to_dfb<tmp_dfb_grad_id, dfb_tmp1_id, dfb_tmp1_id>(first_tile, first_tile, 0);
 
-        // tmp_cb_exp_avg = cb_exp_avg_in * beta1
-        mul_tiles_to_cb<cb_exp_avg_in, cb_scalar_args, tmp_cb_exp_avg>(first_tile, beta1_tile, 0, 0);
+        // tmp_dfb_exp_avg_id = dfb_exp_avg_in_id * beta1
+        mul_tiles_to_dfb<dfb_exp_avg_in_id, dfb_scalar_args_id, tmp_dfb_exp_avg_id>(first_tile, beta1_tile, 0, 0);
 
-        // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1
-        add_tiles_to_cb<tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg>();
+        // tmp_dfb_exp_avg_id = tmp_dfb_exp_avg_id + dfb_tmp1_id
+        add_tiles_to_dfb<tmp_dfb_exp_avg_id, dfb_tmp1_id, tmp_dfb_exp_avg_id>();
 
-        // cb_exp_avg_out
-        copy_tile_to_cb<tmp_cb_exp_avg, cb_exp_avg_out>(first_tile, 0);
+        // dfb_exp_avg_out_id
+        copy_tile_to_dfb<tmp_dfb_exp_avg_id, dfb_exp_avg_out_id>(first_tile, 0);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
-        sub_tiles_to_cb<cb_one, cb_scalar_args, cb_tmp1>(first_tile, beta2_tile, 0, 0);
+        sub_tiles_to_dfb<dfb_one_id, dfb_scalar_args_id, dfb_tmp1_id>(first_tile, beta2_tile, 0, 0);
 
-        // cb_tmp2 = grad * grad
-        mul_tiles_to_cb<tmp_cb_grad, tmp_cb_grad, cb_tmp2>(first_tile, first_tile, 1, 0);
+        // dfb_tmp2_id = grad * grad
+        mul_tiles_to_dfb<tmp_dfb_grad_id, tmp_dfb_grad_id, dfb_tmp2_id>(first_tile, first_tile, 1, 0);
 
-        // cb_tmp1 = cb_tmp1 * cb_tmp2
-        mul_tiles_to_cb<cb_tmp1, cb_tmp2, cb_tmp1>();
+        // dfb_tmp1_id = dfb_tmp1_id * dfb_tmp2_id
+        mul_tiles_to_dfb<dfb_tmp1_id, dfb_tmp2_id, dfb_tmp1_id>();
 
-        // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
-        mul_tiles_to_cb<cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq>(first_tile, beta2_tile, 0, 0);
+        // tmp_dfb_exp_avg_sq_id = dfb_exp_avg_sq_in_id * beta2
+        mul_tiles_to_dfb<dfb_exp_avg_sq_in_id, dfb_scalar_args_id, tmp_dfb_exp_avg_sq_id>(first_tile, beta2_tile, 0, 0);
 
-        // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
-        add_tiles_to_cb<tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq>();
+        // tmp_dfb_exp_avg_sq_id = tmp_dfb_exp_avg_sq_id + dfb_tmp1_id
+        add_tiles_to_dfb<tmp_dfb_exp_avg_sq_id, dfb_tmp1_id, tmp_dfb_exp_avg_sq_id>();
 
-        // cb_exp_avg_sq_out
-        copy_tile_to_cb<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out>(first_tile, 0);
+        // dfb_exp_avg_sq_out_id
+        copy_tile_to_dfb<tmp_dfb_exp_avg_sq_id, dfb_exp_avg_sq_out_id>(first_tile, 0);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
         // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
         // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
         // bias_correction2 = 1 - pow(beta2, step);
-        // cb_tmp1 = pow(beta2, step);
+        // dfb_tmp1_id = pow(beta2, step);
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<
                 ckl::input(
-                    cb_scalar_args,
+                    dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
@@ -154,61 +154,62 @@ void kernel_main() {
                 ckl::Dst::D0>{beta2_tile},
             ckl::Power<ckl::Dst::D0>{step},
             ckl::PackTile<ckl::output(
-                cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_one, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                ckl::input(cb_tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef AMSGRAD
         ckl::binary_sfpu<
             ckl::BinaryMax<>,
-            ckl::input(cb_max_exp_avg_sq_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-            ckl::input(tmp_cb_exp_avg_sq, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+            ckl::input(dfb_max_exp_avg_sq_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+            ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
             ckl::output(
-                tmp_cb_max_exp_avg_sq, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                tmp_dfb_max_exp_avg_sq_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
             ckl::EltwiseShape::tiles(onetile));
 
-        copy_tile_to_cb<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out>(first_tile, 0);
+        copy_tile_to_dfb<tmp_dfb_max_exp_avg_sq_id, dfb_max_exp_avg_sq_out_id>(first_tile, 0);
 #endif
 
 #ifdef AMSGRAD
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(tmp_cb_max_exp_avg_sq, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(cb_tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(
+                    tmp_dfb_max_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 #else
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(tmp_cb_exp_avg_sq, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(cb_tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 #endif
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
-                    cb_scalar_args,
+                    dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
@@ -218,15 +219,15 @@ void kernel_main() {
                 ckl::BroadcastDim::None>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
-        // cb_tmp2 = pow(beta1, step);
+        // dfb_tmp2_id = pow(beta1, step);
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::CopyTile<
                 ckl::input(
-                    cb_scalar_args,
+                    dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
@@ -235,47 +236,47 @@ void kernel_main() {
                 ckl::Dst::D0>{beta1_tile},
             ckl::Power<ckl::Dst::D0>{step},
             ckl::PackTile<ckl::output(
-                cb_tmp2, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-        // cb_tmp2 = 1 / (1 - cb_tmp2);
+        // dfb_tmp2_id = 1 / (1 - dfb_tmp2_id);
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
                 ckl::input(
-                    cb_one,
+                    dfb_one_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
-                ckl::input(cb_tmp2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_tmp2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_tmp2, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-        // cb_tmp2 = lr * cb_tmp2;
-        mul_tiles_to_cb<cb_scalar_args, cb_tmp2, cb_tmp2>(lr_tile, first_tile, 0);
+        // dfb_tmp2_id = lr * dfb_tmp2_id;
+        mul_tiles_to_dfb<dfb_scalar_args_id, dfb_tmp2_id, dfb_tmp2_id>(lr_tile, first_tile, 0);
 
-        // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg;
-        mul_tiles_to_cb<cb_tmp2, tmp_cb_exp_avg, cb_tmp2>();
+        // dfb_tmp2_id = dfb_tmp2_id * tmp_dfb_exp_avg_id;
+        mul_tiles_to_dfb<dfb_tmp2_id, tmp_dfb_exp_avg_id, dfb_tmp2_id>();
 
-        // cb_tmp1 = cb_tmp1 * cb_tmp2;
-        mul_tiles_to_cb<cb_tmp1, cb_tmp2, cb_tmp1>();
+        // dfb_tmp1_id = dfb_tmp1_id * dfb_tmp2_id;
+        mul_tiles_to_dfb<dfb_tmp1_id, dfb_tmp2_id, dfb_tmp1_id>();
 
-        // param = param - cb_tmp1;
-        sub_tiles_to_cb<cb_param_in, cb_tmp1, cb_param_out>(first_tile, first_tile, 0);
+        // param = param - dfb_tmp1_id;
+        sub_tiles_to_dfb<dfb_param_in_id, dfb_tmp1_id, dfb_param_out_id>(first_tile, first_tile, 0);
 
-        cb_param_in_obj.pop_front(onetile);
-        cb_grad_in_obj.pop_front(onetile);
-        cb_exp_avg_in_obj.pop_front(onetile);
-        cb_exp_avg_sq_in_obj.pop_front(onetile);
+        dfb_param_in_obj.pop_front(onetile);
+        dfb_grad_in_obj.pop_front(onetile);
+        dfb_exp_avg_in_obj.pop_front(onetile);
+        dfb_exp_avg_sq_in_obj.pop_front(onetile);
 #ifdef AMSGRAD
-        cb_max_exp_avg_sq_in_obj.pop_front(onetile);
+        dfb_max_exp_avg_sq_in_obj.pop_front(onetile);
 #endif
     }
 
-    cb_scalar_args_obj.pop_front(5);
-    cb_one_obj.pop_front(onetile);
+    dfb_scalar_args_obj.pop_front(5);
+    dfb_one_obj.pop_front(onetile);
 }

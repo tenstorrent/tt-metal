@@ -16,11 +16,11 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
     constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
-    constexpr uint32_t cb_in0 = dfb::in0;
-    constexpr uint32_t cb_in1 = dfb::in1;
-    constexpr uint32_t cb_out0 = dfb::out0;
+    constexpr uint32_t dfb_in0_id = dfb::in0;
+    constexpr uint32_t dfb_in1_id = dfb::in1;
+    constexpr uint32_t dfb_out0_id = dfb::out0;
 
-    compute_kernel_hw_startup(cb_in1, cb_in0, cb_out0);
+    compute_kernel_hw_startup(dfb_in1_id, dfb_in0_id, dfb_out0_id);
 
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
     constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
@@ -34,21 +34,21 @@ void kernel_main() {
             has_bcast,
             ckl::BinaryFpu<
                 ckl::input(
-                    cb_in1,
+                    dfb_in1_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
-                    cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                    dfb_in0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::BinaryFpuOp::Add,
                 bcast_dim>>{},
         ckl::OptionalChainElement<
             !has_bcast,
             ckl::CopyTile<
                 ckl::input(
-                    cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                    dfb_in0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D0>>{},
         ckl::PackTile<ckl::output(
-            cb_out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_out0_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

@@ -18,22 +18,22 @@ void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     using D = ckl::Dst;
-    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
-    DataflowBuffer dfb_output_grad_obj(cb_output_grad);
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
-    DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
-    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_divisor_id = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_output_grad_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb_output_grad_obj(dfb_output_grad_id);
+    constexpr uint32_t dfb_tmp_weight_id = tt::CBIndex::c_24;
+    constexpr uint32_t dfb_tmp1_id = tt::CBIndex::c_25;
+    DataflowBuffer dfb_tmp1_obj(dfb_tmp1_id);
+    constexpr uint32_t dfb_tmp2_id = tt::CBIndex::c_26;
+    constexpr uint32_t dfb_input_grad_id = tt::CBIndex::c_16;
 
 #if defined(DIVISOR)
-    compute_kernel_hw_startup(cb_divisor, cb_tmp1);
+    compute_kernel_hw_startup(dfb_divisor_id, dfb_tmp1_id);
 
     ckl::unary<
         ckl::Recip<D::D0>,
-        ckl::input(cb_divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-        ckl::output(cb_tmp1)>(ckl::EltwiseShape::single());
+        ckl::input(dfb_divisor_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+        ckl::output(dfb_tmp1_id)>(ckl::EltwiseShape::single());
 
     dfb_tmp1_obj.wait_front(1);
     dfb_output_grad_obj.wait_front(1);
@@ -42,25 +42,25 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp_weight),
-                ckl::input(cb_output_grad, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::input(dfb_tmp_weight_id),
+                ckl::input(dfb_output_grad_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<ckl::output(cb_tmp2)>{});
+            ckl::PackTile<ckl::output(dfb_tmp2_id)>{});
 
         compute_kernel_lib::mul<
-            compute_kernel_lib::input(cb_tmp2),
+            compute_kernel_lib::input(dfb_tmp2_id),
             compute_kernel_lib::input(
-                cb_tmp1, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
-            compute_kernel_lib::output(cb_input_grad),
+                dfb_tmp1_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
+            compute_kernel_lib::output(dfb_input_grad_id),
             compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::single());
     }
 
     dfb_output_grad_obj.pop_front(1);
     dfb_tmp1_obj.pop_front(1);
 #else
-    compute_kernel_hw_startup(cb_tmp_weight, cb_output_grad, cb_input_grad);
+    compute_kernel_hw_startup(dfb_tmp_weight_id, dfb_output_grad_id, dfb_input_grad_id);
 
     dfb_output_grad_obj.wait_front(1);
 
@@ -68,12 +68,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp_weight),
-                ckl::input(cb_output_grad, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::input(dfb_tmp_weight_id),
+                ckl::input(dfb_output_grad_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<ckl::output(cb_input_grad)>{});
+            ckl::PackTile<ckl::output(dfb_input_grad_id)>{});
     }
 
     dfb_output_grad_obj.pop_front(1);

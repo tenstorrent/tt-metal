@@ -21,20 +21,20 @@
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr auto cb_in0 = dfb::in0;
-    constexpr auto cb_mask = dfb::mask;
-    constexpr auto cb_max_scaler = dfb::max_scaler;
-    constexpr auto cb_sum_scaler = dfb::sum_scaler;
-    constexpr auto cb_out0 = dfb::out0;
-    constexpr auto cb_exps = dfb::exps;
-    constexpr auto cb_recipsumexps = dfb::recip_sum_exps;
-    DataflowBuffer cb_recipsumexps_obj(cb_recipsumexps);
-    constexpr auto cb_add = dfb::add;
-    constexpr auto cb_max = dfb::max;
-    DataflowBuffer cb_max_obj(cb_max);
-    constexpr auto cb_tmp = dfb::tmp;
+    constexpr auto dfb_in0_id = dfb::in0;
+    constexpr auto dfb_mask_id = dfb::mask;
+    constexpr auto dfb_max_scaler_id = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler_id = dfb::sum_scaler;
+    constexpr auto dfb_out0_id = dfb::out0;
+    constexpr auto dfb_exps_id = dfb::exps;
+    constexpr auto dfb_recipsumexps_id = dfb::recip_sum_exps;
+    DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps_id);
+    constexpr auto dfb_add_id = dfb::add;
+    constexpr auto dfb_max_id = dfb::max;
+    DataflowBuffer dfb_max_obj(dfb_max_id);
+    constexpr auto dfb_tmp_id = dfb::tmp;
 
-    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_max_scaler_id, dfb_out0_id);
 
     constexpr std::uint32_t onetile = 1;
 
@@ -44,35 +44,35 @@ void kernel_main() {
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
         if (Wt == 1) {
-            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
+            mask_tile_to_dfb<dfb_in0_id, dfb_mask_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp_id, dfb_max_scaler_id, dfb_max_id>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Phase 1: reduce Wt-1 full tiles into cb_max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
+            // Phase 1: reduce Wt-1 full tiles into dfb_max_id (no accumulation, first call).
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_in0_id, dfb_max_scaler_id, dfb_max_id>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
-            // Phase 2: mask the last tile and continue reducing into cb_max via Accumulate.
-            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+            // Phase 2: mask the last tile and continue reducing into dfb_max_id via Accumulate.
+            mask_tile_to_dfb<dfb_in0_id, dfb_mask_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*popm=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp_id, dfb_max_scaler_id, dfb_max_id>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
+                compute_kernel_lib::Accumulate::at(dfb_max_id, /*iter=*/1));
         }
 
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+                sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-                exp_tile_and_mask_tile_to_cb<cb_tmp, cb_mask, cb_exps>(
+                exp_tile_and_mask_tile_to_dfb<dfb_tmp_id, dfb_mask_id, dfb_exps_id>(
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
                     /*popm=*/0);
 #else
-                rexp_tile_and_mask_tile_to_cb<cb_in0, cb_mask, cb_exps>(
+                rexp_tile_and_mask_tile_to_dfb<dfb_in0_id, dfb_mask_id, dfb_exps_id>(
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
@@ -80,20 +80,20 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+                sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-                exp_tile_to_cb<cb_tmp, cb_exps>();
+                exp_tile_to_dfb<dfb_tmp_id, dfb_exps_id>();
 #else
-                sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+                sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-                rexp_tile_to_cb<cb_tmp, cb_exps>();
+                rexp_tile_to_dfb<dfb_tmp_id, dfb_exps_id>();
 #endif
             }
 
             if (w == 0) {
-                copy_tile_to_cb<cb_exps, cb_add>();
+                copy_tile_to_dfb<dfb_exps_id, dfb_add_id>();
             } else {
-                add_tiles_to_cb<cb_add, cb_exps, cb_add>();
+                add_tiles_to_dfb<dfb_add_id, dfb_exps_id, dfb_add_id>();
             }
         }
 
@@ -102,9 +102,9 @@ void kernel_main() {
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_add_id,
+            dfb_sum_scaler_id,
+            dfb_recipsumexps_id,
             ckl::ReduceInputPolicy::BulkWaitBulkPop>(
             ckl::ReduceInputBlockShape::single(),
             ckl::ReduceInputMemoryLayout::contiguous(),
@@ -118,9 +118,9 @@ void kernel_main() {
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb_add_id,
+            dfb_sum_scaler_id,
+            dfb_recipsumexps_id,
             ckl::ReduceInputPolicy::BulkWaitBulkPop>(
             ckl::ReduceInputBlockShape::single(),
             ckl::ReduceInputMemoryLayout::contiguous(),
@@ -136,31 +136,31 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            sub_tiles_bcast_cols_to_cb<cb_tmp, cb_recipsumexps, cb_out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb_tmp_id, dfb_recipsumexps_id, dfb_out0_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            exp_tile_to_cb<cb_tmp, cb_exps>();
+            exp_tile_to_dfb<dfb_tmp_id, dfb_exps_id>();
 
-            mul_tiles_bcast_cols_to_cb<cb_exps, cb_recipsumexps, cb_out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb_exps_id, dfb_recipsumexps_id, dfb_out0_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // rexp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb<cb_in0, cb_max, cb_tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_cols_to_dfb<dfb_in0_id, dfb_max_id, dfb_tmp_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            rexp_tile_to_cb<cb_tmp, cb_exps>();
+            rexp_tile_to_dfb<dfb_tmp_id, dfb_exps_id>();
 
-            mul_tiles_bcast_cols_to_cb<cb_exps, cb_recipsumexps, cb_out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb_exps_id, dfb_recipsumexps_id, dfb_out0_id>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #endif
 #endif
         }
 
-        cb_recipsumexps_obj.pop_front(onetile);
-        cb_max_obj.pop_front(onetile);
+        dfb_recipsumexps_obj.pop_front(onetile);
+        dfb_max_obj.pop_front(onetile);
     }
 }

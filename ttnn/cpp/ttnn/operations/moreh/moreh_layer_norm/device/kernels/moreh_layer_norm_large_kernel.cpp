@@ -36,47 +36,47 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    constexpr auto cb_x = tt::CBIndex::c_0;
-    DataflowBuffer cb_x_obj(cb_x);  // input
-    constexpr auto cb_scaler = tt::CBIndex::c_1;
-    DataflowBuffer cb_scaler_obj(cb_scaler);  // scaler
-    constexpr auto cb_eps = tt::CBIndex::c_2;
-    DataflowBuffer cb_eps_obj(cb_eps);  // epsilon
-    constexpr auto cb_gamma = tt::CBIndex::c_3;
-    constexpr auto cb_beta = tt::CBIndex::c_4;
-    constexpr auto cb_mask_h = tt::CBIndex::c_5;
-    DataflowBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
-    constexpr auto cb_mask_w = tt::CBIndex::c_6;
-    DataflowBuffer cb_mask_w_obj(cb_mask_w);  // mask_w
+    constexpr auto dfb_x_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb_x_obj(dfb_x_id);  // input
+    constexpr auto dfb_scaler_id = tt::CBIndex::c_1;
+    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);  // scaler
+    constexpr auto dfb_eps_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_eps_obj(dfb_eps_id);  // epsilon
+    constexpr auto dfb_gamma_id = tt::CBIndex::c_3;
+    constexpr auto dfb_beta_id = tt::CBIndex::c_4;
+    constexpr auto dfb_mask_h_id = tt::CBIndex::c_5;
+    DataflowBuffer dfb_mask_h_obj(dfb_mask_h_id);  // mask_h
+    constexpr auto dfb_mask_w_id = tt::CBIndex::c_6;
+    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);  // mask_w
 
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    constexpr auto cb_mean = tt::CBIndex::c_17;
-    constexpr auto cb_rstd = tt::CBIndex::c_18;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
+    constexpr auto dfb_mean_id = tt::CBIndex::c_17;
+    constexpr auto dfb_rstd_id = tt::CBIndex::c_18;
 
-    constexpr auto cb_ex = tt::CBIndex::c_24;
-    DataflowBuffer cb_ex_obj(cb_ex);  // E[x]
-    constexpr auto cb_xmm = tt::CBIndex::c_25;
-    constexpr auto cb_xmm2 = tt::CBIndex::c_26;
-    constexpr auto cb_xmm2sum = tt::CBIndex::c_27;
-    constexpr auto cb_var = tt::CBIndex::c_28;
-    constexpr auto cb_recip_std = tt::CBIndex::c_29;
-    DataflowBuffer cb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
-    constexpr auto cb_gamma_beta = tt::CBIndex::c_30;
-    constexpr auto cb_xsum = tt::CBIndex::c_31;
+    constexpr auto dfb_ex_id = tt::CBIndex::c_24;
+    DataflowBuffer dfb_ex_obj(dfb_ex_id);  // E[x]
+    constexpr auto dfb_xmm_id = tt::CBIndex::c_25;
+    constexpr auto dfb_xmm2_id = tt::CBIndex::c_26;
+    constexpr auto dfb_xmm2sum_id = tt::CBIndex::c_27;
+    constexpr auto dfb_var_id = tt::CBIndex::c_28;
+    constexpr auto dfb_recip_std_id = tt::CBIndex::c_29;
+    DataflowBuffer dfb_recip_std_obj(dfb_recip_std_id);  // 1.0/(sqrt(Var[x] + eps))
+    constexpr auto dfb_gamma_beta_id = tt::CBIndex::c_30;
+    constexpr auto dfb_xsum_id = tt::CBIndex::c_31;
 
     constexpr uint32_t onetile = 1;
 
-    cb_scaler_obj.wait_front(onetile);  // comes from the reader
-    cb_eps_obj.wait_front(onetile);     // comes from the reader
+    dfb_scaler_obj.wait_front(onetile);  // comes from the reader
+    dfb_eps_obj.wait_front(onetile);     // comes from the reader
 
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
     if constexpr (do_mask_h) {
-        cb_mask_h_obj.wait_front(onetile);
+        dfb_mask_h_obj.wait_front(onetile);
     }
     if constexpr (do_mask_w) {
-        cb_mask_w_obj.wait_front(onetile);
+        dfb_mask_w_obj.wait_front(onetile);
     }
 
     constexpr uint32_t first_tile = 0;
@@ -87,17 +87,17 @@ void kernel_main() {
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         /*
          * Sum[x]
-         * cb_xsum
+         * dfb_xsum_id
          */
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            cb_x_obj.wait_front(block_size);
+            dfb_x_obj.wait_front(block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 const uint32_t w_idx = inner_idx + j;
                 if (w_idx == 0) {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
                         ckl::CopyTile<ckl::input(
-                            cb_x,
+                            dfb_x_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
@@ -107,7 +107,7 @@ void kernel_main() {
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_h,
+                                    dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -119,7 +119,7 @@ void kernel_main() {
                             do_mask_w && ((w_idx + 1) % origin_Wt == 0),
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_w,
+                                    dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -128,14 +128,17 @@ void kernel_main() {
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
-                            cb_xsum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                            dfb_xsum_id,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            kDataFormatReconfig)>{});
                 } else {
-                    // I use cb_ex temporarily.
-                    constexpr auto cb_tmp = cb_ex;
+                    // I use dfb_ex_id temporarily.
+                    constexpr auto dfb_tmp_id = dfb_ex_id;
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
                         ckl::CopyTile<ckl::input(
-                            cb_x,
+                            dfb_x_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
@@ -145,7 +148,7 @@ void kernel_main() {
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_h,
+                                    dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -157,7 +160,7 @@ void kernel_main() {
                             do_mask_w && ((w_idx + 1) % origin_Wt == 0),
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_w,
+                                    dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -166,34 +169,39 @@ void kernel_main() {
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
-                            cb_tmp, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                            dfb_tmp_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
                         ckl::BinaryFpu<
-                            ckl::input(cb_xsum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                            ckl::input(cb_tmp, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                            ckl::input(
+                                dfb_xsum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                            ckl::input(
+                                dfb_tmp_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                             ckl::BinaryFpuOp::Add,
                             ckl::BroadcastDim::None>{},
                         ckl::PackTile<ckl::output(
-                            cb_xsum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                            dfb_xsum_id,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            kDataFormatReconfig)>{});
                 }
             }  // block_size loop
-            cb_x_obj.pop_front(block_size);
+            dfb_x_obj.pop_front(block_size);
         }  // num_inner loop
 
         /*
          * E[x]
-         * cb_ex
+         * dfb_ex_id
          */
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xsum, cb_scaler, cb_ex>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_xsum_id, dfb_scaler_id, dfb_ex_id>(ckl::ReduceInputBlockShape::single());
 
         if constexpr (mean_has_value) {
-            copy_tile_to_cb<cb_ex, cb_mean>(first_tile, 0);
+            copy_tile_to_dfb<dfb_ex_id, dfb_mean_id>(first_tile, 0);
         } else {
-            cb_ex_obj.wait_front(onetile);
+            dfb_ex_obj.wait_front(onetile);
         }
-        // We don't pop cb_ex here.
+        // We don't pop dfb_ex_id here.
 
         /*
          * x - E[x]
@@ -202,13 +210,13 @@ void kernel_main() {
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             ckl::sub<
                 ckl::input(
-                    cb_x,
+                    dfb_x_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
-                ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                ckl::output(cb_xmm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                ckl::input(dfb_ex_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(dfb_xmm_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
@@ -221,12 +229,12 @@ void kernel_main() {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
                         ckl::CopyTile<ckl::input(
-                            cb_xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                            dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_h,
+                                    dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -238,7 +246,7 @@ void kernel_main() {
                             do_mask_w && (w_idx + 1) % origin_Wt == 0,
                             ckl::CopyTile<
                                 ckl::input(
-                                    cb_mask_w,
+                                    dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
@@ -247,134 +255,141 @@ void kernel_main() {
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
-                            cb_xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                            dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
                 }  // block_size loop
             }
 
             /*
              * (x - E[x])^2
-             * cb_xmm2
+             * dfb_xmm2_id
              */
             ckl::square<
                 ckl::input(
-                    cb_xmm,
+                    dfb_xmm_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
-                ckl::output(cb_xmm2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+                ckl::output(dfb_xmm2_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
              * Sum[(x-E[x])^2]
-             * cb_xmm2sum
+             * dfb_xmm2sum_id
              */
             for (uint32_t j = 0; j < block_size; j++) {
                 if (inner_idx == 0 && j == 0) {
                     ckl::copy<
-                        ckl::input(cb_xmm2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(dfb_xmm2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                         ckl::output(
-                            cb_xmm2sum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                        ckl::EltwiseShape::single());
+                            dfb_xmm2sum_id,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            kDataFormatReconfig)>(ckl::EltwiseShape::single());
                 } else {
                     ckl::add<
-                        ckl::input(cb_xmm2sum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                        ckl::input(cb_xmm2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(
+                            dfb_xmm2sum_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(dfb_xmm2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                         ckl::output(
-                            cb_xmm2sum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                        ckl::EltwiseShape::single());
+                            dfb_xmm2sum_id,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            kDataFormatReconfig)>(ckl::EltwiseShape::single());
                 }
             }  // block_size loop
         }  // num_inner loop
-        // Do not pop cb_ex here, we need it later.
+        // Do not pop dfb_ex_id here, we need it later.
 
         /*
          * E[(x-E[x])^2 = Var[x]
-         * cb_var
+         * dfb_var_id
          */
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, cb_var>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_xmm2sum_id, dfb_scaler_id, dfb_var_id>(
+            ckl::ReduceInputBlockShape::single());
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
-         * cb_recip_std
+         * dfb_recip_std_id
          */
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_var, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::input(dfb_var_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_recip_std, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb_recip_std_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         if constexpr (rstd_has_value) {
-            copy_tile_to_cb<cb_recip_std, cb_rstd>(first_tile, 0);
+            copy_tile_to_dfb<dfb_recip_std_id, dfb_rstd_id>(first_tile, 0);
         } else {
-            cb_recip_std_obj.wait_front(onetile);
+            dfb_recip_std_obj.wait_front(onetile);
         }
 
         /*
          * (x - E[x]) * (1.0/(sqrt(E[(x-E[x])^2] + eps)))
          * (x - E[x]) * (1.0/(sqrt(E[(x-E[x])^2] + eps))) * gamma + beta
-         * cb_out
+         * dfb_out_id
          */
-        constexpr auto cb_reuse = cb_xmm;
+        constexpr auto dfb_reuse_id = dfb_xmm_id;
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             /*
              * x - E[x]
-             * cb_reuse(==cb_xmm)
+             * dfb_reuse_id(==dfb_xmm_id)
              */
             ckl::sub<
                 ckl::input(
-                    cb_x,
+                    dfb_x_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
-                ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                ckl::output(cb_reuse, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                ckl::input(dfb_ex_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(dfb_reuse_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
              * (x - E[x]) * 1.0/sqrt(Var[x] + eps)
-             * cb_gamma_beta_or_out
+             * dfb_gamma_beta_or_out_id
              */
-            constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
+            constexpr auto dfb_gamma_beta_or_out_id =
+                (gamma_has_value || beta_has_value) ? dfb_gamma_beta_id : dfb_out_id;
             ckl::mul<
                 ckl::input(
-                    cb_reuse,
+                    dfb_reuse_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
-                ckl::input(cb_recip_std, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::input(dfb_recip_std_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::output(
-                    cb_gamma_beta_or_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                    dfb_gamma_beta_or_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
             if constexpr (gamma_has_value) {
-                constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
+                constexpr auto dfb_outg_id = beta_has_value ? dfb_gamma_beta_id : dfb_out_id;
                 constexpr auto gamma_bcast =
                     is_groupnorm ? ckl::BroadcastDim::Scalar
                                  : (is_lastdim_layernorm ? ckl::BroadcastDim::Row : ckl::BroadcastDim::None);
                 ckl::mul<
                     ckl::input(
-                        cb_gamma_beta_or_out,
+                        dfb_gamma_beta_or_out_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::input(
-                        cb_gamma,
+                        dfb_gamma_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
-                    ckl::output(cb_outg, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                    ckl::output(dfb_outg_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                     gamma_bcast>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
 
@@ -384,31 +399,31 @@ void kernel_main() {
                                  : (is_lastdim_layernorm ? ckl::BroadcastDim::Row : ckl::BroadcastDim::None);
                 ckl::add<
                     ckl::input(
-                        cb_gamma_beta,
+                        dfb_gamma_beta_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::input(
-                        cb_beta,
+                        dfb_beta_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
-                    ckl::output(cb_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
+                    ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                     beta_bcast>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
         }  // num_inner loop
-        cb_recip_std_obj.pop_front(onetile);
-        cb_ex_obj.pop_front(onetile);
+        dfb_recip_std_obj.pop_front(onetile);
+        dfb_ex_obj.pop_front(onetile);
     }  // num_rows_per_core loop
-    cb_scaler_obj.pop_front(onetile);
-    cb_eps_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(onetile);
+    dfb_eps_obj.pop_front(onetile);
 
     if constexpr (do_mask_h) {
-        cb_mask_h_obj.pop_front(onetile);
+        dfb_mask_h_obj.pop_front(onetile);
     }
     if constexpr (do_mask_w) {
-        cb_mask_w_obj.pop_front(onetile);
+        dfb_mask_w_obj.pop_front(onetile);
     }
 }

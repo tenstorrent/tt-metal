@@ -16,18 +16,18 @@ void kernel_main() {
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_in2 = tt::CBIndex::c_2;
-    constexpr auto cb_out = tt::CBIndex::c_3;
+    constexpr auto dfb_in0_id = tt::CBIndex::c_0;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_in2_id = tt::CBIndex::c_2;
+    constexpr auto dfb_out_id = tt::CBIndex::c_3;
 
-    compute_kernel_hw_startup(cb_in0, cb_out);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_out_id);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
         ckl::CopyTile<
             ckl::input(
-                cb_in0,
+                dfb_in0_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
@@ -35,7 +35,7 @@ void kernel_main() {
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
-                cb_in1,
+                dfb_in1_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
@@ -43,7 +43,7 @@ void kernel_main() {
             ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
-                cb_in2,
+                dfb_in2_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::OperandKind::Block,
@@ -54,7 +54,7 @@ void kernel_main() {
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
         ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
         ckl::PackTile<ckl::output(
-            cb_out,
+            dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});

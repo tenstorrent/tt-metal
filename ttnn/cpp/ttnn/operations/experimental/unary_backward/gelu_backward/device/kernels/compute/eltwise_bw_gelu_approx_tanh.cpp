@@ -17,9 +17,9 @@
 namespace ckl = compute_kernel_lib;
 
 ALWI void gelu_tanh_chain(uint32_t num_tiles) {
-    constexpr auto cb_grad_out = dfb::grad_out;
-    constexpr auto cb_input = dfb::input;
-    constexpr auto cb_grad_in = dfb::grad_in;
+    constexpr auto dfb_grad_out_id = dfb::grad_out;
+    constexpr auto dfb_input_id = dfb::input;
+    constexpr auto dfb_grad_in_id = dfb::grad_in;
 
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
     constexpr float kKappa = 0.044715f;
@@ -30,16 +30,16 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
         // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
         ckl::CopyTile<
             ckl::input(
-                cb_grad_out, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             D::D0>{},
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             D::D1>{},
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             D::D2>{},
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             D::D5>{},
         // z = beta * (x + kappa * x^3)
         ckl::Square<D::D1>{},
@@ -77,7 +77,10 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
         ckl::AddBinary<D::D1, D::D2, D::D1>{},
         ckl::MulBinary<D::D0, D::D1, D::D0>{},
         ckl::PackTile<ckl::output(
-            cb_grad_in, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb_grad_in_id,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckl::DataFormatReconfig::Disabled)>{});
 }
 
 void kernel_main() {

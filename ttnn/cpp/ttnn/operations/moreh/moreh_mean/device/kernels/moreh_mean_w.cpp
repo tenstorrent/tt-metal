@@ -31,52 +31,52 @@ void kernel_main() {
 
     // This switches between two named DFBs below, so keep the resolved index rather than
     // the accessor type inferred by auto.
-    uint32_t cb_input = dfb::input;
-    constexpr auto cb_scaler = dfb::scaler;
-    DataflowBuffer cb_scaler_obj(cb_scaler);
-    constexpr auto cb_mask_w = dfb::mask_w;
-    DataflowBuffer cb_mask_w_obj(cb_mask_w);
-    constexpr auto cb_accum_dst = dfb::accum_dst;
-    DataflowBuffer cb_accum_dst_obj(cb_accum_dst);
-    constexpr auto cb_masked_input = dfb::masked_input;
-    constexpr auto cb_out = dfb::out;
-    DataflowBuffer cb_out_obj(cb_out);
+    uint32_t dfb_input_id = dfb::input;
+    constexpr auto dfb_scaler_id = dfb::scaler;
+    DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
+    constexpr auto dfb_mask_w_id = dfb::mask_w;
+    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
+    constexpr auto dfb_accum_dst_id = dfb::accum_dst;
+    DataflowBuffer dfb_accum_dst_obj(dfb_accum_dst_id);
+    constexpr auto dfb_masked_input_id = dfb::masked_input;
+    constexpr auto dfb_out_id = dfb::out;
+    DataflowBuffer dfb_out_obj(dfb_out_id);
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     constexpr bool is_w_single_tile = Wt == 1;
 
-    compute_kernel_hw_startup(cb_input, cb_input, cb_out);
+    compute_kernel_hw_startup(dfb_input_id, dfb_input_id, dfb_out_id);
 
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
     int reduce_dst_idx = 0;
 
     if constexpr (do_mask_w) {
-        cb_mask_w_obj.wait_front(onetile);
+        dfb_mask_w_obj.wait_front(onetile);
     }
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            cb_input = dfb::input;
+            dfb_input_id = dfb::input;
             if constexpr (!is_w_single_tile) {
                 tile_regs_acquire();
 
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    DataflowBuffer(cb_input).wait_front(onetile);
+                    DataflowBuffer(dfb_input_id).wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_input, cb_scaler);
+                    reconfig_data_format(dfb_input_id, dfb_scaler_id);
 #endif
-                    matmul_init(cb_input, cb_scaler, false);
-                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    DataflowBuffer(cb_input).pop_front(onetile);
+                    matmul_init(dfb_input_id, dfb_scaler_id, false);
+                    matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
+                    DataflowBuffer(dfb_input_id).pop_front(onetile);
                 }
                 tile_regs_commit();
 
-                cb_accum_dst_obj.reserve_back(onetile);
+                dfb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst_obj);
+                pack_tile_with_dt(reduce_dst_idx, dfb_accum_dst_obj);
                 tile_regs_release();
-                cb_accum_dst_obj.push_back(onetile);
+                dfb_accum_dst_obj.push_back(onetile);
             }
 
             if constexpr (do_mask_w) {
@@ -85,47 +85,47 @@ void kernel_main() {
                     ckl::CopyTile<ckl::input(
                         dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<
-                        ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                        ckl::input(dfb_mask_w_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        cb_masked_input,
+                        dfb_masked_input_id,
                         ckl::ReservePolicy::PerTile,
                         ckl::PushPolicy::PerTile,
                         kDataFormatReconfig)>{});
-                cb_input = cb_masked_input;
+                dfb_input_id = dfb_masked_input_id;
             }
 
             tile_regs_acquire();
-            DataflowBuffer(cb_input).wait_front(onetile);
+            DataflowBuffer(dfb_input_id).wait_front(onetile);
             if constexpr (!is_w_single_tile) {
-                cb_accum_dst_obj.wait_front(onetile);
-                copy_tile_init_with_dt(cb_accum_dst_obj);
-                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
+                dfb_accum_dst_obj.wait_front(onetile);
+                copy_tile_init_with_dt(dfb_accum_dst_obj);
+                copy_tile(dfb_accum_dst_id, 0, reduce_dst_idx);
             }
 
 #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_input, cb_scaler);
+            reconfig_data_format(dfb_input_id, dfb_scaler_id);
 #endif
-            matmul_init(cb_input, cb_scaler, false);
-            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            matmul_init(dfb_input_id, dfb_scaler_id, false);
+            matmul_tiles(dfb_input_id, dfb_scaler_id, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
-            cb_out_obj.reserve_back(onetile);
+            dfb_out_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile_with_dt(reduce_dst_idx, cb_out_obj);
+            pack_tile_with_dt(reduce_dst_idx, dfb_out_obj);
             tile_regs_release();
-            cb_out_obj.push_back(onetile);
+            dfb_out_obj.push_back(onetile);
 
-            DataflowBuffer(cb_input).pop_front(onetile);
+            DataflowBuffer(dfb_input_id).pop_front(onetile);
             if constexpr (!is_w_single_tile) {
-                cb_accum_dst_obj.pop_front(onetile);
+                dfb_accum_dst_obj.pop_front(onetile);
             }
         }
     }
 
     if constexpr (do_mask_w) {
-        cb_mask_w_obj.pop_front(onetile);
+        dfb_mask_w_obj.pop_front(onetile);
     }
-    cb_scaler_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(onetile);
 }

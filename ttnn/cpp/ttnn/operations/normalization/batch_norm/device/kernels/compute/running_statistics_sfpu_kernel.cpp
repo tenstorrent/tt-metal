@@ -16,13 +16,13 @@ namespace ckl = compute_kernel_lib;
 using D = ckl::Dst;
 
 template <
-    uint32_t cb_batch,
-    uint32_t cb_old,
-    uint32_t cb_updated,
+    uint32_t dfb_batch_id,
+    uint32_t dfb_old_id,
+    uint32_t dfb_updated_id,
     bool AlsoOut0,
-    uint32_t cb_one,
-    uint32_t cb_momentum,
-    uint32_t cb_out0>
+    uint32_t dfb_one_id,
+    uint32_t dfb_momentum_id,
+    uint32_t dfb_out0_id>
 ALWI void update_running_stat() {
     using ckl::AddBinary;
     using ckl::MulBinary;
@@ -31,25 +31,25 @@ ALWI void update_running_stat() {
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
-        ckl::CopyTile<ckl::input(cb_one, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
-        ckl::CopyTile<ckl::input(cb_momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
+        ckl::CopyTile<ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<ckl::input(cb_old, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb_old_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, SCALAR), D::D1>{},
         MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<ckl::input(cb_momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
-        ckl::CopyTile<ckl::input(cb_batch, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D2>{},
+        ckl::CopyTile<ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D2>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<ckl::output(cb_updated, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
+        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
         ckl::OptionalChainElement<
             AlsoOut0,
-            ckl::PackTile<ckl::output(cb_out0, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
+            ckl::PackTile<ckl::output(dfb_out0_id, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
 }
 
-template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb>
+template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcDfb, uint32_t DstDfb>
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
-        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcCb), ckl::output(DstCb)>(
+        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcDfb), ckl::output(DstDfb)>(
             ckl::EltwiseShape::single());
     }
 }
@@ -62,18 +62,18 @@ ALWI void maybe_typecast_stat() {
 // are keyed independently, and either may typecast without the other.
 #ifdef NEEDS_MEAN_TYPECAST
 constexpr bool needs_mean_typecast = true;
-constexpr auto dfb_writer_updated_mean = dfb::writer_updated_mean;
+constexpr auto dfb_writer_updated_mean_binding = dfb::writer_updated_mean;
 #else
 constexpr bool needs_mean_typecast = false;
-constexpr auto dfb_writer_updated_mean = dfb::updated_mean;
+constexpr auto dfb_writer_updated_mean_binding = dfb::updated_mean;
 #endif
 
 #ifdef NEEDS_VAR_TYPECAST
 constexpr bool needs_var_typecast = true;
-constexpr auto dfb_writer_updated_var = dfb::writer_updated_var;
+constexpr auto dfb_writer_updated_var_binding = dfb::writer_updated_var;
 #else
 constexpr bool needs_var_typecast = false;
-constexpr auto dfb_writer_updated_var = dfb::updated_var;
+constexpr auto dfb_writer_updated_var_binding = dfb::updated_var;
 #endif
 
 void kernel_main() {
@@ -84,76 +84,76 @@ void kernel_main() {
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
 
-    constexpr auto cb_batch_mean = dfb::batch_mean;
-    constexpr auto cb_batch_var = dfb::batch_var;
-    constexpr auto cb_out0 = dfb::out;
-    constexpr auto cb_old_running_mean = dfb::old_running_mean;
-    constexpr auto cb_old_running_var = dfb::old_running_var;
-    constexpr auto cb_updated_running_mean = dfb::updated_mean;
-    constexpr auto cb_updated_running_var = dfb::updated_var;
-    constexpr auto cb_momentum = dfb::momentum;
-    constexpr auto cb_one = dfb::one;
-    constexpr auto cb_writer_updated_mean = dfb_writer_updated_mean;
-    constexpr auto cb_writer_updated_var = dfb_writer_updated_var;
+    constexpr auto dfb_batch_mean_id = dfb::batch_mean;
+    constexpr auto dfb_batch_var_id = dfb::batch_var;
+    constexpr auto dfb_out0_id = dfb::out;
+    constexpr auto dfb_old_running_mean_id = dfb::old_running_mean;
+    constexpr auto dfb_old_running_var_id = dfb::old_running_var;
+    constexpr auto dfb_updated_running_mean_id = dfb::updated_mean;
+    constexpr auto dfb_updated_running_var_id = dfb::updated_var;
+    constexpr auto dfb_momentum_id = dfb::momentum;
+    constexpr auto dfb_one_id = dfb::one;
+    constexpr auto dfb_writer_updated_mean_id = dfb_writer_updated_mean_binding;
+    constexpr auto dfb_writer_updated_var_id = dfb_writer_updated_var_binding;
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
-    DataflowBuffer cb_batch_mean_obj(cb_batch_mean);
-    DataflowBuffer cb_batch_var_obj(cb_batch_var);
+    DataflowBuffer dfb_batch_mean_obj(dfb_batch_mean_id);
+    DataflowBuffer dfb_batch_var_obj(dfb_batch_var_id);
 
-    compute_kernel_hw_startup(cb_batch_mean, cb_out0);
+    compute_kernel_hw_startup(dfb_batch_mean_id, dfb_out0_id);
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer(cb_momentum).wait_front(1);
-    DataflowBuffer(cb_one).wait_front(1);
+    DataflowBuffer(dfb_momentum_id).wait_front(1);
+    DataflowBuffer(dfb_one_id).wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // The reader produces both batch-stat streams for every tile, even when only one
         // running statistic is requested. Consume both streams unconditionally to avoid
         // filling either two-entry buffer and stalling its producer.
-        cb_batch_mean_obj.wait_front(onetile);
-        cb_batch_var_obj.wait_front(onetile);
-        DataflowBuffer(cb_out0).reserve_back(onetile);
+        dfb_batch_mean_obj.wait_front(onetile);
+        dfb_batch_var_obj.wait_front(onetile);
+        DataflowBuffer(dfb_out0_id).reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
             update_running_stat<
-                cb_batch_mean,
-                cb_old_running_mean,
-                cb_updated_running_mean,
+                dfb_batch_mean_id,
+                dfb_old_running_mean_id,
+                dfb_updated_running_mean_id,
                 /*AlsoOut0=*/!old_running_var_has_value,
-                cb_one,
-                cb_momentum,
-                cb_out0>();
+                dfb_one_id,
+                dfb_momentum_id,
+                dfb_out0_id>();
             maybe_typecast_stat<
                 needs_mean_typecast,
                 tc_in_fmt,
                 tc_out_fmt,
-                cb_updated_running_mean,
-                cb_writer_updated_mean>();
+                dfb_updated_running_mean_id,
+                dfb_writer_updated_mean_id>();
         }
 
         if constexpr (old_running_var_has_value) {
             update_running_stat<
-                cb_batch_var,
-                cb_old_running_var,
-                cb_updated_running_var,
+                dfb_batch_var_id,
+                dfb_old_running_var_id,
+                dfb_updated_running_var_id,
                 /*AlsoOut0=*/true,
-                cb_one,
-                cb_momentum,
-                cb_out0>();
+                dfb_one_id,
+                dfb_momentum_id,
+                dfb_out0_id>();
             maybe_typecast_stat<
                 needs_var_typecast,
                 tc_in_fmt,
                 tc_out_fmt,
-                cb_updated_running_var,
-                cb_writer_updated_var>();
+                dfb_updated_running_var_id,
+                dfb_writer_updated_var_id>();
         }
 
-        DataflowBuffer(cb_out0).push_back(onetile);
-        cb_batch_mean_obj.pop_front(onetile);
-        cb_batch_var_obj.pop_front(onetile);
+        DataflowBuffer(dfb_out0_id).push_back(onetile);
+        dfb_batch_mean_obj.pop_front(onetile);
+        dfb_batch_var_obj.pop_front(onetile);
     }
 
-    DataflowBuffer(cb_momentum).pop_front(1);
-    DataflowBuffer(cb_one).pop_front(1);
+    DataflowBuffer(dfb_momentum_id).pop_front(1);
+    DataflowBuffer(dfb_one_id).pop_front(1);
 }

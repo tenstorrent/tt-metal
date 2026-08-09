@@ -21,23 +21,23 @@ void kernel_main() {
     const auto p = get_arg(args::p);
     const bool p_is_negative = get_arg(args::p_is_negative) == 1;
 
-    constexpr uint32_t cb_x = dfb::x;
-    constexpr uint32_t cb_one = dfb::one;
-    constexpr uint32_t cb_decimal = dfb::decimal;
-    constexpr uint32_t cb_mask_w = dfb::mask_w;
-    constexpr uint32_t cb_y = dfb::y;
-    constexpr uint32_t cb_xabs = dfb::xabs;          // |x|
-    constexpr uint32_t cb_xpow = dfb::xpow;          // |x|^p
-    constexpr uint32_t cb_logx = dfb::logx;          // log(|x|)
-    constexpr uint32_t cb_exp_lxmd = dfb::exp_lxmd;  // exp(log(|x|) * decimal)
+    constexpr uint32_t dfb_x_id = dfb::x;
+    constexpr uint32_t dfb_one_id = dfb::one;
+    constexpr uint32_t dfb_decimal_id = dfb::decimal;
+    constexpr uint32_t dfb_mask_w_id = dfb::mask_w;
+    constexpr uint32_t dfb_y_id = dfb::y;
+    constexpr uint32_t dfb_xabs_id = dfb::xabs;          // |x|
+    constexpr uint32_t dfb_xpow_id = dfb::xpow;          // |x|^p
+    constexpr uint32_t dfb_logx_id = dfb::logx;          // log(|x|)
+    constexpr uint32_t dfb_exp_lxmd_id = dfb::exp_lxmd;  // exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
 
-    compute_kernel_hw_startup(cb_x, cb_x, cb_y);
+    compute_kernel_hw_startup(dfb_x_id, dfb_x_id, dfb_y_id);
 
-    DataflowBuffer dfb_one_obj(cb_one);
-    DataflowBuffer dfb_decimal_obj(cb_decimal);
-    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
+    DataflowBuffer dfb_one_obj(dfb_one_id);
+    DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
+    DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
 
     dfb_one_obj.wait_front(onetile);
     dfb_decimal_obj.wait_front(onetile);
@@ -54,12 +54,12 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::CopyTile<ckl::input(
-                    cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(
                     do_mask_w && (col_idx == Wt - 1),
                     ckl::CopyTile<
                         ckl::input(
-                            cb_mask_w,
+                            dfb_mask_w_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
@@ -69,9 +69,10 @@ void kernel_main() {
                     ckl::Mask<>{}),
                 ckl::Abs<>{},
                 ckl::PackTile<ckl::output(
-                    cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
-            power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y>(p, p_is_negative);
+            power_tile_to_dfb<dfb_xabs_id, dfb_xpow_id, dfb_logx_id, dfb_decimal_id, dfb_exp_lxmd_id, dfb_y_id>(
+                p, p_is_negative);
         }
     }
 

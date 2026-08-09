@@ -10,9 +10,9 @@
 void kernel_main() {
     using namespace compute_kernel_lib;
 
-    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t intermed_dfb_id = get_compile_time_arg_val(0);
 
-    compute_kernel_hw_startup(intermed_cb_id, intermed_cb_id);
+    compute_kernel_hw_startup(intermed_dfb_id, intermed_dfb_id);
 
     const uint32_t seed = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
@@ -27,5 +27,5 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(num_tiles),
         RandTile<Dst::D0>{rand_from, rand_scale.u, seed},
-        PackTile<output(intermed_cb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+        PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 }

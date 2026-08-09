@@ -15,11 +15,11 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
-    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_tmp_weight_id = tt::CBIndex::c_24;
+    constexpr uint32_t dfb_tmp_input_id = tt::CBIndex::c_25;
+    constexpr uint32_t dfb_divisor_id = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_divisor_recip_id = tt::CBIndex::c_27;
+    constexpr uint32_t dfb_output_id = tt::CBIndex::c_16;
     using D = ckl::Dst;
 
 #if defined(WEIGHT)
@@ -34,28 +34,28 @@ void kernel_main() {
     constexpr bool has_divisor = false;
 #endif
 
-    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
+    compute_kernel_hw_startup(dfb_tmp_weight_id, dfb_tmp_input_id, dfb_output_id);
 
     if constexpr (has_divisor) {
         ckl::unary<
             ckl::Recip<D::D0>,
-            ckl::input(cb_divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(cb_divisor_recip)>(ckl::EltwiseShape::single());
+            ckl::input(dfb_divisor_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb_divisor_recip_id)>(ckl::EltwiseShape::single());
     }
 
     constexpr auto weight_mul = ckl::OptionalChainElement<
         has_weight,
-        ckl::DestReuseBinary<ckl::input(cb_tmp_weight), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
+        ckl::DestReuseBinary<ckl::input(dfb_tmp_weight_id), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
 
     constexpr auto negate = ckl::Negative<D::D0>{};
-    constexpr auto pack_out = ckl::PackTile<ckl::output(cb_output)>{};
+    constexpr auto pack_out = ckl::PackTile<ckl::output(dfb_output_id)>{};
 
     if constexpr (has_divisor) {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(per_core_tile_cnt),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp_input),
-                ckl::input(cb_divisor_recip, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb_tmp_input_id),
+                ckl::input(dfb_divisor_recip_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar>{},
             negate,
@@ -64,7 +64,7 @@ void kernel_main() {
     } else {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(per_core_tile_cnt),
-            ckl::CopyTile<ckl::input(cb_tmp_input)>{},
+            ckl::CopyTile<ckl::input(dfb_tmp_input_id)>{},
             negate,
             weight_mul,
             pack_out);

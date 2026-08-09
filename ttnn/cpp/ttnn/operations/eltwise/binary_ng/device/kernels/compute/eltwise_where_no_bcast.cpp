@@ -28,9 +28,9 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    constexpr auto cb_cond = tt::CBIndex::c_0;
-    constexpr auto cb_tensor = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto dfb_cond_id = tt::CBIndex::c_0;
+    constexpr auto dfb_tensor_id = tt::CBIndex::c_1;
+    constexpr auto dfb_out_id = tt::CBIndex::c_2;
 
 #if WHERE_TTS
     constexpr auto kTensorSlot = ckl::Dst::D1;
@@ -40,17 +40,19 @@ void kernel_main() {
     constexpr auto kFillSlot = ckl::Dst::D1;
 #endif
 
-    compute_kernel_hw_startup(cb_cond, cb_tensor, cb_out);
+    compute_kernel_hw_startup(dfb_cond_id, dfb_tensor_id, dfb_out_id);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
-        // cond -> D0 (block read, init_short for cb_cond).
+        // cond -> D0 (block read, init_short for dfb_cond_id).
         ckl::CopyTile<
-            ckl::input(cb_cond, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_cond_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::Dst::D0>{},
-        // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
+        // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for dfb_tensor_id).
         ckl::CopyTile<
-            ckl::input(cb_tensor, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_tensor_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             kTensorSlot>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
@@ -58,7 +60,7 @@ void kernel_main() {
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            cb_out,
+            dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});

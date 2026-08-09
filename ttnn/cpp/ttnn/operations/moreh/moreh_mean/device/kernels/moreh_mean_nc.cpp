@@ -19,13 +19,13 @@ void kernel_main() {
     const auto num_input_tiles = get_arg(args::num_input_tiles);
     const auto num_output_tiles = get_arg(args::num_output_tiles);
 
-    constexpr auto cb_in0 = dfb::input;
-    constexpr auto cb_in1 = dfb::in1;
-    DataflowBuffer dfb_in1_obj(cb_in1);
-    constexpr auto cb_scalar = dfb::scalar;
-    DataflowBuffer dfb_scalar_obj(cb_scalar);
-    constexpr auto cb_out0 = dfb::out;
-    constexpr auto cb_intermed0 = dfb::intermed0;
+    constexpr auto dfb_in0_id = dfb::input;
+    constexpr auto dfb_in1_id = dfb::in1;
+    DataflowBuffer dfb_in1_obj(dfb_in1_id);
+    constexpr auto dfb_scalar_id = dfb::scalar;
+    DataflowBuffer dfb_scalar_obj(dfb_scalar_id);
+    constexpr auto dfb_out0_id = dfb::out;
+    constexpr auto dfb_intermed0_id = dfb::intermed0;
     constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(dfb::input, dfb::in1, dfb::out);
@@ -37,13 +37,13 @@ void kernel_main() {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             if (enable_reload) {
-                ckl::add<ckl::input(cb_in0), ckl::input(cb_intermed0), ckl::output(cb_intermed0)>(
+                ckl::add<ckl::input(dfb_in0_id), ckl::input(dfb_intermed0_id), ckl::output(dfb_intermed0_id)>(
                     ckl::EltwiseShape::tiles(onetile));
             } else {
                 ckl::add<
-                    ckl::input(cb_in0),
-                    ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::output(cb_intermed0),
+                    ckl::input(dfb_in0_id),
+                    ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(dfb_intermed0_id),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
             }
 
@@ -51,9 +51,9 @@ void kernel_main() {
         }
 
         ckl::mul<
-            ckl::input(cb_intermed0),
-            ckl::input(cb_scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(cb_out0),
+            ckl::input(dfb_intermed0_id),
+            ckl::input(dfb_scalar_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_out0_id),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }
 }

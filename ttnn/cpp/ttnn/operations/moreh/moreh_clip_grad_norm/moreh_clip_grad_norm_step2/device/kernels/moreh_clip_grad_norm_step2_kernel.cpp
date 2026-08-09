@@ -17,36 +17,36 @@ void kernel_main() {
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t cb_input = 0;
-    constexpr uint32_t cb_decimal = 1;
-    DataflowBuffer dfb_decimal_obj(cb_decimal);
+    constexpr uint32_t dfb_input_id = 0;
+    constexpr uint32_t dfb_decimal_id = 1;
+    DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
 
     // x^p * exp(log(x) * decimal)
-    constexpr uint32_t cb_y = 16;
+    constexpr uint32_t dfb_y_id = 16;
 
-    constexpr uint32_t cb_x = 24;
-    constexpr uint32_t cb_xpow = 25;
-    constexpr uint32_t cb_logx = 26;
-    constexpr uint32_t cb_exp_lxmd = 27;
+    constexpr uint32_t dfb_x_id = 24;
+    constexpr uint32_t dfb_xpow_id = 25;
+    constexpr uint32_t dfb_logx_id = 26;
+    constexpr uint32_t dfb_exp_lxmd_id = 27;
 
     constexpr uint32_t onetile = 1;
 
     if (num_tiles > 1) {
-        compute_kernel_hw_startup(cb_input, cb_x, cb_y);
+        compute_kernel_hw_startup(dfb_input_id, dfb_x_id, dfb_y_id);
     } else {
-        compute_kernel_hw_startup(cb_logx, cb_decimal, cb_y);
+        compute_kernel_hw_startup(dfb_logx_id, dfb_decimal_id, dfb_y_id);
     }
 
     dfb_decimal_obj.wait_front(onetile);
 
-    // Compute cb_x
+    // Compute dfb_x_id
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         if (tile_idx == 0) {
-            copy_tile_to_cb<cb_input, cb_x>();
+            copy_tile_to_dfb<dfb_input_id, dfb_x_id>();
         } else {
-            add_tiles_to_cb<cb_input, cb_x, cb_x>();
+            add_tiles_to_dfb<dfb_input_id, dfb_x_id, dfb_x_id>();
         }
     }
     // x^p
-    power_tile_to_cb<cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y>(p, p_is_negative);
+    power_tile_to_dfb<dfb_x_id, dfb_xpow_id, dfb_logx_id, dfb_decimal_id, dfb_exp_lxmd_id, dfb_y_id>(p, p_is_negative);
 }

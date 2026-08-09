@@ -17,49 +17,49 @@ namespace ckl = compute_kernel_lib;
 template <
     bool WeightHas,
     bool BiasHas,
-    uint32_t cb_bcast,
-    uint32_t cb_other,
-    uint32_t cb_batch_var,
-    uint32_t cb_eps,
-    uint32_t cb_den,
-    uint32_t cb_weight,
-    uint32_t cb_bias,
-    uint32_t cb_output_0>
+    uint32_t dfb_bcast_id,
+    uint32_t dfb_other_id,
+    uint32_t dfb_batch_var_id,
+    uint32_t dfb_eps_id,
+    uint32_t dfb_den_id,
+    uint32_t dfb_weight_id,
+    uint32_t dfb_bias_id,
+    uint32_t dfb_output_0_id>
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            ckl::input(cb_batch_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_batch_var_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::BinaryFpuOp::Add,
             ckl::BroadcastDim::None>{},
         ckl::Rsqrt<>{},
-        ckl::PackTile<ckl::output(cb_den)>{});
+        ckl::PackTile<ckl::output(dfb_den_id)>{});
 
     const uint32_t inner_count = freq - tile_start;
 
     constexpr auto sub_op = ckl::BinaryFpu<
-        ckl::input(cb_other),
-        ckl::input(cb_bcast, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+        ckl::input(dfb_other_id),
+        ckl::input(dfb_bcast_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::BinaryFpuOp::Sub,
         ckl::BroadcastDim::None>{};
     constexpr auto mul_den = ckl::DestReuseBinary<
-        input(cb_den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+        input(dfb_den_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::BinaryFpuOp::Mul,
         ckl::DestReuseType::DEST_TO_SRCA>{};
     constexpr auto mul_weight = ckl::OptionalChainElement<
         WeightHas,
         ckl::DestReuseBinary<
-            ckl::input(cb_weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(dfb_weight_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Mul,
             ckl::DestReuseType::DEST_TO_SRCA>>{};
     constexpr auto add_bias = ckl::OptionalChainElement<
         BiasHas,
         ckl::DestReuseBinary<
-            ckl::input(cb_bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(dfb_bias_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Add,
             ckl::DestReuseType::DEST_TO_SRCA>>{};
-    constexpr auto pack_out = ckl::PackTile<ckl::output(cb_output_0)>{};
+    constexpr auto pack_out = ckl::PackTile<ckl::output(dfb_output_0_id)>{};
 
     ckl::eltwise_chain(ckl::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
 }
@@ -75,48 +75,48 @@ void kernel_main() {
         return;
     }
 
-    constexpr auto cb_input = dfb::input;
-    constexpr auto cb_batch_mean = dfb::batch_mean;
-    constexpr auto cb_output_0 = dfb::out;
-    constexpr auto cb_batch_var = dfb::batch_var;
-    constexpr auto cb_eps = dfb::eps;
-    constexpr auto cb_den = dfb::den;
-    constexpr auto cb_weight = dfb::weight;
-    constexpr auto cb_bias = dfb::bias;
+    constexpr auto dfb_input_id = dfb::input;
+    constexpr auto dfb_batch_mean_id = dfb::batch_mean;
+    constexpr auto dfb_output_0_id = dfb::out;
+    constexpr auto dfb_batch_var_id = dfb::batch_var;
+    constexpr auto dfb_eps_id = dfb::eps;
+    constexpr auto dfb_den_id = dfb::den;
+    constexpr auto dfb_weight_id = dfb::weight;
+    constexpr auto dfb_bias_id = dfb::bias;
 
-    compute_kernel_hw_startup(cb_input, cb_batch_mean, cb_output_0);
+    compute_kernel_hw_startup(dfb_input_id, dfb_batch_mean_id, dfb_output_0_id);
 
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
-    DataflowBuffer(cb_eps).wait_front(1);
+    DataflowBuffer(dfb_eps_id).wait_front(1);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         batchnorm_bcast_tiles<
             weight_has_value,
             bias_has_value,
-            cb_batch_mean,
-            cb_input,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_output_0>(tile_freq, tile_start);
+            dfb_batch_mean_id,
+            dfb_input_id,
+            dfb_batch_var_id,
+            dfb_eps_id,
+            dfb_den_id,
+            dfb_weight_id,
+            dfb_bias_id,
+            dfb_output_0_id>(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
         batchnorm_bcast_tiles<
             weight_has_value,
             bias_has_value,
-            cb_batch_mean,
-            cb_input,
-            cb_batch_var,
-            cb_eps,
-            cb_den,
-            cb_weight,
-            cb_bias,
-            cb_output_0>(remaining_iterations, tile_start);
+            dfb_batch_mean_id,
+            dfb_input_id,
+            dfb_batch_var_id,
+            dfb_eps_id,
+            dfb_den_id,
+            dfb_weight_id,
+            dfb_bias_id,
+            dfb_output_0_id>(remaining_iterations, tile_start);
     }
 
-    DataflowBuffer(cb_eps).pop_front(1);
+    DataflowBuffer(dfb_eps_id).pop_front(1);
 }
