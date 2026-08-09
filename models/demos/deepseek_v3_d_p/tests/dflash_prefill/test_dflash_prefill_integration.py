@@ -226,10 +226,10 @@ def test_dflash_prefill_integration(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,  # real cache (pretrained) or None (random)
         lm_head_is_column_parallel=True,
-        # compressed_fp8_dispatch deliberately left at the bf16 default (NOT the resolver like the
-        # sibling prefill tests): this test's strict PCC bar against the HF verifier has not been
-        # re-validated with the e4m3 dispatch round-trip. Revisit once the fp8 hardware validation
-        # run has confirmed thresholds.
+        # PCC_THRESHOLD (0.999) has not been re-validated with the e4m3 dispatch round-trip in the
+        # verifier; if the fp8 run undershoots it, calibrate against a PREFILL_COMPRESSED_FP8_DISPATCH=0
+        # control run before touching the bar.
+        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
     )
     del verifier_state_dict
     gc.collect()

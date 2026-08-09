@@ -84,12 +84,6 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
-    # FP8 MoE dispatch: compress x to fp8_e4m3 before dispatch (per-token scales ride in the
-    # dispatch metadata tail) and decompress the dispatched buffer back to bf16 after. Blackhole
-    # only. Resolved via PrefillModelAdapter.resolve_compressed_fp8_dispatch() (default-on for validated
-    # models; PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch — the env var can only disable,
-    # never enable); never set this True directly for an unsupported model.
-    compressed_fp8_dispatch: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -137,12 +131,8 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
-    # Whether this model is validated for FP8 MoE dispatch (per_token_cast_to_fp8 compression of x
-    # around dispatch, scales in the metadata tail). Validated models run it BY DEFAULT on Blackhole;
-    # PREFILL_COMPRESSED_FP8_DISPATCH=0 is the kill switch (local debugging). The env var can only
-    # DISABLE — it never enables fp8 for a model that leaves this False. Subclasses inherit the
-    # claim; restate it in per-checkpoint subclasses so the validated set stays auditable. Resolve
-    # the effective value with resolve_compressed_fp8_dispatch().
+    # Model is validated for FP8 MoE dispatch: it runs by default on Blackhole, and
+    # PREFILL_COMPRESSED_FP8_DISPATCH=0 disables it. Read via resolve_compressed_fp8_dispatch().
     supports_compressed_fp8_dispatch: bool = False
 
     # =====================================================================
@@ -171,21 +161,13 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     def resolve_compressed_fp8_dispatch(self) -> bool:
-        """Effective FP8 MoE dispatch setting for this model on this machine.
+        """Effective FP8 MoE dispatch setting: ``supports_compressed_fp8_dispatch`` AND
+        Blackhole AND not killed via ``PREFILL_COMPRESSED_FP8_DISPATCH=0``.
 
-        Default TRUE for validated models on Blackhole: models that declare
-        ``supports_compressed_fp8_dispatch = True`` (DS/Kimi) run fp8 dispatch unless it is
-        explicitly killed. The env var is a KILL SWITCH ONLY — ``PREFILL_COMPRESSED_FP8_DISPATCH=0``
-        disables it (local debugging / bf16 comparison runs); it can never ENABLE fp8: an
-        unvalidated model (GLM) or non-Blackhole hardware always resolves False (the
-        per_token_cast fp8 ops are BH-only), and ``=1`` is a documented no-op kept only so a
-        stray export can't kill the feature (it logs a warning where it cannot enable anything).
-        Any other value logs a warning and is ignored. Shared by the prefill runner and the
-        direct pytest entry points (bh e2e / demo tests), which build the model without the
-        runner — so CI always exercises the fp8 path for validated models on Blackhole.
-
-        Under ``tt-run`` note that shell-exported ``PREFILL_*`` vars are NOT propagated to ranks —
-        set the kill switch via the manifest's ``env`` map or the binding's ``global_env`` instead
+        The env var can only disable — ``=1`` cannot enable fp8 on an unvalidated model or
+        non-BH hardware (the per_token_cast ops are BH-only); it logs a warning instead.
+        Shared by the runner and the direct pytest entry points. Under ``tt-run``, shell
+        exports don't reach ranks — set the kill switch via the manifest ``env`` map
         (see docs/ADDING_A_PREFILL_MODEL.md).
         """
         env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")

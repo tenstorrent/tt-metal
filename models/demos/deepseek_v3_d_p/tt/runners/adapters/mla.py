@@ -143,7 +143,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
-            compressed_fp8_dispatch=params.compressed_fp8_dispatch,
+            compressed_fp8_dispatch=self.resolve_compressed_fp8_dispatch(),
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

@@ -903,7 +903,6 @@ def main() -> None:
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
-        compressed_fp8_dispatch=ADAPTER.resolve_compressed_fp8_dispatch(),
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
