@@ -118,7 +118,7 @@ struct CollectedSpecData {
         // therefore requires exactly ONE binder kernel -- the case it exists for anyway.
         uint32_t binder_kernel_count = 0;
         // Set when ANOTHER kernel on this semaphore's node also binds a cached semaphore. The injected
-        // pool seeders rendezvous on ONE node-wide barrier slot (KERNEL_BARRIER_CACHED_SEM_INIT), so
+        // pool seeders rendezvous on ONE node-wide dedicated barrier (g_cached_sem_init_barrier), so
         // two co-resident cached-binder kernels mix rendezvous groups: unequal thread counts hang at
         // kernel entry, equal counts let a hart leave before its own seed store lands. The per-semaphore
         // binder_kernel_count==1 rule does NOT catch this (two DISTINCT semaphores, one kernel each).
