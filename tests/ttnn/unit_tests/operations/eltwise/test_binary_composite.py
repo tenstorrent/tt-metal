@@ -897,15 +897,11 @@ def test_unary_right_shift(input_shapes, device):
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
 
 
-# Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * up, with up optionally
-# softcapped by beta2. Kimi K3 uses beta1 4 (gate half) and beta2 25 (up half), with bf16 /
-# bfp8_b activations. Blackhole only, since it builds on the softcap SFPU op.
+# Kimi K3 betas: 4 for the gate half, 25 for the up half.
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
 
-# One case per intermediate-memory branch (hidden <= 3072 -> L1, hidden > 3072 -> DRAM);
-# the two also cover both dtypes. bfp8_b re-quantizes each intermediate, so it gets a looser
-# PCC and a wider overshoot margin than near-exact bf16.
+# One case per intermediate-memory branch, also covering both dtypes.
 SITU_GLU_CASES = [
     (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
     (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
@@ -924,8 +920,7 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
-    # Output placement must follow the input, not the (possibly L1) intermediates -- so it is
-    # the same on both the L1 and DRAM branches.
+    # Output placement follows the input, not the possibly-L1 intermediates.
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)

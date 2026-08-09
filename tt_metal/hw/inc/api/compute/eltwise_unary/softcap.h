@@ -19,10 +19,8 @@ namespace ckernel {
  * buffer must be in acquired state via *acquire_dst* call. This call is blocking
  * and is only available on the compute engine.
  *
- * This is the up half of Moonshot's SiTU activation. tanh is bounded by 1, so the
- * output is bounded by beta: the op saturates smoothly rather than truncating, staying
- * near-linear for |x| << beta and saturating at +/-beta. +/-Inf clamps to
- * +/-beta; NaN does not propagate and yields a finite result.
+ * The output is bounded by beta: near-linear for |x| << beta, saturating smoothly at
+ * +/-beta rather than truncating. +/-Inf clamps to +/-beta; NaN does not propagate.
  *
  * beta is passed as an fp32 bit pattern, with its reciprocal precomputed by the
  * caller so the kernel performs no division.
