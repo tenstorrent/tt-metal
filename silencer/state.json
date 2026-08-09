@@ -16,7 +16,8 @@
     "31197186569",
     "31229408018",
     "31249794076",
-    "31197332405"
+    "31197332405",
+    "31285846176"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -31,7 +32,8 @@
     "models-t3-unit-tests.yaml",
     "blackhole-sanity-tests.yaml",
     "vllm-model-tests.yaml",
-    "models-t1-unit-tests.yaml"
+    "models-t1-unit-tests.yaml",
+    "galaxy-demo-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -132,10 +134,16 @@
       "pattern": "neighbor_pad_async: Capped num_links... warning fires once per mesh coordinate/device with identical values (2880x in one job sample)",
       "status": "open-pr-just-created",
       "note": "New PR opened 2026-08-09 from models-t1-unit-tests run 31197332405 job 92943200808 (TT-DiT Wan2.2-I2V-A14B, wh_galaxy). Warn-once-per-distinct-tuple fix, mirrors #51894 pattern. Dispatched models-t1-unit-tests (model=wan-2.2-i2v) against the branch for validation; PR number not yet known from this sandbox (assigned by GitHub after safe-output apply) -- update on next run by matching branch name."
+    },
+    {
+      "branch": "silencer/deprecate-all-gather-legacy-args-in-sampling",
+      "pattern": "ttnn.all_gather deprecated num_links/topology/chunks_per_sync/... args warning (1376x in one job sample)",
+      "status": "open-pr-just-created",
+      "note": "New PR opened 2026-08-09 from galaxy-demo-tests run 31285846176 job 93177804513 (DeepSeek v3 demo test). models.common.sampling tt_sampling.py/tt_log_probs.py _perform_all_gather fallback (used when tt_ccl lacks line_all_gather) passed dead num_links/topology kwargs to ttnn.all_gather; both are unconditionally ignored by all_gather.cpp (falls through to composite/prim paths that don't read them). Removed from 4 call sites (common + llama32_1b_quasar fork duplicate). Dispatched galaxy-demo-tests (model=deepseek_v3) for validation. PR number not yet known from this sandbox -- update on next run by matching branch name."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed."
+    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed. | 2026-08-09: root-caused and fixed all_gather deprecated-args warning (1376x in DeepSeek v3 demo job sample, run 31285846176) via silencer/deprecate-all-gather-legacy-args-in-sampling. ~13 other production call sites (gpt_oss*, gemma4, minimax_m3, mistral_24b, llama3_70b_galaxy, z_image_turbo, sampling_1d.py) still pass these deprecated args -- candidates for a follow-up PR if this one is well received."
   }
 }
