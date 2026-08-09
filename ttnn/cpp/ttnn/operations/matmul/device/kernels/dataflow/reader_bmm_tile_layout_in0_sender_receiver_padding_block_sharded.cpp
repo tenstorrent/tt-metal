@@ -167,20 +167,9 @@ void kernel_main() {
                             }
                         }
 
-                        if constexpr (in0_mcast_args.active) {
-                            in0_sender_pipe.send(
-                                in0_tensor_read_addr, in0_tensor_local_l1_write_addr, in0_block_size_bytes);
-                        } else if constexpr (!extract_shard_sub_blocks) {
-                            UnicastEndpoint self_ep;
-                            noc.async_read(
-                                self_ep,
-                                CoreLocalMem<uint32_t>(in0_tensor_local_l1_write_addr),
-                                in0_block_size_bytes,
-                                {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = in0_tensor_read_addr},
-                                {});
-                            noc.async_read_barrier();
-                        }
-                    } else {
+                        in0_sender_pipe.send(
+                            in0_tensor_read_addr, in0_tensor_local_l1_write_addr, in0_block_size_bytes);
+                    } else if (in0_sender_pipe.core_in_receiver_rect()) {
                         in0_receiver_pipe.receive(block_id);
                     }
                     cb_in0.push_back(in0_block_num_tiles);

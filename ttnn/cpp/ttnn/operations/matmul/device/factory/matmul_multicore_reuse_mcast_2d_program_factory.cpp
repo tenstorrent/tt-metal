@@ -315,25 +315,43 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    const ttnn::kernel_lib::host::Mcast1D in0_mcast(
-        device,
-        CoreRangeSet(in0_block_sharded ? all_cores : all_cores_with_work),
-        transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
-                        : ttnn::kernel_lib::host::Mcast1DShape::PerRow,
-        /*starting_sender_index=*/0,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
-            .rotating_sender = in0_block_sharded,
-            .base_sem_id = 0});
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
+                                                 : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
+    std::vector<std::vector<CoreCoord>> in0_mcast_sender_lines;
+    if (in0_block_sharded) {
+        const uint32_t num_lines = transpose_mcast ? num_cores_with_work_c : num_cores_with_work_r;
+        in0_mcast_sender_lines.resize(num_lines);
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            auto& senders = in0_mcast_sender_lines[line];
+            senders.reserve(in0_sender_num_cores_along_width);
+            for (uint32_t sender = 0; sender < in0_sender_num_cores_along_width; ++sender) {
+                senders.push_back(
+                    transpose_mcast ? CoreCoord{start_core_x + line, start_core_y + sender}
+                                    : CoreCoord{start_core_x + sender, start_core_y + line});
+            }
+        }
+    }
+    const auto in0_mcast_config =
+        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .rotating_sender = in0_block_sharded, .base_sem_id = 0};
+    const ttnn::kernel_lib::host::Mcast1D in0_mcast =
+        in0_block_sharded
+            ? ttnn::kernel_lib::host::Mcast1D(
+                  device, CoreRangeSet(all_cores_with_work), in0_mcast_shape, in0_mcast_sender_lines, in0_mcast_config)
+            : ttnn::kernel_lib::host::Mcast1D(
+                  device,
+                  CoreRangeSet(all_cores_with_work),
+                  in0_mcast_shape,
+                  /*starting_sender_index=*/0,
+                  in0_mcast_config);
     const ttnn::kernel_lib::host::Mcast1D in1_mcast(
         device,
         CoreRangeSet(all_cores_with_work),
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         /*starting_sender_index=*/0,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-            .base_sem_id = in0_mcast.next_base_sem_id()});
+        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
@@ -418,9 +436,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             (std::uint32_t)out_num_blocks_x,
             (std::uint32_t)out_num_blocks_y,
         };
-        const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         in0_sender_compile_time_args.insert(
             in0_sender_compile_time_args.end(),
             {
@@ -437,6 +452,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 (std::uint32_t)false,  // get_batch_from_reader
             });
         in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
+        const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
@@ -580,7 +598,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
-    mm_kernel_in1_sender_writer_defines["MCAST_ARGS"] = "1";
     if (bias_mesh.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -612,7 +629,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
     }
-    mm_kernel_in0_sender_interleaved_defines["MCAST_ARGS"] = "1";
     if (in0_height_sharded) {
         mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
     }
@@ -672,8 +688,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     };
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
@@ -1169,18 +1183,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx};  // in0_tensor_start_tile_id
+                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
+                (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),
+                (std::uint32_t)0};  // sparsity_addr
             mm_in0_sender_args.insert(
                 mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
-            if (in0_idx == in0_end_idx) {
-                // padding args (READER)
-                mm_in0_sender_args.push_back(last_out_block_h);  // last_out_block_h
-            } else {
-                mm_in0_sender_args.push_back(out_block_h);
-            }
-
-            // sparsity args
-            mm_in0_sender_args.push_back(0);  // sparsity_addr
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -1765,16 +1772,36 @@ create_program_mcast_in0_in1(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    const ttnn::kernel_lib::host::Mcast1D in0_mcast(
-        device,
-        CoreRangeSet(in0_block_sharded ? all_cores : all_cores_with_work),
-        transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
-                        : ttnn::kernel_lib::host::Mcast1DShape::PerRow,
-        /*starting_sender_index=*/0,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
-            .rotating_sender = in0_block_sharded,
-            .base_sem_id = 0});
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
+                                                 : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
+    std::vector<std::vector<CoreCoord>> in0_mcast_sender_lines;
+    if (in0_block_sharded) {
+        const uint32_t num_lines = transpose_mcast ? num_cores_with_work_c : num_cores_with_work_r;
+        in0_mcast_sender_lines.resize(num_lines);
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            auto& senders = in0_mcast_sender_lines[line];
+            senders.reserve(in0_sender_num_cores_along_width);
+            for (uint32_t sender = 0; sender < in0_sender_num_cores_along_width; ++sender) {
+                senders.push_back(
+                    transpose_mcast ? CoreCoord{start_core_x + line, start_core_y + sender}
+                                    : CoreCoord{start_core_x + sender, start_core_y + line});
+            }
+        }
+    }
+    const auto in0_mcast_config =
+        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .rotating_sender = in0_block_sharded, .base_sem_id = 0};
+    const ttnn::kernel_lib::host::Mcast1D in0_mcast =
+        in0_block_sharded
+            ? ttnn::kernel_lib::host::Mcast1D(
+                  device, CoreRangeSet(all_cores_with_work), in0_mcast_shape, in0_mcast_sender_lines, in0_mcast_config)
+            : ttnn::kernel_lib::host::Mcast1D(
+                  device,
+                  CoreRangeSet(all_cores_with_work),
+                  in0_mcast_shape,
+                  /*starting_sender_index=*/0,
+                  in0_mcast_config);
     ttnn::kernel_lib::host::create_owned_semaphores(program, in0_mcast.owned_semaphores());
     const ttnn::kernel_lib::host::Mcast1D in1_mcast(
         device,
@@ -1782,9 +1809,7 @@ create_program_mcast_in0_in1(
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         /*starting_sender_index=*/0,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-            .base_sem_id = in0_mcast.next_base_sem_id()});
+        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
     ttnn::kernel_lib::host::create_owned_semaphores(program, in1_mcast.owned_semaphores());
 
     const uint32_t in1_mcast_runtime_arg_count = in1_mcast.runtime_args(CoreCoord{start_core_x, start_core_y}).size();
@@ -1880,9 +1905,6 @@ create_program_mcast_in0_in1(
             (std::uint32_t)out_num_blocks_x,
             (std::uint32_t)out_num_blocks_y,
         };
-        const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         in0_sender_compile_time_args.insert(
             in0_sender_compile_time_args.end(),
             {
@@ -1899,6 +1921,9 @@ create_program_mcast_in0_in1(
                 (std::uint32_t)false,  // get_batch_from_reader
             });
         in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
+        const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
+        in0_sender_compile_time_args.insert(
+            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
@@ -2042,7 +2067,6 @@ create_program_mcast_in0_in1(
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
-    mm_kernel_in1_sender_writer_defines["MCAST_ARGS"] = "1";
     if (bias_mesh.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -2074,7 +2098,6 @@ create_program_mcast_in0_in1(
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
     }
-    mm_kernel_in0_sender_interleaved_defines["MCAST_ARGS"] = "1";
     if (in0_height_sharded) {
         mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
     }
@@ -2124,8 +2147,6 @@ create_program_mcast_in0_in1(
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
@@ -2607,18 +2628,11 @@ create_program_mcast_in0_in1(
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx};  // in0_tensor_start_tile_id
+                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,                  // in0_tensor_start_tile_id
+                (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),  // last_block_h
+                (std::uint32_t)0};                                                         // sparsity_addr
             mm_in0_sender_args.insert(
                 mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
-            if (in0_idx == in0_end_idx) {
-                // padding args (READER)
-                mm_in0_sender_args.push_back(last_out_block_h);  // last_out_block_h
-            } else {
-                mm_in0_sender_args.push_back(out_block_h);
-            }
-
-            // sparsity args
-            mm_in0_sender_args.push_back(0);  // sparsity_addr
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);

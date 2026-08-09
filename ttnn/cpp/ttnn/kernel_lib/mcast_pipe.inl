@@ -225,16 +225,15 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     if (src_l1 == dst_l1) {
         return;  // src == dst: nothing to copy
     }
-    UnicastEndpoint src_ep, dst_ep;
+    UnicastEndpoint dst_ep;
     const uint32_t mx = my_x[NOC_ID];
     const uint32_t my = my_y[NOC_ID];
-    noc_.async_read(
-        src_ep,
+    noc_.async_write(
+        CoreLocalMem<uint32_t>(src_l1),
         dst_ep,
         size,
-        typename noc_traits_t<UnicastEndpoint>::src_args_type{mx, my, src_l1},
-        typename noc_traits_t<UnicastEndpoint>::dst_args_type{0, 0, dst_l1});
-    noc_.async_read_barrier();
+        {},
+        typename noc_traits_t<UnicastEndpoint>::dst_args_type{mx, my, dst_l1});
 }
 
 // =============================================================================

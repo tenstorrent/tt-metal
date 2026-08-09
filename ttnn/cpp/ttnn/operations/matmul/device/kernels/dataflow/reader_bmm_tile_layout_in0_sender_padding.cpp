@@ -19,33 +19,19 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
-#ifdef MCAST_ARGS
-    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<15, 2>();
+    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<24, 4>();
     constexpr uint32_t in0_post_mcast_ct_offset = in0_mcast_args.next_compile_time_args_offset();
     constexpr uint32_t in0_post_mcast_rt_offset = in0_mcast_args.next_runtime_args_offset();
-#else
-    constexpr uint32_t in0_post_mcast_ct_offset = 19;
-    constexpr uint32_t in0_post_mcast_rt_offset = 6;
-#endif
 
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
-#ifdef MCAST_ARGS
-    rt_args_idx = in0_post_mcast_rt_offset;
-#else
-    // Legacy in0 mcast args used by the non-multicast and sharded bindings.
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
-#endif
-
     // padding args
     const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    rt_args_idx = in0_post_mcast_rt_offset;
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -67,38 +53,43 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(12);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
-#ifndef MCAST_ARGS
-    // Legacy in0 mcast args used by the non-multicast and sharded bindings.
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
-#endif
     // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(in0_post_mcast_ct_offset);  // if 0
-    constexpr uint32_t in0_B = get_compile_time_arg_val(in0_post_mcast_ct_offset + 1);
-    constexpr uint32_t in1_B = get_compile_time_arg_val(in0_post_mcast_ct_offset + 2);
-    constexpr uint32_t in0_reuse_in_CB = get_compile_time_arg_val(in0_post_mcast_ct_offset + 3);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(15);  // if 0
+    constexpr uint32_t in0_B = get_compile_time_arg_val(16);
+    constexpr uint32_t in1_B = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_reuse_in_CB = get_compile_time_arg_val(18);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(in0_post_mcast_ct_offset + 4);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(in0_post_mcast_ct_offset + 5);
+    constexpr uint32_t batchB = get_compile_time_arg_val(19);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(20);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(in0_post_mcast_ct_offset + 6);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(21);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(in0_post_mcast_ct_offset + 7);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(22);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(in0_post_mcast_ct_offset + 8);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(23);
 
-    constexpr auto in0_args = TensorAccessorArgs<in0_post_mcast_ct_offset + 9>();
+    constexpr auto in0_args = TensorAccessorArgs<in0_post_mcast_ct_offset>();
 
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
-    // Validate the runtime nonzero count against the receiver/compute loop bound (issue #45943).
+    // Number of valid (non-zero sparsity) batches the receiver and compute kernels are configured to
+    // process. When nnz is supplied (get_batch_from_reader == false), those kernels loop exactly
+    // num_batch_compute times, while this sender only multicasts once per non-zero sparsity entry, i.e.
+    // count_nonzero(sparsity) times. The op silently requires count_nonzero(sparsity) == num_batch_compute;
+    // if they disagree, the receivers wait on multicasts that never come (or the sender waits on receivers
+    // that already finished) and the device deadlocks. count_nonzero(sparsity) is data-dependent and only
+    // known here at runtime, so we validate it on-device by counting the multicasts we actually issue and
+    // asserting the contract holds -- surfacing a loud assert (under watcher) instead of a silent hang.
+    // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
         get_compile_time_arg_val(sparsity_args.next_compile_time_args_offset());
 
-    // The flag channel carries INVALID(0), VALID(1), or IGNORE_BATCH(2).
+    // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
+    // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
+    // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
     constexpr uint32_t IGNORE_BATCH = 0x2;
 
     // When sparsity is disabled, we just loop once
@@ -116,7 +107,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    // Interleaved CB pages use the DRAM-aligned tile stride; sharded pages keep the natural stride.
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
+    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
+    // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
+    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
     constexpr uint32_t in0_aligned_tile_size_bytes =
         (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
 #ifdef IN0_SHARDED
@@ -127,10 +121,6 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
-#ifndef MCAST_ARGS
-    Semaphore<> sender_sem(get_compile_time_arg_val(15));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(16));
-#endif
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
@@ -158,11 +148,7 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-#ifdef MCAST_ARGS
     auto in0_pipe = in0_mcast_args.sender(noc);
-#else
-    receiver_sem.set(VALID);
-#endif
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = cb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
@@ -174,7 +160,8 @@ void kernel_main() {
         l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
 
-    // Count the data multicasts issued for the nnz contract.
+    // Counts the in0 multicasts actually issued (one per non-zero sparsity entry). Used to validate
+    // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
@@ -190,23 +177,7 @@ void kernel_main() {
 
                 if constexpr (get_batch_from_reader) {
 #ifndef SKIP_MCAST
-#ifdef MCAST_ARGS
                     in0_pipe.send_signal(is_batch_valid ? VALID : IGNORE_BATCH);
-#else
-                    sender_sem.wait(in0_mcast_num_dests);
-                    sender_sem.set(0);
-                    receiver_sem.set(is_batch_valid ? VALID : IGNORE_BATCH);
-                    receiver_sem.set_multicast(
-                        noc,
-                        in0_mcast_dest_noc_start_x,
-                        in0_mcast_dest_noc_start_y,
-                        in0_mcast_dest_noc_end_x,
-                        in0_mcast_dest_noc_end_y,
-                        in0_mcast_num_cores);
-                    noc.async_writes_flushed();
-                    // Reset the semaphore value to VALID
-                    receiver_sem.set(VALID);
-#endif
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
@@ -222,7 +193,9 @@ void kernel_main() {
                     continue;
                 }
 
-                // Catch excess nonzero batches before the sender can wait on finished receivers.
+                // This is a valid (non-zero) batch that we are about to multicast. When nnz was supplied,
+                // catch count_nonzero(sparsity) > num_batch_compute here, before the sender blocks below
+                // waiting on receivers that have already finished their num_batch_compute iterations.
                 if constexpr (!get_batch_from_reader) {
                     ++num_valid_batches;
                     ASSERT(num_valid_batches <= num_batch_compute);
@@ -351,38 +324,7 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
 #ifndef SKIP_MCAST
-#ifdef MCAST_ARGS
                         in0_pipe.send(in0_start_address, in0_start_address, in0_block_size_bytes);
-#else
-                        sender_sem.wait(in0_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        MulticastEndpoint mcast_dst;
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(in0_start_address),
-                            mcast_dst,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in0_mcast_dest_noc_start_x,
-                             .noc_y_start = in0_mcast_dest_noc_start_y,
-                             .noc_x_end = in0_mcast_dest_noc_end_x,
-                             .noc_y_end = in0_mcast_dest_noc_end_y,
-                             .addr = in0_start_address},
-                            true);
-
-#ifdef ARCH_BLACKHOLE
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        receiver_sem.set_multicast(
-                            noc,
-                            in0_mcast_dest_noc_start_x,
-                            in0_mcast_dest_noc_start_y,
-                            in0_mcast_dest_noc_end_x,
-                            in0_mcast_dest_noc_end_y,
-                            in0_mcast_num_cores);
-#endif
 #endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths
@@ -404,7 +346,11 @@ void kernel_main() {
             in0_tensor_start_tile_id += MtKt;
         }
 
-        // Re-publish a batch-broadcast activation already resident in L1.
+        // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
+        // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
+        // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
+        // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
+        // CB so compute kernel thinks it has new data
         if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
@@ -416,11 +362,15 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 
-    // Catch too few nonzero batches after all possible multicasts have been issued.
+    // When nnz was supplied, the receiver and compute kernels loop exactly num_batch_compute times.
+    // If we issued fewer multicasts than that (count_nonzero(sparsity) < num_batch_compute), those
+    // kernels are now waiting on multicasts that will never arrive and the device would deadlock.
+    // Fail loudly instead. See https://github.com/tenstorrent/tt-metal/issues/45943.
     if constexpr (!get_batch_from_reader && batchB > 0) {
         ASSERT(num_valid_batches == num_batch_compute);
     }
 
+    // For completeness, we empty the sparsity CB if it was reserved earlier
     if constexpr (batchB > 0) {
         cb_sparsity.push_back(1);
         cb_sparsity.wait_front(1);

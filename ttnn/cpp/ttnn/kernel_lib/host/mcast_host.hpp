@@ -22,10 +22,10 @@
 //   * FIXED sender (default): one core on the line broadcasts to the rest. The fixed sender placement
 //     may be uniform (the same axis index on every line) or diagonal (the index advances by one per
 //     line). An interior sender targets the full line and the kernel pipe excludes the source.
-//   * ROTATING sender (`config.rotating_sender`): the sender role walks the whole line — over `span`
-//     rounds every core takes a turn broadcasting to the other `span-1`. Each core therefore acts
-//     as BOTH faces of the channel, so its runtime args carry its own dest rect AND the ordered
-//     coords of every sender (one per round), which the receiver indexes by round.
+//   * ROTATING sender (`config.rotating_sender`): the sender role follows an ordered sequence over
+//     `span` rounds. The default sequence is every core on the receiver line. An overload accepts an
+//     independent ordered sequence whose senders may extend beyond that line while the receiver
+//     rectangle stays fixed.
 //
 // This header is HOST-ONLY (no dataflow_api.h). It shares the *wire* with mcast_pipe.hpp — the CT + RT
 // layout the one McastArgs<CT_BASE, RT_BASE> decoder self-parses — so the two version in
@@ -93,9 +93,9 @@ struct McastConfig {
     // semaphore). true = handshaked (default); false = fire-and-forget broadcast, no consumer_ready.
     bool handshake = true;
     DataReadyMode data_ready = DataReadyMode::Flag;
-    // Rotating sender: the sender role walks the line over `span` rounds; every core is a sender once
-    // and a receiver span-1 times. When set, the fixed sender placement is ignored (there is no single
-    // sender) and runtime_args() emits the rotating layout.
+    // Rotating sender: the sender role follows an ordered sequence over `span` rounds. By default the
+    // sequence is the receiver line/rectangle; independent-sender overloads provide it explicitly.
+    // When set, the fixed sender placement is ignored and runtime_args() emits the rotating layout.
     bool rotating_sender = false;
     // Semaphore ids the helper assigns, starting here (data_ready = base, consumer_ready = base+1).
     // Two independent families on one grid pass base 0 and base 2. Ignored when `sem_ids` adopts.
@@ -208,6 +208,7 @@ public:
 
         // The broadcast extent along the mcast axis; >1 => the family actually multicasts.
         span_ = (shape_ == Mcast1DShape::PerRow) ? GC_ : GR_;
+        receiver_span_ = span_;
         active_ = span_ > 1;
 
         // Diagonal is a FIXED-sender placement; combining it with rotating sender is contradictory.
@@ -239,6 +240,89 @@ public:
             owns_sems_ = true;
         }
         grid_ = grid;
+        receiver_grid_ = grid;
+    }
+
+    // Rotating line families whose ordered sender set is independent of the receiver lines. The
+    // outer vector is one entry per receiver line (row for PerRow, column for PerColumn); every
+    // inner vector is the sender order for that line and must have the same non-zero size.
+    Mcast1D(
+        tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& receiver_grid,
+        Mcast1DShape shape,
+        const std::vector<std::vector<tt::tt_metal::CoreCoord>>& rotating_senders,
+        const McastConfig& cfg) :
+        device_(device), shape_(shape), starting_sender_index_(0), cfg_(cfg), independent_rotating_senders_(true) {
+        TT_FATAL(device_ != nullptr, "Mcast1D: device must not be null");
+        TT_FATAL(cfg_.rotating_sender, "Mcast1D: an independent sender set requires rotating_sender=true");
+
+        const auto bb = receiver_grid.bounding_box();
+        TT_FATAL(
+            receiver_grid.num_cores() == bb.size(),
+            "Mcast1D: receiver grid must be one dense rectangle (bounding box has {} cores, set has {})",
+            bb.size(),
+            receiver_grid.num_cores());
+        origin_x_ = static_cast<uint32_t>(bb.start_coord.x);
+        origin_y_ = static_cast<uint32_t>(bb.start_coord.y);
+        GC_ = static_cast<uint32_t>(bb.end_coord.x - bb.start_coord.x) + 1;
+        GR_ = static_cast<uint32_t>(bb.end_coord.y - bb.start_coord.y) + 1;
+        receiver_span_ = (shape_ == Mcast1DShape::PerRow) ? GC_ : GR_;
+
+        const uint32_t num_lines = (shape_ == Mcast1DShape::PerRow) ? GR_ : GC_;
+        TT_FATAL(
+            rotating_senders.size() == num_lines,
+            "Mcast1D: expected {} rotating sender lines, got {}",
+            num_lines,
+            rotating_senders.size());
+        TT_FATAL(
+            !rotating_senders.empty() && !rotating_senders.front().empty(), "Mcast1D: sender lines must not be empty");
+
+        span_ = rotating_senders.front().size();
+        sender_lines_ = rotating_senders;
+        std::vector<tt::tt_metal::CoreRange> participating_ranges = receiver_grid.ranges();
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            TT_FATAL(
+                sender_lines_[line].size() == span_,
+                "Mcast1D: sender line {} has {} rounds; expected {}",
+                line,
+                sender_lines_[line].size(),
+                span_);
+            std::vector<tt::tt_metal::CoreCoord> seen;
+            seen.reserve(span_);
+            for (const auto& sender : sender_lines_[line]) {
+                const bool on_line = (shape_ == Mcast1DShape::PerRow)
+                                         ? static_cast<uint32_t>(sender.y) == origin_y_ + line
+                                         : static_cast<uint32_t>(sender.x) == origin_x_ + line;
+                TT_FATAL(on_line, "Mcast1D: sender ({},{}) is not on receiver line {}", sender.x, sender.y, line);
+                TT_FATAL(
+                    std::find(seen.begin(), seen.end(), sender) == seen.end(),
+                    "Mcast1D: duplicate sender ({},{}) on line {}",
+                    sender.x,
+                    sender.y,
+                    line);
+                seen.push_back(sender);
+                const bool sender_in_receiver_line = bb.contains(sender);
+                if (!sender_in_receiver_line) {
+                    participating_ranges.emplace_back(sender, sender);
+                }
+                active_ = active_ || receiver_span_ > (sender_in_receiver_line ? 1u : 0u);
+            }
+        }
+
+        receiver_grid_ = receiver_grid;
+        grid_ = tt::tt_metal::CoreRangeSet(std::move(participating_ranges));
+
+        if (cfg_.sem_ids.has_value()) {
+            const auto& ids = *cfg_.sem_ids;
+            TT_FATAL(!ids.empty(), "Mcast1D: adopted sem_ids must contain at least the data_ready id");
+            data_ready_id_ = ids[0];
+            consumer_ready_id_ = cfg_.handshake ? (ids.size() > 1 ? ids[1] : UNUSED_SEM_ID) : UNUSED_SEM_ID;
+            owns_sems_ = false;
+        } else {
+            data_ready_id_ = cfg_.base_sem_id;
+            consumer_ready_id_ = cfg_.handshake ? (cfg_.base_sem_id + 1) : UNUSED_SEM_ID;
+            owns_sems_ = true;
+        }
     }
 
     // ---- args (the wire) -----------------------------------------------------
@@ -268,9 +352,10 @@ public:
     // McastArgs<CT, RT> self-parses:
     // [active, data_ready, consumer_ready, num_active, flags, rotating_span].
     // `consumer_ready` is UNUSED_SEM_ID with no handshake; `num_active` is the sender's ack wait-count
-    // (the dense EXCLUDE fan-out span-1); `flags` carries pre_handshake + the data-ready signal (see
-    // detail::mcast_flags). rotating_span is zero for fixed mode and the line span for rotating mode,
-    // making the CT wire the only source of truth for the RT layout and receiver type.
+    // (or ACK_EQUALS_FANOUT for an independent sequence containing both inside and outside senders);
+    // `flags` carries pre_handshake + the data-ready signal (see detail::mcast_flags). rotating_span
+    // is zero for fixed mode and the sender count for rotating mode, making the CT wire the only source
+    // of truth for the RT layout and receiver type.
     //
     // `pre_handshake` overrides the flags word's pre_handshake bit for THIS emission only (the sems and
     // geometry are unchanged) — one semantic mcast whose faces pick their own handshake per kernel: a
@@ -286,9 +371,10 @@ public:
             cfg_.rotating_sender ? span_ : 0u};
     }
 
-    // Sender's handshake ACK wait-count on the wire. Mcast1D is always dense, so this is the EXCLUDE
-    // fan-out (the other span-1 cores on the line); 0 for a degenerate/inactive line.
-    uint32_t num_active() const { return active_ ? (span_ - 1u) : 0u; }
+    // Sender's handshake ACK policy on the wire. The default line family uses its dense EXCLUDE
+    // fan-out. Independent sequences use ACK_EQUALS_FANOUT because inside and outside senders have
+    // different dense fan-outs for the same receiver line.
+    uint32_t num_active() const { return independent_rotating_senders_ ? 0xFFFFFFFFu : (active_ ? (span_ - 1u) : 0u); }
 
     // Per-core runtime args. FIXED: 4 words (sender rect | receiver sender-coords). ROTATING:
     // 4 + 2*span words (full-line rect, then one sender coord pair per round). See file header.
@@ -313,6 +399,14 @@ public:
     bool is_sender(const tt::tt_metal::CoreCoord& core) const {
         // Rotating: every core on the axis takes a sender turn, so every active core "is a sender".
         if (cfg_.rotating_sender) {
+            if (independent_rotating_senders_) {
+                for (const auto& line : sender_lines_) {
+                    if (std::find(line.begin(), line.end(), core) != line.end()) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             return active_;
         }
         const uint32_t sender_index = sender_index_for_(core);
@@ -327,6 +421,12 @@ public:
             return 0;
         }
         if (cfg_.rotating_sender) {
+            if (independent_rotating_senders_) {
+                if (!is_sender(core)) {
+                    return 0;
+                }
+                return receiver_span_ - (receiver_grid_.bounding_box().contains(core) ? 1u : 0u);
+            }
             return span_ - 1;
         }
         return is_sender(core) ? (span_ - 1) : 0;
@@ -415,6 +515,21 @@ private:
     // coords, one per round. Line-uniform (identical for every core on the same line); every core
     // reads its own rect for its sender round and indexes the coord list by round when receiving.
     std::vector<uint32_t> rotating_rt_(const tt::tt_metal::CoreCoord& core) const {
+        if (independent_rotating_senders_) {
+            const uint32_t line = line_index_(core);
+            std::vector<std::pair<uint32_t, uint32_t>> receiver_coords;
+            receiver_coords.reserve(receiver_span_);
+            for (uint32_t i = 0; i < receiver_span_; ++i) {
+                receiver_coords.push_back(virt_(line_coord_(core, i)));
+            }
+            std::vector<uint32_t> out = noc_ordered_bbox_(receiver_coords);
+            for (const auto& sender : sender_lines_[line]) {
+                const auto coord = virt_(sender);
+                out.push_back(coord.first);
+                out.push_back(coord.second);
+            }
+            return out;
+        }
         std::vector<std::pair<uint32_t, uint32_t>> coords;
         coords.reserve(span_);
         for (uint32_t i = 0; i < span_; ++i) {
@@ -431,6 +546,7 @@ private:
 
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::CoreRangeSet grid_;
+    tt::tt_metal::CoreRangeSet receiver_grid_;
     Mcast1DShape shape_;
     uint32_t starting_sender_index_;
     Mcast1DSenderPlacement sender_placement_;
@@ -440,6 +556,9 @@ private:
     uint32_t GR_ = 1;
     uint32_t GC_ = 1;
     uint32_t span_ = 1;  // cores on the broadcast axis
+    uint32_t receiver_span_ = 1;
+    bool independent_rotating_senders_ = false;
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_;
     bool active_ = false;
     bool owns_sems_ = true;
     uint32_t data_ready_id_ = 0;
@@ -456,8 +575,9 @@ private:
 //   * sender IN rect ("fully inside"): the rect includes the sender, so the wire carries the rect
 //     verbatim and the kernel's SenderPipe auto-excludes the sender (in_rect_ => EXCLUDE_SRC).
 //     Fan-out = area - 1. ROTATING is allowed here (every core in the rect takes a sender turn).
-//   * sender SEPARATE (outside rect): every core in the rect is a receiver, fan-out = area.
-//     FIXED only — rotation would need the sender to be a member of the set it broadcasts to.
+//   * sender SEPARATE (outside rect): every core in the rect is a receiver, fan-out = area. The fixed
+//     constructor accepts one outside sender. The independent rotating overload accepts an ordered
+//     sender sequence containing any mix of inside and outside senders without widening the rect.
 //
 // num_active is the sender's handshake ACK wait-count (how many receivers actually ack): the dense
 // default (ctor arg 0) is the whole fan-out, a divergent caller (mcast box holds noop cores that
@@ -467,11 +587,11 @@ private:
 //
 //   CT (6 words): [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags, rotating_span ]
 //                 flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
-//                 rotating_span = 0 fixed; rectangle area when rotating
+//                 rotating_span = 0 fixed; ordered sender count when rotating
 //   RT, FIXED (4 words):    sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
 //                           receiver -> [ sender_x, sender_y, 0, 0 ]
 //                           degenerate (single-core rect, no receivers) -> [ 0, 0, 0, 0 ]
-//   RT, ROTATING (4 + 2*area words):
+//   RT, ROTATING (4 + 2*sender_count words):
 //                           every core -> [ rect_x0, rect_y0, rect_x1, rect_y1,     (full-rect rect)
 //                                           s0_x, s0_y, ... ]  (sender coords, row-major over the rect)
 //
@@ -548,6 +668,62 @@ public:
         }
     }
 
+    // Rotating senders independent of the fixed receiver rectangle. The vector order is the round
+    // order carried on the existing rotating RT wire. Dense handshakes use the device-side fan-out
+    // sentinel because inside senders wait for area-1 ACKs while outside senders wait for area ACKs.
+    Mcast2D(
+        tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& mcast_rect,
+        const std::vector<tt::tt_metal::CoreCoord>& rotating_senders,
+        const McastConfig& cfg) :
+        device_(device), cfg_(cfg), independent_rotating_senders_(true), senders_(rotating_senders) {
+        TT_FATAL(device_ != nullptr, "Mcast2D: device must not be null");
+        TT_FATAL(cfg_.rotating_sender, "Mcast2D: an independent sender set requires rotating_sender=true");
+        TT_FATAL(!senders_.empty(), "Mcast2D: rotating sender set must not be empty");
+
+        const auto bb = mcast_rect.bounding_box();
+        TT_FATAL(
+            mcast_rect.num_cores() == bb.size(),
+            "Mcast2D: receiver set must be one dense rectangle (bounding box has {} cores, set has {})",
+            bb.size(),
+            mcast_rect.num_cores());
+        rx0_ = static_cast<uint32_t>(bb.start_coord.x);
+        ry0_ = static_cast<uint32_t>(bb.start_coord.y);
+        rx1_ = static_cast<uint32_t>(bb.end_coord.x);
+        ry1_ = static_cast<uint32_t>(bb.end_coord.y);
+        area_ = (rx1_ - rx0_ + 1) * (ry1_ - ry0_ + 1);
+
+        std::vector<tt::tt_metal::CoreRange> participating_ranges = mcast_rect.ranges();
+        for (std::size_t i = 0; i < senders_.size(); ++i) {
+            TT_FATAL(
+                std::find(senders_.begin(), senders_.begin() + i, senders_[i]) == senders_.begin() + i,
+                "Mcast2D: duplicate rotating sender ({},{})",
+                senders_[i].x,
+                senders_[i].y);
+            const bool sender_in_rect = in_rect_(senders_[i]);
+            if (!sender_in_rect) {
+                participating_ranges.emplace_back(senders_[i], senders_[i]);
+            }
+            active_ = active_ || area_ > (sender_in_rect ? 1u : 0u);
+        }
+        sender_ = senders_.front();
+        sender_in_rect_ = in_rect_(sender_);
+        participating_ = tt::tt_metal::CoreRangeSet(std::move(participating_ranges));
+        ack_count_ = 0xFFFFFFFFu;
+
+        if (cfg_.sem_ids.has_value()) {
+            const auto& ids = *cfg_.sem_ids;
+            TT_FATAL(!ids.empty(), "Mcast2D: adopted sem_ids must contain at least the data_ready id");
+            data_ready_id_ = ids[0];
+            consumer_ready_id_ = cfg_.handshake ? (ids.size() > 1 ? ids[1] : UNUSED_SEM_ID) : UNUSED_SEM_ID;
+            owns_sems_ = false;
+        } else {
+            data_ready_id_ = cfg_.base_sem_id;
+            consumer_ready_id_ = cfg_.handshake ? (cfg_.base_sem_id + 1) : UNUSED_SEM_ID;
+            owns_sems_ = true;
+        }
+    }
+
     // ---- args (the wire) -----------------------------------------------------
 
     // The semaphores THIS helper created, placed on the participating set (rect, or rect ∪ {sender}).
@@ -580,11 +756,11 @@ public:
             consumer_ready_id_,
             ack_count_,
             detail::mcast_flags(cfg_, pre_handshake),
-            cfg_.rotating_sender ? area_ : 0u};
+            cfg_.rotating_sender ? num_senders() : 0u};
     }
 
     // Per-core runtime args. FIXED: 4 words (sender rect | receiver sender-coords).
-    // ROTATING: 4 + 2*area words (full-rect rect, then one sender coord pair per round). See header.
+    // ROTATING: 4 + 2*sender_count words (full rect, then one sender coord pair per round). See header.
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const {
         if (cfg_.rotating_sender) {
             return rotating_rt_();
@@ -606,6 +782,9 @@ public:
     bool is_sender(const tt::tt_metal::CoreCoord& core) const {
         // Rotating: every core in the rect takes a sender turn, so every active rect core "is a sender".
         if (cfg_.rotating_sender) {
+            if (independent_rotating_senders_) {
+                return std::find(senders_.begin(), senders_.end(), core) != senders_.end();
+            }
             return active_ && in_rect_(core);
         }
         return core == sender_;
@@ -619,6 +798,9 @@ public:
         }
         const uint32_t receivers = sender_in_rect_ ? (area_ - 1) : area_;
         if (cfg_.rotating_sender) {
+            if (independent_rotating_senders_) {
+                return is_sender(core) ? area_ - (in_rect_(core) ? 1u : 0u) : 0u;
+            }
             return receivers;
         }
         return is_sender(core) ? receivers : 0;
@@ -628,7 +810,9 @@ public:
     uint32_t num_active() const { return ack_count_; }
 
     // Rounds the sender role rotates through = cores in the rect (1 in fixed mode).
-    uint32_t num_senders() const { return cfg_.rotating_sender ? area_ : 1u; }
+    uint32_t num_senders() const {
+        return cfg_.rotating_sender ? (independent_rotating_senders_ ? senders_.size() : area_) : 1u;
+    }
 
     bool active() const { return active_; }
 
@@ -670,14 +854,22 @@ private:
     // two diagonal corners) so it stays correct under non-monotonic Blackhole virtualization.
     std::vector<uint32_t> rect_corners_() const { return detail::noc_ordered_bbox(cfg_.noc, rect_virt_coords_()); }
 
-    // ROTATING runtime block: the full-rect dest rect followed by the ordered per-round sender coords
-    // (row-major over the rect). Uniform for every core in the rect; each reads its own rect on its
-    // sender round and indexes the coord list by round when receiving.
+    // ROTATING runtime block: the full-rect destination followed by the ordered per-round sender
+    // coordinates. The default order is row-major over the rect; the independent overload preserves
+    // its explicit sequence. Every participant receives the same block and indexes it by round.
     std::vector<uint32_t> rotating_rt_() const {
-        const auto coords = rect_virt_coords_();
+        const auto rect_coords = rect_virt_coords_();
         // True rect corners (the 1x1 self-rect too, if area==1) — same reasoning as the fixed path.
-        std::vector<uint32_t> out = detail::noc_ordered_bbox(cfg_.noc, coords);
-        for (const auto& c : coords) {
+        std::vector<uint32_t> out = detail::noc_ordered_bbox(cfg_.noc, rect_coords);
+        if (independent_rotating_senders_) {
+            for (const auto& sender : senders_) {
+                const auto c = detail::virt_coord(device_, sender);
+                out.push_back(c.first);
+                out.push_back(c.second);
+            }
+            return out;
+        }
+        for (const auto& c : rect_coords) {
             out.push_back(c.first);
             out.push_back(c.second);
         }
@@ -690,6 +882,8 @@ private:
     McastConfig cfg_;
     uint32_t rx0_ = 0, ry0_ = 0, rx1_ = 0, ry1_ = 0;
     uint32_t area_ = 1;
+    bool independent_rotating_senders_ = false;
+    std::vector<tt::tt_metal::CoreCoord> senders_;
     bool sender_in_rect_ = true;
     bool active_ = false;
     bool owns_sems_ = true;

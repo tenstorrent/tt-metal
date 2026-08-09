@@ -109,6 +109,21 @@ void py_module(nb::module_& mod) {
             nb::arg("sender_placement"),
             nb::arg("config") = kh::McastConfig{})
         .def(
+            "__init__",
+            [](kh::Mcast1D* self,
+               MeshDevice* device,
+               const CoreRangeSet& receiver_grid,
+               kh::Mcast1DShape shape,
+               const std::vector<std::vector<CoreCoord>>& rotating_senders,
+               const kh::McastConfig& config) {
+                new (self) kh::Mcast1D(device, receiver_grid, shape, rotating_senders, config);
+            },
+            nb::arg("device"),
+            nb::arg("receiver_grid"),
+            nb::arg("shape"),
+            nb::arg("rotating_senders"),
+            nb::arg("config") = kh::McastConfig{})
+        .def(
             "owned_semaphores",
             &kh::Mcast1D::owned_semaphores,
             R"doc(The SemaphoreDescriptors this helper created, for the factory to add (empty if sem_ids were adopted).)doc")
@@ -159,6 +174,17 @@ void py_module(nb::module_& mod) {
             nb::arg("sender"),
             nb::arg("config") = kh::McastConfig{},
             nb::arg("num_active") = 0)
+        .def(
+            "__init__",
+            [](kh::Mcast2D* self,
+               MeshDevice* device,
+               const CoreRangeSet& mcast_rect,
+               const std::vector<CoreCoord>& rotating_senders,
+               const kh::McastConfig& config) { new (self) kh::Mcast2D(device, mcast_rect, rotating_senders, config); },
+            nb::arg("device"),
+            nb::arg("mcast_rect"),
+            nb::arg("rotating_senders"),
+            nb::arg("config") = kh::McastConfig{})
         .def(
             "owned_semaphores",
             &kh::Mcast2D::owned_semaphores,
