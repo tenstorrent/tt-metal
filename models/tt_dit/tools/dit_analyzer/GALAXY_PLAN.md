@@ -86,23 +86,38 @@ column.
 | submesh 4×1, 12×10 (real behaviour) | 4 | 3152 µs | 1298 µs | **4450 µs** |
 
 **Outputs are bit-for-bit identical** to the full-mesh SP-column-0 shards on every TP row
-(`max|Δ|=0`), so the fix is exact. But the win is not latency:
+(`max|Δ|=0`), so the fix is exact. Splitting device time into kernel and firmware says where the
+rest goes — and the split matters, because `DEVICE FW DURATION` alone reads as a compute
+regression that isn't one:
 
-- The ~48% untraced improvement is **almost entirely the op-to-op gap collapsing** (5886 → 1298
-  µs) — host dispatch cost for 32 devices versus 4, not compute.
-- **Per-device compute got ~12% worse** (2824 → 3152 µs), concentrated in small ops (`Embeddings`
-  18.6→95.6, `Clone` 29.9→148.2, `NLPConcatHeads` 19.6→64.0). Reproducible across repeats at 2 and
-  4 iterations, so not noise. Unexplained — worth chasing before anyone ships this.
-- The big ops behave exactly as the analysis predicts: `AllGather` per-device time is **unchanged**
-  (597 → 591 µs) because each TP group does identical work either way — the saving is *aggregate*
-  traffic, 8 concurrent groups collapsing to 1. `SDPA` matches to 0.1 µs.
+| arm | kernel/fwd | FW wait | op-to-op gap | window |
+|---|---|---|---|---|
+| full, 32 chips | **2539.6 µs** | 294.3 | 5232.8 | 8066.7 |
+| submesh, 4 chips | **2527.0 µs** | 1284.5 | 939.1 | 4750.6 |
 
-**The caveat that governs the whole result: production runs traced.** Tracing removes most of the
-gap (the report's own advice: 66% of the full arm's window), which is precisely the term the
-submesh wins on. Traced, this fix is likely neutral-to-slightly-negative on encoder latency while
-still freeing **28 of 32 chips** and cutting the encoder's link traffic 8×. That is a real win, but
-it is a *capacity* win, not a latency one — "traffic down ⇒ latency down" does not hold here, and
-the tool should not imply that it does.
+- **Real compute is identical within 0.5%**, as the analysis requires: every device runs the same
+  program on the same shapes either way, and `CORE COUNT` is identical op for op. Per-op kernel
+  times match — `Embeddings` 17.68 vs 17.71 µs, `Clone` 29.20 vs 28.40, `MinimalMatmul` 284.17 vs
+  281.92.
+- The ~41% untraced improvement is **entirely dispatch**: ~4300 µs of op-to-op gap disappears
+  (driving 4 devices instead of 32), while ~990 µs of it *relocates* into device firmware wait.
+  On the submesh the host keeps up, so each op is picked up immediately and then stalls on its
+  data dependency inside FW rather than idling between ops. Same stall, different column.
+- `AllGather` per-device time is **unchanged** (597 → 591 µs): each TP group does identical work
+  either way, and the saving is *aggregate* traffic — 8 concurrent groups collapsing to 1. `SDPA`
+  matches to 0.1 µs.
+
+**What this means for production, which runs traced.** Tracing removes host dispatch — the term the
+submesh wins on — so traced, the two arms should converge on kernel time and the fix is **latency-
+neutral**, while still freeing **28 of 32 chips** and cutting encoder link traffic 8×. So it is a
+*capacity* win, not a latency one: "traffic down ⇒ latency down" does not hold here, and the tool
+should not imply that it does. Untraced it also happens to halve the encoder's wall clock.
+
+> **Measurement note, the hard-won kind.** The first pass read `DEVICE FW DURATION` alone and
+> concluded per-device compute had regressed ~12%, concentrated in small ops. It had not — FW
+> includes time the firmware spends waiting, and on a fast-dispatch configuration that wait grows
+> precisely because the host stopped being the bottleneck. **Always split FW into kernel and
+> FW-minus-kernel before calling anything a compute regression.**
 
 **A confound worth knowing about for any submesh measurement:** `get_matmul_core_grid` clamps to
 11×10 only at ≥32 devices (a BH Galaxy power constraint), so a 4-device submesh silently takes
