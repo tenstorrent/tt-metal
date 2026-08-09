@@ -94,7 +94,17 @@ the folded form computes `rms_inv · Σ_j (v_j · q_j)`. Algebraically identical
 ## 4. torch API
 
 ```python
-# reference/hf_attn_res.py — vendored, byte-identical to upstream. Oracle only.
+# reference/attn_res_reference.py — unfolded fp64 ground truth. Gates only, never shipped.
+# Imported as `attn_res_reference as ref`; takes the two weights separately.
+ref.read(prefix_sum, block_residual, norm_weight, proj_weight, eps, dtype=float64) -> Tensor
+ref.scores(prefix_sum, block_residual, norm_weight, proj_weight, eps, dtype=float64) -> Tensor
+ref.Stream(hidden_states, block_size, eps, dtype=float64)          # read() takes a weight pair
+ref.layer(stream, layer_idx, q_pre, q_post, attn_fn, mlp_fn)
+ref.stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size, eps)
+
+# reference/hf_attn_res.py — upstream's `_apply_attn_res` verbatim, plus tensor shims.
+# The external anchor. fp32-locked (upstream spells `.float()`), so it gates the
+# equation and never the precision. Licensed under reference/LICENSE-Kimi-K3.
 hf_attn_res(prefix_sum, block_residual, norm_weight, proj_weight, eps) -> Tensor
 
 # torch_functional/attn_res.py
@@ -159,22 +169,47 @@ Each rung is measured against the rung below (D9, amended by D11):
 
 | Rung | Compares | Gate |
 |---|---|---|
-| 1 | `attn_res` (folded) vs vendored `hf_attn_res` | rel err ≤ 1e-5 and PCC ≥ 1 − 1e-9 |
-| 1b | both vs an fp64 ground truth | `err(folded) ≤ max(4·err(reference), 1e-5)` |
+| 0 | `ref` vs closed forms and structural properties | see `tests/test_attn_res_reference.py` |
+| 0b | `ref.read` vs upstream `hf_attn_res`, fp32 | rel err ≤ 1e-5 and PCC ≥ 1 − 1e-9 |
+| 1 | `attn_res` (folded) vs `ref.read`, both fp64 | rel err ≤ 1e-13 |
+| 1a | `attn_res` (folded) vs `ref.read`, fp32 | rel err ≤ 1e-5 and PCC ≥ 1 − 1e-9 |
+| 1b | folded and unfolded fp32 vs `ref.read` fp64 | `err(folded) ≤ max(4·err(unfolded), 1e-5)` |
 | 2 | `inter_block` + `merge` vs rung 1 | rel err ≤ 1e-5 |
 | 3 | `AttnResStream` lifecycle | seal schedule, snapshot growth, read count |
 | 4 | `tt/` composite vs rung 1 | PCC ≥ 0.9999 |
 | 5 | 93-layer depth harness | `PCC(TT, fp32) ≥ PCC(bf16, fp32) − ε` |
 
-No rung is bit-exact. Folding reassociates the score and the online-softmax split
-reassociates the mixture; both change fp32 rounding. `1e-5` is the fp32 dot-product
-noise floor `√d · ε_fp32` at `d = 7168`, and a real algebra error clears it by orders
-of magnitude — measured rung-1 error is 1.5e-7 … 4.0e-7.
+Rung 0 is the exception to "measured against the rung below" — it is the root, so
+nothing above it can gate it without making the ladder circular. What pins it are
+three closed forms where the answer is known outright (a zero query gives the plain
+mean of the candidates, a saturated query selects exactly one, and constant-along-`d`
+candidates give `(a/√(a²+eps))·Σⱼ gainⱼ·projⱼ`) plus scale invariance of the scores,
+output sensitivity to a candidate's scale, and a convex-hull bracket. The third
+closed form is load-bearing: a `sum`-for-`mean` slip in the RMS is a pure softmax
+temperature error, and dropping the `res_norm` gain is invisible to the rest — both
+would otherwise be caught only by agreeing with the implementation under test.
 
-Both the error metric and the fp64 ground truth must be computed outside fp32:
-`torch.corrcoef` in fp32 caps near 0.99999988 on 458 k elements, and the vendored
-oracle widens with `.float()`, so it computes in fp32 whatever dtype it is handed and
-cannot serve as its own high-precision reference.
+Rung 0b is the only rung that reaches outside the module. Rungs 0 and 1–5 all compare
+things we wrote, so every one of them is consistent with the whole ladder solving the
+wrong equation; 0b is not. It runs at fp32 because the vendored function widens with
+`.float()` and so computes in fp32 whatever it is handed — which is also why it anchors
+the equation in one direction only and `ref` stays the root for precision.
+
+Rung 1 runs at fp64 as well as fp32. At fp32 alone an algebra error near the
+rounding floor is indistinguishable from rounding; at fp64 the two forms must agree
+to ~1e-14, which is what turns rung 1 from a smoke test into a proof of the
+reassociation.
+
+No rung above 1 is bit-exact. Folding reassociates the score and the online-softmax
+split reassociates the mixture; both change fp32 rounding. `1e-5` is the fp32
+dot-product noise floor `√d · ε_fp32` at `d = 7168`, and a real algebra error clears
+it by orders of magnitude — measured rung-1a error is 1.5e-7 … 4.0e-7.
+
+Both the error metric and the ground truth must be computed outside fp32:
+`torch.corrcoef` in fp32 caps near 0.99999988 on 458 k elements, and a reference that
+widened with `.float()` would compute in fp32 whatever dtype it was handed and could
+not serve as its own high-precision reference — which is why `ref` promotes rather
+than casts.
 
 Sweep `S ∈ {0, 1, 4, 8}` and `d ∈ {256, 7168}` on every rung. `S=0` and `S=8` are the
 boundary cases (identity, and the widest mixture); `d=256` is the toy dim for fast

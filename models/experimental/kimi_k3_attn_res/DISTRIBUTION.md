@@ -209,6 +209,16 @@ into one `[1, 24(S+1), T/R, 1]` reduction and come down to 26.
 > `merge`'s own statistics pass are fixed costs and there is not yet enough sealed work to
 > amortize them. Crossover at `S+1 = 2.30`. On a mesh the read form is therefore an `S`
 > decision, not a global one — 24 of the schedule's 186 reads sit on the direct side of it.
+>
+> > **Amended 2026-08-04 — the crossover is a function of the per-chip shape, and this one is
+> > quoted at 4× production.** Every µs in this thread is `T_local = 2560`: a `(2, 4)` at
+> > `CHUNK = 5120`. Production is 640 rows per chip. Re-swept at both shapes, the per-read
+> > crossover moves from **`S ≥ 1.93`** at 2 560 rows to **`S ≥ 3.24`** at 640 — the split
+> > form's fixed costs shrink more slowly than the sealed work it amortizes them over, so a
+> > smaller per-chip shape needs more sealed candidates to justify it. At production that puts
+> > **the first three blocks — 72 of 186 reads — on the direct side**, not 24. The schedule as
+> > a whole still favours the split form (1.13×) because 61% of its reads sit at `S ≥ 4`. "The
+> > read form is an `S` decision" was right; the threshold is a shape-and-`S` decision.
 
 **Per-axis topology.** `topology` is one `ttnn.Topology` per mesh axis, not a scalar —
 Galaxy prefill is `[LINE, RING]`. This is not a precaution: the analog already carries the
@@ -235,9 +245,10 @@ a non-existent row wrap link" (`test_prefill_block.py:666-673`).
 ## 5. Judgment gate — decided, implemented, and green on `(2,4)`
 
 **Decided:** M1 — sequence-parallel on `sp_axis` (free), tensor-parallel on `tp_axis` with
-one `all_reduce` of `[1, S+1, T/R, 2]` per read. The mapping is dictated by the analog's
-stream layout, and M2/M3 lose by more than an order of magnitude on CCL traffic, so this
-is not a close call.
+one `all_reduce` per read of the `[1, 2(S+1), T/R, 1]` stats tensor §4 builds, folded to
+`[1, 1, T/R, 2(S+1)]` on the wire. The pair goes on **dim 1**, stacked with the candidates,
+not on a 2-wide last dim. The mapping is dictated by the analog's stream layout, and M2/M3
+lose by more than an order of magnitude on CCL traffic, so this is not a close call.
 
 **Implemented, in this order:**
 1. `hidden_size` is the **global** `d` with an explicit `tp_factor`; `mean_d` divides by the
@@ -291,6 +302,32 @@ halves per device and the call count does not.
 > is there, so it and the fold are alternatives: with the fold in, the second link buys
 > 4.7 µs, and **`num_links` stays at 1** — the opposite of what this section expected. Full
 > record: `bringup_log.md` §Phase 9 perf loop.
+
+> **Amended 2026-08-04 (the production per-chip shape, and the collective count).** Two things
+> this section states need qualifying, and one needs replacing.
+>
+> **The count.** The 186-collective row in the gate table is the **wired** path — one
+> `all_reduce` per executed read, which is what `attn_res_stream.py:46` produces because it
+> calls `forward` and nothing else. The **split** path issues **202**: the same 186 in `merge`,
+> plus two per block over 8 blocks (`_reciprocal_rms` on the sealed set, and `_dots_by_site`
+> batched across all 24 sites). Per block, 26 against 24. An earlier count of 49 priced
+> `_dots_by_site` per site instead of per block and is retired; `tests/test_tt_attn_res_distributed.py`
+> carried it in a docstring and no longer does.
+>
+> **The shape.** Every timing in this memo is a `(2, 4)` at `CHUNK = 5120` — `T_local = 2560`,
+> **four times** what production sees. Cross-mesh perf in this repo holds tokens *per chip*
+> fixed (`test_sparse_mla_perf.py:343-350`, `test_sparse_mla_ccl_perf.py:150-155`,
+> `test_prefill_block_perf.py:219`), and production prefill is `CHUNK / sp = 5120 / 8 = 640`
+> rows per chip on an `(8, 4)`. The matched `(2, 4)` chunk is therefore **1 280, not 5 120**.
+> `tests/perf/test_attn_res_perf.py` now parametrizes both shapes for exactly this reason.
+>
+> **The verdict, re-measured at both shapes.** The split form wins **1.13× at 640 rows per
+> chip** (68.43 ms against 77.51) and **1.41× at 2 560** (153.89 against 216.25). Break-even
+> over the schedule is **~313 rows per chip**, so production sits about 2× clear of it and the
+> choice is not marginal — **ship the split form for prefill.** Decode is the exception: at
+> `T = 1` the direct form wins outright, which is what makes per-shape read-form selection
+> worth keeping on the list. Derivation and the affine-in-`V` coefficients: `ROOFLINE.md` §7,
+> fifth amendment.
 
 > **A distribution fact this memo did not anticipate (P7).** Sharding the hidden dim is not
 > only a memory and bandwidth argument — it decides which *primitives are available*. The

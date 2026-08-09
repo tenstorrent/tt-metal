@@ -96,18 +96,20 @@ argument, so nothing had to be measured to catch it.
 
 ## Tests
 
-**183 passed, 0 failed** in one run over the whole tree on the committed branch, `(2,4)` where
-the test asks for a mesh:
+**239 collected in the module. 109/109 CPU pass** as of 2026-08-06. The device rows were last
+run green at **183 passed, 0 failed** over the whole tree, `(2,4)` where the test asks for a
+mesh — but that run predates the reference rework, so it is history, not a current claim:
 
 | suite | tests | covers |
 |---|---|---|
-| `test_torch_attn_res.py` | 41 | the reference against a vendored oracle, three-rung ladder |
+| `test_attn_res_reference.py` | 36 | rung 0 — the fp64 ground truth against closed forms |
+| `test_torch_attn_res.py` | 73 | rung 0b against upstream, and the folded reference against rung 0 |
 | `test_tt_attn_res.py` | 30 | device `forward` + the block-split form, single device |
 | `test_tt_attn_res_depth.py` | 3 | the 93-layer, 186-read walk under the relative gate |
 | `test_tt_attn_res_production.py` | 8 | `T = 5120`, no host fallback, `T` as a pure batch axis |
-| `test_tt_attn_res_distributed.py` | 13 | TP on a real `(2,4)` mesh, SP equality, collective load-bearing |
-| `test_attn_res_perf.py` | 69 | the perf loop; logs, asserts nothing |
-| `test_fast_weighted_reduce_nc.py` | 19 | the fused op against torch fp32 at PCC 0.9999 |
+| `test_tt_attn_res_distributed.py` | 14 | TP on a real `(2,4)` mesh, SP equality, collective load-bearing |
+| `test_attn_res_perf.py` | 75 | the perf loop; logs, asserts nothing |
+| `test_fast_weighted_reduce_nc.py` | 19 | the fused op against torch fp32 at PCC 0.9999 (out of tree) |
 
 The op's suite covers by *kernel path*, not shape variety: `C ∈ {1,5,8,9,12,13}` to take the
 granularity cap, a clean factor, two primes that fall back to granularity 1, and the
