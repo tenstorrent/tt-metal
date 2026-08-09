@@ -396,12 +396,14 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         /*cb_id=*/tt::CBIndex::c_13,
         "worker_metadata_scratch");
     // Per-page sparse-multicast grouping (1D Ring, any top-k): widen the sender ring's route_info slot
-    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], expert[4], k[4],
-    // weight[4]] = 23 u32 — so a token's co-directional destinations become sparse-multicast payload
-    // writes, each covering up to 4 destinations (writer_worker spills wider groups into extra
-    // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
-    // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
-    // keeps the per-expert path.
+    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], k[4]] = 15 u32 — so a
+    // token's co-directional destinations become sparse-multicast payload writes, each covering up to 4
+    // destinations (writer_worker spills wider groups into extra slots). The payload/metadata rings are
+    // unchanged; the sender builds each destination's metadata from this record (fields kept unpacked so
+    // the sender needs no unpack helpers). Only the three documented routing fields ([src chip, token
+    // idx, top-k slot]) are carried, because that is the whole of the metadata contract below — the
+    // routed expert and routing weight are NOT metadata fields and are therefore not grouped. Every
+    // other config keeps the per-expert path.
     // Sparse multicast (hop-bitmask along one forwarding direction) requires FABRIC_1D: the dispatch
     // routes along a single cluster axis as a 1D line, and FABRIC_1D exposes the per-direction array
     // connection the grouped writer indexes (fabric_connections[direction]). Enabled for ALL FABRIC_1D
@@ -410,13 +412,18 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
     const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     const bool sparse_has_fabric = (operation_attributes.num_links > 0);
-    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric;
+    // fp8_scaled_input extends metadata to 3 routing fields + one word per per-128-block scale, and the
+    // grouped path stages no metadata at the producer — the sender rebuilds it from route_info alone and
+    // has no access to the token's scale rows (they live in the worker's scales CB). Until grouped scale
+    // transport exists, fp8 stays on the legacy per-expert path, which copies the scale tail itself.
+    const bool sparse_not_fp8 = !operation_attributes.fp8_scaled_input;
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_not_fp8;
     // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
-    // disabled, print each gate so the reason is obvious (2D fabric / no fabric).
+    // disabled, print each gate so the reason is obvious (2D fabric / no fabric / fp8-scaled input).
     log_warning(
         tt::LogOp,
         "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
-        "[gates: fabric_1d={}, has_fabric={}]",
+        "[gates: fabric_1d={}, has_fabric={}, not_fp8={}]",
         enable_sparse_mcast ? "ENABLED" : "DISABLED",
         is_row_major ? "row-major" : "tile",
         (int)topology,
@@ -424,8 +431,9 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         mesh_view.num_cols(),
         operation_attributes.num_links,
         is_1d_fabric,
-        sparse_has_fabric);
-    constexpr uint32_t grouped_route_info_u32 = 23;
+        sparse_has_fabric,
+        sparse_not_fp8);
+    constexpr uint32_t grouped_route_info_u32 = 15;
     const uint32_t route_info_slot_stride_bytes =
         enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
                             : l1_alignment;

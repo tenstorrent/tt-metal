@@ -340,8 +340,7 @@ void kernel_main() {
                     // to 4 destinations plus the fields the sender needs to rebuild each destination's
                     // metadata locally (the producer leaves the meta ring slot unwritten for groups).
                     // Layout (written by writer_worker_dispatch): [0]=direction, [1]=num_dests,
-                    // [2]=token_idx, [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4],
-                    // [19..22]=weight[4].
+                    // [2]=token_idx, [3..6]=page[4], [7..10]=dist[4], [11..14]=k[4].
                     uint32_t direction = route_info[0];
                     uint32_t num_dests = route_info[1];
                     uint32_t token_idx = route_info[2];
@@ -395,11 +394,16 @@ void kernel_main() {
                     uint32_t meta_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
                     volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
                     for (uint32_t i = 0; i < num_dests; ++i) {
+                        // Exactly the documented metadata contract, identical to the local and legacy
+                        // cross-device paths in writer_worker_dispatch: three int32 routing fields
+                        // [src chip, global token idx, top-k slot]. Nothing beyond meta[2] may be
+                        // written here — with the default metadata_len == 3 the slot holds only these
+                        // three words, and under fp8_scaled_input meta[3..] is the FP8 scale tail
+                        // (which this path cannot produce, hence the host-side fp8 gate on
+                        // SPARSE_MCAST_DISPATCH).
                         meta[0] = (int32_t)linearized_mesh_coord;
                         meta[1] = (int32_t)token_idx;
-                        meta[2] = (int32_t)route_info[15 + i];  // top-k slot
-                        meta[3] = (int32_t)route_info[11 + i];  // routed expert
-                        meta[4] = (int32_t)route_info[19 + i];  // routing weight
+                        meta[2] = (int32_t)route_info[11 + i];  // top-k slot
                         ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
                         pkt_route_info.distance_in_hops = static_cast<uint16_t>(dest_dist[i]);
                         ccl_routing_utils::fabric_set_line_unicast_route(

@@ -177,11 +177,17 @@ void kernel_main() {
     uint32_t local_count = 0;
 
 #ifdef SPARSE_MCAST_DISPATCH
+#ifdef FP8_SCALED
+#error \
+    "SPARSE_MCAST_DISPATCH is incompatible with FP8_SCALED: the grouped path stages no metadata, so the sender cannot emit the per-token FP8 scale tail (metadata fields 3..metadata_len-1). The host factory gates these apart; see enable_sparse_mcast in dispatch_program_factory.cpp."
+#endif
     // Grouped sparse-multicast staging (1D Ring): a token's cross-device destinations are bucketed per
     // fabric direction (entry->route) for the current token, then flushed as grouped ring slots — one
     // sparse-multicast payload write per slot instead of one unicast per destination. The grouped
     // route_info carries everything the sender needs to rebuild each destination's metadata, so no
-    // metadata is staged here.
+    // metadata is staged here. "Everything" is exactly the three documented routing fields — the
+    // metadata contract is [src chip, global token idx, top-k slot], optionally followed by the FP8
+    // scale tail, and that tail is why fp8 is excluded from this path rather than grouped.
     //
     // One bound shapes a slot: at most MCAST_MAX_DESTS total pages (the fabric packet header holds that
     // many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits
@@ -193,12 +199,14 @@ void kernel_main() {
     // must hold top-k entries. top-k is not a direct arg here, but meta_scratch_slots was sized as
     // read_batch_size * top-k on the host.
     constexpr uint32_t MCAST_BUCKET_CAP = meta_scratch_slots / read_batch_size;
+    // Only the fields the metadata contract actually defines are bucketed: the destination page and hop
+    // distance (routing) plus the top-k slot (metadata field 2). The routed expert and routing weight are
+    // deliberately absent — they are not metadata fields, and staging them here previously led the sender
+    // to write them into meta[3]/meta[4], past the end of a metadata_len == 3 slot.
     uint32_t bk_count[MCAST_NUM_DIRS];
     uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     uint32_t bk_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-    uint32_t bk_expert[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     uint32_t bk_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-    int32_t bk_weight[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     for (uint32_t d = 0; d < MCAST_NUM_DIRS; d++) {
         bk_count[d] = 0;
     }
@@ -260,22 +268,17 @@ void kernel_main() {
             // Sort this direction's destinations by hop distance (ascending) so equal-distance
             // (same-chip) destinations become adjacent for run-aware packing below.
             for (uint32_t a = 1; a < n; a++) {
-                uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], ev = bk_expert[dir][a], kv = bk_k[dir][a];
-                int32_t wv = bk_weight[dir][a];
+                uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], kv = bk_k[dir][a];
                 int32_t b = (int32_t)a - 1;
                 while (b >= 0 && bk_dist[dir][b] > dv) {
                     bk_dist[dir][b + 1] = bk_dist[dir][b];
                     bk_page[dir][b + 1] = bk_page[dir][b];
-                    bk_expert[dir][b + 1] = bk_expert[dir][b];
                     bk_k[dir][b + 1] = bk_k[dir][b];
-                    bk_weight[dir][b + 1] = bk_weight[dir][b];
                     b--;
                 }
                 bk_dist[dir][b + 1] = dv;
                 bk_page[dir][b + 1] = pv;
-                bk_expert[dir][b + 1] = ev;
                 bk_k[dir][b + 1] = kv;
-                bk_weight[dir][b + 1] = wv;
             }
             // Pack MCAST_MAX_DESTS pages per slot, in the ascending-distance order from the sort above. A
             // same-distance run (one chip hit by multiple experts of this token) may span a slot
@@ -287,13 +290,13 @@ void kernel_main() {
                 uint32_t gcount = (n - a < MCAST_MAX_DESTS) ? (n - a) : MCAST_MAX_DESTS;
                 uint16_t hop_mask = 0;
                 for (uint32_t r = 0; r < gcount; r++) {
-                    // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
+                    // Grouped route_info (15 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
+                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=k[4]. Must stay in sync with
+                    // grouped_route_info_u32 in dispatch_program_factory.cpp and the decode in
+                    // writer_sender_dispatch.cpp.
                     route_info_scratch[3 + r] = bk_page[dir][a + r];
                     route_info_scratch[7 + r] = bk_dist[dir][a + r];
-                    route_info_scratch[11 + r] = bk_expert[dir][a + r];
-                    route_info_scratch[15 + r] = bk_k[dir][a + r];
-                    route_info_scratch[19 + r] = (uint32_t)bk_weight[dir][a + r];
+                    route_info_scratch[11 + r] = bk_k[dir][a + r];
                     hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
                 }
                 a += gcount;
@@ -430,9 +433,7 @@ void kernel_main() {
                         bk_count[dir] = dst + 1;
                         bk_dist[dir][dst] = entry->distance;
                         bk_page[dir][dst] = page_idx;
-                        bk_expert[dir][dst] = entry->routed_expert;
                         bk_k[dir][dst] = k;
-                        bk_weight[dir][dst] = unpack_weight(weight_k);
                     }
 #else
                     // Cross-device: stage this token into one sender slot as three NOC writes —
