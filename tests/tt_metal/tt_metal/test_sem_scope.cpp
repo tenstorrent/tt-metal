@@ -566,7 +566,7 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
 
 // up(N) then down(N) must leave the semaphore at 0, per scope. For EXTERNAL this
 // exercises the atomic NoC decrement (INCR_GET of a negative value); for
-// DM_LOCAL_CACHED the AMO subtract; for LOCAL_NONATOMIC the legacy decrement.
+// DM_LOCAL_CACHED the LR/SC conditional decrement; for LOCAL_NONATOMIC the legacy decrement.
 TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
     const uint32_t observed = run_scope(SemaphoreScope::EXTERNAL, /*with_down=*/true);
     log_info(LogTest, "EXTERNAL up/down value(): {} (expected 0)", observed);
@@ -576,7 +576,7 @@ TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
 TEST_F(SemScopeFixture, TestDmLocalCachedScopeUpDown) {
     const uint32_t observed = run_scope(SemaphoreScope::DM_LOCAL_CACHED, /*with_down=*/true);
     log_info(LogTest, "DM_LOCAL_CACHED up/down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() (AMO subtract) did not return to 0.";
+    EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() (LR/SC conditional decrement) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
