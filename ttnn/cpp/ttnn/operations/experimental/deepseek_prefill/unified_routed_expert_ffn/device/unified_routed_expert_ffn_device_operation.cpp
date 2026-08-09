@@ -26,9 +26,8 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
-    // SiTU-GLU is scoped to Blackhole, matching the ttnn::softcap / ttnn::situ_glu
-    // ops it shares its formula with (issue #51350). The SFPU primitives it builds
-    // on exist on Wormhole too, but that combination is unverified.
+    // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
+    // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu) {
         TT_FATAL(
             t.x.device()->arch() == tt::ARCH::BLACKHOLE,
@@ -276,10 +275,9 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             t.gate_bias->dtype(),
             t.up_bias->dtype(),
             t.down_bias->dtype());
-        // Bias fusion lives in the kernel's shared binary-activation phase (FUSE_BIAS
-        // inside FUSED_BINARY_ACT): gate/up bias is added before the activation, down
-        // bias after the down matmul. That branch is activation-agnostic, so every fused
-        // binary activation supports it; only the SiLU path has no bias branch.
+        // Bias fusion lives in the kernel's shared binary-activation phase and is
+        // activation-agnostic, so every fused binary activation supports it. Only the SiLU
+        // path has no bias branch.
         TT_FATAL(
             op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
             "unified_routed_expert_ffn: expert biases require a fused binary activation "

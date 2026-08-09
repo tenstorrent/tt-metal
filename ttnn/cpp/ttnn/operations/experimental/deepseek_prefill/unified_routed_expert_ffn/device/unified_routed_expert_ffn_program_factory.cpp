@@ -840,9 +840,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
     } else if (op.activation == RoutedExpertActivation::SituGlu) {
-        // SiTU-GLU activation (Kimi K3):
-        // (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up)).
-        // Bakes beta_gate=4.0, beta_up=25.0 (SituGluConfigKimi) in the kernel.
+        // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
         compute_defines["SITU_GLU"] = "1";
     }
     if (fuse_bias) {

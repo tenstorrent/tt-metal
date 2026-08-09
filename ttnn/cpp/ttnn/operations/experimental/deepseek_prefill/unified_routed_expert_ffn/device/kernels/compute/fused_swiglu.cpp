@@ -72,11 +72,9 @@
 #include "api/compute/bcast.h"
 #endif
 
-// SwiGLU-OAI (gpt-oss / MiniMax-M3) and SiTU-GLU (Kimi K3) both evaluate their
-// activation as a single binary SFPU op over the raw gate/up matmul accumulators,
-// so they share this kernel's whole phase-3 path and differ only in the op called.
-// FUSED_BINARY_ACT gates that shared path; exactly one of the two variant defines
-// is set by the program factory.
+// SwiGLU-OAI and SiTU-GLU both evaluate their activation as one binary SFPU op over the
+// raw gate/up accumulators, so they share the phase-3 path below and differ only in the op
+// called. The program factory sets exactly one of the two variant defines.
 #if defined(SWIGLU_OAI) || defined(SITU_GLU)
 #define FUSED_BINARY_ACT 1
 #endif
@@ -502,12 +500,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #endif
 
 #ifdef FUSED_BINARY_ACT
-    // Binary-SFPU activation path: do NOT apply silu here and do NOT consume the
-    // partials. Both partials_gu and partials_up are left pushed (bf16, full
-    // precision) so binary_activation_phase() in kernel_main can read raw gate AND
-    // raw up together and run the fused activation in one pass.
-    // (Keeping the activation off the bf8 gate_intermed avoids a precision loss
-    // before the activation.)
+    // Leave both partials pushed (bf16) so binary_activation_phase() can read raw gate and
+    // up together. Activating off the bf8 gate_intermed would lose precision first.
     (void)gate_intermed_cb_id;
     (void)up_intermed_cb_id;
 #else
@@ -558,9 +552,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #define FP32_DEST_ACC_EN 0
 #endif
 
-// Variant selector for the shared phase below: init + per-tile SFPU call. Both
-// ops expose the same (gate, up, out) dst-index signature and bake their model
-// constants in their config struct, so only these two lines differ.
+// Both ops share the (gate, up, out) dst-index signature and bake their constants into a
+// config struct, so only these two lines differ.
 #ifdef SWIGLU_OAI
 #define BINARY_ACT_INIT() ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()
 #define BINARY_ACT_TILE(fp32, g, u, o) ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32>(g, u, o)
@@ -569,25 +562,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #define BINARY_ACT_TILE(fp32, g, u, o) ckernel::llk_math_eltwise_binary_sfpu_situ_glu<fp32>(g, u, o)
 #endif
 
-// Binary-SFPU activation pass (replaces gate-silu + multiply_phase for the
-// gpt-oss/M3 and Kimi K3 activations). Reads the raw bf16 gate & up matmul
-// accumulators (both still resident in their partials CBs) and writes the
-// activated result into activated_cb:
-//   SwiGLU-OAI: (clamp(up,+/-L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L))
-//               (swiglu_sfpu.h, SwiGLUConfigGPTOSS = M3 config)
-//   SiTU-GLU:   (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up))
-//               (situ_glu_sfpu.h, SituGluConfigKimi = K3 config)
+// Replaces gate-silu + multiply_phase: reads the raw bf16 gate/up accumulators from their
+// partials CBs and writes the activated result to activated_cb. Runs on MATH (between
+// tile_regs_acquire/commit), matching this kernel's silu_tile structure.
 //
-// SFPU thread: invoked on MATH (between tile_regs_acquire/commit), matching this
-// kernel's existing silu_tile structure (copy_tile -> SFPU -> pack). gpt-oss's
-// moe_gpt runs it on PACK only because of its bespoke pack-fused pipeline.
-//
-// DST budget: the binary op pins BOTH gate and up in dst at the same time, so
-// each output tile costs 2 dst slots. With fp32_dest_acc_en=false the MATH thread
-// has 8 dst tiles (DST_CAPACITY in the program factory), so we stream the block in
-// chunks of <=4 output tiles (<=8 dst). The activated CB is drained count-based by
-// the reader (cb_activated_obj.wait_front(d_in0_block_num_tiles)), so the push
-// granularity here is free and need not match out_subblock_num_tiles.
+// The binary op pins BOTH gate and up in dst, so each output tile costs 2 dst slots. With
+// 8 dst tiles available we stream in chunks of <=4 output tiles. The activated CB is
+// drained count-based, so push granularity need not match out_subblock_num_tiles.
 template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0>
 FORCE_INLINE void binary_activation_phase(
     uint32_t prev_srcA_cb_id,
@@ -862,11 +843,9 @@ void kernel_main() {
     const uint32_t effective_chunks =
         effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
-    // Hardware startup must precede every other Compute API call, init included: it does
-    // MMIO configuration of MATH/PACK/UNPACK that requires those units idle, so running an
-    // SFPU init first risks the startup writes racing the constants that init just loaded.
-    // This matters concretely for SiTU-GLU, whose tanh_init loads the vConstFloatPrgm
-    // registers the activation then reads.
+    // Must precede every other Compute API call, init included: it does MMIO config of
+    // MATH/PACK/UNPACK requiring those units idle, so an earlier SFPU init risks the startup
+    // writes racing the constants it loaded (SiTU-GLU's tanh_init in particular).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
     // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
@@ -937,11 +916,9 @@ void kernel_main() {
             /*m_subblocks=*/re_m_valid);
 
 #ifdef FUSED_BINARY_ACT
-        // Phase 3 (SwiGLU-OAI / SiTU-GLU): fused activation run directly on the raw
-        // bf16 gate/up accumulators -> cb_activated. Replaces both the gate-silu
-        // pass (skipped above) and the plain multiply_phase. cb_in1_up is the
-        // unpacker's last SrcA operand (up matmul in1), passed so the partials
-        // reconfig (weights df -> Float16_b) actually fires.
+        // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+        // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
+        // (weights df -> Float16_b) actually fires.
         binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
             cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
         (void)cb_gate_intermed;
