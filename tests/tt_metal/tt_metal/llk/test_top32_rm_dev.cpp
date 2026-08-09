@@ -20,7 +20,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 
@@ -28,6 +27,7 @@
 #include <tt-metalium/distributed.hpp>
 
 #include "tt_metal/test_utils/packing.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

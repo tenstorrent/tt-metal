@@ -7,7 +7,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -40,6 +39,7 @@
 #include <limits>
 
 #include <tt_metal/fabric/ccl/ccl_common.hpp>
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -140,7 +140,7 @@ static void build_and_enqueue(
         futures.emplace_back(tt::tt_metal::detail::async([&devices, &programs, i, enqueue_only]() {
             if constexpr (std::is_same_v<ProgramContainer, std::vector<Program*>>) {
                 if (!enqueue_only) {
-                    tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], *programs[i]);
+                    programs[i]->impl().compile(devices[i]->get_devices()[0]);
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
@@ -148,7 +148,7 @@ static void build_and_enqueue(
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             } else {
                 if (!enqueue_only) {
-                    tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], programs[i]);
+                    programs[i].impl().compile(devices[i]->get_devices()[0]);
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range

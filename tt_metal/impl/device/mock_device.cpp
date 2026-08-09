@@ -10,8 +10,8 @@
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/device/mock_device_util.hpp"
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 

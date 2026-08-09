@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

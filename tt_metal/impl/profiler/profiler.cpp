@@ -14,7 +14,6 @@
 #include "impl/threading/thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
-#include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <nlohmann/json.hpp>
 #include <stack>
@@ -59,6 +58,7 @@
 #include "tools/profiler/perf_counters.hpp"
 #include "debug/noc_debugging.hpp"
 #include "tools/profiler/noc_debugging_metadata.hpp"
+#include "program/program_impl.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push

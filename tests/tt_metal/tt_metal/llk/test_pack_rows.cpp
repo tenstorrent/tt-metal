@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -27,6 +26,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

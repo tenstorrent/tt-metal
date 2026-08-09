@@ -29,9 +29,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgConfig (RuntimePageSize / IsDram)
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

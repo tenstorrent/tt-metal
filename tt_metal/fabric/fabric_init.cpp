@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "impl/program/program_impl.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -41,8 +42,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.create_kernels();
 
     // Compile the program
-    tt::tt_metal::detail::CompileProgram(
-        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    fabric_program_ptr->impl().compile(device, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
 
     return fabric_program_ptr;
 }

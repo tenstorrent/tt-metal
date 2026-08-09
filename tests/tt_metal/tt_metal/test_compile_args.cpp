@@ -10,8 +10,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -56,7 +57,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::IDevice
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::detail::CompileProgram(device, program);
+    program.impl().compile(device);
 
     return true;
 }

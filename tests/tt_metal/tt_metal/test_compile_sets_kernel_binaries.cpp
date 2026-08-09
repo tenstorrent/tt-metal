@@ -13,7 +13,6 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -21,10 +20,11 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/device/device_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using std::vector;
 using namespace tt;
@@ -162,7 +162,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                         .get_device_build_env(device->build_id())
                         .build_key();
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
         compute_binaries.insert({mask, compute_kernel->binaries(mask)});
         TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
         brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
@@ -204,7 +204,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                                     .get_device_build_env(device->build_id())
                                     .build_key();
-                    detail::CompileProgram(device, program);
+                    program.impl().compile(device);
                     uint32_t programmable_core_index = MetalContext::instance().hal().get_programmable_core_type_index(
                         HalProgrammableCoreType::TENSIX);
                     const KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);

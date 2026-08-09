@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -38,6 +37,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "eth_test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt;

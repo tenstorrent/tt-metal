@@ -16,8 +16,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -32,6 +30,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace {
 

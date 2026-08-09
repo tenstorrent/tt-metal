@@ -13,13 +13,13 @@
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/device.hpp>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
-#include "impl/program/program_impl.hpp"
+#include "program/program_impl.hpp"
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal::experimental::lightmetal {
 
@@ -455,7 +455,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDealloc
         cmd->global_id());
 
     log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDeallocate) global_id: {}", cmd->global_id());
-    DeallocateBuffer(*buffer);  // Buffer& expected.
+    buffer->deallocate();
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd) {

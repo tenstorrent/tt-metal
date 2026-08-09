@@ -17,11 +17,11 @@
 #include <cerrno>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
+#include "impl/kernels/kernel.hpp"
 
-// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+// Access to internal API: BuildEnvManager, ProgramImpl::compile, get_kernel
 #include "jit_build/build_env_manager.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -340,7 +340,7 @@ public:
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
         auto* device = mesh_device->get_devices()[0];
-        detail::CompileProgram(device, program_);
+        program_.impl().compile(device);
 
         // Find compiled kernel and extract format string from it to compare with expected_format_message
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();

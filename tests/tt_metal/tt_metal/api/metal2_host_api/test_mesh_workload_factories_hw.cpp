@@ -26,6 +26,7 @@
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "test_helpers.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

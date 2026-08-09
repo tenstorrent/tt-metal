@@ -30,6 +30,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "test_helpers.hpp"
 #include "impl/program/program_impl.hpp"  // ScratchpadBaseReDeliveredAfterDfbResize: DFB allocated-address query
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

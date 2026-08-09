@@ -32,8 +32,9 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

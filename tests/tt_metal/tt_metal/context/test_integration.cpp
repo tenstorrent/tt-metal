@@ -11,7 +11,6 @@
 
 // Prefer to use API rather than internals in this
 // test as we are testing end to end functionality
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -48,6 +47,8 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include "impl/kernels/kernel.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

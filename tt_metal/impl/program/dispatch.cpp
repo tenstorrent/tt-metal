@@ -69,11 +69,11 @@
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
-#include "kernels/kernel.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
+#include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;

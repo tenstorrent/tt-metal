@@ -11,9 +11,7 @@
 #include <iterator>
 #include <random>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <map>
 #include <memory>
 #include <string>
@@ -40,6 +38,7 @@
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

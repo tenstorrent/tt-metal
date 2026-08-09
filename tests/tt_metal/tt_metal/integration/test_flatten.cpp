@@ -30,6 +30,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -287,8 +290,8 @@ bool flatten_stress(
         // Async write input
         distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
-        AssignGlobalBufferToProgram(
-            std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);
+        detail::DispatchStateCheck(MetalContext::instance().rtoptions().get_fast_dispatch());
+        program_on_workload.impl().add_buffer(std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()));
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();

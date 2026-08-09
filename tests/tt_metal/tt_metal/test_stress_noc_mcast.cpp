@@ -14,7 +14,6 @@
 #include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -36,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

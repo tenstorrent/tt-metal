@@ -25,7 +25,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
@@ -35,6 +34,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 

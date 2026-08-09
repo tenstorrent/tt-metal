@@ -31,6 +31,7 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -234,7 +235,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         SetRuntimeArgs(
             prog, kernel, svc_core, {(uint32_t)stop_addr, (uint32_t)counter_addr, (uint32_t)service_done_addr});
 
-        tt::tt_metal::detail::CompileProgram(device, prog, /*force_slow_dispatch=*/true);
+        prog.impl().compile(device, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::LaunchProgram(
             device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);

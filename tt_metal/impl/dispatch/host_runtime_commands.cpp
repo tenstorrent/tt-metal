@@ -5,9 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
-#include <host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_metal.hpp>
 #include <functional>
 #include <memory>
 
@@ -26,6 +24,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include "device/device_impl.hpp"
 
 using namespace tt::tt_metal;
 

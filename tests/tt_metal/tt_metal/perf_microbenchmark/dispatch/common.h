@@ -14,7 +14,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
@@ -37,6 +36,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 

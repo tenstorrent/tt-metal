@@ -42,10 +42,10 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

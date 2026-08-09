@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
@@ -26,6 +25,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt::tt_metal;
 

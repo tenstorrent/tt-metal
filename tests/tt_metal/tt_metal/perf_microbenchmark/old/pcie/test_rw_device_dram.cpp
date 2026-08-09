@@ -9,7 +9,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
@@ -25,6 +24,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

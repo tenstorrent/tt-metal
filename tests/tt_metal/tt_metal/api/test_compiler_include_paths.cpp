@@ -17,13 +17,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "multi_device_fixture.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -71,7 +70,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
     });
 
     fs::remove_all(include_dir);
@@ -120,7 +119,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
     });
 
     fs::remove_all(absolute_include_dir);
@@ -203,7 +202,6 @@ TEST_F(CompilerIncludePathsTest, TensixHeaderEditTriggersRebuild) {
     const std::string kernel_src = R"(
 #include "api/dataflow/dataflow_api.h"
 #include "user_header.h"
-
 void kernel_main() {
     volatile uint32_t tt_l1_ptr* l1_ptr = (volatile uint32_t tt_l1_ptr*)0x100000;
     *l1_ptr = USER_HEADER_SENTINEL;
@@ -221,7 +219,7 @@ void kernel_main() {
             .compiler_include_paths = {include_dir},
         };
         auto kernel_handle = CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);

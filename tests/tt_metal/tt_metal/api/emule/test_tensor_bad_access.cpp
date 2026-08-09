@@ -9,11 +9,11 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include "device_fixture.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,7 +33,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
-    DeallocateBuffer(*buffer);
+    buffer->deallocate();
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(detail::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
@@ -45,7 +45,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
-    DeallocateBuffer(*buffer);
+    buffer->deallocate();
 
     std::vector<uint32_t> out;
     EXPECT_DEATH(detail::ReadFromBuffer(*buffer, out), ".*Use-After-Free.*ReadFromBuffer.*");
@@ -57,7 +57,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
     // ReadShard's sanitizer check runs before its is_sharded() assertion, so a
     // plain interleaved buffer still drives the UAF path under test here.
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
-    DeallocateBuffer(*buffer);
+    buffer->deallocate();
 
     std::vector<uint8_t> out(1024);
     EXPECT_DEATH(detail::ReadShard(*buffer, out.data(), /*core_id=*/0), ".*Use-After-Free.*ReadShard.*");
@@ -69,7 +69,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
-    DeallocateBuffer(*buffer);
+    buffer->deallocate();
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     CoreRangeSet logical_core_filter{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}};
@@ -91,7 +91,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
     auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
-    DeallocateBuffer(*buffer);
+    buffer->deallocate();
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(detail::WriteToBuffer(buffer, data), ".*Use-After-Free.*WriteToBuffer.*");

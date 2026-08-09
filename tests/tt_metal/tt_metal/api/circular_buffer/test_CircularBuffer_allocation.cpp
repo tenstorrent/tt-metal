@@ -43,6 +43,7 @@
 #include "impl/program/program_impl.hpp"
 // Access to CircularBufferImpl::size(), local_buffer_indices(), etc.
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;

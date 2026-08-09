@@ -5,6 +5,8 @@
 // Edge-case coverage: counter-wrap, ring-pressure, decoy, long-run (Metal 2.0).
 
 #include "dfb_test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

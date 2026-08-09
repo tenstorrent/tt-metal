@@ -20,11 +20,11 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -255,7 +255,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
@@ -303,7 +303,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, runtime_program));
+    EXPECT_NO_THROW(runtime_program.impl().compile(device));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
@@ -314,7 +314,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
     EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
@@ -326,7 +326,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
     try {
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
         FAIL() << "Expected PrecompiledKernelNotFoundError";
     } catch (const experimental::PrecompiledKernelNotFoundError& ex) {
         EXPECT_EQ(ex.kernel_name(), kReaderKernelName);

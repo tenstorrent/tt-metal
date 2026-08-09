@@ -9,6 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "llrt.hpp"
+#include "impl/device/device_impl.hpp"
 
 static inline std::string to_string(pkt_dest_size_choices_t choice) {
     switch (choice) {

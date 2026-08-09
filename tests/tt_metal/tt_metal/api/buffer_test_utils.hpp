@@ -7,9 +7,9 @@
 #include <stdint.h>
 #include <vector>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/device/device_impl.hpp"
 
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(

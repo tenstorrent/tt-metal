@@ -283,6 +283,9 @@ public:
     // Mark the buffer as deallocated, without releasing underlying device memory
     void mark_as_deallocated();
 
+    // Deallocate is allowed to be called multiple times on the same buffer
+    void deallocate();
+
     Buffer(
         IDevice* device,
         DeviceAddr size,
@@ -303,11 +306,8 @@ private:
 
     void allocate_impl();
 
-    // Deallocate is allowed to be called multiple times on the same buffer
-    void deallocate();
     void deallocate_impl();
     friend class AllocatorImpl;
-    friend void DeallocateBuffer(Buffer& buffer);
     friend bool experimental::per_core_allocation::is_per_core_allocation(const Buffer&);
     friend DeviceAddr experimental::per_core_allocation::get_per_core_address(const Buffer&, CoreCoord);
     friend const std::unordered_map<CoreCoord, DeviceAddr>& experimental::per_core_allocation::get_per_core_addresses(

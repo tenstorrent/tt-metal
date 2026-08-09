@@ -6,12 +6,12 @@
 
 #include <device.hpp>
 #include <fmt/ranges.h>
-#include <tt_metal.hpp>
 #include <utility>
 
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/core.h>
+#include "buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

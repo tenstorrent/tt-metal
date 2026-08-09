@@ -21,9 +21,9 @@
 #include "impl/context/context_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
-#include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
+#include "kernels/kernel.hpp"
 
 using namespace tt::tt_metal;
 
