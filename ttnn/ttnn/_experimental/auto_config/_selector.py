@@ -2244,16 +2244,21 @@ def _fp32_reference(prepared: PreparedMatmulInputs, signature: AutoMatmulSignatu
         return None
     if _is_distributed(signature):
         return None
-    lhs = _operand_to_host_f32(prepared.input_tensor_a)
-    rhs = _operand_to_host_f32(prepared.input_tensor_b)
+    a_tensor = getattr(prepared, "input_tensor_a", None)
+    b_tensor = getattr(prepared, "input_tensor_b", None)
+    if a_tensor is None or b_tensor is None:
+        return None
+    lhs = _operand_to_host_f32(a_tensor)
+    rhs = _operand_to_host_f32(b_tensor)
     if lhs is None or rhs is None:
         return None
     try:
         lhs_m = lhs.transpose(-1, -2) if signature.transpose_a else lhs
         rhs_m = rhs.transpose(-1, -2) if signature.transpose_b else rhs
         out = lhs_m @ rhs_m
-        if signature.is_linear and prepared.bias is not None:
-            bias = _operand_to_host_f32(prepared.bias)
+        bias_tensor = getattr(prepared, "bias", None)
+        if signature.is_linear and bias_tensor is not None:
+            bias = _operand_to_host_f32(bias_tensor)
             if bias is not None:
                 out = out + bias
         return out.flatten()
@@ -2352,16 +2357,21 @@ def _fp32_reference_distributed(
         import torch  # noqa: F401
     except Exception:
         return None
-    lhs = _reconstruct_operand_f32(prepared.input_tensor_a, plan.lhs_shard_dim)
-    rhs = _reconstruct_operand_f32(prepared.input_tensor_b, plan.rhs_shard_dim)
+    a_tensor = getattr(prepared, "input_tensor_a", None)
+    b_tensor = getattr(prepared, "input_tensor_b", None)
+    if a_tensor is None or b_tensor is None:
+        return None
+    lhs = _reconstruct_operand_f32(a_tensor, plan.lhs_shard_dim)
+    rhs = _reconstruct_operand_f32(b_tensor, plan.rhs_shard_dim)
     if lhs is None or rhs is None:
         return None
     try:
         lhs_m = lhs.transpose(-1, -2) if signature.transpose_a else lhs
         rhs_m = rhs.transpose(-1, -2) if signature.transpose_b else rhs
         out = lhs_m @ rhs_m
-        if signature.is_linear and prepared.bias is not None:
-            bias = _operand_to_host_f32(prepared.bias)
+        bias_tensor = getattr(prepared, "bias", None)
+        if signature.is_linear and bias_tensor is not None:
+            bias = _operand_to_host_f32(bias_tensor)
             if bias is not None:
                 out = out + bias
         return out.flatten()

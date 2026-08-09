@@ -432,38 +432,36 @@ def test_select_candidate_fails_closed_when_all_candidates_error(monkeypatch, tm
 
 
 def test_select_candidate_cache_hit_returns_fallback_without_retuning(monkeypatch, tmp_path):
-    # After a base-op fallback is persisted, subsequent calls must return candidate=None from the
-    # cache without re-running the (crashing) benchmarks on every call.
+    # After a base-op fallback is persisted (no distributed candidate survived the
+    # correctness gate), subsequent calls must return candidate=None from the cache
+    # WITHOUT re-running selection (rebuild + gate/benchmark) on every call.  With the
+    # item-#2 distributed gate the throwing candidate is now excluded at the gate rather
+    # than at benchmarking, so this asserts the invariant that survives that change:
+    # selection runs exactly once and the second call is served from the cache.
     _isolate_cache(monkeypatch, tmp_path)
     signature = _make_distributed_signature(rhs_shard_dim=2)
     prepared = _prepared_for_selection()
 
-    monkeypatch.setattr(
-        auto_matmul,
-        "_build_candidates",
-        lambda *a, **k: [auto_matmul.Candidate(descriptor={"kind": "matmul_then_reduce_scatter"}, run=lambda: None)],
-    )
+    build_calls = {"count": 0}
+
+    def _build(*a, **k):
+        build_calls["count"] += 1
+        # _fail_if_run guards against any path that would execute the unvalidated candidate.
+        return [auto_matmul.Candidate(descriptor={"kind": "matmul_then_reduce_scatter"}, run=_fail_if_run)]
+
+    monkeypatch.setattr(auto_matmul, "_build_candidates", _build)
     monkeypatch.setattr(auto_matmul, "_compute_reference_output", lambda *a, **k: None)
 
-    benchmark_calls = {"count": 0}
-
-    def _raise(*args, **kwargs):
-        benchmark_calls["count"] += 1
-        raise RuntimeError("bad optional access")
-
-    monkeypatch.setattr(auto_matmul, "_benchmark_candidate", _raise)
-
     first = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
-    calls_after_first = benchmark_calls["count"]
-    assert first["candidate"] is None
-    assert calls_after_first >= 1
+    assert first["candidate"] is None  # fail closed: no candidate survived the gate
+    assert build_calls["count"] == 1  # the first call actually ran selection
 
     second = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
     assert second["cache_hit"] is True
     assert second["candidate"] is None
     assert second["winner"]["kind"] == auto_matmul.WINNER_KIND_BASE_OP_FALLBACK
-    # No new benchmark runs: the fallback was served from the persisted cache record.
-    assert benchmark_calls["count"] == calls_after_first
+    # Served from the persisted cache record -- selection was NOT re-run.
+    assert build_calls["count"] == 1
 
 
 def test_select_candidate_chooses_fastest_and_persists_record(monkeypatch, tmp_path):
