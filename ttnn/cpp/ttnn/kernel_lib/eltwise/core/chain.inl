@@ -457,7 +457,7 @@ struct RuntimeConditionalSequenceTag {};
 struct CopyTileTag : CbReaderTag {};
 /// 2 CBs → DEST FPU compute (add/sub/mul + bcast variants).
 struct BinaryFpuTag : CbReaderTag {};
-/// 1 CB + DEST → DEST FPU compute (binary_dest_reuse_tiles).
+/// 1 CB + DEST → DEST FPU compute (op-specific reuse-dest tiles).
 struct DestReuseBinaryTag : CbReaderTag {};
 /// 1 CB → DEST row/col/scalar broadcast (unary_bcast).
 struct UnaryBcastTag : CbReaderTag {};

@@ -43,14 +43,14 @@ void kernel_main() {
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
-        if constexpr (Wt == 1) {
+        if (Wt == 1) {
             mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb_max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_in0, dfb_max_scaler, dfb_max>(
+            // Phase 1: reduce Wt-1 full tiles into cb_max (no accumulation, first call).
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             // Phase 2: mask the last tile and continue reducing into cb_max via Accumulate.
@@ -58,7 +58,7 @@ void kernel_main() {
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
+                compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
         }
 
         for (uint32_t w = 0; w < Wt; ++w) {

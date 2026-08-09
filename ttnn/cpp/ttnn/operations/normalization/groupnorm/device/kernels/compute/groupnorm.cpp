@@ -159,11 +159,11 @@ void kernel_main() {
     constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_28;
 
-    // #50682 pad-correction CBs, allocated only when has_pad_correction. dfb_k holds K from the
-    // writer; dfb_msq / dfb_kmsq are single-tile scratch.
-    constexpr uint32_t dfb_k_id = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_msq_id = tt::CBIndex::c_7;
-    constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_11;
+    // #50682 pad-correction CBs, allocated only when has_pad_correction. cb_k holds K from the
+    // writer; cb_msq / cb_kmsq are single-tile scratch.
+    constexpr uint32_t cb_k_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_msq_id = tt::CBIndex::c_7;
+    constexpr uint32_t cb_kmsq_id = tt::CBIndex::c_11;
 
     // interm cbs
     constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
@@ -271,6 +271,9 @@ void kernel_main() {
     DataflowBuffer cb_in0(cb_in0_id);
     DataflowBuffer cb_inbeta(cb_inbeta_id);
     DataflowBuffer cb_input_mask(cb_input_mask_id);
+    DataflowBuffer cb_k(cb_k_id);
+    DataflowBuffer cb_kmsq(cb_kmsq_id);
+    DataflowBuffer cb_msq(cb_msq_id);
     DataflowBuffer cb_outbeta(cb_outbeta_id);
     DataflowBuffer cb_outgamma(cb_outgamma_id);
     DataflowBuffer cb_reread_out(cb_reread_out_id);
@@ -542,11 +545,56 @@ void kernel_main() {
             // Start Variance Calc
             //  global reduce results
             cb_eps.wait_front(1);
+
+            // Padded zero rows become -E[x] after centering and contribute K*E[x]^2 to the
+            // variance. Preserve main's correction while using the migrated chain helpers for
+            // the final add/rsqrt.
+            constexpr uint32_t cb_var_src_id = has_pad_correction ? cb_msq_id : cb_ex2_global_id;
+            if constexpr (has_pad_correction) {
+                cb_ex_global.wait_front(1);
+                cb_ex2_global.wait_front(1);
+                cb_k.wait_front(1);
+
+                cb_msq.reserve_back(1);
+                tile_regs_acquire();
+                mul_init(cb_ex_global_id, cb_ex_global_id);
+                mul_tiles(cb_ex_global_id, cb_ex_global_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_msq_id);
+                tile_regs_release();
+                cb_msq.push_back(1);
+
+                cb_msq.wait_front(1);
+                cb_kmsq.reserve_back(1);
+                tile_regs_acquire();
+                mul_init(cb_msq_id, cb_k_id);
+                mul_tiles(cb_msq_id, cb_k_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_kmsq_id);
+                tile_regs_release();
+                cb_msq.pop_front(1);
+                cb_kmsq.push_back(1);
+
+                cb_kmsq.wait_front(1);
+                cb_msq.reserve_back(1);
+                tile_regs_acquire();
+                sub_init(cb_ex2_global_id, cb_kmsq_id);
+                sub_tiles(cb_ex2_global_id, cb_kmsq_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_msq_id);
+                tile_regs_release();
+                cb_kmsq.pop_front(1);
+                cb_msq.push_back(1);
+            }
+
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
                     ckl::input(
-                        cb_ex2_global_id,
+                        cb_var_src_id,
                         ckl::WaitPolicy::PerTile,
                         ckl::PopPolicy::PerTile,
                         ckl::DataFormatReconfig::Disabled),
@@ -560,6 +608,9 @@ void kernel_main() {
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
                     ckl::DataFormatReconfig::Disabled)>{});
+            if constexpr (has_pad_correction) {
+                cb_ex2_global.pop_front(1);
+            }
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;

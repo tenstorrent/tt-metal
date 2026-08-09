@@ -38,7 +38,7 @@ void kernel_main() {
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
-        if constexpr (Ht == 1) {
+        if (Ht == 1) {
             mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(

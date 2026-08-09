@@ -70,7 +70,7 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
 
     static ALWI void init() {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        ::unary_bcast_init_short<bt>(Cb);
+        ::unary_bcast_init<bt>(Cb);
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
