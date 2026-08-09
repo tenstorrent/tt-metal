@@ -19,7 +19,9 @@
 - Single-chip fabric-free path: `HY3_SINGLE_CHIP=1` (per-layer bring-up / PCC only; full 32-layer stack needs the mesh).
 
 ## Current perf
-**~84 s/image warm** (resident server) / **216.5 s cold** @1024²/50-step, on-device head-glue path — down from **351.4 s hybrid**.
+**~58 s/image warm** (SP + on-device VAE, resident server) @1024²/50-step — down from ~67 s (SP + host VAE), ~84 s (default), 216.5 s cold, 351.4 s hybrid.
+- **SP** (`HUNYUAN_SP`): diffusion loop token-sharded EP=32→8 → 623 ms/step, −31%, PCC 0.99999 (`1be484e7`).
+- **On-device VAE** (`HUNYUAN_ONDEVICE_VAE`): `AutoencoderKLConv3D.decode` ported to the (8,4) mesh (H/W spatial-shard) → **25.2 s** in-render vs 36 s host, real-weight PCC **0.99718** (`148085fb05`→`a40fc8c057`). One-time 19.4 s decoder build cached across images. Next VAE lever = conv3d block-size sweep (blockings are untuned `C_in_block=32`). See `PERF.md`.
 
 ## Roofline & target
 - Dense-64 (what actually runs): ~65.5 PFLOP/image (MoE ~97% of fwd FLOPs). Sparse top-8: ~10.6 PFLOP. Galaxy peak ~10.6 PFLOP/s bf16 (~3.6× the 3×H100 aggregate).

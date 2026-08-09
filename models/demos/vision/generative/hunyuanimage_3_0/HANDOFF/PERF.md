@@ -20,9 +20,11 @@ Measured performance of the native-TTNN HunyuanImage-3.0 text-to-image render on
 |---|---|---|---|---|
 | Hybrid (per-step host round-trip) | 5548 | 294.7 | 56.4 (fp32) | 351.4 |
 | On-device head-glue — cold | 947 | 46.4 (+133.7 compile) | 36.4 (bf16) | 216.5 |
-| On-device head-glue — **warm** | ~970 | ~48 | ~36 (bf16) | **~84** |
+| On-device head-glue — **warm** | ~970 | ~48 | ~36 host | **~84** |
+| **warm + SP** (`HUNYUAN_SP`) | 623 | ~31 | ~36 host | **~67** |
+| **warm + SP + on-device VAE** (`HUNYUAN_SP` + `HUNYUAN_ONDEVICE_VAE`) | ~660 | ~33 | **25.2 mesh** | **~58** |
 
-Throughput at warm: **~43 images/hr**.
+Throughput at warm: **~43 images/hr** (default) · **~54/hr** (SP) · **~62/hr** (SP + on-device VAE). E2E numbers are steady (steps 2..N + build-amortized VAE); see the VAE section for the one-time build caveat.
 
 ## Optimization ladder (steady ms/step; hybrid path, 32 layers / 12-step / trace)
 
@@ -40,8 +42,8 @@ The largest single win is separate from this ladder: the **on-device head-glue**
 
 | | s/image | Note |
 |---|---|---|
-| **Current (warm)** | **~84** | 32-chip Galaxy, resident server |
-| Near-term target | ~40-50 | on-device VAE + traced render + CFG-parallel |
+| **Current (warm, SP + on-device VAE)** | **~58** | 32-chip Galaxy, resident server (~67 with host VAE) |
+| Near-term target | ~40-50 | traced render + CFG-parallel + VAE decode tuning |
 | Aggressive target | ~15-20 | dense-MoE roofline @ ~40% MFU |
 | Floor (not reachable) | ~5-8 | needs sparse dispatch — DEAD on TT (~13-47× slower) |
 | Ref: HunyuanImage-3.0 / 3×H100 | 137 | same model, GPU (soft provenance) |
@@ -78,4 +80,31 @@ Ladder (traced steady ms/step):
 The fused/ring elaborations (H-shard + AG+MM + fused Ring RS+MM + distributed RMSNorm) are numerically CORRECT (PCC 0.99999) but REGRESS on this HW → kept as gated-off scaffolds (`HUNYUAN_SP_FUSED` / `HUNYUAN_SP_RING`). Added collective traffic + Ring latency > overlap; simple token-sharding wins.
 
 - **Lever 1 (matmul block sweep) = wash** — see [`SWEEPS.md`](SWEEPS.md).
-- **Next lever: on-device VAE decode** — host ~36 s = ~54% of the warm image → target ~10–17 s on mesh; multi-day port (Mochi scaffold + novel UpsampleDCAE + conv3d blocking-fix).
+
+## 2026-08-09 — on-device VAE decode (perf lever #1) — SHIPPED + MEASURED
+
+Full port of `AutoencoderKLConv3D.decode` (the 3D DCAE VAE) to the mesh, replacing the ~36 s host `model.vae.decode` tail. Committed on `hunyuan-image3-unified`: `148085fb05` (single-chip decoder) → `4215de39d3` (mesh HW-shard) → `7e09747e01` (full-res test) → `a40fc8c057` (wired). Gated `HUNYUAN_ONDEVICE_VAE` (default off; host path stays the oracle/fallback).
+
+**Correctness (PCC vs host `model.vae.decode`, real checkpoint weights):**
+
+| level | PCC |
+|---|---|
+| single-chip full decoder (tiny latent) | 0.99937 |
+| (8,4) mesh, 256² | 0.99954 |
+| (8,4) mesh, 1024² | 0.99962 |
+| (8,4) mesh, 1024², **real VAE weights** | **0.99718** |
+
+**Perf (1024², (8,4) mesh, factor 8×4):**
+
+| measurement | value |
+|---|---|
+| standalone decode forward (empty mesh) | 16.2 s warm / 57 s cold |
+| **in-render decode** (mesh shared w/ resident transformer) | **25.2 s** (vs 36 s host) |
+| one-time decoder build (prepares ~160 mesh weights, cached across images) | 19.4 s |
+| **e2e warm (SP + on-device VAE)** | **~58 s** vs ~67 s (SP + host VAE) |
+
+How it works: shard latent H/W across the mesh (`ShardTensor2dMesh`, H=axis0÷8, W=axis1÷4); each conv3d runs on its local shard with a cross-chip H/W halo (`vae_neighbor_pad`, **zeros** boundary to match HF) + on-chip symmetric T pad; GroupNorm gathers full H/W → `GroupNorm3D` (exact statistic) → re-partitions; the DCAE pixel-shuffle upsample stays local (spatial doubling needs no CCL); mid attention gathers full spatial for one replicated SDPA. Reuses the tt_dit **Mochi** VAE CCL machinery + de-risked `ttnn.experimental.conv3d`.
+
+**Caveats / open levers:** (1) the 19.4 s build is one-time and cached, but must move to model-setup so single images benefit; (2) in-render decode 25.2 s > the 16.2 s isolated number — the gap is memory pressure sharing the mesh with the resident transformer + the output gather; (3) conv3d blockings are the safe untuned `C_in_block=32` — **a conv3d block-size sweep is the next VAE lever**. Reduce-moments GroupNorm (avoid the gather) and per-op `num_links` tuning are further levers.
+
+- Superseded plan note: on-device VAE was "next lever"; now shipped and measured above.
