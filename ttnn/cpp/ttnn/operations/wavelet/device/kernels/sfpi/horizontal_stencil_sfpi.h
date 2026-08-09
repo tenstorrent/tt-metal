@@ -146,7 +146,7 @@ inline void _horizontal_stencil_plus_base_block(
             }
         }
     }
-    // TODO Check if NOPS needed
+    // Preserve SFPU pipeline spacing before stores.
     TTI_SFPNOP;
     TTI_SFPNOP;
     TT_SFPSTORE(g_e, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_3, dst_g);
