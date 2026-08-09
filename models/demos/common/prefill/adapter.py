@@ -161,42 +161,23 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     def resolve_compressed_fp8_dispatch(self) -> bool:
-        """Effective FP8 MoE dispatch setting: ``supports_compressed_fp8_dispatch`` AND
-        Blackhole AND not killed via ``PREFILL_COMPRESSED_FP8_DISPATCH=0``.
-
-        The env var can only disable — ``=1`` cannot enable fp8 on an unvalidated model or
-        non-BH hardware (the per_token_cast ops are BH-only); it logs a warning instead.
-        Shared by the runner and the direct pytest entry points. Under ``tt-run``, shell
-        exports don't reach ranks — set the kill switch via the manifest ``env`` map
-        (see docs/ADDING_A_PREFILL_MODEL.md).
-        """
+        """True iff the model is validated for FP8 MoE dispatch, the hardware is Blackhole,
+        and ``PREFILL_COMPRESSED_FP8_DISPATCH=0`` did not kill it. Under ``tt-run`` set the
+        kill switch via the manifest ``env`` map — shell exports don't reach ranks."""
         env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
-        if env is not None and env not in ("0", "1"):
-            logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} not recognized (expected '0' to disable); ignored")
-            env = None
-
+        if env not in (None, "0", "1"):
+            logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} ignored (only '0' has an effect)")
         if env == "0":
             return False
 
-        if not self.supports_compressed_fp8_dispatch:
-            if env == "1":
-                logger.warning(
-                    f"PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: {self.name} is not validated for "
-                    "FP8 MoE dispatch (supports_compressed_fp8_dispatch=False); the env var can only disable"
-                )
-            return False
+        from models.common.utility_functions import is_blackhole  # lazy: keeps this module import-light
 
-        # Lazy: pulls in ttnn/torch — this module must stay import-light (see module docstring).
-        from models.common.utility_functions import is_blackhole
-
-        if not is_blackhole():
-            if env == "1":
-                logger.warning(
-                    "PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect: FP8 MoE dispatch requires Blackhole "
-                    "hardware; the env var can only disable"
-                )
-            return False
-        return True
+        enabled = self.supports_compressed_fp8_dispatch and is_blackhole()
+        if env == "1" and not enabled:
+            logger.warning(
+                f"PREFILL_COMPRESSED_FP8_DISPATCH=1 has no effect for {self.name}: the env var can only disable"
+            )
+        return enabled
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
