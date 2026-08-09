@@ -692,6 +692,80 @@ TEST_F(McastHostFixture, Mcast2DRotating) {
     }
 }
 
+TEST_F(McastHostFixture, Mcast1DRotatingSendersIndependentOfReceiverLines) {
+    auto* dev = device_;
+    const auto receivers = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/2);
+    const std::vector<std::vector<CoreCoord>> senders = {
+        {CoreCoord(1, 1), CoreCoord(3, 1)},
+        {CoreCoord(1, 2), CoreCoord(3, 2)},
+    };
+
+    for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        McastConfig cfg;
+        cfg.noc = noc;
+        cfg.rotating_sender = true;
+        Mcast1D mc(dev, receivers, Mcast1DShape::PerRow, senders, cfg);
+
+        EXPECT_TRUE(mc.active());
+        EXPECT_EQ(mc.num_senders(), 2u);
+        EXPECT_EQ(mc.num_active(), 0xFFFFFFFFu);
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 0xFFFFFFFFu, 1, 2}));
+        EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
+        EXPECT_TRUE(mc.is_sender(CoreCoord(3, 1)));
+        EXPECT_FALSE(mc.is_sender(CoreCoord(2, 1)));
+        EXPECT_EQ(mc.num_receivers(CoreCoord(1, 1)), 1u);
+        EXPECT_EQ(mc.num_receivers(CoreCoord(3, 1)), 2u);
+
+        std::vector<uint32_t> expected = expected_bbox(dev, {CoreCoord(1, 1), CoreCoord(2, 1)}, noc);
+        for (const auto& sender : senders.front()) {
+            const auto w = dev->worker_core_from_logical_core(sender);
+            expected.push_back(static_cast<uint32_t>(w.x));
+            expected.push_back(static_cast<uint32_t>(w.y));
+        }
+        EXPECT_EQ(mc.runtime_args(CoreCoord(1, 1)), expected);
+        EXPECT_EQ(mc.runtime_args(CoreCoord(3, 1)), expected);
+
+        const auto semaphores = mc.owned_semaphores();
+        ASSERT_EQ(semaphores.size(), 2u);
+        EXPECT_EQ(semaphores[0].core_ranges.num_cores(), 6u);
+        EXPECT_EQ(semaphores[1].core_ranges.num_cores(), 6u);
+    }
+}
+
+TEST_F(McastHostFixture, Mcast2DRotatingSendersIndependentOfReceiverRect) {
+    auto* dev = device_;
+    const auto receivers = make_grid(CoreCoord(1, 1), /*gc=*/2, /*gr=*/2);
+    const std::vector<CoreCoord> senders = {CoreCoord(1, 1), CoreCoord(3, 1)};
+
+    McastConfig cfg;
+    cfg.rotating_sender = true;
+    Mcast2D mc(dev, receivers, senders, cfg);
+
+    EXPECT_TRUE(mc.active());
+    EXPECT_EQ(mc.num_senders(), 2u);
+    EXPECT_EQ(mc.num_active(), 0xFFFFFFFFu);
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 0xFFFFFFFFu, 1, 2}));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 1)));
+    EXPECT_FALSE(mc.is_sender(CoreCoord(2, 1)));
+    EXPECT_EQ(mc.num_receivers(CoreCoord(1, 1)), 3u);
+    EXPECT_EQ(mc.num_receivers(CoreCoord(3, 1)), 4u);
+
+    std::vector<uint32_t> expected = expected_rect2d(dev, 1, 1, 2, 2, /*noc1=*/false);
+    for (const auto& sender : senders) {
+        const auto w = dev->worker_core_from_logical_core(sender);
+        expected.push_back(static_cast<uint32_t>(w.x));
+        expected.push_back(static_cast<uint32_t>(w.y));
+    }
+    EXPECT_EQ(mc.runtime_args(CoreCoord(1, 1)), expected);
+    EXPECT_EQ(mc.runtime_args(CoreCoord(3, 1)), expected);
+
+    const auto semaphores = mc.owned_semaphores();
+    ASSERT_EQ(semaphores.size(), 2u);
+    EXPECT_EQ(semaphores[0].core_ranges.num_cores(), 5u);
+    EXPECT_EQ(semaphores[1].core_ranges.num_cores(), 5u);
+}
+
 // NoC1: the sender's rect corners swap to high-corner-start (matches the kernel's per-NoC ordering).
 TEST_F(McastHostFixture, Mcast2DNoc1) {
     auto* dev = device_;

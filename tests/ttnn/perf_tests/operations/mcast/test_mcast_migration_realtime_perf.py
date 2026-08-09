@@ -21,7 +21,6 @@ import ttnn
 from tests.ttnn.perf_tests.operations.conv.test_conv2d_device_perf import CONV_PERF_CONFIGS
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
-
 WARMUP_ITERATIONS = int(os.environ.get("MCAST_RT_WARMUP_ITERATIONS", "3"))
 MEASURED_ITERATIONS = int(os.environ.get("MCAST_RT_MEASURED_ITERATIONS", "20"))
 
@@ -158,7 +157,7 @@ def test_conv2d_mcast_realtime_perf(device, config):
     _run_conv2d(device, config)
 
 
-def _profile_repeated_program(device, case_name, run_once, kernel_source_fragment):
+def _profile_repeated_program(device, case_name, run_once, kernel_source_fragment, required_kernel_source_fragments=()):
     for _ in range(WARMUP_ITERATIONS):
         run_once()
     ttnn.synchronize_device(device)
@@ -177,6 +176,12 @@ def _profile_repeated_program(device, case_name, run_once, kernel_source_fragmen
         f"Expected {MEASURED_ITERATIONS} {case_name} records, found {len(matching_records)} "
         f"out of {len(records)} total records"
     )
+    kernel_sources = {source for record in matching_records for source in record["kernel_sources"]}
+    for fragment in required_kernel_source_fragments:
+        assert any(fragment in source.lower() for source in kernel_sources), (
+            f"{case_name} did not compile the required kernel fragment {fragment!r}; "
+            f"observed sources: {sorted(kernel_sources)}"
+        )
     _write_results(case_name, matching_records)
 
 
@@ -353,12 +358,101 @@ def _run_matmul_2d_transposed(device):
     _profile_repeated_program(device, "matmul_2d_transpose_mcast", run_once, "matmul")
 
 
+def _run_matmul_degenerate_1x1(device):
+    m = k = n = 64
+    tt_act = ttnn.from_torch(
+        torch.randn((1, 1, m, k), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_weights = ttnn.from_torch(
+        torch.randn((1, 1, k, n), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=2,
+        out_subblock_w=2,
+        per_core_M=2,
+        per_core_N=2,
+        mcast_in0=True,
+        gather_in0=False,
+        fuse_batch=True,
+        fused_activation=None,
+    )
+
+    def run_once():
+        output = ttnn.matmul(
+            tt_act,
+            tt_weights,
+            program_config=program_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(output)
+
+    _profile_repeated_program(
+        device,
+        "matmul_1d_degenerate_1x1",
+        run_once,
+        "matmul",
+        required_kernel_source_fragments=("reader_bmm_tile_layout_in0_sender_padding.cpp",),
+    )
+
+
+def _run_matmul_2d_sender_span_exceeds_receiver_span(device):
+    batch_size, m, k, n = 2, 128, 256, 512
+    shape = (batch_size, 1, m, k)
+    tt_act = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_weights = ttnn.from_torch(
+        torch.randn((k, n), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_act = ttnn.to_memory_config(
+        tt_act,
+        ttnn.create_sharded_memory_config(
+            shape,
+            core_grid=ttnn.CoreGrid(y=2, x=2),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    def run_once():
+        output = ttnn.matmul(tt_act, tt_weights, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(output)
+
+    _profile_repeated_program(
+        device,
+        "matmul_2d_sender_span_exceeds_receiver_span",
+        run_once,
+        "matmul",
+        required_kernel_source_fragments=("reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",),
+    )
+
+
 @pytest.mark.parametrize(
     "case_name,run_case",
     [
         pytest.param("matmul_2d_sdxl_ff_gelu", _run_sdxl_matmul_2d, id="matmul_2d_sdxl_ff_gelu"),
         pytest.param("matmul_1d_sdxl_resnet_960_320", _run_sdxl_matmul_1d, id="matmul_1d_sdxl_resnet_960_320"),
         pytest.param("matmul_2d_transpose_mcast", _run_matmul_2d_transposed, id="matmul_2d_transpose_mcast"),
+        pytest.param("matmul_1d_degenerate_1x1", _run_matmul_degenerate_1x1, id="matmul_1d_degenerate_1x1"),
+        pytest.param(
+            "matmul_2d_sender_span_exceeds_receiver_span",
+            _run_matmul_2d_sender_span_exceeds_receiver_span,
+            id="matmul_2d_sender_span_exceeds_receiver_span",
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

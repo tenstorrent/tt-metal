@@ -724,13 +724,17 @@ def test_f3_degenerate(device):
 # shard to the whole line; every core records what it saw per round to DRAM. The check
 # output[c*N + r] == shard(r) validates BOTH the data path AND that the receiver indexes the sender
 # coords in the RIGHT ORDER -- a mis-ordered coord list would hand core c shard(r' != r).
-def _run_rotating_line(device, span, payload_tiles):
-    N = span
+def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_indices=None):
+    receiver_span = span if receiver_span is None else receiver_span
+    sender_indices = list(range(span)) if sender_indices is None else sender_indices
+    assert len(sender_indices) == span
+    N = max(receiver_span, max(sender_indices) + 1)
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
 
-    # the line = a single row of N cores at y=0
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))])
+    # The receiver rectangle may be shorter than the participating line when a sender is outside it.
+    receiver_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(receiver_span - 1, 0))])
+    participant_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))])
 
     # input: N distinct shards (outer row i = core i's shard, constant i+1: bf16-exact and distinct).
     in_shape = [N, 1, 32, 32 * payload_tiles]
@@ -742,23 +746,33 @@ def _run_rotating_line(device, span, payload_tiles):
         payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    # output: N*N shards -> for each core c, N slots (one per round).
-    out_shape = [N * N, 1, 32, 32 * payload_tiles]
+    # output: one slot per participant and sender round. Outside senders write only their own round.
+    out_shape = [N * span, 1, 32, 32 * payload_tiles]
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     io_tensors = [input_tensor, output_tensor]
 
     # ---- the host helper owns sems + CT + per-core RT for the rotating line ----
-    mc = ttnn.Mcast1D(device, grid, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(rotating_sender=True))
-    assert mc.num_senders() == N, f"expected {N} sender rounds, got {mc.num_senders()}"
+    if sender_indices == list(range(span)) and receiver_span == span:
+        mc = ttnn.Mcast1D(device, receiver_grid, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(rotating_sender=True))
+    else:
+        sender_lines = [[ttnn.CoreCoord(sender, 0) for sender in sender_indices]]
+        mc = ttnn.Mcast1D(
+            device,
+            receiver_grid,
+            ttnn.Mcast1DShape.PerRow,
+            sender_lines,
+            ttnn.McastConfig(rotating_sender=True),
+        )
+    assert mc.num_senders() == span, f"expected {span} sender rounds, got {mc.num_senders()}"
     semaphores = mc.owned_semaphores()
 
     cb = 0  # one CB per core: mcast source (in place) + landing region
     cbs = [
         ttnn.CBDescriptor(
             total_size=payload_pages * page_bytes,
-            core_ranges=grid,
+            core_ranges=participant_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=page_bytes)
             ],
@@ -772,20 +786,21 @@ def _run_rotating_line(device, span, payload_tiles):
 
     # RT: [in_addr, in_start, out_addr, out_start, my_index] + McastArgs<1,5> RT block (rect + coords)
     rt = ttnn.RuntimeArgs()
+    sender_rounds = {sender: round_id for round_id, sender in enumerate(sender_indices)}
     for X in range(N):
         core = ttnn.CoreCoord(X, 0)
         rt[X][0] = [
             input_tensor.buffer_address(),
             X * payload_pages,
             output_tensor.buffer_address(),
-            X * N * payload_pages,
-            X,
+            X * span * payload_pages,
+            sender_rounds.get(X, 0xFFFFFFFF),
         ] + list(mc.runtime_args(core))
 
     k = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/pipe_rotating_line.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=grid,
+        core_ranges=participant_grid,
         compile_time_args=ct,
         runtime_args=rt,
         config=ttnn.ReaderConfigDescriptor(),
@@ -794,19 +809,28 @@ def _run_rotating_line(device, span, payload_tiles):
     pd = ttnn.ProgramDescriptor(kernels=[k], semaphores=semaphores, cbs=cbs)
     output = ttnn.generic_op(io_tensors, pd)
 
-    torch_out = ttnn.to_torch(output).reshape(N * N, 1, 32, 32 * payload_tiles)
+    torch_out = ttnn.to_torch(output).reshape(N * span, 1, 32, 32 * payload_tiles)
     for c in range(N):
-        for r in range(N):
+        for r, sender in enumerate(sender_indices):
+            if c >= receiver_span and c != sender:
+                continue
             assert torch.equal(
-                torch_out[c * N + r].to(torch.float32), payload[r].to(torch.float32)
-            ), f"core {c} round {r}: expected shard {r} (const {r + 1}) -> coord-order / data-path bug"
-    logger.info(f"ROTATING-LINE (helper-driven) N={N} pt={payload_tiles}: PASS ({N * N} slots correct, order verified)")
+                torch_out[c * span + r].to(torch.float32), payload[sender].to(torch.float32)
+            ), f"core {c} round {r}: expected sender core {sender} (const {sender + 1}) -> coord-order / data-path bug"
+    logger.info(
+        f"ROTATING-LINE (helper-driven) participants={N} receivers={receiver_span} "
+        f"senders={sender_indices} pt={payload_tiles}: PASS"
+    )
 
 
 # Smoke: the smallest line (2 cores, 1 tile, one round each way). Run this FIRST to shake out compile
 # / wire errors before the full sweep.
 def test_rotating_line_smoke(device):
     _run_rotating_line(device, span=2, payload_tiles=1)
+
+
+def test_rotating_line_outside_sender(device):
+    _run_rotating_line(device, span=2, payload_tiles=1, receiver_span=2, sender_indices=[0, 2])
 
 
 @pytest.mark.parametrize("span", [2, 4, 8])

@@ -16,14 +16,9 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
-#ifdef MCAST_ARGS
     constexpr auto in1_mcast_args = dataflow_kernel_lib::McastArgs<10, 2>();
     constexpr uint32_t in1_post_mcast_ct_offset = in1_mcast_args.next_compile_time_args_offset();
     constexpr uint32_t in1_post_mcast_rt_offset = in1_mcast_args.next_runtime_args_offset();
-#else
-    constexpr uint32_t in1_post_mcast_ct_offset = 14;
-    constexpr uint32_t in1_post_mcast_rt_offset = 6;
-#endif
 
     // READER
     uint32_t rt_args_idx = 0;

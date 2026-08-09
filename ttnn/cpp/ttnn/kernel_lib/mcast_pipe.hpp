@@ -58,6 +58,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
 
 namespace dataflow_kernel_lib {
@@ -216,6 +217,11 @@ public:
     // values are a Flag-only capability; Counter remains a monotone +1 event channel and requires
     // the default VALID argument. Pairs with ReceiverPipe::receive_signal().
     void send_signal(uint32_t value = VALID);
+
+    // Whether this core belongs to the fixed receiver rectangle. Rotating protocols whose ordered
+    // sender set extends beyond that rectangle use this to keep outside senders sender-only on the
+    // other rounds, without duplicating the rectangle-containment calculation at the call site.
+    bool core_in_receiver_rect() const { return in_rect_; }
 
 private:
     // ---- data multicast via the Noc object ----

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 LEDGER_PATH = REPO_ROOT / "helper_design/mcast_pipe/migration/ledger.json"
 
@@ -105,3 +104,91 @@ def test_migrated_kernels_resume_from_named_mcast_boundaries(kernel, rules):
     source = matching_paths[0].read_text()
     violations = [message for pattern, message in rules if re.search(pattern, source)]
     assert not violations, f"{matching_paths[0].relative_to(REPO_ROOT)}: " + "; ".join(violations)
+
+
+MATMUL_MCAST_SOURCES = [
+    REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+    REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+    REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+    REPO_ROOT
+    / "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+    REPO_ROOT
+    / "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+]
+
+
+def test_matmul_migration_has_one_unconditional_mcast_abi():
+    violations = [str(path.relative_to(REPO_ROOT)) for path in MATMUL_MCAST_SOURCES if "MCAST_ARGS" in path.read_text()]
+    assert not violations, "Matmul must use McastArgs without a conditional legacy ABI:\n" + "\n".join(violations)
+
+
+def test_matmul_in0_padding_appends_mcast_after_fixed_operation_args():
+    kernel = MATMUL_MCAST_SOURCES[2].read_text()
+    assert "McastArgs<24, 4>()" in kernel
+    assert "TensorAccessorArgs<in0_post_mcast_ct_offset>()" in kernel
+
+    factory_sources = "\n".join(path.read_text() for path in MATMUL_MCAST_SOURCES[:2])
+    assert "begin() + 15" not in factory_sources
+
+
+def test_matmul_1d_in1_bindings_use_helper_generated_blocks_even_when_inactive():
+    source = MATMUL_MCAST_SOURCES[0].read_text()
+    assert source.count("const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();") == 4
+    assert source.count("const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);") == 6
+    assert "in1_mcast_dest_noc_start_x" not in source
+    assert "in1_mcast_num_dests" not in source
+
+
+def test_sparse_matmul_bindings_preserve_fixed_abi_and_use_inactive_helper_block():
+    source = MATMUL_MCAST_SOURCES[4].read_text()
+
+    in0_ct_helper = source.index("const auto in0_mcast_compile_time_args")
+    fixed_tail_matches = [
+        match.start()
+        for match in re.finditer(r"\(std::uint32_t\)false,\s*// fuse_op", source)
+        if match.start() < in0_ct_helper
+    ]
+    assert fixed_tail_matches
+    in0_ct_fixed_tail = fixed_tail_matches[-1]
+    in0_ct_accessor = source.index("TensorAccessorArgs(*in0_buffer)")
+    assert in0_ct_fixed_tail < in0_ct_helper < in0_ct_accessor
+
+    in0_rt_fixed_tail = source.index("(std::uint32_t)sparsity_buffer->address()};")
+    in0_rt_helper = source.index("in0_mcast_runtime_args.begin()")
+    assert in0_rt_fixed_tail < in0_rt_helper
+
+    assert "const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();" in source
+    assert "const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);" in source
+    assert "in1_mcast_dest_noc_start_x" not in source
+    assert "in1_mcast_num_dests" not in source
+
+
+def test_matmul_mcast_objects_reuse_their_kernel_descriptor_nocs():
+    for path in (MATMUL_MCAST_SOURCES[0], MATMUL_MCAST_SOURCES[1], MATMUL_MCAST_SOURCES[4]):
+        source = path.read_text()
+        assert not re.search(
+            r"McastConfig\s*\{\s*\.noc\s*=\s*tt::tt_metal::detail::preferred_noc_for_dram_",
+            source,
+        ), f"{path.relative_to(REPO_ROOT)} recomputes a NoC inside McastConfig"
+        assert "McastConfig{.noc = in0_noc" in source or ".noc = in0_noc," in source
+        assert "McastConfig{.noc = in1_noc" in source or ".noc = in1_noc," in source
+
+
+def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span():
+    factory_1d = MATMUL_MCAST_SOURCES[0].read_text()
+    factory_2d = MATMUL_MCAST_SOURCES[1].read_text()
+
+    assert "CoreRange in0_mcast_rect = all_cores_with_work.bounding_box();" in factory_1d
+    assert "in0_mcast_senders" in factory_1d
+    assert "in0_mcast_sender_lines" in factory_2d
+    assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_1d, re.DOTALL)
+    assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
+
+
+def test_sender_pipe_degenerate_copy_preserves_async_write_semantics():
+    source = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.inl").read_text()
+    start = source.index("    local_copy_(uint32_t src_l1")
+    body = source[start : source.index("// ReceiverPipe", start)]
+    assert "noc_.async_write(" in body
+    assert "async_read" not in body
+    assert "barrier" not in body
