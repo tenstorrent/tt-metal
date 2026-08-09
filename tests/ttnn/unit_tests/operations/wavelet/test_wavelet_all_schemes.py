@@ -58,8 +58,10 @@ def test_all_106_discrete_schemes_jit_forward_inverse(device: ttnn.MeshDevice, b
 
 @pytest.mark.slow
 @pytest.mark.timeout(1800)
+@pytest.mark.parametrize("boundary_mode", BOUNDARY_MODES)
 def test_all_106_discrete_schemes_jit_forward_inverse_2d(
     device: ttnn.MeshDevice,
+    boundary_mode: str,
 ) -> None:
     schemes = pywt.wavelist(kind="discrete")
     assert len(schemes) == 106
@@ -77,18 +79,18 @@ def test_all_106_discrete_schemes_jit_forward_inverse_2d(
     )
 
     for scheme in schemes:
-        outputs = ttnn.dwt_2d(input_tensor, scheme, boundary_mode="symmetric")
+        outputs = ttnn.dwt_2d(input_tensor, scheme, boundary_mode=boundary_mode)
         reconstructed = ttnn.idwt_2d(
             *outputs,
             scheme,
             shape,
-            boundary_mode="symmetric",
+            boundary_mode=boundary_mode,
         )
 
         wavelet = pywt.Wavelet(scheme)
         coefficient_shape = (
-            pywt.dwt_coeff_len(shape[0], wavelet.dec_len, mode="symmetric"),
-            pywt.dwt_coeff_len(shape[1], wavelet.dec_len, mode="symmetric"),
+            pywt.dwt_coeff_len(shape[0], wavelet.dec_len, mode=boundary_mode),
+            pywt.dwt_coeff_len(shape[1], wavelet.dec_len, mode=boundary_mode),
         )
         for output in outputs:
             assert tuple(output.shape) == coefficient_shape
