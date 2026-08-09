@@ -73,13 +73,42 @@ thing the scout stands in for.
 - Reconcile any mismatch as a **shim bug, not model waste** (the verify-loop discipline).
 - Proves the scout is faithful and retires the "run directly, not via scout" blockers.
 
-**4. From counted bytes to a measured win** *(the proof).*
-The tool reports recoverable traffic as byte-counts; only real fabric turns that into measured
-latency/bandwidth.
-- Profile the flagged collectives on the Ring fabric.
-- Implement one fix end-to-end — e.g. run the encoder on a `1×8` submesh instead of replicating
-  across SP — and measure: outputs identical, traffic and latency down. One finding becomes a
-  landed optimization with a number.
+**4. From counted bytes to a measured win** — *measured 2026-08-08; the number is not the one this
+plan assumed.* The encoder-on-a-submesh fix was measured end to end with
+`measure_encoder_submesh.py` (Tracy, warm window via signposts, construction outside it). At
+production `sp1tp0` the submesh is **4×1**, not the `1×8` written above — TP=4 intact, one SP
+column.
+
+| arm | chips | device time/fwd | op-to-op gap/fwd | untraced window/fwd |
+|---|---|---|---|---|
+| full 4×8, 11×10 grid | 32 | 2824–2834 µs | 5233–5886 µs | 8067–8709 µs |
+| submesh 4×1, 11×10 pinned | 4 | 3689–3812 µs | 939–1378 µs | 4751–5067 µs |
+| submesh 4×1, 12×10 (real behaviour) | 4 | 3152 µs | 1298 µs | **4450 µs** |
+
+**Outputs are bit-for-bit identical** to the full-mesh SP-column-0 shards on every TP row
+(`max|Δ|=0`), so the fix is exact. But the win is not latency:
+
+- The ~48% untraced improvement is **almost entirely the op-to-op gap collapsing** (5886 → 1298
+  µs) — host dispatch cost for 32 devices versus 4, not compute.
+- **Per-device compute got ~12% worse** (2824 → 3152 µs), concentrated in small ops (`Embeddings`
+  18.6→95.6, `Clone` 29.9→148.2, `NLPConcatHeads` 19.6→64.0). Reproducible across repeats at 2 and
+  4 iterations, so not noise. Unexplained — worth chasing before anyone ships this.
+- The big ops behave exactly as the analysis predicts: `AllGather` per-device time is **unchanged**
+  (597 → 591 µs) because each TP group does identical work either way — the saving is *aggregate*
+  traffic, 8 concurrent groups collapsing to 1. `SDPA` matches to 0.1 µs.
+
+**The caveat that governs the whole result: production runs traced.** Tracing removes most of the
+gap (the report's own advice: 66% of the full arm's window), which is precisely the term the
+submesh wins on. Traced, this fix is likely neutral-to-slightly-negative on encoder latency while
+still freeing **28 of 32 chips** and cutting the encoder's link traffic 8×. That is a real win, but
+it is a *capacity* win, not a latency one — "traffic down ⇒ latency down" does not hold here, and
+the tool should not imply that it does.
+
+**A confound worth knowing about for any submesh measurement:** `get_matmul_core_grid` clamps to
+11×10 only at ≥32 devices (a BH Galaxy power constraint), so a 4-device submesh silently takes
+12×10. That is not a free 20% — it changes the matmul's output sharding, which downstream
+elementwise ops inherit, and it moves small-op times in both directions. `--grid clamped` pins it
+so the A/B isolates the finding.
 
 **5. Ring collectives & the soundness gates (11c).**
 The shim *models* Ring but has only ever been conformed on Linear. Conform the ring all-gather /
