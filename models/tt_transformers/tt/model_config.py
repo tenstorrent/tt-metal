@@ -109,6 +109,41 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Preserve Galaxy's 128K layout while accommodating larger vocabularies."""
+    return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
+
+
+def compute_galaxy_width_shard_cores(width: int, max_cores: int = 32) -> int:
+    """Use the largest core count that leaves a tile-aligned width shard."""
+    if width % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"width must be tile-aligned, got {width}")
+    width_tiles = width // ttnn.TILE_SIZE
+    num_cores = min(max_cores, width_tiles)
+    while width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores
+
+
+def create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim: int, mesh_cols: int) -> ttnn.MemoryConfig:
+    """Create the Galaxy FF1 reduce-scatter layout for the padded MLP width."""
+    if hidden_dim == 32768:
+        num_cores = 32
+        core_grid = ttnn.CoreGrid(x=8, y=4)
+    else:
+        # Preserve the silicon-validated Llama-70B 7x4 layout.
+        num_cores = 28
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))})
+
+    return ttnn.create_sharded_memory_config(
+        shape=(32, hidden_dim // mesh_cols // num_cores),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
@@ -936,12 +971,8 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
-            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = create_galaxy_ff1_out_reduce_scatter_memcfg(
+                self.hidden_dim, self.cluster_shape[1]
             )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -2768,7 +2799,7 @@ class ModelArgs:
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
         if self.is_galaxy:
-            self.padded_vocab_size = 128 * 1024
+            self.padded_vocab_size = compute_galaxy_padded_vocab_size(self.vocab_size, self.num_devices)
         elif self.num_devices == 0:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
@@ -4333,19 +4364,30 @@ class ModelArgs:
             )
 
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, self.dim // 4 // compute_galaxy_width_shard_cores(self.dim // 4)),
+                core_grid=num_to_coregrid(compute_galaxy_width_shard_cores(self.dim // 4)),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            if self.dim == 5120:
+                # Qwen's unified attention output is [32, 1024] after the user
+                # gather, requiring one 32-wide shard on each of 32 cores.
+                self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                    shape=(32 * mesh_cols, 32),
+                    core_grid=num_to_coregrid(32),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            else:
+                self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                    shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+                    core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
         else:
             qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
