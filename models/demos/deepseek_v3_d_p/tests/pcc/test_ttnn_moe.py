@@ -702,7 +702,7 @@ MESH_TOPOLOGY_PARAMS = [
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -773,7 +773,7 @@ def test_ds_moe(
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -841,7 +841,7 @@ def test_glm_moe(
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
