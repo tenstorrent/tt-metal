@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental {
 

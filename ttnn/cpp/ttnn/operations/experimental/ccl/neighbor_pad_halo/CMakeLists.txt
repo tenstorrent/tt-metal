@@ -4,11 +4,23 @@ add_library(TTNN::Ops::Experimental::NeighborPadHalo ALIAS ttnn_op_experimental_
 tt_reuse_precompile_headers(ttnn_op_experimental_neighbor_pad_halo TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_neighbor_pad_halo)
 
-file(GLOB_RECURSE kernels device/kernels/*)
+set_target_properties(
+    ttnn_op_experimental_neighbor_pad_halo
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+set(api_headers neighbor_pad_halo.hpp halo_scatter.hpp)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_experimental_neighbor_pad_halo
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${api_headers}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -34,6 +46,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_experimental_neighbor_pad_halo
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo
