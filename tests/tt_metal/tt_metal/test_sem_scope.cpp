@@ -753,6 +753,9 @@ TEST_F(SemScopeFixture, TestExternalRemoteUpConcurrentExactCount) {
 // node, so the cached pool is off the table and AUTO must resolve EXTERNAL -- and still count
 // exactly end to end.
 TEST_F(SemScopeFixture, TestAutoRemoteWriterExternalExactCount) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes for an off-node sender";
     }
@@ -948,6 +951,9 @@ TEST_F(SemScopeFixture, TestCensusOffNodeWriterPicksExternal) {
 // node conflict), so only the node-confinement check can demote this to EXTERNAL. Count is not
 // asserted: the binder's node has no host-initialized word for this semaphore.
 TEST_F(SemScopeFixture, TestCensusOffNodeSoleBinderPicksExternal) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place the binder off the semaphore's node";
     }
@@ -1005,6 +1011,9 @@ TEST_F(SemScopeFixture, TestWriterBindingBakesMutable) {
 // writer's kernel: double bindings are rejected), so this pins the reader rule end-to-end rather
 // than in isolation.
 TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a reader off the semaphore's node";
     }

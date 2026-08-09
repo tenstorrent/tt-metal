@@ -109,8 +109,8 @@ struct CollectedSpecData {
         // Union of ALL binders' node sets (writers + readers), derived once kernel node sets exist.
         // Used to validate DM_LOCAL_CACHED eligibility (forced and AUTO, via cached_geometry_ok()):
         // the cached-only pool is per-core, so a binder on another node would address THAT node's
-        // pool copy and the semaphore would silently split. (Every binder being a DM kernel is validator-enforced, but re-checked at decision
-        // time since validation can be skipped.)
+        // pool copy and the semaphore would silently split. (Every binder being a DM kernel is
+        // validator-enforced, but re-checked at decision time since validation can be skipped.)
         NodeRangeSet binder_node_set;
         // Distinct binder KERNELS (writers + readers, deduplicated). The cached pool slot is re-seeded
         // at EVERY binding kernel's entry by an unsynchronised store, so a second binder kernel (even
