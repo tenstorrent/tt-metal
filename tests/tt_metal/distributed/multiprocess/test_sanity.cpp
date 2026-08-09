@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <numeric>
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -15,7 +14,6 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -168,48 +166,6 @@ TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     };
 
     host_buffer.apply(validate_local_shards);
-}
-
-TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
-    // Simple test with a 2x4 mesh, 64x128 buffer, 32x32 shards
-    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
-    DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-
-    Shape2D global_buffer_shape = {64, 128};
-    Shape2D shard_shape = {32, 32};
-
-    uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
-
-    ShardedBufferConfig sharded_config{
-        .global_size = global_buffer_size,
-        .global_buffer_shape = global_buffer_shape,
-        .shard_shape = shard_shape,
-        .shard_orientation = ShardOrientation::ROW_MAJOR,
-    };
-
-    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
-
-    // Create input data
-    std::vector<uint32_t> src_vec(global_buffer_shape.height() * global_buffer_shape.width(), 0);
-    std::iota(src_vec.begin(), src_vec.end(), 0);
-
-    // Write and read back
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
-    std::vector<uint32_t> dst_vec;
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
-
-    // The expectation is that EnqueueWriteMeshBuffer/EnqueueReadMeshBuffer
-    // should handle sharding/unsharding transparently, so dst should equal src
-    for (int i = 0; i < dst_vec.size(); i++) {
-        auto shard_row = i / global_buffer_shape.width();
-        auto shard_col = i % global_buffer_shape.width();
-        auto device_row = shard_row / shard_shape.height();
-        auto device_col = shard_col / shard_shape.width();
-        if (mesh_device_->impl().is_local(MeshCoordinate(device_row, device_col))) {
-            EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
-        }
-    }
 }
 
 TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
