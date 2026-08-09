@@ -42,6 +42,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

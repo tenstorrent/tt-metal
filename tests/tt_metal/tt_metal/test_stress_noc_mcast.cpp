@@ -14,7 +14,6 @@
 #include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <map>

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cluster.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <internal/cluster.hpp>
+#include <tt-metalium/cluster.hpp>
 
 namespace ttnn {
 

@@ -13,6 +13,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 

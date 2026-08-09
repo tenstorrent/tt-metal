@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

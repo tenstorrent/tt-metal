@@ -16,6 +16,7 @@
 
 #include "device_fixture.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

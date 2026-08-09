@@ -23,6 +23,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

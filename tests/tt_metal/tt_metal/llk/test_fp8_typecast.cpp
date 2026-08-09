@@ -16,7 +16,6 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -24,6 +23,7 @@
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

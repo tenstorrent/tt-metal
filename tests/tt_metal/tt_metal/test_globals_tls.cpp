@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/device/device_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""

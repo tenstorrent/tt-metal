@@ -18,9 +18,9 @@
 #include <tt-metalium/kernel_types.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 #include "host_api/helpers.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental::quasar {
 

@@ -25,12 +25,12 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/device/device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

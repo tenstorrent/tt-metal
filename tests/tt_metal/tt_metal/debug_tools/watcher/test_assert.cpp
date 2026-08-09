@@ -25,13 +25,13 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
 #include "impl/debug/debug_helpers.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.

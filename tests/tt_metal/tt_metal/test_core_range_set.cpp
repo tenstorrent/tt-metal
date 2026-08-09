@@ -24,8 +24,8 @@
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt;

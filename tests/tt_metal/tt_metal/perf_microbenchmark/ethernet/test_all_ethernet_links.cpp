@@ -28,7 +28,6 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 #include <thread>
@@ -39,6 +38,8 @@
 
 #include <enchantum/enchantum.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

@@ -15,6 +15,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 /* Performance debug helpers */
 #define NOW() std::chrono::high_resolution_clock::now()

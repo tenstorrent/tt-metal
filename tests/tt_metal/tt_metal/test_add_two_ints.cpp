@@ -14,6 +14,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

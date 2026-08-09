@@ -38,7 +38,6 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -51,6 +50,7 @@
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"  // receiver_socket_md (for L1 layout sizing)
+#include "program/program_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 

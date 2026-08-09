@@ -14,13 +14,13 @@
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/device.hpp>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
-#include "impl/program/program_impl.hpp"
+#include "program/program_impl.hpp"
+#include "device/device_impl.hpp"
 
 namespace tt::tt_metal::experimental::lightmetal {
 

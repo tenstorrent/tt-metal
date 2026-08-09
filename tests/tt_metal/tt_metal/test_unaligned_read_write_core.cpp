@@ -11,7 +11,6 @@
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -32,6 +31,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test verifies that the slow dispatch path can perform device reads and writes when the page size is not a

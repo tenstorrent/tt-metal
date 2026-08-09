@@ -7,6 +7,7 @@
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

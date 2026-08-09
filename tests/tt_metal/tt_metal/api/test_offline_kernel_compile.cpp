@@ -28,6 +28,7 @@
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

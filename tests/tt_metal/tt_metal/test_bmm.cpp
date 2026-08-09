@@ -10,8 +10,6 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -22,6 +20,8 @@
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;

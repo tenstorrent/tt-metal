@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -30,6 +29,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

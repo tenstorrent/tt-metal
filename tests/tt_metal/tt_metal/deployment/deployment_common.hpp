@@ -8,6 +8,7 @@
 #include "tt_metal/api/tt-metalium/hal.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include "impl/device/device_impl.hpp"
 
 #define TEST_PARAM(type, var, initial, envvar) \
     type var = (initial);                      \

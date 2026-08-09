@@ -4,6 +4,8 @@
 
 #include "impl/streaming_profiler/streaming_profiler_device.hpp"
 
+#include "impl/program/program_impl.hpp"  // ProgramImpl: Program::impl().compile()
+
 #include <algorithm>
 #include <array>
 #include <chrono>

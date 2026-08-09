@@ -15,7 +15,6 @@
 #include "impl/sub_device/sub_device_impl.hpp"
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
-#include <tt_metal.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>

@@ -17,13 +17,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device_fixture.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -199,7 +198,6 @@ TEST_F(CompilerIncludePathsTest, TensixHeaderEditTriggersRebuild) {
     const std::string kernel_src = R"(
 #include "api/dataflow/dataflow_api.h"
 #include "user_header.h"
-
 void kernel_main() {
     volatile uint32_t tt_l1_ptr* l1_ptr = (volatile uint32_t tt_l1_ptr*)0x100000;
     *l1_ptr = USER_HEADER_SENTINEL;

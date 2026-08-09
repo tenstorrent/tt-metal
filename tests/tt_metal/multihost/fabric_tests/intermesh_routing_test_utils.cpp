@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

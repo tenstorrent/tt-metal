@@ -38,6 +38,7 @@
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"
+#include "impl/device/device_impl.hpp"
 #endif
 
 namespace tt::tt_metal::slow_dispatch {

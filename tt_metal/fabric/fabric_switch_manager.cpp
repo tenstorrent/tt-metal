@@ -12,6 +12,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_fabric {
 

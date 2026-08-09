@@ -37,12 +37,12 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 

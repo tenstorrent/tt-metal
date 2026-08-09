@@ -42,6 +42,7 @@
 #include <random>
 #include <set>
 #include <vector>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

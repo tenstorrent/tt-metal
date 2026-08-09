@@ -12,7 +12,6 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
@@ -20,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_fabric {
 

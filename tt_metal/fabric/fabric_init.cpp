@@ -12,6 +12,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "impl/program/program_impl.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000

@@ -57,6 +57,7 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 #include "test_helpers.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

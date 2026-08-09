@@ -11,7 +11,6 @@
 #include <iterator>
 #include <random>
 #include <sys/types.h>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"

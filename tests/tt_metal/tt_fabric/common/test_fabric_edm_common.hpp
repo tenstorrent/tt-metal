@@ -7,7 +7,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -40,6 +39,7 @@
 #include <limits>
 
 #include <tt_metal/fabric/ccl/ccl_common.hpp>
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

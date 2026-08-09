@@ -7,7 +7,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <map>
 #include <utility>

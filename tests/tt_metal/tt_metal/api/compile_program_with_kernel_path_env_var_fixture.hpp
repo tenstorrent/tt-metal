@@ -14,6 +14,7 @@
 
 #include "device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_impl.hpp"
 
 class CompileProgramWithKernelPathEnvVarFixture : public tt::tt_metal::UnitMeshAnyDispatchFixture {
 protected:

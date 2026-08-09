@@ -18,9 +18,10 @@
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

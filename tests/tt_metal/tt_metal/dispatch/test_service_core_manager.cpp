@@ -36,6 +36,7 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 

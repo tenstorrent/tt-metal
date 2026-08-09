@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -27,6 +26,8 @@
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "work_thread.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -16,8 +16,8 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental {
 
