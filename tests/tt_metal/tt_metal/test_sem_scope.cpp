@@ -44,14 +44,10 @@ protected:
     static constexpr uint32_t iterations{64};
     static constexpr uint32_t concurrent_iterations{20};  // per-thread; NoC round-trips are slow on emu
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_smoke.cpp";
-    const std::string kernel_path_concurrent =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_concurrent.cpp";
-    const std::string kernel_path_coexist =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_coexist.cpp";
-    const std::string kernel_path_census =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
-    const std::string kernel_path_remote =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
+    const std::string kernel_path_concurrent = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_concurrent.cpp";
+    const std::string kernel_path_coexist = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_coexist.cpp";
+    const std::string kernel_path_census = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
+    const std::string kernel_path_remote = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -616,8 +612,8 @@ TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
     }
-    const uint32_t observed = run_concurrent(
-        SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    const uint32_t observed =
+        run_concurrent(SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
 }
@@ -654,8 +650,8 @@ TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
     }
-    const uint32_t observed = run_concurrent(
-        SemaphoreScope::EXTERNAL, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
+    const uint32_t observed =
+        run_concurrent(SemaphoreScope::EXTERNAL, "MODE_MULTI_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "EXTERNAL multi-consumer down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "EXTERNAL multi-consumer down() double-spent or lost a credit";
 }
@@ -685,8 +681,7 @@ TEST_F(SemScopeFixture, TestAutoMultiConsumerDown) {
 TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
     const auto [cached_val, external_val] = run_coexist();
     const uint32_t expected = num_dms_ * concurrent_iterations;
-    log_info(
-        LogTest, "coexistence: cached={} external={} (each expected {})", cached_val, external_val, expected);
+    log_info(LogTest, "coexistence: cached={} external={} (each expected {})", cached_val, external_val, expected);
     EXPECT_EQ(cached_val, expected)
         << "DM_LOCAL_CACHED (pool) count wrong -> cached AMO lost updates or the pool was not initialised.";
     EXPECT_EQ(external_val, expected)
@@ -960,10 +955,7 @@ TEST_F(SemScopeFixture, TestCensusOffNodeSoleBinderPicksExternal) {
     }
     const auto [scope, count] = run_census(
         core,
-        {{.node = second_node(),
-          .num_threads = num_dms_,
-          .increments = concurrent_iterations,
-          .reporter = true}});
+        {{.node = second_node(), .num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     (void)count;
     log_info(LogTest, "census off-node sole binder: scope={}", scope);
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
@@ -1022,10 +1014,7 @@ TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true},
-         {.node = other,
-          .num_threads = 1,
-          .access = experimental::SemaphoreAccessType::OBSERVE,
-          .increments = 0}});
+         {.node = other, .num_threads = 1, .access = experimental::SemaphoreAccessType::OBSERVE, .increments = 0}});
     (void)count;
     log_info(LogTest, "census off-node observer: scope={}", scope);
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL))
@@ -1057,8 +1046,8 @@ TEST_F(SemScopeFixture, TestCensusOffNodeConsumerFatal) {
 
 // Explicit scopes must still win over the classifier.
 TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
-    const auto [ext_scope, ext_count] = run_census(
-        core, {{.num_threads = 1, .increments = iterations, .reporter = true}}, SemaphoreScope::EXTERNAL);
+    const auto [ext_scope, ext_count] =
+        run_census(core, {{.num_threads = 1, .increments = iterations, .reporter = true}}, SemaphoreScope::EXTERNAL);
     EXPECT_EQ(ext_scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must override the AUTO cheap pick";
     EXPECT_EQ(ext_count, iterations);
 
@@ -1137,8 +1126,7 @@ TEST_F(SemScopeFixture, TestCensusSetHonestyFatal) {
 // A kernel may bind a given semaphore only once -- a second binding would double-count that kernel's
 // instances in the census and so distort the mechanism choice.
 TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
-    experimental::SemaphoreSpec sem{
-        .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
+    experimental::SemaphoreSpec sem{.unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
     const experimental::KernelSpecName K{"double_binder"};
     experimental::KernelSpec ks{
         .unique_id = K,
@@ -1151,8 +1139,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
         .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
-    experimental::ProgramSpec spec{
-        .name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
+    experimental::ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
     EXPECT_ANY_THROW({
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
         (void)program;

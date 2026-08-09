@@ -208,8 +208,8 @@
 #define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
 // Guard size edits: all three regions must stay whole, 64B-aligned cache lines
 // (a non-multiple size above would misalign the pool base).
-#if (MEM_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_NOC_SEM_LOCK_SIZE % 64 != 0) || \
-    (MEM_DM_CACHED_SEM_BASE % 64 != 0) || (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
+#if (MEM_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_NOC_SEM_LOCK_SIZE % 64 != 0) || (MEM_DM_CACHED_SEM_BASE % 64 != 0) || \
+    (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
 #error "CAS-ret/lock regions and the cached semaphore pool must be whole, aligned 64B cache lines"
 #endif
 

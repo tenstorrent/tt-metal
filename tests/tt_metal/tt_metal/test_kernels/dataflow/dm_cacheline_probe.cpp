@@ -34,8 +34,8 @@
 
 void kernel_main() {
 #if defined(ARCH_QUASAR)
-    const uint32_t base_addr = get_arg(args::base_addr);          // line-aligned sweep region
-    const uint32_t report_addr = get_arg(args::report_addr);      // disjoint scratch (2 + 3*NUM_SEPS words)
+    const uint32_t base_addr = get_arg(args::base_addr);            // line-aligned sweep region
+    const uint32_t report_addr = get_arg(args::report_addr);        // disjoint scratch (2 + 3*NUM_SEPS words)
     const uint32_t residency_addr = get_arg(args::residency_addr);  // disjoint scratch for Control A
 
     constexpr uint32_t CACHED_ADD = 5;
@@ -52,14 +52,14 @@ void kernel_main() {
 
     // ---- Control A: write-back residency proof ----
     {
-        volatile tt_l1_ptr uint32_t* r_unc =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(residency_addr) + MEM_L1_UNCACHED_BASE);
+        volatile tt_l1_ptr uint32_t* r_unc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            static_cast<uintptr_t>(residency_addr) + MEM_L1_UNCACHED_BASE);
         volatile uint32_t* r_cached = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(residency_addr));
-        *r_unc = RES_OLD;                             // TL1 = OLD (uncached alias bypasses the cache)
-        *r_cached = RES_NEW;                          // cached write: dirty, NOT flushed
-        report[0] = *r_unc;                           // expect OLD (NEW is stuck in the write-back cache)
+        *r_unc = RES_OLD;     // TL1 = OLD (uncached alias bypasses the cache)
+        *r_cached = RES_NEW;  // cached write: dirty, NOT flushed
+        report[0] = *r_unc;   // expect OLD (NEW is stuck in the write-back cache)
         flush_l2_cache_line(static_cast<uintptr_t>(residency_addr));
-        report[1] = *r_unc;                           // expect NEW (flush wrote it back)
+        report[1] = *r_unc;  // expect NEW (flush wrote it back)
     }
 
     // ---- Per-separation clobber sweep ----
@@ -93,9 +93,9 @@ void kernel_main() {
         flush_l2_cache_line(static_cast<uintptr_t>(wc));
 
         // 6. Read TL1 truth via the uncached alias.
-        report[2 + 3 * i + 0] = *wc_unc;   // liveness: expect CACHED_ADD
-        report[2 + 3 * i + 1] = wn_pre;    // Control B: expect NOC_ADD
-        report[2 + 3 * i + 2] = *wn_unc;   // NOC_ADD => safe (different line); 0 => clobbered
+        report[2 + 3 * i + 0] = *wc_unc;  // liveness: expect CACHED_ADD
+        report[2 + 3 * i + 1] = wn_pre;   // Control B: expect NOC_ADD
+        report[2 + 3 * i + 2] = *wn_unc;  // NOC_ADD => safe (different line); 0 => clobbered
     }
 
     // Publish the whole report region to TL1 for the host readback.

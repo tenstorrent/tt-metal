@@ -261,8 +261,7 @@ bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
 bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
     return sem_nodes.num_cores() == 1 && binders.binder_kernel_count == 1 &&
-           sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() &&
-           all_binders_are_dm(binders);
+           sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() && all_binders_are_dm(binders);
 }
 
 // Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope baked into
@@ -931,8 +930,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             }
             const auto& node = sem_nodes.ranges().front().start_coord;
             const uint64_t node_key = (static_cast<uint64_t>(node.x) << 32) | static_cast<uint64_t>(node.y);
-            const KernelSpec* binder = binders.writers.empty() ? binders.readers.front().kernel
-                                                              : binders.writers.front().kernel;
+            const KernelSpec* binder =
+                binders.writers.empty() ? binders.readers.front().kernel : binders.writers.front().kernel;
             kernels_by_node[node_key].insert(binder);
             if (forced_cached) {
                 forced_kernels_by_node[node_key].insert(binder);

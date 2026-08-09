@@ -43,4 +43,3 @@ enum class SemScope : uint8_t {
     DM_LOCAL_CACHED = 1,
     EXTERNAL = 2,
 };
-
