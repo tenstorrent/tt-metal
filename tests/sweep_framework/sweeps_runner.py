@@ -340,7 +340,11 @@ def run(input_queue, output_queue, config: SweepsConfig):
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
-    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import clear_job_device_program_cache, close_job_device
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+        clear_job_device_program_cache,
+        close_job_device,
+        device_canary,
+    )
 
     module_cache = {}
     cur_module = None
@@ -405,6 +409,17 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     status, message, e2e_perf, device_perf, peak_memory = run_single(
                         test_module, test_vector, cur_device, config
                     )
+                # Probe the device ONLY when the vector failed. On the happy path this costs
+                # nothing; on a failure it answers the question the exception text cannot --
+                # did this op compute the wrong answer, or is the device returning garbage to
+                # everyone? 2+2 across the batch's own mesh, ~1 ms warm.
+                canary_detail = None
+                if not status and cur_device is not None:
+                    healthy, canary_detail = device_canary(cur_device)
+                    if healthy:
+                        canary_detail = None  # nothing to report; the failure stands on its own
+                    else:
+                        logger.error(f"Device canary FAILED after a failing vector: {canary_detail}")
                 output_queue.put(
                     [
                         status,
@@ -412,12 +427,19 @@ def run(input_queue, output_queue, config: SweepsConfig):
                         e2e_perf,
                         device_perf if config.measure_device_perf else None,
                         peak_memory if config.measure_memory else None,
+                        canary_detail,
                     ]
                 )
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
-                output_queue.put([False, str(e), None, None, None])
+                canary_detail = None
+                if cur_device is not None:
+                    healthy, detail = device_canary(cur_device)
+                    if not healthy:
+                        canary_detail = detail
+                        logger.error(f"Device canary FAILED after a raised vector: {detail}")
+                output_queue.put([False, str(e), None, None, None, canary_detail])
     finally:
         _exhaust_fixture()
         close_job_device()
@@ -528,6 +550,9 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         response[3],
         response[4],
     )
+    # 6th element (optional, so older/other producers of this tuple still unpack): set only
+    # when the vector FAILED and the post-failure device canary also failed.
+    canary_detail = response[5] if len(response) > 5 else None
     result["message"] = message
 
     logger.info(f"Test status: {status}")
@@ -572,7 +597,30 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             result["status"] = TestStatus.PASS
     else:
         result["exception"] = message
-        if config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
+        if canary_detail:
+            # The vector failed AND the device then failed to compute 2+2 across its own mesh.
+            # A device that cannot do that is not evidence about this op, so the failure is
+            # unattributable: mark NOT_RUN and stop rather than book it -- and rather than keep
+            # feeding vectors to a device that will manufacture more.
+            #
+            # This is what run 31295900210 needed. On UF-MN-B4-GWH03 a device timeout was
+            # followed by add/linear/nlp_create_qkv_heads_decode each returning PCC exactly 0.0;
+            # all three were booked as test failures and all three pass in other runs on other
+            # boxes. The exception text alone could not tell them apart from real regressions --
+            # a health probe can.
+            #
+            # Deliberately ahead of the profiler-readback rule below: both mean "the device is
+            # bad", and the canary is the more direct measurement of the two.
+            logger.error(
+                f"Device canary failed after input_hash='{input_hash}' failed: {canary_detail}. "
+                "The failure is unattributable to this vector -- marking NOT_RUN and ending the run."
+            )
+            result["status"] = TestStatus.NOT_RUN
+            result["exception"] = f"DEVICE CANARY FAILED (result not attributable to this vector): {canary_detail}"
+            result["device_perf"] = None
+            result["_abort_suite"] = True
+            result["_infra_abort"] = True
+        elif config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
             # The vector FAILED and the profiler readback ALSO threw. Two independent
             # readers of the device disagreeing with expectations at once is treated as
             # evidence the device itself is bad, not that this vector is a bad test: the

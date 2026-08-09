@@ -623,6 +623,60 @@ def _guarded_open_mesh_device(*args, **kwargs):
 ttnn.open_mesh_device = _guarded_open_mesh_device
 
 
+def device_canary(device) -> Tuple[bool, str]:
+    """Ask the device a question we already know the answer to: is 2 + 2 still 4, on every chip?
+
+    Returns (healthy, detail). Never raises -- a throw IS a failed canary.
+
+    Why this exists. Wedge detection is otherwise REACTIVE: the runner pattern-matches the
+    exception text a vector produced, so a device that returns plausible-looking garbage is
+    indistinguishable from an op that computed the wrong answer. Lead-models run 31295900210
+    is the case in point -- after a device timeout, `add`, `linear` and
+    `nlp_create_qkv_heads_decode` each came back at PCC exactly 0.0 (an all-zeros readback)
+    and were booked as three separate test failures. All three pass in other runs on other
+    boxes. A health probe answers the question directly instead of inferring it from prose.
+
+    The tensor is SHARDED over the whole mesh, not run on one chip: a batch's vectors span
+    every device in its mesh, so a probe that only exercises chip 0 would miss exactly the
+    per-chip corruption this is meant to catch. Scatter + compute + gather all participate.
+
+    Exact equality, not PCC: 2.0 and 4.0 are exactly representable in bfloat16, so any
+    deviation at all is corruption rather than precision.
+    """
+    try:
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    except Exception as e:
+        return False, f"canary: could not query device count ({e})"
+
+    try:
+        rows = 32 * max(int(num_devices), 1)
+        torch_in = torch.full((rows, 32), 2.0, dtype=torch.float32)
+        if hasattr(device, "get_num_devices") and num_devices > 1:
+            mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            tt_in = ttnn.from_torch(
+                torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+            )
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+        else:
+            tt_in = ttnn.from_torch(torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in))
+    except Exception as e:
+        return False, f"canary: 2+2 raised on a {num_devices}-device mesh ({type(e).__name__}: {str(e)[:160]})"
+
+    try:
+        if tuple(out.shape) != (rows, 32):
+            return False, f"canary: 2+2 returned shape {tuple(out.shape)}, expected {(rows, 32)}"
+        bad = int((out != 4.0).sum().item())
+        if bad:
+            return False, (
+                f"canary: 2+2 != 4 in {bad}/{out.numel()} elements on a {num_devices}-device mesh "
+                f"(first value {out.flatten()[0].item()}) -- the device is returning corrupt data"
+            )
+    except Exception as e:
+        return False, f"canary: could not verify the 2+2 result ({e})"
+    return True, f"canary: 2+2 == 4 across {num_devices} device(s)"
+
+
 def clear_job_device_program_cache() -> None:
     """Clear the cached job device's program cache — call at each module boundary
     so a new module doesn't collide with an earlier module's cached programs /
