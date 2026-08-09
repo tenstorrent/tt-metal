@@ -87,12 +87,12 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     if (hart == 2) {  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
         const uint32_t src_index = (uint32_t)((sem_addr >> 2) & 0x3);
-        const uint64_t at_len_cas_ok =
-            NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(9 & 0xF) << 6) | ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
+        const uint64_t at_len_cas_ok = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(9 & 0xF) << 6) |
+                                       ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
         noc_raw_atomic(self_noc_addr, at_len_cas_ok, 0);
         noc_async_atomic_barrier();
-        const uint64_t at_len_cas_fail =
-            NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(2 & 0xF) << 6) | ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
+        const uint64_t at_len_cas_fail = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(2 & 0xF) << 6) |
+                                         ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
         noc_raw_atomic(self_noc_addr, at_len_cas_fail, 0);
         noc_async_atomic_barrier();
     }
@@ -110,7 +110,7 @@ void kernel_main() {
     //   +32/+48/+64 slotA/B/C       +128 report[7]
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
-    if (hart == 2) {  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
+    if (hart == 2) {                                // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
         constexpr uint32_t SENTINEL = 0xFFFFFFFFu;  // never a legal pre-op word here (5/9/0x15)
         const uint32_t word2_addr = sem_addr + 16;
         const uint32_t slot_a = sem_addr + 32;
@@ -122,8 +122,15 @@ void kernel_main() {
         // 1. Successful CAS (5 -> 9) returns the pre-op 5.
         *uncached(slot_a) = SENTINEL;
         noc_fast_atomic_cas4<DM_DEDICATED_NOC, true /*program_ret_addr*/>(
-            noc_index, 0 /*cmd_buf unused*/, self_noc_addr, NOC_UNICAST_WRITE_VC, 5 /*cmp*/, 9 /*swap*/,
-            false /*linked*/, false /*posted*/, slot_a);
+            noc_index,
+            0 /*cmd_buf unused*/,
+            self_noc_addr,
+            NOC_UNICAST_WRITE_VC,
+            5 /*cmp*/,
+            9 /*swap*/,
+            false /*linked*/,
+            false /*posted*/,
+            slot_a);
         noc_async_atomic_barrier();
         report[0] = *uncached(slot_a);  // immediate, no poll
         while (*uncached(slot_a) == SENTINEL) {

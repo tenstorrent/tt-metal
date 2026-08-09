@@ -80,7 +80,7 @@ void kernel_main() {
     }
     done.up(1);
     if (is_lowest) {
-        done.wait_min(num_threads);  // barrier: every thread finished its up() loop
+        done.wait_min(num_threads);               // barrier: every thread finished its up() loop
         report_value(report_addr, work.value());  // expect num_threads * increment_times
     }
 #endif

@@ -41,7 +41,7 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     if (hart == 2) {  // lowest user DM: wait for all, then report both final counts
         done.wait_min(num_threads);
-        report_value(report_addr, cached.value());        // expect num_threads * increment_times
+        report_value(report_addr, cached.value());                       // expect num_threads * increment_times
         report_value(report_addr + sizeof(uint32_t), external.value());  // expect num_threads * increment_times
     }
 }

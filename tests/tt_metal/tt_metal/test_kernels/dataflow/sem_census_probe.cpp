@@ -52,8 +52,8 @@ void kernel_main() {
 #if defined(ARCH_QUASAR)
         // Residency check: the ring slot (uncached alias = TL1 truth) must be untouched for a
         // cached semaphore -- its count lives in the pool.
-        report[2] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            ::get_semaphore(sem::counter.id) + MEM_L1_UNCACHED_BASE);
+        report[2] =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(::get_semaphore(sem::counter.id) + MEM_L1_UNCACHED_BASE);
         flush_l2_cache_line(report_addr);
         flush_l2_cache_line(report_addr + sizeof(uint32_t));
         flush_l2_cache_line(report_addr + 2 * sizeof(uint32_t));

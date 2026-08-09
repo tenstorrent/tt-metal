@@ -54,16 +54,11 @@ protected:
     // Keystone is a correctness/deadlock check, not a stress test. NoC atomic
     // round-trips are slow on emu RTL sim; bump this for silicon stress runs.
     static constexpr uint32_t iterations{100};
-    const std::string kernel_path_noc =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_atomic.cpp";
-    const std::string kernel_path_amo32 =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_amo32.cpp";
-    const std::string kernel_path_cas32 =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_cas32.cpp";
-    const std::string kernel_path_cacheline =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_cacheline_probe.cpp";
-    const std::string kernel_path_cas_drain =
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_cas_drain.cpp";
+    const std::string kernel_path_noc = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_atomic.cpp";
+    const std::string kernel_path_amo32 = "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_amo32.cpp";
+    const std::string kernel_path_cas32 = "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_cas32.cpp";
+    const std::string kernel_path_cacheline = "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_cacheline_probe.cpp";
+    const std::string kernel_path_cas_drain = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_cas_drain.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -199,8 +194,7 @@ protected:
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    core,
-                    {{"base_addr", base_addr}, {"report_addr", report_addr}, {"residency_addr", residency_addr}}),
+                    core, {{"base_addr", base_addr}, {"report_addr", report_addr}, {"residency_addr", residency_addr}}),
             },
         };
         experimental::SetProgramRunArgs(program, params);
@@ -275,7 +269,12 @@ TEST_F(NocSelfAtomicFixture, TestSelfTargetedNocAtomicIncrement) {
     const uint32_t observed = read_counter(core, l1_unreserved_base);
     const uint32_t expected = num_dms_ * iterations;
     log_info(
-        LogTest, "Self-targeted NoC atomic count: {} (expected {} = {} DMs x {})", observed, expected, num_dms_, iterations);
+        LogTest,
+        "Self-targeted NoC atomic count: {} (expected {} = {} DMs x {})",
+        observed,
+        expected,
+        num_dms_,
+        iterations);
     EXPECT_EQ(observed, expected)
         << "Self-targeted NoC atomic increments lost updates: the loopback INCR_GET is NOT mutually "
            "atomic across same-node DM cores. The auto-path EXTERNAL semaphore mode has no software "
@@ -416,11 +415,10 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
         start,
         num_dms_,
         iterations);
-    EXPECT_EQ(observed, 0u)
-        << "lr.w/sc.w conditional decrement LOST updates on the cached L1 alias -- the "
-           "DM_LOCAL_CACHED multi-consumer down() keystone failed. (An over-committed decrement "
-           "cannot show here: the guarded CAS never takes the word below 0, so that presents as "
-           "a HANG with surplus threads spinning.)";
+    EXPECT_EQ(observed, 0u) << "lr.w/sc.w conditional decrement LOST updates on the cached L1 alias -- the "
+                               "DM_LOCAL_CACHED multi-consumer down() keystone failed. (An over-committed decrement "
+                               "cannot show here: the guarded CAS never takes the word below 0, so that presents as "
+                               "a HANG with surplus threads spinning.)";
 }
 
 // (5) DM write-back cache line width: the minimum separation at which a cached-AMO
@@ -472,8 +470,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
         << "Control A: flush_l2_cache_line did not write the cached value back to TL1 -> cache/flush not "
            "functional on this platform.";
     ASSERT_EQ(res_noflush, RES_OLD)
-        << "Control A: a cached-alias write was visible via the uncached alias WITHOUT a flush (saw 0x"
-        << std::hex << res_noflush << ", expected 0x" << RES_OLD << std::dec
+        << "Control A: a cached-alias write was visible via the uncached alias WITHOUT a flush (saw 0x" << std::hex
+        << res_noflush << ", expected 0x" << RES_OLD << std::dec
         << ") -> this platform is NOT modeling a write-back cache (flat/coherent/write-through). The "
            "write-back-clobber hazard cannot be measured here; verify the DM cache line width on silicon.";
 
@@ -503,8 +501,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
         ASSERT_EQ(wn_pre, NOC_ADD) << "sep=" << seps[i]
                                    << "B: NoC atomic did not land at TL1 pre-flush (wn_pre=" << wn_pre
                                    << ") -> sample invalid, cannot distinguish clobber from never-landed.";
-        EXPECT_TRUE(safe || clobbered)
-            << "sep=" << seps[i] << "B: wn_post=" << wn_post << " is neither " << NOC_ADD << " nor 0";
+        EXPECT_TRUE(safe || clobbered) << "sep=" << seps[i] << "B: wn_post=" << wn_post << " is neither " << NOC_ADD
+                                       << " nor 0";
         if (clobbered) {
             seen_clobber = true;
             if (seen_safe) {
@@ -536,7 +534,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
            "the natural-eviction variant or measure on silicon.";
     log_info(LogTest, "==> DM write-back cache line width (min NoC-safe separation) = {} B", width);
     EXPECT_EQ(width, EXPECTED_WIDTH)
-        << "measured DM write-back line width (" << width << "B) != documented 64B (L1 D$/L2 line). If this is "
+        << "measured DM write-back line width (" << width
+        << "B) != documented 64B (L1 D$/L2 line). If this is "
            "real (not an artifact), the pool segregation must use the measured value -- investigate.";
 }
 
@@ -552,12 +551,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
     const uint32_t start = num_dms_ * iterations;
     const uint32_t observed = run_cas_lock(0 /*mode: pure drain*/, 0 /*pairs unused*/, start);
     log_info(
-        LogTest,
-        "CAS-lock drain: {} (expected 0; started at {} = {} DMs x {})",
-        observed,
-        start,
-        num_dms_,
-        iterations);
+        LogTest, "CAS-lock drain: {} (expected 0; started at {} = {} DMs x {})", observed, start, num_dms_, iterations);
     EXPECT_EQ(observed, 0u)
         << "The NoC CAS lock lost or double-granted around the decrement (a double grant on the LAST "
            "credit wraps the word to the ret-slot sentinel and presents as a HANG instead) -- EXTERNAL "

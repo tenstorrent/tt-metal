@@ -211,12 +211,10 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     EXPECT_EQ(result[1], 5u)
         << "successful CAS did not return the pre-op word (expected 5): a CAS winner cannot confirm "
            "what it swapped out, so cas4's return path is unusable for a lock/down() upgrade.";
-    EXPECT_EQ(result[3], 9u)
-        << "FAILED CAS did not return the pre-op word (expected 9): a CAS loser cannot learn the "
-           "current value, so a CAS retry loop cannot be built on cas4 returns.";
-    EXPECT_EQ(result[4], 9u)
-        << "failed CAS modified the target word (expected 9 unchanged): CAS failure is not "
-           "side-effect-free, so any concurrent use of cas4 corrupts the word.";
+    EXPECT_EQ(result[3], 9u) << "FAILED CAS did not return the pre-op word (expected 9): a CAS loser cannot learn the "
+                                "current value, so a CAS retry loop cannot be built on cas4 returns.";
+    EXPECT_EQ(result[4], 9u) << "failed CAS modified the target word (expected 9 unchanged): CAS failure is not "
+                                "side-effect-free, so any concurrent use of cas4 corrupts the word.";
     EXPECT_EQ(result[5], 0x15u)
         << "CAS on a word with upper-28 bits set did not return the pre-op word (expected 0x15): the "
            "return path is unreliable outside the [0,15] value range.";
