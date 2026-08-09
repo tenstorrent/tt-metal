@@ -8,7 +8,7 @@ The op implements the ``pre`` / ``post`` / ``comb`` / ``collapsed`` portion of
 projection ``fused_w`` (shape ``[1, 1, T, (2+H)*H]``). It splits ``fused_w`` into its
 ``pre_w`` / ``post_w`` / ``comb_w`` slices inside the ``fused_hyperconnection_pre_post``
 device kernel; ``pre_w`` / ``post_w`` are consumed in-place and ``comb_w`` is returned
-already laid out as the ``[1, 1, H, H]`` comb matrix. This test is fully self-contained:
+already laid out as the ``[1, T, H, H]`` comb matrix. This test is fully self-contained:
 it builds a random ``fused_w`` + biases, runs the op on device, and compares against a
 torch reference of exactly that math (no HuggingFace / RMSNorm / matmul involved).
 """
@@ -64,9 +64,11 @@ def _torch_reference(
     return post, comb, collapsed
 
 
-# Decode-only fused op: a single token (T == B * S == 1).
-@pytest.mark.parametrize("seq_len", (1,))
-@pytest.mark.parametrize("batch_size", (1,))
+# The T = B * S tokens are independent and are spread across the core grid, so batched decode
+# (B > 1) and multi-token prefill (S > 1) run through the same two device ops. T = 40 crosses a
+# tile row of fused_w (token t lives in row t % 32 of tile row t / 32), and T = 200 exceeds the
+# core grid so each core loops over several tokens and restages fused_w as it crosses tile rows.
+@pytest.mark.parametrize("batch_size, seq_len", ((1, 1), (8, 1), (1, 4), (5, 8), (25, 8)))
 @pytest.mark.parametrize("sinkhorn_iters", (1, 20))
 def test_fused_hyperconnection_op(device, reset_seeds, batch_size, seq_len, sinkhorn_iters):
     hc = 4  # number of streams (hc_mult)

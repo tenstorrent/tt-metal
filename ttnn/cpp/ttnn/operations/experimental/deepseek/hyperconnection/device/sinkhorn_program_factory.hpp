@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "sinkhorn_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -14,6 +16,7 @@ struct SinkhornSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
+    std::vector<CoreCoord> cores;
 };
 
 struct SinkhornProgramFactory {
