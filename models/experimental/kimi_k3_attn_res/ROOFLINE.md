@@ -156,22 +156,40 @@ compute roof: AttnRes is data movement.
 
 ## 3. The DRAM floor
 
-`d = 7168`, `T = 5120`, `S = 8` (the widest read), bf16, `12V` touches at 512 GB/s:
+`V = (S+1)·T_local·d_local`, `S = 8` (the widest read), bf16, `12V` touches at 512 GB/s.
 
-| placement | `V` elements/device | traffic | floor |
-|---|---|---|---|
-| single device | 330 301 440 | 7 927 MB | **15 483 µs** |
-| `(2, 4)` LoudBox | 41 287 680 | 991 MB | **1 935 µs** |
-| `(8, 4)` Galaxy | 10 321 920 | 248 MB | **484 µs** |
-| `(2, 4)`, `T = 64` (what the suite runs) | 516 096 | 12.4 MB | **24 µs** |
+Hold `T_local` at production's **640 rows per chip** and the sequence axis drops out of the
+per-chip cost entirely — it decides how many tokens one launch covers, not what a chip
+moves. Only the TP split of `d` changes the floor:
+
+| placement | `d_local` | `V` elements/chip | traffic | floor |
+|---|---|---|---|---|
+| single device | 7168 | 41 287 680 | 991 MB | **1 935 µs** |
+| `(2, 4)` LoudBox | 1792 | 10 321 920 | 248 MB | **484 µs** |
+| `(8, 4)` Galaxy | 1792 | 10 321 920 | 248 MB | **484 µs** |
+
+The two mesh rows are the same point, not two points on a scaling curve. **TP = 4 buys the
+whole 4×.** They differ only in the global chunk 640 rows/chip implies: `sp = 8` covers
+prefill's 5120 in one launch, `sp = 2` covers 1280 and needs four.
+
+Fixing the *global* chunk at 5120 instead — the framing this table used to carry — puts the
+LoudBox at `T_local = 2560` and a 1 935 µs floor. That is four times the per-chip shape
+anything runs, and it is why §5 and §7 both flag `T_local = 2560` measurements as
+off-production.
 
 Over a whole forward the read schedule is not flat: 186 executed reads with `S` ramping
-0 → 8, `Σ(S+1) = 1002`, mean `S+1 = 5.39`. On `(2, 4)` at `T = 5120` that totals
-**110.3 GB** of DRAM traffic and a **215.5 ms** floor for the AttnRes reads alone.
+0 → 8, `Σ(S+1) = 1002`, mean `S+1 = 5.39`. At 640 rows per chip that is `ΣV = 1002 ·
+640 · 1792`, so **27.6 GB** of DRAM traffic and a **53.9 ms** floor per chip for the
+AttnRes reads alone — the same on either mesh, since neither the schedule nor `d_local`
+depends on `sp`.
 
-That number is the reason this memo exists. 215 ms of pure data movement per prefill
-forward, for an op with no matmul in it, is not a rounding error against the rest of the
-model — and §7 says most of it is removable.
+What `sp` decides is how many launches cover a prefill chunk. Galaxy's `sp = 8` takes
+5120 tokens in one pass at that 53.9 ms; the LoudBox needs four, so covering the same
+chunk there costs **215.5 ms** against **110.3 GB**.
+
+Either number is the reason this memo exists. Tens of milliseconds of pure data movement
+per prefill forward, for an op with no matmul in it, is not a rounding error against the
+rest of the model — and §7 says most of it is removable.
 
 ---
 
@@ -249,6 +267,32 @@ that is itself DRAM.
 > permutes track the *padded* tensor exactly as the collective does, so the two terms shrink
 > together and the fold's advantage never widens at small `S`.
 
+> **Amended a third time 2026-08-04 (the per-chip shape, and the call count).** Every µs in
+> this section — including the 41.1 ms and the 15.3 ms — was taken on a `(2, 4)` at
+> `CHUNK = 5120`, which is `T_local = 2560`: **four times the production per-chip shape.**
+> Production prefill is `5120 / sp = 640` rows per chip on an `(8, 4)`, and the collective's
+> slope is proportional to `T_local`, so at production the folded collective is **5.39 ms per
+> forward, not 15.3** — `18.6·(S+1) − 18` µs scaled by `640 / 2560`, clamped at the 29 µs
+> launch floor. The clamp is not a detail at this shape, it is the whole answer: at
+> `T_local = 640` the fit gives 23.9 µs even at `S = 8`, so **all 186 calls sit at the floor**
+> and 5.39 ms is just `186 × 29 µs`. On the production shape the collective is launch-bound,
+> and `num_links`, the fold, and a ring on the reduce axis are all worth approximately nothing
+> — the lever that remains is issuing fewer calls. §8's "the default
+> should follow production's 2" is dead at `T_local = 640`; it was only ever a `T_local = 2560`
+> conclusion.
+>
+> The count, which this memo never stated plainly: the **wired** path issues **186**
+> collectives per forward, one per executed read site — `attn_res_stream.py:46` calls
+> `forward` and nothing else. The **split** path issues **202**: the same 186 in `merge`, plus
+> two per block (the sealed-set reciprocal RMS and the batched sealed dots) over 8 blocks.
+> Per block that is 26 against 24 — not the 49 an earlier count claimed by pricing
+> `_dots_by_site` per site instead of per block.
+>
+> As a share of what the op actually costs, the collective is **7.9%** at the production shape
+> against 10.1% at `T_local = 2560` — it shrinks *slower* than the op does, because the floor
+> does not shrink at all. It remains the largest single term in the analytic floor and the
+> wrong thing to optimize next; see §7's fifth amendment for what is.
+
 ---
 
 ## 5. Which collective the op actually gets **[measured]**
@@ -291,10 +335,10 @@ programs (the reshape pair) cost more than 5.7 MB of fabric traffic.
 
 Two consequences:
 
-1. **The distributed suite exercises a different collective than production does.** At
-   `T = 64` the mesh tests spend most of their parametrizations on the composite path;
-   at `T = 5120` production never touches it. The suite is therefore *better* coverage
-   than intended — both algorithms are proven correct — and *useless* for timing.
+1. **A suite at small `T_local` exercises a different collective than production does.**
+   That is why every suite is now parametrized at 640 rows per chip: it is the payload
+   that selects the RS+AG path production takes. A convenience row count proves the
+   composite path instead — correct, but coverage of an algorithm nothing ships.
 2. `2(S+1)` is divisible by 4 only for odd `S`, so at small `T_local` the algorithm
    flips with the parity of the sealed count. Any Phase-9 measurement that sweeps `S`
    at small `T` will see a sawtooth that has nothing to do with AttnRes.
@@ -494,6 +538,50 @@ which a fused kernel that reads `v` once has already collapsed.
 > exactly the parts P7 spent four iterations getting right in composed form where they could
 > be inspected. Read §7 as two projects from here, one done.
 
+> **Amended a fifth time 2026-08-04 (both forms measured at the production per-chip shape —
+> and every whole-forward number above is at 4× that shape).** The fits in the amendments
+> above were taken on a `(2, 4)` at `CHUNK = 5120`, i.e. `T_local = 2560`. Production is
+> `5120 / sp = 640` rows per chip. Both forms have now been swept at both shapes, traced, on
+> the same box, `S ∈ {1, 4, 8}`:
+>
+> | per site, µs | `S = 1` | `S = 4` | `S = 8` | over the 186-read schedule |
+> |---|---|---|---|---|
+> | direct, 2 560 rows/chip | 552.9 | 1 105.7 | 1 800.6 | **216.25 ms** |
+> | split, 2 560 rows/chip | 704.5 | 780.1 | 990.8 | **153.89 ms** — split **1.41×** |
+> | direct, **640 rows/chip** | 231.6 | 387.9 | 621.6 | **77.51 ms** |
+> | split, **640 rows/chip** | 315.1 | 375.2 | 411.2 | **68.43 ms** — split **1.13×** |
+>
+> The 153.89 ms row reproduces the 153.6 ms above, which is the only cross-tree-state check
+> available; **the 216.25 ms row does not reproduce the 265.0 ms** this section quotes for the
+> direct form. `209.4 + 225.6·(S+1)` overpredicts the measured `S = 8` site by 24%. Take the
+> fresh dual-shape sweep — it is one run, one tree, both forms.
+>
+> **The correction that matters is structural, not numerical.** The old model held the
+> `S`-independent term *constant* across per-chip shapes, on the argument that it is launch
+> plus fixed collective cost and a launch does not shrink when the tensor does. Measured, that
+> term falls **45–48%** from 2 560 to 640 rows per chip — it also carries one candidate pass
+> over the **live stream**, which is proportional to `T_local`. Both coefficients are affine
+> in the per-chip element count `V = T_local·d_local / (2560·1792)`:
+>
+> | | `S`-independent, µs | per sealed candidate, µs |
+> |---|---|---|
+> | direct | `101.6 + 280.1·V` | `15.15 + 162.85·V` |
+> | split | `196.7 + 448.5·V` | `4.12 + 37.42·V` |
+>
+> A single-shape fit cannot see this and, extrapolated down to production, **inverts the
+> verdict** — it predicted the direct form winning by 1.14× at 640 rows/chip where the split
+> form in fact wins by 1.13×. The crossover did move in the predicted direction, from `S ≈ 1.9`
+> to `S ≈ 3.2` per read as the shape shrank 4×, but 61% of the schedule's reads sit at `S ≥ 4`,
+> so the schedule as a whole never crosses. Over the schedule the break-even is
+> **~313 rows per chip** — `CHUNK ≈ 2 500` on an `(8, 4)`, half of production, so the margin is
+> not fragile. Decode is the one regime on the other side: at `T = 1` the direct form wins
+> outright, which makes per-shape read-form selection a decode concern rather than a prefill
+> one.
+>
+> **Ship the split form for prefill,** and attack its `S`-independent term rather than its
+> slope — the slope is already a quarter of the direct form's and within 1.124× of its own
+> floor, while the `S`-independent term is where its entire deficit lives.
+
 ---
 
 ## 8. What this memo does not know
@@ -533,8 +621,8 @@ which a fused kernel that reads `v` once has already collapsed.
   the better Galaxy trade — the fabric is contended by dispatch/combine there.
 - ~~**Nothing is measured at production `T` on a mesh.**~~ **Superseded.** Everything in
   Phase 9 is `T = 5120` on `(1, 1)`, `(8, 1)` and `(2, 4)`, which §5's rule puts on the
-  RS+AG path — the one production takes. The correctness suite still runs `T = 64` and
-  still exercises the other algorithm.
+  RS+AG path — the one production takes. The correctness suite is on the same path: it
+  runs 640 rows per chip, and the `T = 64` arm that exercised the other algorithm is gone.
 - **`(8, 4)` and `[LINE, RING]` are modelled, not measured.** A ring axis sustains 2
   directions and halves §4's Galaxy column; that has never been run. `(4, 2)` was skipped
   deliberately — it is between two measured points on both axes.

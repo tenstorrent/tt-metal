@@ -13,12 +13,16 @@ refutation), `API_SPEC.md` (the tensor contract).
 ## 1. Where things stand
 
 - **Branch:** `nmilicevic/bringup/kimi-k3-attnres-2026-07-30`, 13 commits off `main` @ `6d526e8d61d`.
-- **State:** 183 tests passing on LoudBox. 11 of 12 phases closed; Phase 11 (PP boundary) not started.
+- **State:** 239 tests collected; the 109 CPU cases pass. 11 of 12 phases closed; Phase 11
+  (PP boundary) not started. The last full LoudBox run predates the reference rework — the
+  device rungs need re-running before the pass count is quotable again.
 - **Machine so far:** LoudBox, 8 × Blackhole. Meshes run: `(1,1)`, `(8,1)`, `(2,4)`. `(4,2)` skipped deliberately.
 - **What the op is:** Kimi K3 attention residuals — `v = cat(block_residual, prefix_sum)`,
   RMS-normed keys against raw values, `α = softmax(rsqrt(mean(v²)+eps)·⟨q,v⟩)`, `out = Σ αᵢvᵢ`.
-  Validated against the upstream `_apply_attn_res` as oracle. It is **the op only** — not
-  wired into a model, no real K3 weights, prefill only.
+  Validated against `reference/attn_res_reference.py`, an unfolded fp64 ground truth pinned by
+  closed forms rather than by any other implementation, which in turn is checked against
+  upstream's own read vendored verbatim in `reference/hf_attn_res.py`. It is **the op only** —
+  not wired into a model, no real K3 weights, prefill only.
 
 Files that matter:
 
@@ -27,7 +31,8 @@ Files that matter:
 | `tt/attn_res.py` | the op — `TtAttnRes`, 577 lines |
 | `tt/attn_res_stream.py` | the residual-stream bookkeeping the 93-layer walk drives |
 | `torch_functional/attn_res.py` | the reference; `NUM_LAYERS=93`, `BLOCK_SIZE=12`, `EPS=1e-5` |
-| `reference/hf_attn_res.py` | the vendored upstream oracle |
+| `reference/attn_res_reference.py` | the unfolded fp64 ground truth — the root of the ladder |
+| `reference/hf_attn_res.py` | upstream's read, verbatim — the external anchor. Kimi K3 License, see §8 |
 | `tests/test_tt_attn_res_distributed.py` | **the file you edit for `(8,4)`** |
 | `tests/perf/test_attn_res_perf.py` | the perf harness; logs, asserts nothing |
 | `ttnn/cpp/ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/` | the fused mixture kernel |
@@ -214,6 +219,25 @@ Two live cautions on the predictions:
 3. **Phase 11, the PP boundary** — the `(1+S)·d` canonical layout round-tripped through a
    `MeshSocket` pair. This is what the pipeline-of-Galaxies goal actually needs, and it has
    never run. `PIPELINE.md` doesn't exist yet.
+
+   Priced (workbook, `PP BOUNDARY`): a plain boundary carries one activation plane, AttnRes
+   carries `1+S`, because a read at layer 90 still mixes the snapshot sealed at layer 0. At a
+   balanced 2-stage cut after layer 46, `S = 4` → 5 planes, i.e. **9.2 MB per chip / 294 MB per
+   mesh of new traffic**. The payload therefore grows with cut *depth*, which standard PP
+   schedulers do not assume.
+
+   It is nonetheless not a problem, for one reason: a sealed snapshot is **write-once and
+   immutable from the instant it is sealed**, so it can be sent eagerly and overlapped with the
+   layers between its seal and the cut. Snapshots seal at 0/12/24/36 against a cut at 46, so
+   their windows are 46/34/22/10 layers and the last one binds at 10/93 of a forward. Break-even
+   forward time — no `T_fwd` estimate needed — is **0.85 ms per-device**, or **27.3 ms** if all 32
+   chips funnel through one exit link the way the b1 decode path does. AttnRes alone measures
+   68.4 ms, so even the funnelled path clears by ≥2.5×.
+
+   The risk is not bandwidth, it is **scheduling**: dump all `S` planes *at* the cut instead of
+   eagerly and the funnelled path serializes 11.7 ms per boundary, 17% of the op. Eager send is a
+   requirement of the design. Decode is a non-issue either way (`T = 1` → 3.6 KB a plane), and
+   snapshot residency is unchanged by PP — the op already holds `(1+S)` planes, ≤20.6 MB/chip.
 4. **Hoist the collective's global semaphores** — 481 µs enqueue against a 152 µs baseline;
    per-call global-semaphore creation is the suspect. The analog hoists it with
    `create_global_semaphores` (`tt_ccl.py`). Untraced-only, so it moves none of §6's numbers.
@@ -231,9 +255,19 @@ Two live cautions on the predictions:
 
 ## 8. Two things to raise with people, not with the device
 
-- **Vendoring.** `reference/hf_attn_res.py` carries 13 lines derived from upstream
-  `_apply_attn_res`. That brings the Kimi K3 License into an Apache-2.0 repo. Repo-owner call
-  before this branch goes anywhere near `main`.
+- **The vendored upstream reference is not Apache-2.0.** `reference/hf_attn_res.py` is
+  `_apply_attn_res` copied verbatim from `modeling_kimi_linear.py` (`moonshotai/Kimi-K3`,
+  upstream sha256 `9e3564c7…fff44a`, lines 1075-1088 of 1314), with the upstream LICENSE
+  alongside it as `reference/LICENSE-Kimi-K3`. Upstream dual-licenses: the DeepSeek-V3-adapted
+  MLA / MoE-gating / sparse-MoE parts are Apache-2.0, everything else is the Kimi K3 License.
+  `_apply_attn_res` is not DeepSeek-adapted, so it lands on the Kimi K3 arm — source-available,
+  with MaaS revenue and attribution conditions above certain thresholds. The header and folder
+  LICENSE follow the repo's existing pattern for this
+  (`models/demos/t3000/llama2_70b/reference/llama/llama31_8b/*.py`, SPDX
+  `LicenseRef-LICENSE-FILE`), and there is no license or SPDX pre-commit hook to consult.
+  **Whether it can merge in this form is a call for people, not for me.** If it cannot, the
+  fallback is cheap: delete the file and rung 0b, and the ladder still stands on
+  `reference/attn_res_reference.py` — it loses the external anchor, not its root.
 - **For mvasilijevic:** `modeling_kimi_linear.py:520-521` allocates `A_log` as
   `[num_heads] = [96]`, while the checkpoint stores `F32 [128]` = `head_dim`. Unrelated to
   AttnRes, found while reading KDA.

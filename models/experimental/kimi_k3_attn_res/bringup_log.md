@@ -29,9 +29,17 @@ residual-path blast radius.
 - Actually running on a Galaxy. LoudBox `(2,4)` is the TP proxy; `(8,4)` SP behaviour
   is modelled, not measured.
 
-**Ground truth** is the HF reference `_apply_attn_res`
-(`modeling_kimi_linear.py:1075-1088`, Kimi-K3 repo), vendored verbatim into
-`reference/hf_attn_res.py` and exercised by a committed test.
+**Ground truth** is `reference/attn_res_reference.py` — the unfolded read written from
+the published definition, computed in fp64, and pinned by closed forms rather than by
+comparison with another implementation. It shares no algebra with the folded form that
+`torch_functional/` and `tt/` implement, which is what lets rung 1 prove the fold.
+
+**The external anchor** is `reference/hf_attn_res.py` — upstream's `_apply_attn_res`
+verbatim from `modeling_kimi_linear.py:1075-1088`. It is the only gate in the module that
+compares against something we did not write, so it is the only one that can catch the whole
+ladder agreeing on the wrong equation. It cannot be the root: it widens with `.float()`, so
+it computes in fp32 whatever it is handed. Anchor for the algebra, `ref` for the precision.
+It carries the Kimi K3 License rather than Apache-2.0 — see `GALAXY.md` §8.
 
 ---
 
@@ -214,6 +222,24 @@ Numbered, dated, never renumbered. Each names what it rejected.
   and fp32 measures 0.9999500 against bf16's 0.9999401 over 186 chained reads, for 1.5 MB
   per read on a 900 MB budget. Rejected alternative — the analog's `all_gather` + `strided
   sum`, which is both slower here and needs an op we do not have.
+- **D19 — 2026-08-06 — amends D9 and D11 again: the root of the ladder is an unfolded fp64
+  reference of our own, and the vendored oracle sits beside it, not under it.** D11 left the
+  ladder starting at "the folded form versus the oracle", which was circular for the algebra
+  in a way I did not see at the time: every TTNN test rooted on `torch_functional/attn_res.py`,
+  and that file *is* the folded form — same fold, same rsqrt pull-out as the device op. It gates
+  numerics and plumbing and can never gate the algebra. The only unfolded check was a
+  test-local `_exact` helper. So rung 0 is now `reference/attn_res_reference.py`, deliberately
+  naive, fp64, pinned by three closed forms where the answer is known outright rather than by
+  agreement with anything. Rung 0b keeps the vendored oracle as the *external* anchor — the one
+  thing no reference of ours can supply, evidence that upstream computes the equation we believe
+  it does. Two roles, because the oracle cannot fill both: it widens with `.float()`, so it
+  cannot be a precision reference, and it is ours-by-copying, so it cannot be pinned
+  intrinsically. Rejected alternative — keep the oracle as the sole root, which is what D11 did
+  and what left the algebra ungated. What proved the new root works is mutation testing, not its
+  own suite passing: seven injected porting errors, each caught, and the run found two real holes
+  (a `sum`-for-`mean` softmax-temperature slip and a dropped `res_norm` gain) that only agreement
+  with the implementation under test had been catching. Both are now closed by the
+  constant-along-`d` closed form.
 
 ---
 
@@ -2132,3 +2158,34 @@ Append-only. UTC timestamps. `PASS` / `FAIL` bolded.
   cross-candidate softmax in the same pass — is not started. `dim = 0` is rejected rather than
   implemented. Non-bf16 *input* is rejected, so the op has no fp32 or bfp8 path. Nothing here
   is measured on `(8,4)`, in decode, or on real K3 weights.
+
+- **2026-08-06** — **Reference rework, CPU only, no device run.** Per D19: added
+  `reference/attn_res_reference.py` as the unfolded fp64 root, restored `reference/hf_attn_res.py`
+  as the external anchor with its real upstream header and `reference/LICENSE-Kimi-K3` alongside
+  it. **109/109** CPU cases (36 in `tests/test_attn_res_reference.py`, 73 in
+  `tests/test_torch_attn_res.py`), 58.8 s; 239 collected across the module.
+  **Command:** `PYTHONPATH=$TT_METAL_HOME python_env/bin/python -m pytest
+  models/experimental/kimi_k3_attn_res/tests/test_attn_res_reference.py
+  models/experimental/kimi_k3_attn_res/tests/test_torch_attn_res.py -q`
+
+  **VALIDATED:** the new root against three closed forms, scale invariance in two arms (exact at
+  `eps = 0`, and an analytic `(eps/2·mean(v²))·(1−c⁻²)` bound at `eps = 1e-5` — measured 3.684e-6
+  against a predicted 4.44e-6, because `eps` makes the invariance approximate by construction),
+  row-stochasticity, the convex-hull bracket, non-narrowing internal precision, and no overflow at
+  saturation. Rung 0b: upstream's read at its own fp32 against our fp64 root, `S ∈ {0,1,4,8}` ×
+  `d ∈ {256,7168}` × two score regimes. Rung 1 now has an fp64 arm at 1e-13, which is what
+  actually proves the fold rather than failing to detect an error in it.
+
+  **VALIDATED BY MUTATION, not by the suite passing:** eight injected errors, each caught —
+  mixing `k` instead of `v` (8 gates), `sum` for `mean` in the RMS (4), `eps` outside the `rsqrt`
+  (3), a dropped `res_norm` gain (4), an unshifted softmax (2), a drifted vendored extract (1 —
+  the anchor, and only the anchor), and on the folded side an additive `fold_query` (2) and a
+  dropped rsqrt pull-out (2). Two of those rows were the point: temperature and the dropped gain
+  had been caught *only* by agreement with the implementation under test until the
+  constant-along-`d` closed form was added.
+
+  **NOT VALIDATED:** every device rung. The last full LoudBox run predates this, and the device
+  tests still root on `torch_functional/attn_res.py` — which shares the fold with the op, so they
+  gate numerics and plumbing, not algebra. Re-rooting them on `ref` needs a device run. The fp32
+  arms cannot see the `eps`-placement error (only the fp64 arm can), and the anchor structurally
+  cannot either, since upstream computes in fp32 whatever it is handed.
