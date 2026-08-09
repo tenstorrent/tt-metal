@@ -4,8 +4,10 @@
 
 #include "ttnn/operations/experimental/reduction/attn_res_stats/device/attn_res_stats_program_factory.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -68,15 +70,21 @@ tt::tt_metal::ProgramDescriptor AttnResStatsProgramFactory::create_descriptor(
 
     // Both reductions read the same resident row, so `v`, `q` and one transformed
     // copy are all live at once. That, not the tensor size, is what bounds d.
+    //
+    // Circular buffers can only occupy L1 above the allocator's base, so the total per
+    // core overstates the budget — measuring against it accepts a d that then fails
+    // during descriptor allocation instead of here.
+    const uint32_t l1_available =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t l1_required = kRowsInFlight * Wt * v_tile_size + Wt * q_tile_size + Wt * scratch_tile_size +
                                  scaler_tile_size + kStatsPerRow * output_tile_size;
     TT_FATAL(
-        l1_required <= device->l1_size_per_core(),
+        l1_required <= l1_available,
         "AttnResStats holds a whole row of v, q and one transformed copy in L1: d of {} needs {} B per core against {} "
         "available",
         v_shape[-1],
         l1_required,
-        device->l1_size_per_core());
+        l1_available);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup

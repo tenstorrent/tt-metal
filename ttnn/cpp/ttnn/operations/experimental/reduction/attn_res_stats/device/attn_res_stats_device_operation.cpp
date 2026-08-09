@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/reduction/attn_res_stats/device/attn_res_stats_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -18,6 +19,12 @@ void AttnResStatsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& v = tensor_args.v;
     const auto& q = tensor_args.q;
+
+    // The compute config defaults to HiFi4 with fp32 dest accumulation, which is only
+    // correct on Blackhole; elsewhere the op compiles, runs, and returns silently wrong
+    // values. Reject the device rather than let a caller reach that path.
+    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "AttnResStats is only supported on Blackhole, got {}", arch);
 
     operations::check_tensor(v, "AttnResStats", "v", {DataType::BFLOAT16, DataType::FLOAT32});
     operations::check_tensor(q, "AttnResStats", "q", {DataType::BFLOAT16, DataType::FLOAT32});
@@ -45,15 +52,19 @@ void AttnResStatsDeviceOperation::validate_on_program_cache_miss(
         "AttnResStats requires a single query row, got q dims [{}, {}, ...]",
         q_shape[0],
         q_shape[1]);
+    // Logical rather than padded on both counts. The kernel broadcasts q's first row down
+    // the tokens, and a padded height cannot tell one query row from thirty-two; a padded
+    // width would likewise admit d = 63 against d = 33, whose dot contracts q's zero
+    // padding against real v.
+    const auto& v_logical = v.logical_shape();
+    const auto& q_logical = q.logical_shape();
     TT_FATAL(
-        q_shape[-2] == TILE_HEIGHT,
-        "AttnResStats broadcasts q down the tokens, so it must occupy exactly one tile row, got {}",
-        q_shape[-2]);
+        q_logical[-2] == 1, "AttnResStats broadcasts a single query row down the tokens, got {} rows", q_logical[-2]);
     TT_FATAL(
-        v_shape[-1] == q_shape[-1],
+        v_logical[-1] == q_logical[-1],
         "AttnResStats contracts v and q over d, got {} against {}",
-        v_shape[-1],
-        q_shape[-1]);
+        v_logical[-1],
+        q_logical[-1]);
 
     TT_FATAL(
         v_shape[-1] % TILE_WIDTH == 0 && v_shape[-2] % TILE_HEIGHT == 0,
