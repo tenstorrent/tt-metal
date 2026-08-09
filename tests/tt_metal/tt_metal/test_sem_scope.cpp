@@ -103,7 +103,11 @@ protected:
             .num_threads = 1,
             .compiler_options = {.defines = defines_obj},
             .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
+                  .accessor_name = "counter",
+                  // Label matches what the kernel does: SEM_SCOPE_UPDOWN really down()s.
+                  .access_type = with_down ? experimental::SemaphoreAccessType::CONSUME
+                                           : experimental::SemaphoreAccessType::INCREMENT}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
@@ -608,6 +612,9 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
 // down()'s decrement is atomic vs concurrent producer increments (a non-atomic down() loses
 // producer increments -> the consumer starves and the test times out).
 TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     const uint32_t observed = run_concurrent(
         SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
@@ -615,6 +622,9 @@ TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     const uint32_t observed = run_concurrent(
         SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER", experimental::SemaphoreAccessType::CONSUME);
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
@@ -777,6 +787,9 @@ TEST_F(SemScopeFixture, TestCensusSingleWriterPicksLocal) {
 // Many writer instances (threads) all on the semaphore's ONE node -> cached-pool AMO: atomic among
 // the node's coherent DM cores, with no NoC round-trip. This is the auto-selected fast path.
 TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     const auto [scope, count] =
         run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     const uint32_t expected = num_dms_ * concurrent_iterations;
@@ -790,6 +803,9 @@ TEST_F(SemScopeFixture, TestCensusMultiThreadPicksCached) {
 // still hold the untouched initial value. Every other cached assertion is count-only and would pass
 // even if the semaphore had silently fallen back to the ring -- this is the only test that can tell.
 TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     const auto [scope, count] =
         run_census(core, {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}});
     ASSERT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED)) << "expected the cached pick for this shape";

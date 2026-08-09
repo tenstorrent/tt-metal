@@ -48,7 +48,7 @@ void kernel_main() {
 
 #if defined(ARCH_QUASAR)
     // Flush the write-back cache so the host readback of TL1 sees the drained word.
-    // (Blackhole's L1 cache is write-through, so no flush is needed there.)
+    // (Quasar-only kernel: lr.w/sc.w needs Zalrsc, which Blackhole lacks.)
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(word));
 #endif
 }

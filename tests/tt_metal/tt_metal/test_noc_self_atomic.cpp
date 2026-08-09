@@ -89,7 +89,7 @@ protected:
         }
     }
 
-    // Launch one incrementer per user DM core, all targeting the word at `sem_addr`
+    // Launch the given kernel on every user DM core, all targeting the word at `sem_addr`
     // on `core`. Quasar: a single multi-threaded DM kernel spans the user DMs
     // (DM2..DM7). Gen1 (BH): one single-threaded KernelSpec per DM processor.
     void run_single_node(const std::string& kernel_src, uint32_t sem_addr) {
@@ -400,6 +400,9 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
 // exact 0 proves no decrement was lost and no credit was consumed twice -- the
 // multi-consumer DM_LOCAL_CACHED down() keystone.
 TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "lr.w/sc.w needs Zalrsc; Blackhole DM cores are Zaamo-only";
+    }
     const uint32_t start = num_dms_ * iterations;
     set_counter(core, l1_unreserved_base, start);
 
@@ -556,7 +559,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
         num_dms_,
         iterations);
     EXPECT_EQ(observed, 0u)
-        << "The NoC CAS lock lost or double-granted around the decrement -- EXTERNAL multi-consumer "
+        << "The NoC CAS lock lost or double-granted around the decrement (a double grant on the LAST "
+           "credit wraps the word to the ret-slot sentinel and presents as a HANG instead) -- EXTERNAL "
+           "multi-consumer "
            "down() cannot be enabled.";
 }
 
