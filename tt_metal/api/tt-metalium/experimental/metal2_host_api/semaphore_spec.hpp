@@ -16,6 +16,24 @@
 
 namespace tt::tt_metal::experimental {
 
+/**
+ * @brief Host-side per-semaphore scope INTENT, baked into a SemScope by the host.
+ *
+ * AUTO = the host derives the effective SemScope from the semaphore's reach (who
+ * binds it, on how many nodes). An off-node CONSUME binder is rejected under EVERY
+ * scope (a guaranteed hang: down() spins on the consumer's local word). Beyond that:
+ * forcing DM_LOCAL_CACHED is validated at build time (a contradiction is a host
+ * FATAL); forcing EXTERNAL or LOCAL_NONATOMIC skips AUTO's SET-race FATAL -- the
+ * escape for phase-separated init-then-write, which the census cannot see.
+ * Host-only; not used on the device.
+ */
+enum class SemaphoreScope : uint8_t {
+    AUTO = 0,
+    LOCAL_NONATOMIC = 1,
+    DM_LOCAL_CACHED = 2,
+    EXTERNAL = 3,
+};
+
 // ============================================================================
 //  SemaphoreSpec API
 // ============================================================================
@@ -31,8 +49,8 @@ namespace tt::tt_metal::experimental {
 //
 // BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec and
 //   signal it (up() takes explicit coordinates for remote targets). Consumers
-//   (down()) must run on the semaphore's node -- the host rejects off-node
-//   CONSUME binders at build time, under every scope.
+//   (down(), labeled CONSUME) must run on the semaphore's node -- the host
+//   rejects off-node CONSUME binders at build time, under every scope.
 //
 // ============================================================================
 

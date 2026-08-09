@@ -157,6 +157,12 @@ struct KernelSpec {
         //   CONSUME:   down()
         //   SET:       set() / set_multicast() / relay_* destination
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
+        // A binding using SEVERAL mutators: anything that down()s is CONSUME -- the off-node
+        // hang rejection keys on that label, and the AUTO-only SET-race check it forgoes has
+        // forced scope as its documented escape. Otherwise pick the stronger of SET > INCREMENT
+        // (e.g. up() + set() through one binding is SET). OBSERVE only for a pure reader. Every
+        // non-OBSERVE label counts as a writer, so the choice never changes the mechanism --
+        // only which hazard checks apply.
         // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
         // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
         enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
