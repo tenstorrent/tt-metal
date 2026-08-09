@@ -49,9 +49,7 @@ void kernel_main() {
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
-    uint32_t dbg_waits = 0, dbg_pops = 0;                                  // [#48552 DEBUG]
-    \n ", start_output_page, end_output_page);  // [#48552 DEBUG]
-        for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
+    for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
         mapping_cb.wait_front(1);
         const uint32_t map_addr = mapping_cb.get_read_ptr();
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_addr);
@@ -66,16 +64,12 @@ void kernel_main() {
                 input_base_addr = input_cb.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
                 first = false;
-                dbg_waits++;  // [#48552 DEBUG]
-
             } else if (map_ptr[seg_idx].input_page_index != previous_input_page_idx) {
                 noc.async_write_barrier();
                 input_cb.pop_front(1);
-                dbg_pops++;  // [#48552 DEBUG]
                 input_cb.wait_front(1);
                 input_base_addr = input_cb.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
-                dbg_waits++;  // [#48552 DEBUG]
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
@@ -97,6 +91,5 @@ void kernel_main() {
     if (!first) {
         noc.async_write_barrier();
         input_cb.pop_front(1);
-        dbg_pops++;  // [#48552 DEBUG]
     }
 }
