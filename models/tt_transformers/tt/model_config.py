@@ -4153,13 +4153,23 @@ class ModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            if self.dim == 5120:
+                # Preserve Qwen's silicon-validated Galaxy user-gather layout.
+                self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                    shape=(32, 128),
+                    core_grid=num_to_coregrid(32),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            else:
+                self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                    shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+                    core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
         else:
             qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
