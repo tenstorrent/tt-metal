@@ -35,8 +35,10 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
+        self.use_galaxy_no_prefetch = args.is_galaxy and prefetcher is None
 
-        size_per_device = self.padded_vocab_size // self.num_devices
+        vocab_shards = args.cluster_shape[0] if self.use_galaxy_no_prefetch else self.num_devices
+        size_per_device = self.padded_vocab_size // vocab_shards
 
         tile_size = 32
         max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
@@ -80,7 +82,7 @@ class LMHead(LightweightModule):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
-                for device in range(self.num_devices):
+                for device in range(vocab_shards):
                     start = device * size_per_device + sum(split_sizes[:i])
                     end = start + split_size
                     device_splits.append(torch_output_weights[:, start:end])
@@ -101,14 +103,21 @@ class LMHead(LightweightModule):
                     return 1 << (n - 1).bit_length()
 
                 if mode == 0:
-                    memory_config = args.create_dram_sharded_mem_config(
-                        k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
-                    )
+                    if self.use_galaxy_no_prefetch:
+                        torch_weight = combined_split.unsqueeze(0).unsqueeze(0)
+                        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape)
+                        memory_config = ttnn.DRAM_MEMORY_CONFIG
+                    else:
+                        torch_weight = combined_split
+                        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+                        memory_config = args.create_dram_sharded_mem_config(
+                            k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
+                        )
                     self.output_weights_dram_sharded.append(
                         ttnn.as_tensor(
-                            combined_split,
+                            torch_weight,
                             device=mesh_device,
-                            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                            mesh_mapper=mesh_mapper,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=dtype,
                             memory_config=memory_config,
@@ -215,6 +224,9 @@ class LMHead(LightweightModule):
 
         output_weights = self.output_weights_ring_mm if use_prefetcher else self.output_weights_dram_sharded
 
+        if self.use_galaxy_no_prefetch:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
@@ -224,8 +236,10 @@ class LMHead(LightweightModule):
                 x,
                 weight,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=pc,
-                memory_config=self.lm_head_output_memory_config,
+                program_config=None if self.use_galaxy_no_prefetch else pc,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if self.use_galaxy_no_prefetch else self.lm_head_output_memory_config
+                ),
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
