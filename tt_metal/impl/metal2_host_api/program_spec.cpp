@@ -268,8 +268,7 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 // Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope baked into
 // every kernel that binds it. This is the authoritative decision; contradictions FATAL here.
 //
-//   EXTERNAL        -> EXTERNAL (one FATAL: no CONSUME binder off the semaphore's node --
-//                      down() spins on the consumer's LOCAL word).
+//   EXTERNAL        -> EXTERNAL.
 //   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit escape hatch; caller is asserting single-writer).
 //   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only after six FATALs: Gen2 arch, single-node semaphore,
 //                      at most one binder kernel, no other cached-binder kernel on the node, every
@@ -280,25 +279,29 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
 //                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
 //                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      Two hazards FATAL here: a CONSUME binder off the semaphore's node (every
-//                      arch -- down() spins on the local word), and, on Gen2 only, a SET racing
-//                      another writer (Gen1 keeps its historical silent behavior). Multi-consumer
-//                      down() itself is safe on both atomic tiers.
+//                      One hazard FATALs here, Gen2 only: a SET racing another writer (Gen1 keeps
+//                      its historical silent behavior; forced scopes are the escape for
+//                      phase-separated init-then-write, which the census cannot see).
+//                      Multi-consumer down() itself is safe on both atomic tiers.
+// An off-node CONSUME binder FATALs before the switch, under EVERY scope: it is a guaranteed hang,
+// not an atomicity trade-off.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
+    // Checked before the scope switch: down() spins on the consumer's LOCAL word under EVERY
+    // mechanism and arch, so an off-node consumer builds and then hangs no matter what the caller
+    // forces. (Off-node OBSERVE readers are tolerated: read-only, and a remote-fed shadow copy at
+    // coordinates the census cannot see is a legitimate pattern.)
+    {
+        const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
+        TT_FATAL(
+            binders.consuming_instance_count == 0 ||
+                sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
+            "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
+            "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
+            "there. Run consumers on the semaphore's node(s).",
+            sem.unique_id);
+    }
     switch (sem.scope) {
-        case SemaphoreScope::EXTERNAL: {
-            // Forced scopes skip the AUTO honesty guards, but an off-node consumer is a mechanical
-            // hang (down() spins on the LOCAL word), so it is rejected like forced-cached geometry.
-            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-            TT_FATAL(
-                binders.consuming_instance_count == 0 ||
-                    sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
-                "SemaphoreSpec '{}' is forced EXTERNAL with a CONSUME (down()) binder kernel on a node "
-                "outside the semaphore's node set; down() spins on the consumer's LOCAL word. Run "
-                "consumers on the semaphore's node(s).",
-                sem.unique_id);
-            return SemScope::EXTERNAL;
-        }
+        case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
         case SemaphoreScope::DM_LOCAL_CACHED: {
             // The cached-only pool is a per-core region in the DM cache domain, so every access must
             // come from a data-movement kernel on the semaphore's one node. Violations SPLIT the
@@ -361,17 +364,6 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
             // LOCAL_NONATOMIC (the Quasar DM cache has no Gen1 equivalent; a Gen1 user who wants
             // atomicity forces EXTERNAL -- the NoC atomic increment is a standard Gen1 primitive).
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-            // Arch-independent, so checked before the Gen1 return: down() spins on the consumer's
-            // LOCAL word under EVERY mechanism, so even one off-node consumer builds and then hangs.
-            // (Off-node OBSERVE readers are tolerated: read-only, and a remote-fed shadow copy at
-            // coordinates the census cannot see is a legitimate pattern.)
-            TT_FATAL(
-                binders.consuming_instance_count == 0 ||
-                    sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
-                "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
-                "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
-                "there. Run consumers on the semaphore's node(s).",
-                sem.unique_id);
             if (!is_gen2_arch()) {
                 return SemScope::LOCAL_NONATOMIC;
             }
