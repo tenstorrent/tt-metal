@@ -10,6 +10,9 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/attn_res_merge/attn_res_merge_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/attn_res_scores/attn_res_scores_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/attn_res_stats/attn_res_stats_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/fast_weighted_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
@@ -132,6 +135,9 @@ void py_module(nb::module_& mod) {
 
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
 
+    reduction::detail::bind_attn_res_merge(mod);
+    reduction::detail::bind_attn_res_scores(mod);
+    reduction::detail::bind_attn_res_stats(mod);
     reduction::detail::bind_fast_reduce_nc(mod);
     reduction::detail::bind_fast_weighted_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
