@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: the Kimi K3 attention-residuals read (`models/experimental/kimi_k3_attn_res`)
+"""PCC: the Kimi K3 attention-residuals read (`models/demos/deepseek_v3_d_p/tt/attn_res`)
 against the torch oracle, at the per-chip shape prefill actually runs.
 
 Prefill chunks 5120 tokens across the sequence-parallel axis, so every chip sees
@@ -28,12 +28,12 @@ and `(8, 4)` skips on chip count.
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.common.utility_functions import is_blackhole
-from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import EPS, attn_res
-from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 
 PCC_GATE = 0.9999
 REL_ERR_GATE = 2e-2

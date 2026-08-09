@@ -3,7 +3,7 @@
 
 """TTNN composite for Kimi K3 attention residuals (AttnRes).
 
-Mirrors `torch_functional/attn_res.py`. Two divergences from the torch API, both
+Mirrors `reference/attn_res/attn_res.py`. Two divergences from the torch API, both
 forced by ttnn:
 
   * `block_residual` is 4D `[1, S, N, d]` with candidates on **dim 1**, not the
@@ -89,7 +89,7 @@ class TtAttnRes(LightweightModule):
             instead of failing.
         eps: `rms_norm_eps`.
         torch_queries: optional sequence of `[d]` folded queries (see
-            `torch_functional.attn_res.fold_query`). Exposed as `self.queries`.
+            `reference.attn_res.attn_res.fold_query`). Exposed as `self.queries`.
         dtype: device dtype for queries and intermediates.
         sp_axis, tp_axis: mesh axes the sequence and the hidden dim are sharded
             across. `sp_axis` is placement only — the op never communicates on it,

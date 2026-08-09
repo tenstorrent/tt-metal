@@ -4,7 +4,7 @@
 """Device-side `block_residual` lifecycle for Kimi K3 attention residuals, plus
 the layer and stack drivers that walk it.
 
-Interface-compatible with `torch_functional.attn_res` — same `prefix_sum` /
+Interface-compatible with `reference.attn_res.attn_res` — same `prefix_sum` /
 `num_sealed` / `read` / `seal` / `accumulate` / `block_size` on the stream, same
 signature on `attn_res_layer` — so the depth harness drives both backends through
 one loop and the seal schedule and read count cannot diverge between them. The

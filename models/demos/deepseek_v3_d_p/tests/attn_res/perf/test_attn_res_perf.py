@@ -23,11 +23,11 @@ import time
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import EPS
-from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
+import ttnn
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 
 HIDDEN_SIZE = 7168
 PRODUCTION_TOKENS = 5120
