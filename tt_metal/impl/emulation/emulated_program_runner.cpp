@@ -850,7 +850,7 @@ static void emit_metal2_namespaces(
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
     if (!s.sem_accessors.empty()) {
-        // SemaphoreBindingToken<Id, SemScope, ReadOnly> token header (pulls in SemScope); see genfiles.cpp.
+        // SemaphoreBindingToken<Id, SemScope, SemAccess> token header (pulls in both enums); see genfiles.cpp.
         f << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
@@ -901,25 +901,8 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // emule does not model DM_LOCAL_CACHED (no seeder call in its entry wrapper; only the
-        // ring slot is seeded), so a cached semaphore would read an unseeded pool word. Refuse loudly.
-        for (const auto& [name, h] : s.sem_accessors) {
-            TT_FATAL(
-                h.scope != SemScope::DM_LOCAL_CACHED,
-                "Semaphore '{}' resolved to DM_LOCAL_CACHED, which the emule backend does not model (it "
-                "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
-                "or LOCAL_NONATOMIC for this semaphore when running under emule.",
-                name);
-            // Same shape of refusal for EXTERNAL multi-consumer: emule compiles the Gen1
-            // single-consumer down() arm (TT_EMULE_USE_L1_POOL), so >1 consuming instance would
-            // race unlocked and produce silently wrong results.
-            TT_FATAL(
-                !(h.scope == SemScope::EXTERNAL && h.external_multi_consumer),
-                "Semaphore '{}' is EXTERNAL with more than one consuming (down()) instance, but the "
-                "emule backend compiles the single-consumer Gen1 down() arm -- results would be "
-                "silently wrong. Restructure to one consumer under emule, or run on real Quasar.",
-                name);
-        }
+        // Backend-capability refusals (cached scope, multi-consumer EXTERNAL) run at snapshot
+        // time in the launch path -- NOT here: this emitter runs only on a JIT-cache miss.
         // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access> (see
         // genfiles.cpp); CTAD gives the kernel's Semaphore the host-resolved mechanism and access.
         f << "namespace sem {\n";
@@ -1776,6 +1759,26 @@ static void collect_kernels(
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
+            // Backend-capability refusals live HERE, not in the emitter: the emitter runs only on
+            // a JIT-cache MISS, so a check there is silently vacated by a .so reuse (the cache key
+            // folds scope/access but deliberately not program shape).
+            for (const auto& [sem_name, h] : bindings.sem_accessors) {
+                TT_FATAL(
+                    h.scope != SemScope::DM_LOCAL_CACHED,
+                    "Semaphore '{}' resolved to DM_LOCAL_CACHED, which the emule backend does not model (it "
+                    "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
+                    "or LOCAL_NONATOMIC for this semaphore when running under emule.",
+                    sem_name);
+                // Config-time instance count is a per-binding over-approximation (cores x threads
+                // per CONSUME binding) -- deliberately conservative; the refusal is loud and the
+                // workaround (one consumer under emule) is stated.
+                TT_FATAL(
+                    !(h.scope == SemScope::EXTERNAL && h.external_multi_consumer),
+                    "Semaphore '{}' is EXTERNAL with more than one consuming (down()) instance, but the "
+                    "emule backend compiles the single-consumer Gen1 down() arm -- results would be "
+                    "silently wrong. Restructure to one consumer under emule, or run on real Quasar.",
+                    sem_name);
+            }
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
             // GENERAL emule fix — intentionally NOT part of the Blaze named-args feature and NOT

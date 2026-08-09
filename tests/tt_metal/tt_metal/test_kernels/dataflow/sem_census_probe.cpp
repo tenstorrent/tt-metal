@@ -48,7 +48,7 @@ void kernel_main() {
         report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
         // Read the baked access back: proves the host actually emitted it (OBSERVE tests
-        // assert 1), so forgetting to bake it can't leave enforcement silently inert.
+        // assert SemAccess::OBSERVE == 3), so forgetting to bake it can't leave enforcement silently inert.
         report[3] = static_cast<uint32_t>(sem::counter.access);
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         // Residency check: the ring slot (uncached alias = TL1 truth) must be untouched for a

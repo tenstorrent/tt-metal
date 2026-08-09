@@ -17,7 +17,7 @@
 // Deliberately NO `operator uint32_t()` (unlike the DFB accessor): the token cannot decay to a
 // raw address, so `get_semaphore(sem::x)` and `noc_semaphore_inc(get_noc_addr(x, y, sem::x))`
 // fail to compile. An explicit `Semaphore<...>` pin fails the token-ctor static_asserts on any
-// scope/read-only mismatch; a pin that happens to match compiles and is caught by the hygiene
+// scope/access mismatch; a pin that happens to match compiles and is caught by the hygiene
 // sweep (test_semaphore_binding_hygiene) instead.
 //
 // Access is the host's KernelSpec::SemaphoreBinding::access_type, baked whole: every Semaphore
