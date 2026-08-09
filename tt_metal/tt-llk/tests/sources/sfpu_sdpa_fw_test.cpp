@@ -2,32 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/* Driver for the column-vector SFPU bodies in metal's
-   experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h.
+/*
+ * Driver for Metal's llk_sfpu/ckernel_sfpu_sdpa_fw.h.
  *
- * Like the bodies in the neighbouring ckernel_sfpu_sdpa.h, these have no LLK API of their own: the
- * consumer declares its own wrapper and dispatches the body at VectorMode::C. This test declares
- * that wrapper, so what is under test is body, dispatch mode and init together.
+ * Like the bodies in the neighbouring ckernel_sfpu_sdpa.h, these have no LLK API of their own.
+ * The consumer declares its own wrapper and dispatches the body at VectorMode::C.
  *
- * The header holds two bodies, and both are narrower than their ckernel_sfpu_sdpa.h namesakes:
+ * The header holds two:
  *
  *   calculate_recip_first_column        sfpu_reciprocal_iter<2> on an fp32 dest, else <1> plus a
- *                                       round to bf16. No legacy_compat template parameter and no
- *                                       APPROX branch, so it is one code path per dest-acc mode.
+ *                                       round to bf16.
  *   calculate_exponential_first_column  _ckernel_sfpu_exp_accurate_ with SCALE_EN, scale as a
- *                                       uint16_t bf16 pattern. No polynomial branch.
+ *                                       uint16_t bf16 pattern.
  *
- * Both are behaviourally equal to a path ckernel_sfpu_sdpa.h already reaches: recip matches
- * calculate_recip_first_column<false> at APPROX=false, and exp matches
- * calculate_exponential_first_column<true, scale>. The Python side reuses one golden for both
- * headers on that basis. The two headers declare these names separately rather than sharing them,
- * so the bodies can drift apart without any build breaking.
- *
- * Footprint. Both bodies run ITERATIONS_HALF_FACE = 4 iterations at a dst_reg stride of 2, and
- * VectorMode::C invokes them on faces 0 and 2. That writes columns {0,2,4,6,8,10,12,14} of all 32
- * rows and leaves the other 768 elements untouched. Only column 0 carries meaning for the caller,
- * since these operands are row-reduce outputs broadcast down a column, but the other seven are
- * computed and so have to be modelled.
+ * Both run ITERATIONS_HALF_FACE = 4 iterations at a dst_reg stride of 2, on faces 0 and 2
+ * under VectorMode::C. That writes columns {0,2,4,6,8,10,12,14} of all 32 rows and leaves the rest
+ * of the tile alone. Only column 0 carries meaning for the caller, since these operands are
+ * row-reduce outputs broadcast down a column, but the other seven are computed and so have to be
+ * modelled.
  */
 
 #include <cstdint>
@@ -47,7 +39,7 @@ constexpr int OP_FW_EXP   = 1; // calculate_exponential_first_column<EXP_SCALE_B
 
 static_assert(SDPA_FW_OP == OP_FW_RECIP || SDPA_FW_OP == OP_FW_EXP, "unhandled SDPA_FW_OP");
 
-// Both bodies are eltwise-unary shaped and work on one DEST tile in place.
+// Both work on one Dest tile in place.
 constexpr std::uint32_t SDPA_FW_DST_INDEX = 0;
 
 #ifdef LLK_TRISC_UNPACK
@@ -83,31 +75,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
-// ckernel_sfpu_sdpa_fw.h names DST_ACCUM_MODE but only ever reads its value, in an `if constexpr`
-// and as a template argument. No header in this translation unit tests it with #ifdef, so a
-// constant declared ahead of the include satisfies it and there is no macro to scope or undefine.
-// sfpu_binop_scalar_test.cpp:66 and fast_untilize_test.cpp:35 do the same.
-//
-// One consequence is that each dest-acc mode is a separate build, which is how the harness sweeps
-// it in any case. Unlike ckernel_sfpu_sdpa.h, this header reads no APPROX, so the test needs no
-// approx_mode axis.
+// ckernel_sfpu_sdpa_fw.h needs DST_ACCUM_MODE.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
 
 using namespace ckernel;
 
-// Per-body SFPU init.
-//
-// Reciprocal is tt-train's init verbatim, with nothing added: recip_tile_init<legacy_compat=false>
-// (sdpa_compute_utils.hpp:422), which reaches recip_init<APPROX, DST_ACCUM_MODE, false>. That call
-// is what programs vConstFloatPrgm0 for the body's Newton step, so garbage results here point at it.
-//
-// Exp gets the shared init and nothing else, because it needs nothing else.
-// _ckernel_sfpu_exp_accurate_ resolves to _sfpu_exp_21f_bf16_<false> or _sfpu_exp_fp32_accurate_
-// (ckernel_sfpu_exp.h:409-417), both of which carry their constants as immediates. exp_init would
-// program either the Schraudolph constants or LREG12/LREG13 and ADDR_MOD_6, and those belong to
-// _sfpu_exp_21f_bf16_tti_, which this body does not call.
 inline void sdpa_fw_op_init()
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
@@ -120,7 +94,6 @@ inline void sdpa_fw_op_init()
     }
 }
 
-// The wrapper under test: each body dispatched the way a consumer dispatches it.
 inline void sdpa_fw_op(const std::uint32_t dst_index)
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)

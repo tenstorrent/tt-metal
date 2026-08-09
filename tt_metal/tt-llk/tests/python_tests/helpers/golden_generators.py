@@ -4559,7 +4559,7 @@ class TopKGolden:
 
 @register_golden
 class SdpaSfpuGolden:
-    # Columns the stride-2 half-face walk lands on.
+    # Columns the kernel writes to.
     TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)
 
     def __call__(
@@ -4595,6 +4595,7 @@ class SdpaSfpuGolden:
 @register_golden
 class SdpaCorrectionGolden:
     """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
+
     def __call__(self, tiles, scale: float):
         prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
             t.to(torch.float32) for t in tiles

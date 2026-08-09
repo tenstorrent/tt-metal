@@ -16,7 +16,6 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
-    SdpaOp,
     DataCopyType,
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -29,6 +28,7 @@ from .llk_params import (
     PerfRunType,
     ReducePool,
     SdpaFwOp,
+    SdpaOp,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -510,7 +510,7 @@ class SDPA_OP(TemplateParameter):
     op: SdpaOp = SdpaOp.RecipLegacy
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int COLVEC_OP = {self.op.value};"
+        return f"constexpr int SDPA_OP = {self.op.value};"
 
 
 @dataclass

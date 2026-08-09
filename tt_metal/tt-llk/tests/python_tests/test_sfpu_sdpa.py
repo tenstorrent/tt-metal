@@ -5,8 +5,7 @@
 Tests for Metal's llk_sfpu/ckernel_sfpu_sdpa.h.
 
 Those kernels have no LLK API of their own. Each consumer declares its own wrapper, so
-sources/sfpu_sdpa_test.cpp declares the same one ttnn's SDPA uses and this file
-drives it.
+sources/sfpu_sdpa_test.cpp declares the same one ttnn's SDPA uses and this file drives it.
 """
 
 import struct
@@ -23,9 +22,9 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    SdpaOp,
     DestAccumulation,
     DestSync,
+    SdpaOp,
     format_dict,
 )
 from helpers.param_config import parametrize
@@ -33,10 +32,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
-    DEST_SYNC,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -57,6 +56,7 @@ SOFTPLUS_THRESHOLD = 20.0
 
 class Precision(Enum):
     """Format and dest accumulation pairings, so only legal ones are generated."""
+
     Bf16Dest = ("bf16_dest", DataFormat.Float16_b, DestAccumulation.No, False)
     Fp32Dest = ("fp32_dest", DataFormat.Float16_b, DestAccumulation.Yes, False)
     Fp32E2E = ("fp32_e2e", DataFormat.Float32, DestAccumulation.Yes, True)
@@ -121,11 +121,6 @@ def _footprint_violations(src_2d, res_2d):
     return [c for c in untouched if bool(changed[:, c].any())]
 
 
-# ----------------------------------------------------------------------------------
-# The eltwise-unary-shaped bodies
-# ----------------------------------------------------------------------------------
-
-
 def _stimulus(op, exp_scale_bf16: int) -> torch.Tensor:
     if op in RECIP_OPS:
         # Magnitudes in [1.25, 5.0). Kept away from zero because these bodies run 1 to 3 Newton
@@ -136,16 +131,11 @@ def _stimulus(op, exp_scale_bf16: int) -> torch.Tensor:
         magnitudes = _ramp(1.25, 5.0)
 
         if op is SdpaOp.RecipLegacy:
-            # Positive only: this body is positive-domain by design and returns +|1/x| for a
-            # negative input, which the header records next to it. Do not "fix" this to alternate
-            # sign -- the kernel is correct as specified, and the restriction is what lets the
-            # SDPA inner loop stay branchless.
+            # Positive only. The kernel effectively returns the absolute value.
             return magnitudes
 
-        # RecipIter handles the sign itself, so it gets both. Sign alternates by row, not by flat
-        # index: flat index i sits at column i % TILE_DIM, so alternating on i would put every
-        # negative in an odd column -- and the written footprint is all even columns, which would
-        # leave the sign path untested while looking like it was covered.
+        # RecipIter handles the sign itself, so it gets both positives and negatives.
+        # Sign alternates by row, so flat index i sits at column i % TILE_DIM.
         rows = torch.arange(ELEMENTS_PER_TILE) // TILE_DIM
         signs = torch.where(rows % 2 == 0, torch.tensor(1.0), torch.tensor(-1.0))
         return magnitudes * signs
@@ -157,19 +147,13 @@ def _stimulus(op, exp_scale_bf16: int) -> torch.Tensor:
         scale = _bf16_to_float(exp_scale_bf16)
         return _ramp(0.0, 8.0) if scale < 0.0 else _ramp(-8.0, 0.0)
 
-    # Softplus: stay inside the degree-6 residual polynomial's [0, 5] fit domain, so the
-    # test measures the polynomial rather than the clamp to zero beyond it.
+    # Softplus. Stay inside the degree-6 residual polynomial's [0, 5] fit domain,
+    # so the test measures the polynomial rather than the clamp to zero beyond it.
     return _ramp(-4.0, 4.0)
 
 
 def _templates(op, exp_scale_bf16: int, approx_mode, dest_sync=DestSync.Half):
-    """Every parameter is emitted for every op, not only the ones the selected body reads.
-
-    sdpa_op() dispatches with `if constexpr` inside a non-template function, so
-    the compiler still performs name lookup in the discarded branches. An exp-only or
-    softplus-only constant missing from the build header is a hard error even when its
-    branch is never taken.
-    """
+    """Return all the C++ template parameters."""
     return [
         SDPA_OP(op),
         APPROX_MODE(approx_mode),
@@ -184,11 +168,7 @@ def _templates(op, exp_scale_bf16: int, approx_mode, dest_sync=DestSync.Half):
 
 
 def _variants():
-    """(op, exp_scale_bf16) pairs for the single-tile bodies.
-
-    Correction is excluded; it has its own test below. Only the exp bodies vary with the
-    scale, so the rest are run once at whichever value comes first.
-    """
+    """(op, exp_scale_bf16) pairs for the single-tile bodies."""
     variants = []
     for op in SdpaOp:
         if op == SdpaOp.Correction:
@@ -200,15 +180,6 @@ def _variants():
     return variants
 
 
-# dest_acc selects code, not just a storage width: the recip bodies pick
-# sfpu_reciprocal_iter<2> against <1>-plus-bf16-round and _reciprocal_compat_<3> against
-# <2>, the polynomial exp picks POLY_DEGREE 4 against 2 along with an fp32 or bf16
-# load/store mode, and softplus picks whether to round to bf16.
-#
-# approx_mode is live only for the two reciprocal bodies. The exp bodies read their own
-# SDPA_EXP_APPROX_MODE argument, and calculate_softplus_body takes an APPROXIMATION_MODE
-# parameter it never uses. Sweeping it everywhere costs four duplicate variants and makes
-# any future rewiring of APPROX show up as a change.
 @parametrize(
     op_and_scale=_variants(),
     precision=list(Precision),
@@ -281,13 +252,9 @@ def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
     )
 
 
-# ----------------------------------------------------------------------------------
-# The five-region softmax-combine body
-# ----------------------------------------------------------------------------------
-
-
 def _correction_stimulus_tiles(torch_format):
-    """Five input tiles, chosen so every branch and every in-place write is observable.
+    """
+    Five input tiles, chosen so every branch and every in-place write is observable.
 
     prev_max ascends while worker_max descends, so they cross mid-tile and the device's
     `v_if(prev_max < worker_max)` takes both branches within one dispatch. Elements near
@@ -311,14 +278,7 @@ def _correction_stimulus_tiles(torch_format):
 
 
 def _dest_configurations():
-    """(precision, dest_sync) pairs that can hold five 32x32 DEST tiles.
-
-    get_dest_max_tiles is DEST_REGISTER_{HALF,FULL}_SIZE, halved again under fp32 dest
-    accumulation, over the 32x32 tile size. On Blackhole that gives 8 tiles for (SyncHalf,
-    no fp32), 4 for (SyncHalf, fp32), and 16 and 8 for the two SyncFull pairs. The
-    (fp32 dest, SyncHalf) pair holds four and is omitted here, because the body needs
-    five; enabling it fails on silicon and leaves the device needing a reset.
-    """
+    """Dest configurations that can hold five tiles."""
     return [
         (Precision.Bf16Dest, DestSync.Half),
         (Precision.Bf16Dest, DestSync.Full),
@@ -348,7 +308,6 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
         scale=_bf16_to_float(scale_bf16),
     )
 
-    # Tilize each region on its own: the device unpacks them as five separate tiles.
     src_A_tilized = torch.cat(
         [
             tilize_block(
@@ -404,12 +363,9 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
         )
 
         if name == "cur_max":
-            # cur_max is an elementwise max of two representable inputs, with no
-            # arithmetic and nothing to round, so it is checked exactly rather than
-            # against a tolerance that a wrong max could hide inside.
-            cols = torch.tensor(
-                SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long
-            )
+            # cur_max is an eltwise max of two representable inputs, with no
+            # arithmetic and nothing to round, so it is checked exactly.
+            cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
             assert torch.equal(
                 res[:, cols].to(torch.float32), golden[:, cols].to(torch.float32)
             ), "correction cur_max must be an exact elementwise max"
