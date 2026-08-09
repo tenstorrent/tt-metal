@@ -108,6 +108,17 @@ def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
 
 
+def compute_galaxy_width_shard_cores(width: int, max_cores: int = 32) -> int:
+    """Use the largest core count that leaves a tile-aligned width shard."""
+    if width % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"width must be tile-aligned, got {width}")
+    width_tiles = width // ttnn.TILE_SIZE
+    num_cores = min(max_cores, width_tiles)
+    while width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores
+
+
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
@@ -4147,8 +4158,8 @@ class ModelArgs:
             )
 
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, self.dim // 4 // compute_galaxy_width_shard_cores(self.dim // 4)),
+                core_grid=num_to_coregrid(compute_galaxy_width_shard_cores(self.dim // 4)),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

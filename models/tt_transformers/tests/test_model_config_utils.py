@@ -6,6 +6,7 @@ import pytest
 
 from models.tt_transformers.tt.model_config import (
     compute_galaxy_padded_vocab_size,
+    compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     should_pad_sampling_logits_to_power_of_2,
 )
@@ -49,6 +50,22 @@ def test_compute_galaxy_padded_vocab_size(vocab_size, num_devices, expected):
     assert padded_vocab_size == expected
     assert padded_vocab_size >= vocab_size
     assert padded_vocab_size % (32 * num_devices) == 0
+
+
+@pytest.mark.parametrize(
+    ("width", "expected"),
+    [
+        (768, 24),
+        (1024, 32),
+        (1280, 20),
+        (2048, 32),
+    ],
+)
+def test_compute_galaxy_width_shard_cores(width, expected):
+    num_cores = compute_galaxy_width_shard_cores(width)
+
+    assert num_cores == expected
+    assert (width // num_cores) % 32 == 0
 
 
 @pytest.mark.parametrize(
