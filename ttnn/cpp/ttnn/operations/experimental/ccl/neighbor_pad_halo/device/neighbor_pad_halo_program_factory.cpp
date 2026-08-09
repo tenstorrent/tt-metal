@@ -591,11 +591,15 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         std::set<CoreRange> hw_crs, hm_crs;
-        for (const auto& c : hmux_worker_logical) hw_crs.insert(CoreRange(c));
+        for (const auto& c : hmux_worker_logical) {
+            hw_crs.insert(CoreRange(c));
+        }
         // Mux kernel only for (link,dir) that send (edge outward dirs don't).
         for (uint32_t s = 0; s < hmux_core_logical.size(); s++) {
             const bool sends = (s % num_directions == 0) ? !is_last_device : !is_first_device;
-            if (sends) hm_crs.insert(CoreRange(hmux_core_logical[s]));
+            if (sends) {
+                hm_crs.insert(CoreRange(hmux_core_logical[s]));
+            }
         }
         CoreRangeSet hw_crset(hw_crs);
         CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
@@ -792,7 +796,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             const std::vector<CoreCoord>& mux_worker_cores = mux_worker_logical;
             const std::vector<CoreCoord>& mux_mux_cores = mux_core_logical;
             std::set<CoreRange> worker_crs, mux_crs;
-            for (const auto& c : mux_worker_cores) worker_crs.insert(CoreRange(c));
+            for (const auto& c : mux_worker_cores) {
+                worker_crs.insert(CoreRange(c));
+            }
             // Only create a mux kernel for (link,dir) that actually SEND (have a send-neighbor)
             for (uint32_t s = 0; s < mux_mux_cores.size(); s++) {
                 const uint32_t w_dir_s = s % 2;
