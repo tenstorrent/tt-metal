@@ -3,8 +3,8 @@
 
 """TTNN composite for Kimi K3 attention residuals (AttnRes).
 
-Mirrors `torch_functional/attn_res.py`; `API_SPEC.md` holds the contract. Two
-divergences from the torch API, both forced by ttnn:
+Mirrors `torch_functional/attn_res.py`. Two divergences from the torch API, both
+forced by ttnn:
 
   * `block_residual` is 4D `[1, S, N, d]` with candidates on **dim 1**, not the
     last dim. `S+1 <= 9` would tile-pad 9 -> 32 on a last dim, and padding zeros
@@ -18,13 +18,12 @@ reciprocal-RMS pass and the dots each collapse to a single pass over the sealed
 set for all 24 read sites, which leaves the weighted sum as the only per-site
 traffic over it. That one does not batch in composed form — it contracts over the
 candidate axis, and reaching it with a matmul means making that axis a tile axis,
-whose two permutes over the sealed set cost what the matmul saves
-(`bringup_log.md` P8).
+whose two permutes over the sealed set cost what the matmul saves.
 
-Distribution follows `DISTRIBUTION.md`: the stream stays sharded `[1, 1, T/R,
-d/C]` exactly as the analog leaves it, the sequence axis communicates nothing,
-and each read all-reduces `2(S+1)` scalars per token across the TP axis. Nothing
-of width `d` ever crosses a rank boundary.
+Distribution: the stream stays sharded `[1, 1, T/R, d/C]` exactly as the analog
+leaves it, the sequence axis communicates nothing, and each read all-reduces
+`2(S+1)` scalars per token across the TP axis. Nothing of width `d` ever crosses
+a rank boundary.
 """
 
 import ttnn
@@ -334,11 +333,11 @@ class TtAttnRes(LightweightModule):
         7.8e-3 -> 1.6e-2 at `C = 18` — and at `N` of one tile row it can switch
         `all_reduce` to the composite algorithm outright, because the candidate
         axis was the only dim that could qualify for reduce-scatter and the folded
-        shape does not have it (`ROOFLINE.md` §5). Neither layout is exact to
-        begin with and both stay ~50x inside one bf16 ULP, so the gate is the
-        186-read depth PCC in `test_tp_depth_walk`, not exactness: measured there,
-        the two differ by <=5e-6 in *either* direction, which is reassociation
-        noise rather than a precision cost."""
+        shape does not have it. Neither layout is exact to begin with and both stay
+        ~50x inside one bf16 ULP, so the gate is the 186-read depth PCC in
+        `test_split_matches_direct`, not exactness: measured there, the two differ
+        by <=5e-6 in *either* direction, which is reassociation noise rather than a
+        precision cost."""
         if not (self.fold_stats and wide.shape[-1] == 1 and FOLD_MIN_CANDIDATES <= wide.shape[1] <= ttnn.TILE_SIZE):
             return ttnn.all_reduce(
                 wide,
@@ -408,8 +407,8 @@ class TtAttnRes(LightweightModule):
         produce one scalar per (token, candidate): read `v`, write a second copy of
         it, read that back. `rms_norm_pre_all_gather` is the distributed-RMSNorm
         statistics kernel, which squares inside the reduce and does it in one —
-        782 -> 232 µs traced at `C = 9`, against a 229 µs one-pass floor
-        (`bringup_log.md` P7). Its 32-wide output carries the sum in column 0.
+        782 -> 232 µs traced at `C = 9`, against a 229 µs one-pass floor. Its
+        32-wide output carries the sum in column 0.
 
         Only where the row fits in L1 — see `ONE_PASS_SQUARES_MAX_WIDTH`.
         """
@@ -446,9 +445,9 @@ class TtAttnRes(LightweightModule):
 
         R matvecs are R passes over `v`, which is the only large tensor in the op.
         Stacking the queries as columns makes them one matmul over one pass: at a
-        12-layer block's 24 read sites that is 42x the one-pass floor down to 1.8x
-        (`bringup_log.md` P8). The 24-wide output also idles 8 of 32 tile columns
-        instead of the lone matvec's 31.
+        12-layer block's 24 read sites that is 42x the one-pass floor down to 1.8x.
+        The 24-wide output also idles 8 of 32 tile columns instead of the lone
+        matvec's 31.
 
         Nothing has to be transposed to get here — the dots contract over `d`,
         which is already the last axis. The mixture contracts over candidates and

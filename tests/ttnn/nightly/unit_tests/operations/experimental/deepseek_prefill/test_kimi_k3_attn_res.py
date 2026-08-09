@@ -6,9 +6,8 @@ against the torch oracle, at the per-chip shape prefill actually runs.
 
 Prefill chunks 5120 tokens across the sequence-parallel axis, so every chip sees
 `5120 / sp` rows. On the Galaxy `(8, 4)` that is **640**, and 640 is the only row
-count this file uses — the op's cost and its collective's algorithm both turn on it
-(`ROOFLINE.md` §4, §5), and a suite parametrized at 64 tokens exercises a reduction
-production never issues.
+count this file uses — the op's cost and its collective's algorithm both turn on it, and
+a suite parametrized at 64 tokens exercises a reduction production never issues.
 
 Two placements, both sharded:
 

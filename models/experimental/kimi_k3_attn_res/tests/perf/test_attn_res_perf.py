@@ -4,12 +4,10 @@
 """The perf harness for the composed read. It measures and it never gates.
 
 No timing assertion appears in this file. A wall-clock threshold on a shared box is a
-flake generator, and the numbers here exist to be read into `bringup_log.md` as numbered
-perf iterations, not to fail CI. `_report` writes through loguru, so `pytest -s` is what
-makes them visible at all.
+flake generator, and the numbers here exist to be read off a bringup run, not to fail CI.
+`_report` writes through loguru, so `pytest -s` is what makes them visible at all.
 
-The op's settled cost model lives in `ROOFLINE.md`. What runs here are the two numbers
-the schedule is still chosen on:
+What runs here are the two numbers the schedule is chosen on:
 
   * one read replayed from a captured trace, swept over `S` — the only form whose total
     is device time rather than host dispatch;
