@@ -37,12 +37,30 @@ struct KernelBarrier {
 // different thread counts would still share a slot (host validation admits at most one
 // same-role DFB instance per node today, so this is not a reachable topology); if that
 // ever becomes supported, key the barrier per kernel-group instead of per DFB role.
-// [0] = DFB producer side, [1] = DFB consumer side, [2] = cached-semaphore pool init.
-// Slot 2 keeps the auto-injected sem::init_dm_cached() rendezvous out of the DFB-role
-// barriers: sharing a slot across groups with different participant counts deadlocks.
+// [0] = DFB producer side, [1] = DFB consumer side, [2] = free for kernel use.
 constexpr uint32_t NUM_KERNEL_BARRIERS = 3;
-constexpr uint32_t KERNEL_BARRIER_CACHED_SEM_INIT = 2;
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
+
+// Dedicated barrier for the auto-injected sem::init_dm_cached() rendezvous (see genfiles.cpp).
+// Deliberately NOT an array slot: sync_threads(idx) can then never mix a user rendezvous with
+// the seeder's -- mixed participant groups on one barrier deadlock or release early.
+extern volatile KernelBarrier g_cached_sem_init_barrier;
+
+// Generation-based barrier body, shared by wait_threads() (array slots) and the injected
+// seeder (dedicated barrier). Reusable: each pass advances the generation.
+inline void wait_threads_on(volatile KernelBarrier& barrier, uint32_t participants) {
+    if (participants <= 1) {
+        return;
+    }
+    uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
+    uint32_t arrived = __atomic_add_fetch(&barrier.arrived, 1, __ATOMIC_ACQ_REL);
+    if (arrived == participants) {
+        __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
+    } else {
+        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
+    }
+}
 
 #endif // !COMPILE_FOR_TRISC
 
@@ -88,6 +106,8 @@ inline void thread_sync_init() {
         g_kernel_barrier[i].arrived = 0;
         g_kernel_barrier[i].generation = 0;
     }
+    g_cached_sem_init_barrier.arrived = 0;
+    g_cached_sem_init_barrier.generation = 0;
 #endif
 }
 
@@ -99,15 +119,7 @@ inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     }
 
 #if defined(ARCH_QUASAR)
-    volatile KernelBarrier& barrier = g_kernel_barrier[barrier_idx];
-    uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
-    uint32_t arrived = __atomic_add_fetch(&barrier.arrived, 1, __ATOMIC_ACQ_REL);
-    if (arrived == participants) {
-        __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
-    } else {
-        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
-    }
+    wait_threads_on(g_kernel_barrier[barrier_idx], participants);
 #endif
 }
 
