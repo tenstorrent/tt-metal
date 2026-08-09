@@ -18,7 +18,7 @@ global_env:
   PREFILL_NUM_LAYERS: "60"
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
-  # Only 12B of metadata transits the queue, so reducing it's size has no effect on transfer speed
+  # Only 12B of metadata transits the queue, so reducing its size has no effect on transfer speed
   # Keeping it default (64KB) clashes with the MoE FFN L1 allocation
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
   LOGURU_LEVEL: "INFO"
