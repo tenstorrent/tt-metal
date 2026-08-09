@@ -47,10 +47,12 @@ enum class SemScope : uint8_t {
  * @brief Host-side per-semaphore scope INTENT, baked into a SemScope by the host.
  *
  * AUTO = the host derives the effective SemScope from the semaphore's reach (who
- * binds it, on how many nodes). Forcing DM_LOCAL_CACHED is validated at build time
- * (a contradiction is a host FATAL); forcing EXTERNAL skips AUTO's SET-race FATAL but
- * still rejects an off-node CONSUME binder (a guaranteed hang); forcing LOCAL_NONATOMIC
- * is a pure pass-through. Host-only; not used on the device.
+ * binds it, on how many nodes). An off-node CONSUME binder is rejected under EVERY
+ * scope (a guaranteed hang: down() spins on the consumer's local word). Beyond that:
+ * forcing DM_LOCAL_CACHED is validated at build time (a contradiction is a host
+ * FATAL); forcing EXTERNAL or LOCAL_NONATOMIC skips AUTO's SET-race FATAL -- the
+ * escape for phase-separated init-then-write, which the census cannot see.
+ * Host-only; not used on the device.
  */
 enum class SemaphoreScope : uint8_t {
     AUTO = 0,

@@ -1049,6 +1049,9 @@ TEST_F(SemScopeFixture, TestCensusOffNodeConsumerFatal) {
         << "AUTO must reject a CONSUME binder off the semaphore's node (a guaranteed hang)";
     EXPECT_ANY_THROW(run_census(core, off_node_consumer, SemaphoreScope::EXTERNAL))
         << "forced EXTERNAL must also reject an off-node CONSUME binder";
+    EXPECT_ANY_THROW(run_census(core, off_node_consumer, SemaphoreScope::LOCAL_NONATOMIC))
+        << "forced LOCAL_NONATOMIC must also reject it: the hang is mechanical, not an atomicity "
+           "trade-off the caller can own";
 }
 
 // Explicit scopes must still win over the classifier.
@@ -1110,7 +1113,8 @@ TEST_F(SemScopeFixture, TestCensusSetHonestyFatal) {
         core,
         {{.num_threads = 1, .access = experimental::SemaphoreAccessType::SET, .increments = 1, .reporter = true},
          {.num_threads = 1, .increments = 1}}))
-        << "a SET racing another writer must be rejected under every mechanism";
+        << "AUTO must reject a SET racing another writer (set() is non-atomic under every mechanism; "
+           "forced scopes remain the escape for phase-separated init-then-write)";
 
     // A SINGLE consumer instance is fine: no concurrency, so it takes the cheap path.
     EXPECT_NO_THROW(run_census(
