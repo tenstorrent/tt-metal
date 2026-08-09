@@ -113,7 +113,7 @@ Shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip,
         max_dispatched_tokens_per_expert, metadata_len)
 
 metadata_len = 3 routing fields:
-  [0]: src_chip      - Source chip ID (linearized mesh coord)
+  [0]: src_chip      - Source chip ID (0 to dispatch_group_size-1)
   [1]: token_idx     - Token index within source chip's sequence
   [2]: topk_idx      - Which of the K experts this token selected (0 to num_experts_per_tok-1)
 

@@ -1182,13 +1182,10 @@ def validate_dispatch_metadata(
                                 )
                         if not scale_match:
                             rel = (out_scales - ref_scales).abs() / ref_scales.abs().clamp_min(1e-9)
-                            worst = rel.argmax()
-                            slot, field = divmod(int(worst.item()), num_scale_fields)
+                            slot, field = divmod(int(rel.argmax()), num_scale_fields)
                             logger.error(
-                                f"    Scale tail mismatch at chip={dst_chip_id}, expert={expert_id}: "
-                                f"max_rel={rel.max().item():.4f} (buffer slot {start + slot} "
-                                f"(region-relative {slot}), field {field}: "
-                                f"ref={ref_scales[slot, field].item():.6e}, out={out_scales[slot, field].item():.6e})"
+                                f"    Scale tail: max_rel={rel.max().item():.4f} at slot {slot}, field {field} "
+                                f"(ref={ref_scales[slot, field].item():.6e}, out={out_scales[slot, field].item():.6e})"
                             )
 
     passed = len(mismatches) == 0

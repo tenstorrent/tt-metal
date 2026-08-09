@@ -413,8 +413,7 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
-        # Kept for the compressed_fp8_dispatch decompression: per_token_cast_back sweeps only the token
-        # regions of this chip's local experts, looked up through this table.
+        # Needed by the compressed_fp8_dispatch decompression (per_token_cast_back).
         self.global_expert_idx_tt = global_expert_idx_tt
 
         # Initialize routed expert
@@ -638,14 +637,8 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
-        # ========================================
-        # FP8 dispatch compression (outside the sub-device overlap)
-        # ========================================
-        # Compress x per-token (DeepEP-style: e4m3 values + one fp32 scale per 128-wide block)
-        # BEFORE the sub-device manager is loaded, so the cast runs on the full Tensix grid.
-        # The scales are not shipped as a separate transfer: dispatch byte-copies each token's
-        # scales into the metadata tail (fields 3..), so they travel with the routing metadata.
-        # The bf16 x is kept alive — the shared expert below still consumes it.
+        # fp8 compression runs BEFORE the sub-device manager is loaded, so the cast gets the full
+        # Tensix grid; the bf16 x stays alive for the shared expert below.
         x_fp8, x_scales = None, None
         if self.compressed_fp8_dispatch:
             x_fp8, x_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
@@ -688,13 +681,7 @@ class TtMoe(LightweightModule):
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
 
-        # ========================================
-        # FP8 dispatch decompression (after the sub-device manager is cleared)
-        # ========================================
-        # Dequantize the fp8 dispatched buffer back to bfloat16 on the full grid. The per-token
-        # scales are read from the metadata tail (fields 3..) that dispatch shipped alongside the
-        # routing fields; token-count-aware sweeping restricts the work to the regions of this
-        # chip's local experts, bounded by the routing tensors.
+        # fp8 decompression runs AFTER the sub-device manager is cleared (full grid again).
         if self.compressed_fp8_dispatch:
             x_fp8 = ttnn.deallocate(x_fp8)
             x_scales = ttnn.deallocate(x_scales)
