@@ -664,15 +664,6 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
-// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
-// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
-// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
-// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
-// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
-// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
-// enforced at program finalize.
-constexpr uint32_t max_runtime_args_tensix = 4096;
-
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 // num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
