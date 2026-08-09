@@ -38,13 +38,7 @@ from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filter
 
 
 def per_token_cast_to_fp8(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Quantize per token to e4m3, DeepEP-style: one fp32 scale per 128-wide block,
-    scale = clamp(amax(|block|), 1e-4) / 448. The quantized values are returned as fp32
-    so the fp32 dispatch buffer carries them bit-exactly.
-
-    Device-computed scales agree with these only within ~1e-2 relative — the tolerance is
-    pinned by the cast op unit test (test_deepseek_prefill_per_token_cast.py).
-    """
+    """Mimics the DeepSeek (DeepEP) per-token fp8 compression method."""
     orig_shape = x.shape
     assert orig_shape[-1] % FP8_SCALE_BLOCK == 0, f"emb_dim ({orig_shape[-1]}) must be divisible by {FP8_SCALE_BLOCK}"
     blocks = x.float().reshape(*orig_shape[:-1], orig_shape[-1] // FP8_SCALE_BLOCK, FP8_SCALE_BLOCK)
