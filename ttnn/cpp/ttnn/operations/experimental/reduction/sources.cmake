@@ -2,6 +2,9 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS
+    attn_res_merge/attn_res_merge.hpp
+    attn_res_scores/attn_res_scores.hpp
+    attn_res_stats/attn_res_stats.hpp
     deepseek_grouped_gate/deepseek_grouped_gate.hpp
     deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp
     fast_reduce_nc/fast_reduce_nc.hpp
@@ -10,6 +13,15 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS
 )
 
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
+    attn_res_merge/attn_res_merge.cpp
+    attn_res_merge/device/attn_res_merge_device_operation.cpp
+    attn_res_merge/device/attn_res_merge_program_factory.cpp
+    attn_res_scores/attn_res_scores.cpp
+    attn_res_scores/device/attn_res_scores_device_operation.cpp
+    attn_res_scores/device/attn_res_scores_program_factory.cpp
+    attn_res_stats/attn_res_stats.cpp
+    attn_res_stats/device/attn_res_stats_device_operation.cpp
+    attn_res_stats/device/attn_res_stats_program_factory.cpp
     fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
     fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
     fast_reduce_nc/fast_reduce_nc.cpp
@@ -36,6 +48,9 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS
+    attn_res_merge/attn_res_merge_nanobind.cpp
+    attn_res_scores/attn_res_scores_nanobind.cpp
+    attn_res_stats/attn_res_stats_nanobind.cpp
     fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     fast_weighted_reduce_nc/fast_weighted_reduce_nc_nanobind.cpp
