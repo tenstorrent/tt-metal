@@ -19,17 +19,33 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+
     const auto& page_size = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
+    auto* mesh_device = input_tensor.device();
+    const auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto available_worker_cores =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id).num_cores();
+    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     TT_FATAL(operation_attributes.in_dim >= 0 && operation_attributes.in_dim < rank, "in_dim out of range");
     TT_FATAL(operation_attributes.out_dim >= 0 && operation_attributes.out_dim < rank, "out_dim out of range");
 
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(
+        available_worker_cores >= operation_attributes.num_links,
+        "All-to-all requires at least one worker per link: requested {} links, but subdevice has {} workers",
+        operation_attributes.num_links,
+        available_worker_cores);
+    TT_FATAL(
+        max_payload_size >= page_size,
+        "Fabric maximum payload {} must fit at least one tensor page of size {}",
+        max_payload_size,
+        page_size);
 
     TT_FATAL(
         input_shape[operation_attributes.out_dim] % operation_attributes.num_devices == 0,
@@ -141,6 +157,12 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto axis_topology = ttnn::ccl::get_axis_topology(
+        tensor_args.input_tensor, fabric_config, operation_attributes.cluster_axis.value_or(0));
+    const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    // The cached program contains the fabric mux kernel and client ABI. Bump this whenever either changes.
+    constexpr uint32_t fabric_mux_implementation_version = 2;
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncGenericDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
@@ -150,6 +172,10 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
+        fabric_config,
+        axis_topology,
+        max_payload_size,
+        fabric_mux_implementation_version,
         tensor_args);
 }
 
@@ -165,6 +191,7 @@ Tensor all_to_all_async_generic(
     std::optional<uint32_t> cluster_axis) {
     using OperationType = AllToAllAsyncGenericDeviceOperation;
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    TT_FATAL(num_links > 0, "all_to_all_async requires at least one fabric link");
     TT_FATAL(
         num_devices > 1,
         "all_to_all_async is a collective operation and requires more than 1 device, but has {}",
