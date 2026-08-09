@@ -141,13 +141,21 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
         }
         // Only a construction over a sem:: token matters; `Semaphore<> s(raw_id)` uses the unaffected
         // uint32_t ctor (find_unbound_semaphore_constructions covers it), and a `Semaphore<...>&`
-        // parameter is fine as long as it is scope-generic. Bound the scan at the first of
-        // ';' / ')' / '{' / newline so a parameter declaration cannot borrow sem:: text from the
-        // function body that follows it.
-        size_t stmt_end = std::string::npos;
-        for (const char c : {';', ')', '{', '\n'}) {
-            stmt_end = std::min(stmt_end, code.find(c, close));
+        // parameter is fine as long as it is scope-generic. Discriminate by the first
+        // non-whitespace character after '>': a reference/pointer/list-position marker means a
+        // PARAMETER (skip -- it must not borrow sem:: text from the function body); anything else
+        // is a potential construction, scanned to the statement's ';' so brace-init and
+        // line-wrapped spellings stay covered.
+        size_t after = close + 1;
+        while (after < code.size() && std::isspace(static_cast<unsigned char>(code[after]))) {
+            after++;
         }
+        if (after < code.size() && (code[after] == '&' || code[after] == '*' || code[after] == ',' ||
+                                    code[after] == ')' || code[after] == ':')) {
+            pos = close + 1;
+            continue;
+        }
+        const size_t stmt_end = code.find(';', close);
         if (stmt_end != std::string::npos) {
             const std::string stmt = code.substr(close, stmt_end - close);
             if (stmt.find("sem::") != std::string::npos) {
@@ -162,7 +170,9 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
 }
 
 // Raw-id Semaphore construction: `Semaphore s(x)` / `Semaphore<...> s{x}` where the constructor
-// argument is not a sem:: token. The wrapper is not a raw primitive, but it is still an
+// argument is not a sem:: token. LIMITS: unnamed forms (`auto s = Semaphore(x)`, `new Semaphore(x)`,
+// expression temporaries) are not modeled, and a function DECLARATION returning Semaphore would
+// over-flag -- neither shape exists in kernel sources today. The wrapper is not a raw primitive, but it is still an
 // UNDECLARED census participant: the host cannot see it, so AUTO can pick a non-atomic
 // mechanism out from under it. (A cached-pinned raw construction is additionally rejected at
 // compile time on Quasar DM -- noc_semaphore.h raw-id ctor -- but the lint covers every arch.)
@@ -354,6 +364,9 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         {"raw_local_set", "void kernel_main() { noc_semaphore_set(ptr, 5); }", true},
         // Explicit <> pins the class-default scope and access rights instead of the baked ones.
         {"pinned_scope_ctor", "void kernel_main() { Semaphore<> s(sem::counter); }", true},
+        // Brace-init and line-wrapped pins are the same violation in other spellings.
+        {"pinned_scope_brace_init", "void kernel_main() { Semaphore<> s{sem::counter}; }", true},
+        {"pinned_scope_line_wrapped", "void kernel_main() {\n    Semaphore<>\n        s(sem::counter);\n}", true},
         // A raw-id construction (any template spelling) is an undeclared census participant.
         {"raw_id_construction", "void kernel_main() { Semaphore<> s(sem_id); }", true},
         {"raw_id_construction_untemplated", "void kernel_main() { Semaphore s(get_arg_val<uint32_t>(0)); }", true},

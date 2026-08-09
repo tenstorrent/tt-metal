@@ -200,7 +200,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
     //  - Semaphore binding tokens are emitted into the sem namespace (a
-    //    SemaphoreBindingToken<id, scope, read_only>, so the kernel's Semaphore deduces the
+    //    SemaphoreBindingToken<id, scope, access>, so the kernel's Semaphore deduces the
     //    host-chosen mechanism and access rights via CTAD rather than taking a bare id)
     //  - TensorBindings are emitted into the tensor namespace
     //  - Scratchpad binding tokens are emitted into the scratch namespace
@@ -227,7 +227,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
         if (!sem_entries.empty()) {
-            // Defines SemaphoreBindingToken<Id, SemScope, ReadOnly> (and pulls in SemScope), the
+            // Defines SemaphoreBindingToken<Id, SemScope, SemAccess> (and pulls in SemScope), the
             // token each sem::<name> symbol is emitted as.
             content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
             if (has_cached_sem) {
@@ -263,7 +263,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
-            // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, read_only>. The kernel
+            // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access>. The kernel
             // writes `Semaphore s(sem::<name>)` and CTAD picks the host-resolved mechanism and access
             // rights. scope is emitted numerically to avoid a host<->device enumerator-name dependency.
             if (has_cached_sem) {

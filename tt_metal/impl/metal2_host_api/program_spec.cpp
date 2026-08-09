@@ -642,10 +642,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             // namespace as the accessors; an accessor by that name would be a redefinition
             // error inside generated code instead of a readable failure.
             TT_FATAL(
-                binding.accessor_name != "init_dm_cached",
-                "Kernel '{}' semaphore accessor_name 'init_dm_cached' is reserved (generated "
-                "cached-pool seeder symbol). Pick another name.",
-                kernel.unique_id);
+                binding.accessor_name != "init_dm_cached" && binding.accessor_name != "SEM_HAS_DM_CACHED",
+                "Kernel '{}' semaphore accessor_name '{}' is reserved (generated cached-pool seeder "
+                "symbol / macro). Pick another name.",
+                kernel.unique_id,
+                binding.accessor_name);
             TT_FATAL(
                 collected.semaphore_by_name.contains(binding.semaphore_spec_name),
                 "Kernel '{}' references unknown semaphore '{}'",
@@ -2882,7 +2883,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id (+ the host-resolved scope and read_only flag)
+// Create map of accessor name -> logical Semaphore id (+ the host-resolved scope and access label flag)
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
