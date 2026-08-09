@@ -104,13 +104,28 @@ def _load_random_weights(module, torch, _top=True) -> int:
 
 
 def _expand_fused(counts: Counter) -> Counter:
-    """Reconcile the device log with the shim's expanded view: each ring-joint SDPA
-    is one ttnn call on device but hides two all-gathers (K and V) over its cluster
-    axis, which the dry run emits as separate stages (dryrun/fused.py)."""
+    """Reconcile the device log with the shim's expanded view.
+
+    A fused kernel is ONE ttnn call on device but performs a collective inside it, which the dry
+    run emits as a separate stage (dryrun/fused.py). Comparing raw call names would report a
+    mismatch on every fused op, so expand each into the collective it hides -- the same table the
+    shim expands, kept in step with it:
+
+        agmm       -> all_gather   over its cluster axis, before the matmul
+        mmrs       -> reduce_scatter over its cluster axis, after the matmul
+        ring_sdpa  -> two all_gathers (K and V) over the ring axis
+
+    Only the collective is counted; the matmul half is not a collective and the dry-run side of
+    the diff lists collectives only.
+    """
     out = Counter()
     for (op, axis), n in counts.items():
         if op == "ring_sdpa":
             out[("all_gather", axis)] += 2 * n  # K and V gathered over the ring axis
+        elif op == "agmm":
+            out[("all_gather", axis)] += n
+        elif op == "mmrs":
+            out[("reduce_scatter", axis)] += n
         else:
             out[(op, axis)] += n
     return out
