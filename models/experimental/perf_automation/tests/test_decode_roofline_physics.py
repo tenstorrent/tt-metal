@@ -175,8 +175,8 @@ def _cfg(**kw):
 
 def test_the_producer_derives_facts_from_the_checkpoint_and_config(tmp_path, monkeypatch):
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     facts = run._perf_target_inputs(tmp_path, None, {})
     assert facts["weight_bytes"] == int(8 * _GB)
@@ -186,8 +186,8 @@ def test_the_producer_derives_facts_from_the_checkpoint_and_config(tmp_path, mon
 
 def test_head_dim_is_derived_when_the_config_omits_it(tmp_path, monkeypatch):
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 1000)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 1000)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg(hidden_size=8192, num_attention_heads=64))
     assert run._perf_target_inputs(tmp_path, None, {})["head_dim"] == 128
 
@@ -195,8 +195,8 @@ def test_head_dim_is_derived_when_the_config_omits_it(tmp_path, monkeypatch):
 def test_an_explicit_head_dim_wins_over_the_derived_one(tmp_path, monkeypatch):
     """Phi-3.5-mini has head_dim 96 with hidden/heads = 128; deriving it would be wrong."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 1000)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 1000)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg(head_dim=96))
     assert run._perf_target_inputs(tmp_path, None, {})["head_dim"] == 96
 
@@ -206,8 +206,8 @@ def test_moe_models_are_refused_rather_than_guessed(tmp_path, monkeypatch, moe_k
     """The reachable read set is shared + top_k x per-expert, and the split cannot come from config
     alone without guessing FFN shapes. A guessed ceiling is worse than the floor fallback."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(60 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/moe")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(60 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/moe")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg(**{moe_key: 128, "num_experts_per_tok": 8}))
     assert run._perf_target_inputs(tmp_path, None, {}) is None
 
@@ -222,13 +222,13 @@ def test_only_a_missing_divisor_withholds_the_ceiling(tmp_path, monkeypatch):
     withholds it, since with neither there is nothing to divide by and a zero ceiling would render as a
     real one."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: None)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: None)
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: {})
     monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 0)
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 0)
     assert run._perf_target_inputs(tmp_path, None, {}) is None, "no params and no bytes must withhold"
 
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
     facts = run._perf_target_inputs(tmp_path, None, {})
     assert facts and facts["weight_bytes"] == int(8 * _GB), "bytes alone are a usable divisor"
     tgt = _pt().compute_target(facts, {"dram_bw_gbps": _BH_DRAM_GBPS})
@@ -237,8 +237,8 @@ def test_only_a_missing_divisor_withholds_the_ceiling(tmp_path, monkeypatch):
 
 def test_the_manifest_config_overrides_the_hf_cache(tmp_path, monkeypatch):
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 1000)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 1000)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg(num_hidden_layers=32))
     facts = run._perf_target_inputs(tmp_path, None, {"model_config": {"num_hidden_layers": 16}})
     assert facts["layers"] == 16
@@ -247,8 +247,8 @@ def test_the_manifest_config_overrides_the_hf_cache(tmp_path, monkeypatch):
 def test_emit_writes_the_file_once_and_never_clobbers_a_tuned_one(tmp_path, monkeypatch, capsys):
     """A file already present may carry real per-tensor dtypes, which beats anything derivable here."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
 
     run._emit_perf_target_inputs(tmp_path, tmp_path, None, {})
@@ -262,8 +262,8 @@ def test_emit_writes_the_file_once_and_never_clobbers_a_tuned_one(tmp_path, monk
 
 def test_emit_never_raises_on_a_broken_model_root(tmp_path, monkeypatch):
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     run._emit_perf_target_inputs(tmp_path / "does" / "not" / "exist", tmp_path, None, {})
 
@@ -271,8 +271,8 @@ def test_emit_never_raises_on_a_broken_model_root(tmp_path, monkeypatch):
 def test_end_to_end_the_produced_facts_give_the_published_ceiling(tmp_path, monkeypatch):
     """Producer -> perf_target: the file this writes must yield the 64.0 ceiling and 38.4-51.2 band."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
     monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
@@ -296,8 +296,8 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
     Under the params rule that trap is structural rather than a setting to remember: 8B params -> 8 GB
     whatever the checkpoint stores, so both paths give 64.0 and the override cannot be forgotten."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 16_060_556_376)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
     monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
@@ -320,8 +320,8 @@ def test_on_device_weight_bytes_can_be_stated_when_they_differ_from_the_checkpoi
 
 def test_a_junk_override_is_ignored_rather_than_trusted(tmp_path, monkeypatch):
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(16 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "x/y")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(16 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "x/y")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     for junk in ("", "  ", "abc", "0", "-8", "8e9x"):
         monkeypatch.setenv("TT_PERF_WEIGHT_BYTES", junk)
@@ -566,8 +566,8 @@ def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkey
     run, led = _run_mod(), _led_mod()
     monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "l.jsonl"))
     # a bf16 checkpoint: 16.06 GB stored, but 8B params -> the ceiling divides by 8 GB
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 16_060_556_376)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 16_060_556_376)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: _cfg())
     # No snapshot: this pins the CONFIG-and-name path, so the real HF cache must not leak in.
     monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [])
@@ -592,8 +592,8 @@ def test_a_list_valued_config_field_does_not_cost_the_whole_ceiling(tmp_path, mo
     the caller swallows it, and the model lost its ENTIRE ceiling over a KV field the ceiling does not
     even use without a seq_len. Two cached checkpoints hit this in a stress run."""
     run = _run_mod()
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: int(8 * _GB))
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "meta-llama/Llama-3.1-8B")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: int(8 * _GB))
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "meta-llama/Llama-3.1-8B")
     monkeypatch.setattr(
         run,
         "_hf_cache_dims",
@@ -620,8 +620,8 @@ def test_params_are_read_even_when_the_unit_cannot_be_determined(tmp_path, monke
     hdr = json.dumps({"w": {"dtype": "F32", "shape": [1000, 1000], "data_offsets": [0, 4_000_000]}}).encode()
     (shard / "model.safetensors").write_bytes(struct.pack("<Q", len(hdr)) + hdr)
 
-    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None: 4_000_000)
-    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None: "org/no-size-in-name")
+    monkeypatch.setattr(run, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 4_000_000)
+    monkeypatch.setattr(run, "_resolve_model_id", lambda d, h=None, *_a, **_k: "org/no-size-in-name")
     monkeypatch.setattr(run, "_hf_cache_dims", lambda mid: {"hidden_size": 1000})  # no tag, no architectures
     monkeypatch.setattr(run, "_hf_snapshots", lambda mid: [shard])
 

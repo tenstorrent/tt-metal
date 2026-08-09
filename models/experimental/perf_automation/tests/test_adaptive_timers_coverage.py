@@ -1,14 +1,26 @@
 import json, os, sys, tempfile, importlib.util
 from pathlib import Path
 
-sys.path.insert(0, "/home/ttuser/tt-metal-llama/models/experimental/perf_automation")
-sys.path.insert(0, "/home/ttuser/tt-metal-llama")
+# DERIVED FROM THIS FILE, NOT FROM ONE MACHINE'S LAYOUT. These were three absolute paths into
+# /home/ttuser/tt-metal-llama -- a SIBLING checkout that happens to exist on the box this was
+# written on. Two consequences, and the second is the serious one:
+#
+#   * the test exercised whatever tool version that other checkout held, not the one it ships beside,
+#     so it could pass here while the code under test was broken;
+#   * the preflight now runs this suite before every run, so on any machine without that checkout the
+#     import raises, the suite is red, and the run REFUSES TO START. A machine-specific path in a
+#     test is no longer just untidy once the suite gates the device.
+#
+# Skipping it was the other option and is worse: a skipped test still reports green while covering
+# nothing. The paths are derivable -- this file sits inside the tree it is testing.
+_PA = Path(__file__).resolve().parent.parent  # .../models/experimental/perf_automation
+_REPO = _PA.parents[2]  # the tt-metal checkout this test ships in
+sys.path.insert(0, str(_PA))
+sys.path.insert(0, str(_REPO))
 
 from agent import probes
 
-spec = importlib.util.spec_from_file_location(
-    "ccrun", "/home/ttuser/tt-metal-llama/models/experimental/perf_automation/cc_optimize/run.py"
-)
+spec = importlib.util.spec_from_file_location("ccrun", str(_PA / "cc_optimize" / "run.py"))
 ccrun = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ccrun)
 

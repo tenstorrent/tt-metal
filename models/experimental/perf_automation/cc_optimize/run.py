@@ -3672,7 +3672,46 @@ def _is_cached_model_id(cand) -> bool:
     return (_hf_hub_root() / f"models--{org}--{name}").is_dir()
 
 
-def _resolve_model_id(demo_dir, hint=None) -> str | None:
+def _run_test_files(demo_dir, manifest=None) -> tuple:
+    """The test files THIS RUN executes, absolute. Empty when the manifest cannot name them.
+
+    These are what make _resolve_model_id a fact rather than a scan: the model pinned in the PCC test
+    and the perf test is the model being run, whatever else the directory happens to mention."""
+    out = []
+    try:
+        # No manifest means the caller genuinely has none (a probe, a unit test). Returning ()
+        # sends _resolve_model_id to its tree scan, which is the documented last resort -- it does
+        # NOT go hunting for a manifest, because a function that finds its own inputs is a function
+        # nobody can reason about from the call site.
+        cfg = ((manifest or {}).get("config") or {}) if isinstance(manifest, dict) else {}
+        pm = ((manifest or {}).get("pathmap") or {}) if isinstance(manifest, dict) else {}
+        cands = [cfg.get("pcc_test"), cfg.get("perf_test")]
+        for key in ("pcc", "perf_test"):
+            v = pm.get(key)
+            if isinstance(v, str):
+                cands.append(v)
+            elif isinstance(v, dict):
+                cands.append(v.get("path"))
+            elif isinstance(v, (list, tuple)):
+                cands.extend(x for x in v if isinstance(x, str))
+        for c in cands:
+            if not c:
+                continue
+            p = Path(str(c).partition("::")[0])
+            for base in (
+                Path(demo_dir),
+                Path(demo_dir).parents[2] if len(Path(demo_dir).parents) > 2 else Path(demo_dir),
+            ):
+                q = p if p.is_absolute() else (base / p)
+                if q.is_file():
+                    out.append(str(q))
+                    break
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(dict.fromkeys(out))
+
+
+def _resolve_model_id(demo_dir, hint=None, prefer_files=()) -> str | None:
     """Which HF model this run is optimizing: hint, then HF_MODEL, then the directory scan.
 
     The middle tier was missing. optimize.py passes `model_id_hint=(None if model_dir else
@@ -3693,8 +3732,30 @@ def _resolve_model_id(demo_dir, hint=None) -> str | None:
     env_id = (os.environ.get("HF_MODEL") or "").strip()
     if _is_cached_model_id(env_id):
         return env_id
+    # THE RUN'S OWN TESTS, BEFORE THE TREE. This dropped straight to "first cached id in the first
+    # .py rglob yields", and a model tree names more than one: gemma3's conftest, perf test, PCC test
+    # and host-split test all pin google/gemma-3-12b-it, while test_ci_dispatch.py lists the 4b and
+    # the 27b as a CI matrix. It returned the 4b -- because rglob reached that file first -- and every
+    # derived figure then described a 4B model.
+    #
+    # Counting which id appears in the most files was the first attempt and was rejected: a vote is a
+    # heuristic, it has no reason to be right on a tree nobody has seen, and the stress suite says so.
+    # The run already KNOWS which files it executes -- the PCC test and the perf test are named in its
+    # own config -- and the model those files pin is the model being run. That is a fact about this
+    # run, not a property of the directory layout.
+    for _f in prefer_files or ():
+        try:
+            _txt = Path(str(_f).partition("::")[0]).read_text(errors="ignore")
+        except OSError:
+            continue
+        for cand in _HF_ID_RE.findall(_txt):
+            if _is_cached_model_id(cand):
+                return cand
+    # Last resort: the tree. Unchanged -- first cached id wins -- because with nothing stating which
+    # model this is, one answer from the family beats no answer, and the callers above are what make
+    # it rare rather than what it falls back to.
     try:
-        for p in Path(demo_dir).rglob("*.py"):
+        for p in sorted(Path(demo_dir).rglob("*.py")):
             try:
                 txt = p.read_text(errors="ignore")
             except OSError:
@@ -3704,7 +3765,6 @@ def _resolve_model_id(demo_dir, hint=None) -> str | None:
                     return cand
     except Exception:  # noqa: BLE001
         return None
-    return None
 
 
 def _chip_count(devices) -> int:
@@ -3755,7 +3815,7 @@ def _hf_cache_dims(model_id: str) -> dict:
     return {}
 
 
-def _model_weight_bytes(demo_dir, hint=None) -> int:
+def _model_weight_bytes(demo_dir, hint=None, manifest=None) -> int:
     # _captured/ (golden PCC input/output tensors) and _stubs/ (graduated-stub .last_good snapshots)
     # are TEST FIXTURES, not model weights. Summing them made a tiny non-weight total short-circuit
     # the real checkpoint lookup -- XTTS's 102 captured *.pt files (133 MB) masked the true 1.868 GB
@@ -3773,7 +3833,7 @@ def _model_weight_bytes(demo_dir, hint=None) -> int:
         total = 0
     if total:
         return total
-    mid = _resolve_model_id(demo_dir, hint)
+    mid = _resolve_model_id(demo_dir, hint, _run_test_files(demo_dir, manifest))
     return _hf_cache_weight_bytes(mid) if mid else 0
 
 
@@ -3800,12 +3860,12 @@ def _decide_parallelism_route(
         chips = int(env.get("device_count") or env.get("mesh_chips") or env.get("num_devices") or 0) or _chip_count(
             devices
         )
-        weight_bytes = _model_weight_bytes(demo_dir, model_id_hint)
+        weight_bytes = _model_weight_bytes(demo_dir, model_id_hint, manifest)
         if not (cap and weight_bytes):
             return
         cfg = manifest.get("model_config") or {}
         if not cfg.get("hidden_size"):
-            mid = _resolve_model_id(demo_dir, model_id_hint)
+            mid = _resolve_model_id(demo_dir, model_id_hint, _run_test_files(demo_dir, manifest))
             if mid:
                 cfg = {**_hf_cache_dims(mid), **cfg}
         heads = int(cfg.get("num_attention_heads") or cfg.get("num_heads") or 1)
@@ -3876,9 +3936,9 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     # `cfg` supplies the KV terms, which are unused unless a seq_len is given. So a model with no HF
     # config, or whose weights are in a format the byte-sizer cannot read, got NO ceiling at all and its
     # report fell to the band-less ms floor -- three unrelated-looking symptoms with one cause.
-    wb = _model_weight_bytes(demo_dir, model_id_hint) or 0
+    wb = _model_weight_bytes(demo_dir, model_id_hint, manifest) or 0
     cfg = dict(manifest.get("model_config") or {})
-    mid = _resolve_model_id(demo_dir, model_id_hint)
+    mid = _resolve_model_id(demo_dir, model_id_hint, _run_test_files(demo_dir, manifest))
     if mid:
         cfg = {**_hf_cache_dims(mid), **cfg}
     experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
@@ -4110,6 +4170,31 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
                 return  # hand-tuned (or unreadable): strictly better than what is derived here
             if _prev == facts:
                 return
+            # A REFRESH MUST NEVER DOWNGRADE. `never overwrites` was crude but it was SAFE: it could
+            # not replace good facts with worse ones. Refreshing on the strength of "the file is
+            # mine" checks who WROTE it and never whether what is about to be written is any good --
+            # and the deriver can be wrong. It was: with four gemma-3 variants in the HF cache it
+            # resolved gemma-3-4b, so a run overwrote gemma-3-12b's facts (24.37 GB, 11.18B params,
+            # 48 layers) with `weight_bytes: 0`, 4B params and 34 layers, and every roofline number
+            # after that described a model that was not running.
+            #
+            # The divisor is the thing that cannot be lost: with no byte count and no param count
+            # there is nothing to divide by, so a file that HAS one must not be replaced by one that
+            # does not. Refuse the write and say so -- silently keeping the old file would leave the
+            # geometry keys unable to land, which is the problem the refresh exists to solve.
+            _lost = [
+                k
+                for k in ("weight_bytes", "total_params", "active_params")
+                if (_prev.get(k) or 0) > 0 and not (facts.get(k) or 0) > 0
+            ]
+            if _lost:
+                print(
+                    "  [optimize/cc] NOT refreshing perf_target_inputs.json: the new facts drop %s "
+                    "(the ceiling's divisor). Keeping the existing file -- a regenerated file that "
+                    "lost the divisor describes no model." % ", ".join(_lost),
+                    flush=True,
+                )
+                return
         out.write_text(json.dumps(facts, indent=2) + "\n")
         # ANCHOR IT IN THE LEDGER TOO. The file lives in the model directory, which the optimize loop
         # reverts between attempts -- it was rolled back twice in one run, each time restoring a
@@ -4260,7 +4345,7 @@ def run_cc_optimize(
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     os.environ.setdefault("PERF_MCP_MODEL_NAME", model_name or "model")
-    _cfg_ref = _resolve_model_id(demo_dir, model_id_hint) or str(demo_dir)
+    _cfg_ref = _resolve_model_id(demo_dir, model_id_hint, _run_test_files(demo_dir, manifest)) or str(demo_dir)
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
