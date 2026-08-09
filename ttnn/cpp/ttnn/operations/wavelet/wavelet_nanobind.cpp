@@ -34,8 +34,8 @@ Compute one level of the FP32 1D Discrete Wavelet Transform.
 ``input`` must be a row-major INTERLEAVED FLOAT32 tensor with shape ``[W]`` or
 ``[B,1,1,W]`` in DRAM or L1 on one physical device. Outputs remain INTERLEAVED
 DRAM tensors and preserve the optional batch dimensions.
-``wavelet`` names one of the 106 discrete PyWavelets
-schemes and ``boundary_mode`` is one of ``zero``, ``constant``, ``symmetric``,
+``wavelet`` names one of the 106 supported discrete wavelet schemes and
+``boundary_mode`` is one of ``zero``, ``constant``, ``symmetric``,
 ``reflect``, ``periodic``, ``smooth``, ``antisymmetric``, or ``antireflect``.
 
 Returns ``(approximation, detail)``. Let
