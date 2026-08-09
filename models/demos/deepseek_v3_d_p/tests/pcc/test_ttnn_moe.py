@@ -84,10 +84,11 @@ def run_model(
     topology,
     gate_fallback_mode,
     request,
+    compressed_fp8_dispatch,
+    is_ci_env,
+    is_ci_v2_env,
     is_balanced=False,
     padded_percent=0,
-    *,
-    compressed_fp8_dispatch: bool,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -146,22 +147,16 @@ def run_model(
     # (pinned by the cast op unit test) — hence the tolerant buffer/scale checks below.
     logger.info(f"compressed_fp8_dispatch={compressed_fp8_dispatch} for this run (dispatch path under test)")
 
-    # In CI, a bf16-dispatch entry for a model whose production path is fp8 only covers the
-    # PREFILL_COMPRESSED_FP8_DISPATCH=0 debugging fallback — not worth device time there; it
-    # stays runnable locally. The emb_dim guard keeps foreign-dims entries (GLM, whose
-    # production really is bf16) and Wormhole (no fp8 ops) running.
-    in_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    # A bf16-dispatch entry for a model whose production path is fp8 only covers the
+    # PREFILL_COMPRESSED_FP8_DISPATCH=0 debugging fallback — not worth CI device time; it stays
+    # runnable locally. Wormhole (no fp8 ops) keeps its bf16 coverage.
     if (
-        in_ci
+        (is_ci_env or is_ci_v2_env)
+        and is_blackhole()
         and not compressed_fp8_dispatch
         and variant.supports_compressed_fp8_dispatch
-        and emb_dim == variant.model_config.EMB_SIZE
-        and is_blackhole()
     ):
-        logger.warning(
-            f"{variant.name} runs fp8 dispatch in production — skipping bf16 dispatch entry in CI "
-            "(run locally or set compressed_fp8_dispatch=True coverage instead)"
-        )
+        logger.warning(f"{variant.name} runs fp8 dispatch in production — skipping bf16 dispatch entry in CI")
         pytest.skip(f"{variant.name} production path is fp8 dispatch; bf16 fallback not exercised in CI")
 
     (
@@ -471,10 +466,8 @@ def run_model(
     gc.collect()
 
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
-        # Sparse tensor validation using slot-aware comparisons.
-        # fp8: the ~1e-2 scale noise (see comment above) rules out an exact buffer check, so
-        # PCC — at 0.999, since scale noise is the ONLY expected difference; a looser bar
-        # would hide real bugs (e.g. a block dequantized with the wrong scale field).
+        # Sparse tensor validation using slot-aware comparisons. In fp8 mode the scale tail of
+        # the dispatch metadata is validated too.
         if compressed_fp8_dispatch:
             buffer_validate_fn, buffer_kwargs = validate_dispatch_buffer_pcc, {"pcc_threshold": 0.999}
         else:
@@ -626,6 +619,67 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+# Mesh/topology axis shared by test_ds_moe / test_glm_moe.
+MESH_TOPOLOGY_PARAMS = [
+    pytest.param(
+        (8, 1),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        },
+        2 if is_blackhole() else 1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+        id="linear-8",
+    ),
+    pytest.param(
+        (4, 2),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        },
+        2 if is_blackhole() else 1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="mesh-4x2",
+    ),
+    pytest.param(
+        (4, 2),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2 if is_blackhole() else 1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="fabric2d-mesh-4x2",
+    ),
+    pytest.param(
+        (2, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        },
+        2 if is_blackhole() else 1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="mesh-2x4",
+    ),
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        },
+        2 if is_blackhole() else 1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="mesh-8x4",
+    ),
+]
+
+
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -640,8 +694,8 @@ def run_model(
         # the rest keep sequential placement (their reference / PCC path isn't zigzag).
         # compressed_fp8_dispatch column: the dispatch path this entry tests. True (production
         # path for DS/Kimi) requires Blackhole — the per_token_cast ops don't exist elsewhere,
-        # so True entries carry the Blackhole-only mark; entries that also run on Wormhole and
-        # the GLM-dims entries (GLM production runs bf16 dispatch) pin False.
+        # so True entries carry the Blackhole-only mark; entries that also run on Wormhole
+        # pin False.
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  True, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
@@ -656,86 +710,13 @@ def run_model(
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, True, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
-        # GLM-5.2 MoE (256 experts / top-8, emb 6144, moe_int 2048). Exercises the >64-expert unfused
-        # extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
-        # GLM's noaux_tc knife-edge gate is validated at the transformer level. 25k = 3200 per-chip x 8.
-        pytest.param(1600, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
-        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL,    True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-glm-256"),
         # fmt: on
     ],
 )
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
+    MESH_TOPOLOGY_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
@@ -758,6 +739,8 @@ def test_ds_moe(
     gate_fallback_mode,
     request,
     padded_percent,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -778,6 +761,80 @@ def test_ds_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         compressed_fp8_dispatch=compressed_fp8_dispatch,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced, "
+        "compressed_fp8_dispatch"
+    ),
+    [
+        # fmt: off
+        # GLM-5.2 MoE (256 experts / top-8, emb 6144, moe_int 2048). Exercises the >64-expert unfused
+        # extract->FFN->insert routed-expert path on GLM dims. Gate grouping comes from the GLM config
+        # (n_group=1 -> plain top-k); GLM's noaux_tc knife-edge gate is validated at the transformer
+        # level. compressed_fp8_dispatch=False everywhere: GLM production runs bf16 dispatch
+        # (supports_compressed_fp8_dispatch=False on its adapter). 25k = 3200 per-chip x 8.
+        pytest.param(1600, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL,    True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-glm-256"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    MESH_TOPOLOGY_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+def test_glm_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    is_balanced,
+    compressed_fp8_dispatch,
+    num_links,
+    topology,
+    gate_fallback_mode,
+    request,
+    padded_percent,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+        is_balanced=is_balanced,
+        padded_percent=padded_percent,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
     )
 
 
@@ -858,6 +915,8 @@ def test_kimi_moe(
     topology,
     gate_fallback_mode,
     request,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -876,4 +935,6 @@ def test_kimi_moe(
         gate_fallback_mode,
         request,
         compressed_fp8_dispatch=compressed_fp8_dispatch,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
     )
