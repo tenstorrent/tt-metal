@@ -74,6 +74,12 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
               output. Lets M grow past the point where the resident shard crowds out the circular
               buffers. The returned matmul output is then smaller than [M, N] and does NOT hold the
               full matmul result, so leave this unset if you need to read it.
+            * :attr:`mm_credit_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the RS->MM
+              window credits: a uint32 ROW_MAJOR tensor, L1 HEIGHT_SHARDED with shard [1, slots] over a
+              core grid covering the matmul cores, where slots >= the number of RS readers
+              (2 * num_links * num_workers_per_link). Only used when mm_window_blocks is set. Share one
+              across every MMRS call (see CCLManager.get_mm_credit_counters_buffer) for the same reason
+              as mm_progress_counters.
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
@@ -105,7 +111,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("addcmul_input_tensor2") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("mm_progress_counters") = nb::none(),
-        nb::arg("mm_window_blocks") = nb::none());
+        nb::arg("mm_window_blocks") = nb::none(),
+        nb::arg("mm_credit_counters") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

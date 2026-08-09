@@ -41,6 +41,8 @@ class CCLManager:
         self._strided_ag_mm_sem_idx = {}
         # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
         self._mm_progress_counters_buffer = None
+        # Single shared RS->MM window credit array. See get_mm_credit_counters_buffer.
+        self._mm_credit_counters_buffer = None
 
         # Setup semaphores
         self._init_subdevice()
@@ -366,6 +368,34 @@ class CCLManager:
                 ),
             )
         return self._mm_progress_counters_buffer
+
+    def get_mm_credit_counters_buffer(self):
+        """Own the credit array for the fused matmul -> strided reduce-scatter op's rolling L1
+        window: one uint32 slot per RS reader, one row per matmul core.
+
+        The return leg of the window handshake -- the readers bump their slot once per M block so
+        the matmul knows a window slot is free to recycle. Owned here for the same reason as the
+        progress counters: the op allocates its own otherwise, once per compiled program and kept
+        for as long as that program stays cached, and each of those small permanent L1 blocks pins
+        the freed space above it.
+
+        Only consumed when mm_window_blocks is set; harmless to allocate either way.
+        """
+        if self._mm_credit_counters_buffer is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            slots = grid.x * grid.y
+            self._mm_credit_counters_buffer = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([slots, slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+        return self._mm_credit_counters_buffer
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """

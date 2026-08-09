@@ -59,6 +59,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
     std::optional<uint32_t> mm_logical_Ht = std::nullopt,
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
@@ -119,6 +120,16 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
                 "array must be allocated once and kept alive for every call that reuses the program",
                 shared_variables.rs_shared_variables.mm_progress_counters_addr,
                 tensor_args.mm_progress_counters->buffer()->address());
+        }
+        // Likewise the credit-counter address
+        if (tensor_args.mm_credit_counters.has_value()) {
+            TT_FATAL(
+                static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address()) ==
+                    shared_variables.rs_shared_variables.rs_credit_counters_addr,
+                "mm_credit_counters moved from L1 address {} to {} since this program was compiled; the "
+                "array must be allocated once and kept alive for every call that reuses the program",
+                shared_variables.rs_shared_variables.rs_credit_counters_addr,
+                tensor_args.mm_credit_counters->buffer()->address());
         }
 
         // Override RS runtime arguments
@@ -188,6 +199,7 @@ minimal_matmul_strided_reduce_scatter_async_program(
     const CoreCoord reduce_scatter_core_grid_offset,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<uint32_t> mm_window_blocks,
+    const std::optional<const Tensor>& mm_credit_counters,
 
     /* Matmul Params */
     const std::optional<const Tensor>& bias,
@@ -266,6 +278,7 @@ minimal_matmul_strided_reduce_scatter_async_program(
         chunk_width_in_mm_blocks,
         mm_window_blocks,
         mm_logical_Ht_val,
+        mm_credit_counters,
         // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
         fused_ternary_scalar,
         addcmul_input_tensor1,
@@ -344,6 +357,7 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         attributes.reduce_scatter_core_grid_offset,
         attributes.chunk_width_in_mm_blocks,
         attributes.mm_window_blocks,
+        tensor_args.mm_credit_counters,
 
         /* Matmul Params */
         tensor_args.bias,

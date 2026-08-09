@@ -123,6 +123,21 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ),
     )
 
+    # Caller-owned RS->MM window credit array, the CCLManager counterpart of the progress array
+    # above (see CCLManager.get_mm_credit_counters_buffer). One uint32 slot per RS reader, one row
+    # per matmul core; only consumed when mm_window_blocks is set.
+    mm_credit_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
 
@@ -282,6 +297,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 addcmul_input_tensor2=tt_addcmul_b,
                 mm_window_blocks=mm_window_blocks,
                 mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters,
             )
             return tt_mm_out, tt_rs_out
         else:
