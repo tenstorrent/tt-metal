@@ -2786,14 +2786,11 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
 
 
-# softcap(x) = beta * tanh(x / beta), the up half of Moonshot's SiTU activation. Kimi K3
-# uses beta 25 for the up half, with bf16 / bfp8_b activations. Blackhole only.
+# Kimi K3 up-half beta.
 SOFTCAP_BETA = 25.0
 
-# Inputs below this magnitude are excluded from accuracy ratios. softcap scales x down
-# twice before the tanh polynomial -- by 1/beta, then by the Horner chain's leading
-# 5.9e-3 -- so a normal input can drive a subnormal intermediate the SFPU flushes to
-# zero. This is far below anything an activation bounded by beta can carry.
+# Accuracy-ratio floor: softcap scales x by 1/beta and again by the Horner chain's leading
+# 5.9e-3, so a normal input can drive a subnormal intermediate the SFPU flushes to zero.
 SOFTCAP_FLUSH_FLOOR = 1e-30
 
 # bf16 is the near-exact reference; bfp8_b shares one exponent per 16-element block, so it is

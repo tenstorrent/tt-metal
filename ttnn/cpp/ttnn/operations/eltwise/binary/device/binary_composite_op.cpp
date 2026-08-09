@@ -886,10 +886,8 @@ Tensor bias_gelu(
         resolved_sub_core_grids);
 }
 
-// At/below this activation width (Kimi K3 routed-expert moe_intermediate_size = 3072) the
-// composite's intermediates fit in L1, so they are kept there to skip the DRAM round-trip
-// between the composed ops. Wider activations -- the shared expert (moe_intermediate_size *
-// n_shared_experts = 6144) and the dense FFN (33792) -- fall back to DRAM.
+// At/below this width the intermediates fit in L1, skipping the DRAM round-trip between
+// the composed ops. 3072 is the K3 routed-expert moe_intermediate_size.
 constexpr uint32_t SITU_GLU_L1_MAX_HIDDEN = 3072;
 
 Tensor situ_glu(
@@ -900,26 +898,21 @@ Tensor situ_glu(
     const std::optional<MemoryConfig>& output_mem_config) {
     using namespace operations::unary;
 
-    // Both betas are divisors (softcap precomputes 1/beta), so zero would emit inf.
+    // softcap precomputes 1/beta, so zero would emit inf.
     TT_FATAL(beta1 != 0.0f && beta2 != 0.0f, "situ_glu: beta1 and beta2 must be non-zero");
 
-    // Keep intermediates resident in L1 for the widths that fit; the final output uses the
-    // caller's config, defaulting to the input placement (below).
     const std::optional<MemoryConfig> interm_mem = gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN
                                                        ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG)
                                                        : output_mem_config;
 
-    // gate half: beta1 * tanh(gate / beta1) * sigmoid(gate).
     Tensor situ_a = ttnn::multiply(
         ttnn::softcap(gate, beta1, interm_mem),
         ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, interm_mem),
         std::nullopt,
         interm_mem);
-    // up half: softcap(up, beta2).
     Tensor up_half = ttnn::softcap(up, beta2, interm_mem);
-    // Pin the output to the caller's config, or the input's placement when unset -- otherwise
-    // multiply would inherit situ_a's (possibly L1) config, making output placement depend on
-    // the hidden dim.
+    // Pin the output placement, or multiply would inherit situ_a's possibly-L1 config and
+    // make placement depend on the hidden dim.
     const MemoryConfig out_mem = output_mem_config.value_or(gate.memory_config());
     return ttnn::multiply(situ_a, up_half, std::nullopt, out_mem);
 }
