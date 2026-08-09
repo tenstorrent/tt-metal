@@ -323,17 +323,27 @@ The **whole-pipeline scout** (`scouts/scout_h3_pipeline.py`) imports the DiT, VA
 models, which live on the **MiniMax-H3 integration branch (`cglagovich/minimax-h3`)**, *not* on
 the analyzer branch. To run the scout you need one working tree that has **both**. Two ways:
 
-1. **Copy the tool into an H3 tree** (the pattern used in development):
-   ```bash
-   # check out / worktree the H3 branch, then drop the analyzer tool in:
-   rsync -a <analyzer-tree>/models/tt_dit/tools/dit_analyzer/ \
-            <h3-tree>/models/tt_dit/tools/dit_analyzer/
-   ```
-2. **Land the analyzer onto the H3 branch** (or main) so tool and models coexist permanently —
-   the durable fix, and the recommended next step for shared use.
+**This is now done (2026-08-08).** `rsalman/minimax-h3-ditcheck` is a local branch off
+`cglagovich/minimax-h3` @ `3fdb75f55e5` with the analyzer landed into it — so the scout, the full
+report and the triage probes all run from **one checkout with nothing to re-sync**:
 
-Until (2) happens, remember to re-sync (1) whenever either side moves — the tool in the H3 tree
-is a copy, not the source of truth.
+```bash
+cd /home/rsalman/tt-metal-h3/models/tt_dit/tools/dit_analyzer/scouts   # the landed worktree
+TT_METAL_HOME=/home/rsalman/tt-metal-h3 \
+PYTHONPATH=/home/rsalman/tt-metal-h3:/home/rsalman/tt-metal-h3/models/tt_dit/tools \
+  python3 scout_h3_pipeline.py prod
+```
+
+The landing commit touches **only** `models/tt_dit/tools/dit_analyzer/`, so the H3 models on that
+branch are byte-identical to `cglagovich/minimax-h3`; it records the analyzer SHA it was copied
+from, so the two trees can be diffed later. It has **not** been pushed — it is a local copy, not a
+change to anyone else's branch.
+
+**It does not fully retire the two-copy problem, and should not be described as if it does.** The
+tool is still *developed* on `rsalman-dit-static-analyzer`, so this branch needs re-landing
+whenever the analyzer moves — the difference is that it is now a commit against a named source
+SHA rather than a silent rsync. The end state is landing on **main**, where one copy serves every
+model branch; that is the remaining piece of this section.
 
 ---
 
