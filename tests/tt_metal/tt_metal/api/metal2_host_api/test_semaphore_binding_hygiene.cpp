@@ -205,8 +205,12 @@ bool is_allowlisted(const std::string& path) {
 }
 
 // Kernel sources worth scanning: the metal test kernels and the TT-NN op kernels.
+// Headers included: kernel helper .hpp/.h can carry the same raw primitives (a Metal 2.0 .cpp
+// could otherwise hide a violation in an #include). Legacy headers with raw primitives stay out
+// via the Metal 2.0 classification below.
 bool is_kernel_source(const std::filesystem::path& p) {
-    if (p.extension() != ".cpp") {
+    const auto ext = p.extension();
+    if (ext != ".cpp" && ext != ".hpp" && ext != ".h") {
         return false;
     }
     const std::string s = p.string();
