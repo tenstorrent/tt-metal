@@ -20,6 +20,7 @@ RULE_ORDER = [
     "overwide_gather",
     "participant_shrink",
     "invariant_collective",
+    "recomputed_stage",
     "mergeable_collectives",
 ]
 

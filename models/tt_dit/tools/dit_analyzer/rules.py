@@ -585,6 +585,106 @@ def _depends_on(graph: Graph, node: Node, symbol: str, order: Dict[str, int], de
     return False
 
 
+def _steps_for(graph: Graph, node_id: str) -> int:
+    """How many times this node's stage runs in one generation.
+
+    In a linked pipeline the stages run at different rates -- H3 encodes once and evaluates the
+    DiT once per denoise step -- so a graph-level `steps` is the wrong unit. `link_stages`
+    records the per-stage frequency; fall back to the graph's own `steps` for a single-stage
+    graph, which is what the standalone dry runs produce.
+    """
+    freq = graph.meta.get("stage_steps")
+    if freq and "/" in node_id:
+        return int(freq.get(node_id.split("/", 1)[0], graph.steps))
+    return graph.steps
+
+
+def _is_step_invariant(graph: Graph, sid: str, consumer_steps: int = 1, depth: int = 24) -> bool:
+    """Is this value identical on every denoise step?
+
+    Params are invariant by definition, and an entry may declare itself so. Everything derived is
+    invariant exactly when all of its inputs are -- for *any* deterministic op, which is what
+    separates this from `_traces_to_params`: that one asks whether the same BYTES are re-sent and
+    so only follows value-preserving ops, while this asks whether the same COMPUTATION is redone.
+
+    Undeclared entries answer False, so a graph that declares nothing produces no findings rather
+    than wrong ones.
+    """
+    sym = graph.symbols.get(sid)
+    if sym is None:
+        return False
+    if sym.kind == PARAM or sym.step_varying is False:
+        return True
+    # A value produced by a stage that runs *less often* than the consumer is, by construction,
+    # constant across the consumer's evaluations: H3 encodes the prompt once above the denoise
+    # loop, so everything crossing encoder -> DiT is fixed for all 49 DiT evaluations. Without
+    # this, connecting the stages would hide the very redundancy that connecting them reveals,
+    # because the declaration on the DiT's own prompt entry is superseded by the wiring.
+    if _steps_for(graph, sid) < consumer_steps:
+        return True
+    prod = graph.producer_of(sid)
+    if prod is None or depth <= 0:
+        return False
+    if sym.step_varying is True:
+        return False
+    return bool(prod.inputs) and all(_is_step_invariant(graph, i, consumer_steps, depth - 1) for i in prod.inputs)
+
+
+def check_recomputed_across_steps(
+    graph: Graph, fwd: ForwardResult, views: Sequence[CollectiveView]
+) -> List[Tuple[Finding, CollectiveView]]:
+    """Collectives inside a sub-graph that is recomputed identically on every denoise step.
+
+    `invariant_collective` catches a collective whose operand is *weights*. This catches the
+    larger case: a whole branch whose inputs are all step-invariant (H3's token refiner consumes
+    only the prompt), so the entire computation -- collectives included -- is redone every step
+    to produce the same answer. The fix is not a cheaper collective but hoisting the branch out
+    of the denoise loop.
+    """
+    findings: List[Tuple[Finding, CollectiveView]] = []
+    for v in views:
+        steps = _steps_for(graph, v.node.id)
+        if steps <= 1:
+            continue
+        if not _is_step_invariant(graph, v.node.inputs[0], steps):
+            continue
+        if _traces_to_params(graph, v.node.inputs[0]):
+            continue  # already reported, more precisely, as invariant_collective
+        proof = _base_proof(v)
+        proof["operand_kind"] = "step-invariant activation (derived only from step-constant inputs)"
+        proof["steps"] = steps
+        proof["conclusion"] = "the identical computation is redone on every one of %d evaluations" % steps
+        findings.append(
+            (
+                Finding(
+                    rule="recomputed_stage",
+                    title="%s is recomputed identically on all %d denoise evaluations" % (_name(v), steps),
+                    severity=MEDIUM,
+                    confidence=_confidence(v, LIKELY),
+                    nodes=[v.node.id],
+                    reason=[
+                        "Every input of this collective traces back to values that do not change "
+                        "between denoise steps, so it produces the same result each time.",
+                        "Only the first of %d evaluations is doing new work; the other %d repeat it."
+                        % (steps, steps - 1),
+                    ],
+                    suggestion=(
+                        "Hoist this branch out of the denoise loop: compute it once before the loop and "
+                        "reuse the result on every step."
+                    ),
+                    proof=proof,
+                    bytes_per_call=v.moved_bytes(),
+                    calls=v.node.calls * (steps - 1),
+                    steps=steps,
+                    loc=v.node.loc,
+                    scope="generation",
+                ),
+                v,
+            )
+        )
+    return findings
+
+
 def check_invariant_collectives(
     graph: Graph, fwd: ForwardResult, views: Sequence[CollectiveView]
 ) -> List[Tuple[Finding, CollectiveView]]:
@@ -710,6 +810,8 @@ def run_rules(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> Report:
             blocked.append((f, v))
         else:
             raw.append((f, v))
+    for f, v in check_recomputed_across_steps(graph, fwd, views):
+        (blocked if v.unregistered() else raw).append((f, v))
     for f, v in check_invariant_collectives(graph, fwd, views):
         (blocked if v.unregistered() else raw).append((f, v))
 

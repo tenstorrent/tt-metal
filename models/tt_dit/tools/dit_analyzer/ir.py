@@ -206,6 +206,11 @@ class TensorSymbol:
     value_id: str = ""
     note: str = ""
     mesh: Optional[str] = None  # which mesh this symbol lives on (None = the graph's primary)
+    # Does this value change between denoise steps? Only meaningful on *entries* (a derived
+    # symbol's answer is computed from its producers). None means undeclared, which is read as
+    # "varying": assuming an undeclared input is constant would invent step-hoisting findings,
+    # so the unsafe direction is the one that has to be opted into.
+    step_varying: Optional[bool] = None
 
     @property
     def ndim(self) -> int:

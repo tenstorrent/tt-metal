@@ -115,9 +115,12 @@ class GraphBuilder:
         partial: Sequence[int] = (),
         dtype: str = "bf16",
         kind: str = ACT,
+        step_varying: Optional[bool] = None,
     ) -> Value:
         v = self._symbol(name, shape, dtype, kind)
         self.graph.placements[v.id] = Placement(dist=Dist.make(self.graph.mesh, shard, partial))
+        if step_varying is not None:
+            self.graph.symbols[v.id].step_varying = step_varying
         return v
 
     def param(

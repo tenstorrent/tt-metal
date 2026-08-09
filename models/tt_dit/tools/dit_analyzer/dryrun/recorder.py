@@ -95,12 +95,25 @@ def loc() -> Optional[str]:
 # symbols and nodes
 # -----------------------------------------------------------------------------
 def entry(
-    logical, dist: Dist, dtype=None, kind: str = ACT, base: str = "in", host: bool = False, layout=None
+    logical,
+    dist: Dist,
+    dtype=None,
+    kind: str = ACT,
+    base: str = "in",
+    host: bool = False,
+    layout=None,
+    step_varying: Optional[bool] = None,
 ) -> Tensor:
-    """A tensor entering the graph from the host, with its placement recorded."""
+    """A tensor entering the graph from the host, with its placement recorded.
+
+    ``step_varying=False`` declares that this input is the same on every denoise step (the
+    prompt embeds, the rope tables); leaving it unset reads as varying. See TensorSymbol.
+    """
     graph = CTX.require_graph()
     sid = fresh(base)
-    graph.symbols[sid] = TensorSymbol(id=sid, shape=tuple(logical), dtype=dtype_tag(dtype), kind=kind, value_id=sid)
+    graph.symbols[sid] = TensorSymbol(
+        id=sid, shape=tuple(logical), dtype=dtype_tag(dtype), kind=kind, value_id=sid, step_varying=step_varying
+    )
     graph.placements[sid] = Placement(dist=dist)
     return Tensor(logical, dist, dtype, sym=sid, host=host, layout=layout)
 

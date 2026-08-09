@@ -149,15 +149,24 @@ dit = MiniMaxH3Transformer3DModel(
 load_meta_weights(dit)
 sp_seq = Dist.make(CTX.mesh, {SP_AXIS: 2})
 sp_last = Dist.make(CTX.mesh, {SP_AXIS: 3})
+# Which of these change between denoise steps decides what can be hoisted out of the loop, so
+# each is declared from what pipeline_minimax_h3 actually does per step (its denoise loop is
+# `for i, t in enumerate(timesteps)`; tt_prompt and the rope tables are built above it, while
+# tt_timestep / tt_adaln / tt_tsi are rebuilt from the step index inside it). Undeclared reads as
+# varying, so only the two genuinely constant inputs are marked.
 v_out, a_out = dit.forward(
-    video_1BVC=rep([1, 1, NUM_VIDEO, 96]),
-    audio_1BAC=rep([1, 1, NUM_AUDIO, 32]),
-    prompt_1BLP=rep([1, 1, L, HID]),  # <- fed by the encoder once linked
-    timestep=repf([1, 1, 2, 1]),
-    adaln_indices=recorder.entry([1, 1, 1, PADDED], sp_last, base="adaln"),
-    timestep_indices=recorder.entry([1, 1, 1, PADDED], sp_last, base="tsi"),
-    rope_cos=recorder.entry([1, 1, PADDED, 128], sp_seq, dtype=ttnn.float32, base="rcos"),
-    rope_sin=recorder.entry([1, 1, PADDED, 128], sp_seq, dtype=ttnn.float32, base="rsin"),
+    video_1BVC=rep([1, 1, NUM_VIDEO, 96]),  # the latents being denoised — varies
+    audio_1BAC=rep([1, 1, NUM_AUDIO, 32]),  # ditto
+    prompt_1BLP=recorder.entry(  # hoisted above the loop by the pipeline
+        [1, 1, L, HID], Dist.replicated(CTX.mesh), base="in", step_varying=False
+    ),
+    timestep=repf([1, 1, 2, 1]),  # the sigma for this step — varies
+    adaln_indices=recorder.entry([1, 1, 1, PADDED], sp_last, base="adaln"),  # indexed by step — varies
+    timestep_indices=recorder.entry([1, 1, 1, PADDED], sp_last, base="tsi"),  # ditto
+    rope_cos=recorder.entry(
+        [1, 1, PADDED, 128], sp_seq, dtype=ttnn.float32, base="rcos", step_varying=False
+    ),  # geometry only
+    rope_sin=recorder.entry([1, 1, PADDED, 128], sp_seq, dtype=ttnn.float32, base="rsin", step_varying=False),
 )
 dit_graph.outputs = [v_out.sym, a_out.sym]
 print("dit stage: %d nodes" % len(dit_graph.nodes))

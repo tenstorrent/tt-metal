@@ -917,3 +917,39 @@ if __name__ == "__main__":
             print("ERROR %s: %r" % (name, exc))
     print("\n%d/%d passed" % (len(_tests()) - failed, len(_tests())))
     sys.exit(1 if failed else 0)
+
+
+def test_recomputed_stage_needs_a_declared_step_invariant_input():
+    """A branch fed only by step-constant inputs is redone every denoise step.
+
+    Also pins the conservative default: an *undeclared* input must read as varying, or the rule
+    would invent hoisting advice for values that actually change each step.
+    """
+
+    def build(step_varying):
+        b = GraphBuilder("recompute", Mesh(shape=(2, 4), axis_names=("sp", "tp")), steps=8)
+        x = b.input("prompt", [1, 256, 64], shard={1: 2}, step_varying=step_varying)
+        b.all_gather(x, dim=2, mesh_axis=1, label="ag_text")
+        return b.graph
+
+    invariant = {f.rule for f in analyze_graph(build(False)).findings}
+    assert "recomputed_stage" in invariant
+
+    undeclared = {f.rule for f in analyze_graph(build(None)).findings}
+    assert "recomputed_stage" not in undeclared
+
+    varying = {f.rule for f in analyze_graph(build(True)).findings}
+    assert "recomputed_stage" not in varying
+
+
+def test_recomputed_stage_uses_the_consuming_stages_frequency():
+    """A stage that runs less often than its consumer is constant from the consumer's view."""
+    from dit_analyzer.rules import _is_step_invariant
+
+    b = GraphBuilder("two_stage", Mesh(shape=(2, 4), axis_names=("sp", "tp")))
+    x = b.input("x", [1, 256, 64], shard={1: 2})
+    graph = b.graph
+    graph.meta["stage_steps"] = {"encoder": 1, "dit": 49}
+    graph.symbols["encoder/out"] = graph.symbols[x.id]
+    assert _is_step_invariant(graph, "encoder/out", consumer_steps=49)
+    assert not _is_step_invariant(graph, "encoder/out", consumer_steps=1)

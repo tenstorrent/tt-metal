@@ -201,6 +201,37 @@ the encoder's**, because they pay 49 times. `link_stages(..., stage_steps=...)` 
 frequencies and the report prints both lines, never a blend; without frequencies it stays silent
 rather than guessing 1. `DITCHECK_STEPS` overrides (a distilled 8-step schedule gives 41.7 GiB).
 
+**Carried state: what the denoise loop repeats (blocker 24).** Frequency alone says how *often* a
+stage runs; it does not say whether the stage is doing new work. H3's token refiner is the case
+that matters — `MiniMaxH3TokenRefiner.forward(self, prompt_1BLP)` takes **only the prompt**: no
+timestep, no modulation. The pipeline builds `tt_prompt` above `for i, t in enumerate(timesteps)`
+and then calls the transformer inside it, so the refiner recomputes an identical result on all 49
+evaluations. (The pipeline already hoists `tt_cond` above the loop; the refiner just never was.)
+
+The new `recomputed_stage` rule finds this: a collective is flagged when every input traces back
+to values that cannot change between steps. Two things make it sound rather than a guess:
+
+- **Undeclared reads as varying.** `recorder.entry(..., step_varying=False)` is an opt-in; a graph
+  that declares nothing produces no findings rather than wrong ones. Assuming an undeclared input
+  is constant would invent hoisting advice for values that change every step.
+- **A stage that runs less often than its consumer is constant to it.** Without that, connecting
+  encoder→DiT would *hide* the redundancy that connecting them reveals, because the DiT's own
+  prompt declaration is superseded by the wiring.
+
+It differs from `invariant_collective` in what it asks: that rule asks whether the same *bytes*
+are re-sent (weights, so it follows only value-preserving ops); this asks whether the same
+*computation* is redone, which holds through any deterministic op.
+
+Result at production: **5 findings, +31.5 GiB once per generation**, all in the text branch —
+`token_refiner_minimax_h3.py:119` and `attention_minimax_h3.py:336/419`, the same call sites
+already conformed as SP-replicated. Nothing from the main DiT blocks, which consume latents and
+correctly stay step-varying. The evidence is unusually strong for a static finding: the invariance
+is guaranteed by the refiner's *signature*, not inferred from dataflow.
+
+Note the compounding — the text branch is redundant twice over, on independent axes: **7 of 8 SP
+copies** (conformed on silicon) and **48 of 49 recomputations**. Hoisting it out of the loop and
+running it on one SP column are separate fixes that multiply.
+
 **The rollup that made this readable (phase 9).** 321 findings behind a top-8 cut showed one
 repeat eight times instead of eight distinct problems. `report.rollup_findings` groups on what
 makes two findings the same problem — rule, source chain, per-call bytes, verdict — and ranks by
