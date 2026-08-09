@@ -7,7 +7,7 @@
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
-#include <hostdevcommon/sem_scope.h>       // enum class SemScope (shared host/device)
+#include <hostdevcommon/sem_scope.h>               // enum class SemScope (shared host/device)
 #include "api/dataflow/semaphore_binding_token.h"  // SemaphoreBindingToken<Id,Scope,ReadOnly> baked-sem token
 
 /**
@@ -272,15 +272,21 @@ public:
             const uint64_t sem_noc = ::get_noc_addr(l1_offset_);
             const uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset());
             const uint32_t ret_slot = cas_ret_slot();
-            auto* ret_word =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_UNCACHED_BASE + ret_slot);
+            auto* ret_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_UNCACHED_BASE + ret_slot);
             constexpr uint32_t kCasSentinel = 0xFFFFFFFFu;
             // One consumed NoC atomic: sentinel, issue, fence, poll the returned pre-op value.
             auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
                 *ret_word = kCasSentinel;
                 noc_fast_atomic_cas4<DM_DEDICATED_NOC, /*program_ret_addr=*/true>(
-                    noc_index, write_at_cmd_buf, lock_noc, NOC_UNICAST_WRITE_VC, cmp4, swap4,
-                    /*linked=*/false, /*posted=*/false, ret_slot);
+                    noc_index,
+                    write_at_cmd_buf,
+                    lock_noc,
+                    NOC_UNICAST_WRITE_VC,
+                    cmp4,
+                    swap4,
+                    /*linked=*/false,
+                    /*posted=*/false,
+                    ret_slot);
                 noc_async_atomic_barrier();
                 while (*ret_word == kCasSentinel) {
                 }

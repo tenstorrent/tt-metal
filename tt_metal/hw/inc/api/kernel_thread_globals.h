@@ -58,7 +58,8 @@ inline void wait_threads_on(volatile KernelBarrier& barrier, uint32_t participan
         __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
     } else {
-        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
+        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {
+        }
     }
 }
 

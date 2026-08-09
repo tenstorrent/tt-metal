@@ -138,8 +138,9 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
         if (stmt_end != std::string::npos) {
             const std::string stmt = code.substr(close, stmt_end - close);
             if (stmt.find("sem::") != std::string::npos) {
-                found.emplace_back("Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
-                                   "adopt the baked scope and access rights)");
+                found.emplace_back(
+                    "Semaphore<...> constructed over a sem:: token (drop <> and let CTAD "
+                    "adopt the baked scope and access rights)");
             }
         }
         pos = close + 1;
@@ -153,16 +154,16 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
 // primitives from the framework header, not from kernel source.
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
-        "get_semaphore(",                // turning a semaphore id into a raw address
-        "get_semaphore<",                // same, templated spelling: get_semaphore<X>(id)
-        "noc_semaphore_inc(",            // atomic increment at a raw address (local or remote)
-        "noc_semaphore_inc<",            // same, templated spelling
-        "noc_semaphore_inc_multicast<",  // templated multicast increment
+        "get_semaphore(",                             // turning a semaphore id into a raw address
+        "get_semaphore<",                             // same, templated spelling: get_semaphore<X>(id)
+        "noc_semaphore_inc(",                         // atomic increment at a raw address (local or remote)
+        "noc_semaphore_inc<",                         // same, templated spelling
+        "noc_semaphore_inc_multicast<",               // templated multicast increment
         "noc_semaphore_set_multicast_loopback_src(",  // multicast set incl. the source core
-        "noc_semaphore_set(",            // raw set
-        "noc_semaphore_set_remote(",     // remote set
-        "noc_semaphore_set_multicast(",  // multicast set
-        "noc_semaphore_inc_multicast(",  // multicast increment
+        "noc_semaphore_set(",                         // raw set
+        "noc_semaphore_set_remote(",                  // remote set
+        "noc_semaphore_set_multicast(",               // multicast set
+        "noc_semaphore_inc_multicast(",               // multicast increment
     };
     std::vector<std::string> found;
     for (const char* pat : kPatterns) {
@@ -248,15 +249,15 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         // Patterns inside string literals are not code.
         {"string_literal_pattern", "void kernel_main() { const char* s = \"noc_semaphore_inc(\"; }", false},
         // A "/*" inside a string must not swallow the real statement after it.
-        {"comment_start_in_string",
-         "void kernel_main() { const char* s = \"/*\"; noc_semaphore_set(ptr, 5); }",
-         true},
+        {"comment_start_in_string", "void kernel_main() { const char* s = \"/*\"; noc_semaphore_set(ptr, 5); }", true},
         // A digit separator is not a char-literal opener.
         {"digit_separator", "void kernel_main() { uint32_t n = 1'000; noc_semaphore_set(p, n); }", true},
         // A declared binding: the managed accessor only, no raw primitive in kernel source.
         {"clean_declared", "void kernel_main() {\n    Semaphore s(sem::counter);\n    s.up(1);\n}", false},
         // Prose mentioning the patterns must NOT be flagged (line and block comments).
-        {"comment_only_line", "// calls get_semaphore(id) and noc_semaphore_inc(addr, 1)\nvoid kernel_main() {}", false},
+        {"comment_only_line",
+         "// calls get_semaphore(id) and noc_semaphore_inc(addr, 1)\nvoid kernel_main() {}",
+         false},
         {"comment_only_block",
          "/*\n * uses get_semaphore(x)\n * and noc_semaphore_inc(y, 1)\n */\nvoid kernel_main() {}",
          false},
@@ -271,8 +272,8 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
             EXPECT_FALSE(found.empty()) << "detector MISSED a violation (raw access or pinned scope) in case '"
                                         << c.name << "' -- the sweep test would silently pass on this code";
         } else {
-            EXPECT_TRUE(found.empty()) << "detector FALSE-POSITIVED on case '" << c.name << "' (first: "
-                                       << (found.empty() ? std::string{} : found.front()) << ")";
+            EXPECT_TRUE(found.empty()) << "detector FALSE-POSITIVED on case '" << c.name
+                                       << "' (first: " << (found.empty() ? std::string{} : found.front()) << ")";
         }
     }
 }
