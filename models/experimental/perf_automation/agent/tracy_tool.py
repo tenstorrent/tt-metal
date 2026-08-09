@@ -192,6 +192,26 @@ def normalize_dispatch(gaps_ns: Sequence[float]) -> str:
 _PER_CORE_NS_COLS = ("DEVICE KERNEL DURATION PER CORE MAX [ns]",)
 
 
+def device_time_source(members) -> str:
+    """Which definition produced these durations: "per_core_max" or "cross_core".
+
+    CARRY THE PROVENANCE, DO NOT ASSUME IT. Two ms figures may only be differenced when they measure
+    the same thing, and this changed what device_ms MEANS on hardware whose cores do not share a
+    clock. A baseline taken under the old definition and a reading taken under the new one look
+    identical -- both are "device_ms" -- and subtracting them reports a gain or a regression that
+    never happened. That is defect shape 5 in agent/integrity.py, and it has already produced four
+    wrong headlines in this tool's history.
+
+    Stamped onto the profile so the ledger and the report can refuse the comparison instead of
+    silently making it, and so the first run on a new build states plainly which column it read."""
+    for m in members or []:
+        for col in _PER_CORE_NS_COLS:
+            v = _to_float((m.get("raw") or {}).get(col))
+            if v is not None and v > 0:
+                return "per_core_max"
+    return "cross_core"
+
+
 def _member_device_us(m: dict) -> float:
     """One op's device time in MICROSECONDS, from the per-core column when the capture has it.
 
@@ -450,10 +470,22 @@ def build_buckets(
                 "layout_churn_ms": round(churn_ms, 4),
                 "layout_churn_count": churn_n,
                 "top_ops": _top_ops(b["members"], available_cores),
+                # WHICH DEFINITION PRODUCED THESE MS. Two figures may only be differenced when they
+                # measure the same thing; a per-core reading and a cross-core one both call
+                # themselves device_ms. Carried per bucket so a later comparison can refuse rather
+                # than assume -- see device_time_source.
+                "device_time_source": device_time_source(b["members"]),
             }
         )
     # Stable, useful ordering: biggest device-time bucket first.
     out.sort(key=lambda x: x["device_ms"], reverse=True)
+    _srcs = {b.get("device_time_source") for b in out}
+    if _srcs:
+        print(
+            "  [tracy] device_ms from %s" % ("+".join(sorted(s for s in _srcs if s)) or "unknown"),
+            file=sys.stderr,
+            flush=True,
+        )
     return out
 
 

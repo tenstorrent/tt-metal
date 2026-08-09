@@ -88,3 +88,52 @@ def test_end_to_end_a_bucket_uses_the_per_core_duration(tmp_path):
     buckets = build_buckets(rep, raw)
     got = sum(b["device_ms"] for b in buckets)
     assert abs(got - 0.6) < 1e-6, got  # 600000 ns = 0.6 ms, NOT 500 ms
+
+
+# --- a baseline measured under the OLD definition is re-measured, not carried forward -----------
+
+
+def test_the_source_is_stamped_on_every_bucket(tmp_path):
+    """Two figures may only be differenced when they measure the same thing, and a per-core reading
+    and a cross-core one both call themselves device_ms. The stamp is what lets a later comparison
+    refuse instead of assume."""
+    raw, rep = _write(tmp_path, per_core_ns=600_000, device_time_us=500_000)
+    assert all(b["device_time_source"] == "per_core_max" for b in build_buckets(rep, raw))
+
+
+def test_a_capture_without_the_column_is_stamped_cross_core(tmp_path):
+    raw = tmp_path / "raw2.csv"
+    rep = tmp_path / "rep2.csv"
+    with open(raw, "w", newline="") as f:
+        w = csv.DictWriter(f, ["GLOBAL CALL COUNT", "ATTRIBUTES"])
+        w.writeheader()
+        w.writerow({"GLOBAL CALL COUNT": "1", "ATTRIBUTES": ""})
+    with open(rep, "w", newline="") as f:
+        w = csv.DictWriter(f, ["OP Code", "Global Call Count", "Device Time", "Cores", "Op-to-Op Gap"])
+        w.writeheader()
+        w.writerow(
+            {
+                "OP Code": "MatmulDeviceOperation",
+                "Global Call Count": "1",
+                "Device Time": "1000",
+                "Cores": "64",
+                "Op-to-Op Gap": "0",
+            }
+        )
+    b = build_buckets(rep, raw)
+    assert all(x["device_time_source"] == "cross_core" for x in b)
+    assert abs(sum(x["device_ms"] for x in b) - 1.0) < 1e-6, "the fallback must still produce a value"
+
+
+def test_a_stale_definition_baseline_is_re_measured_not_flagged():
+    """CORRECTED, NOT GUARDED. Carrying the old number forward with a warning attached leaves every
+    later delta wrong and asks a human to remember why. A baseline exists to be compared against, so
+    one that cannot be is worth nothing -- the honest cost is one profiling run at start-up.
+
+    An ABSENT stamp counts as the old definition, because the stamp was added with the change."""
+    src = (Path(__file__).resolve().parent.parent / "agent" / "before_loop.py").read_text()
+    i = src.index("baseline DISCARDED")
+    block = src[max(0, i - 1500) : i + 500]
+    assert "device_time_source" in block, "the reuse path does not check the definition"
+    assert "_stored_baseline = None" in block, "a stale-definition baseline is not discarded"
+    assert 'not _srcs <= {"per_core_max"}' in block, "the check does not treat an absent stamp as old"

@@ -773,6 +773,33 @@ def before_loop(
             _sp_doc = json.loads(_sp_path.read_text())
             if float(_sp_doc.get("device_ms") or 0.0) > 0 and (_sp_doc.get("buckets") or []):
                 _stored_baseline = _sp_doc
+            # A BASELINE MEASURED UNDER A DIFFERENT DEFINITION IS NOT A BASELINE. device_ms used to
+            # come from DEVICE KERNEL DURATION [ns] -- first start on ANY core to last end on ANY
+            # core -- which on hardware whose cores do not share a clock includes the inter-core
+            # offset as well as the op. It now comes from the per-core column. Both are called
+            # device_ms, so a stored one and a fresh one look identical and subtracting them reports
+            # a gain or a regression that never happened.
+            #
+            # RE-MEASURED, not flagged. Carrying the old number forward with a warning attached
+            # leaves every later delta wrong and asks a human to remember why; a baseline exists to
+            # be compared against, so one that cannot be is worth nothing and the honest cost is one
+            # profiling run at start-up. Absent stamp = pre-stamp = old definition, because the
+            # stamp was added with the change.
+            if _stored_baseline is not None:
+                _srcs = {
+                    str(b.get("device_time_source") or "")
+                    for b in (_stored_baseline.get("buckets") or [])
+                    if isinstance(b, dict)
+                }
+                if _srcs and not _srcs <= {"per_core_max"}:
+                    print(
+                        "      baseline DISCARDED: its device_ms came from %s, this build measures "
+                        "per_core_max -- the two are not comparable, so it is being re-measured "
+                        "rather than differenced." % ("+".join(sorted(x for x in _srcs if x)) or "an older definition"),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    _stored_baseline = None
         except Exception:  # noqa: BLE001
             _stored_baseline = None
 

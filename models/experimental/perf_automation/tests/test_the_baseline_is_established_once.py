@@ -182,14 +182,15 @@ def test_the_second_run_skips_the_measurement_entirely():
     """
     bl = Path(__file__).resolve().parent.parent / "agent" / "before_loop.py"
     src = bl.read_text()
-    i = src.index("_stored_baseline = None")
-    block = src[i : i + 2000]
-    assert "PERF_MCP_FORCE_REBASELINE" in block, "no escape hatch"
-    assert "if _stored_baseline is not None:" in block, "reuse is not a branch"
-    assert "_measure_baseline(" in block, "the measurement must sit on the ELSE arm"
-    assert block.index("if _stored_baseline is not None:") < block.index(
-        "_measure_baseline("
-    ), "the measurement must be skipped by the reuse branch, not run before it"
+    # Anchored on the REUSE BRANCH ITSELF rather than a byte window after the first mention of
+    # `_stored_baseline`. The window version broke the moment anything was inserted between the two
+    # -- which is a test failing on layout, not on the behaviour it names.
+    assert "PERF_MCP_FORCE_REBASELINE" in src, "no escape hatch"
+    reuse = src.index('stages.start("tracy_baseline", "Reusing')
+    measure = src.index("_measure_baseline(", reuse)
+    assert src.rindex("if _stored_baseline is not None:", 0, reuse) < reuse, "reuse is not a branch"
+    assert reuse < measure, "the measurement must be skipped by the reuse branch, not run before it"
+    assert "else:" in src[reuse:measure], "the measurement must sit on the ELSE arm"
 
 
 def test_the_baseline_file_is_keyed_from_the_model_directory():
