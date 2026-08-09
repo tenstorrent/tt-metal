@@ -113,6 +113,25 @@
   team: ttnn
   category: experimental
 
+- name: ttnn AttnRes fused op unit tests
+  # Scoped to one SKU for the same reason as fast_weighted_reduce_nc above: these
+  # ops are brought up and measured on Blackhole only and have never executed on
+  # Wormhole. The mesh-level gate for the same ops lives under
+  # tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ and its
+  # placements skip on chip count here, so a single card gets no coverage from it.
+  cmd: |
+    pytest \
+      tests/ttnn/unit_tests/operations/reduce/test_attn_res_stats.py \
+      tests/ttnn/unit_tests/operations/reduce/test_attn_res_scores.py \
+      tests/ttnn/unit_tests/operations/reduce/test_attn_res_merge.py \
+      -xv --timeout=600
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+  category: experimental
+
 - name: ttnn nightly experimental tests (blackhole - viommu)
   # Tests opt in with @pytest.mark.requires_host_iommu, allowing operation developers to add IOMMU coverage
   # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
