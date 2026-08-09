@@ -4,6 +4,8 @@
 
 #pragma once
 
+// This file is part of the experimental Metal 2.0 host API: experimental and subject to change.
+
 #include <cstdint>
 #include <string>
 #include <variant>
