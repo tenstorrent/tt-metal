@@ -75,8 +75,8 @@ static_assert(static_cast<uint32_t>(StorageSlot::kScratch) == 2);
 struct LwtWorkingBuffers {
     tt::tt_metal::Buffer* final_even{};
     tt::tt_metal::Buffer* final_odd{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config{};
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config;
     std::vector<tt::tt_metal::CoreCoord> cores;
 
     [[nodiscard]] uint32_t slot_id(const StorageSlot slot) const noexcept { return static_cast<uint32_t>(slot); }
@@ -84,8 +84,8 @@ struct LwtWorkingBuffers {
 
 struct IlwtWorkingBuffers {
     tt::tt_metal::Buffer* output{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config{};
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config;
     std::vector<tt::tt_metal::CoreCoord> cores;
 
     [[nodiscard]] uint32_t slot_id(const StorageSlot slot) const noexcept { return static_cast<uint32_t>(slot); }
@@ -1040,7 +1040,7 @@ void append_programs(
     tt::tt_metal::WorkloadDescriptor& workload,
     tt::tt_metal::ProgramDescriptor descriptor,
     const MeshCoordinateRangeSet& tensor_coords) {
-    const auto ranges = tensor_coords.ranges();
+    const auto& ranges = tensor_coords.ranges();
     TT_FATAL(!ranges.empty(), "Wavelet workload has no mesh coordinate range");
     for (size_t index = 0; index + 1 < ranges.size(); ++index) {
         workload.programs.push_back({ranges[index], descriptor});

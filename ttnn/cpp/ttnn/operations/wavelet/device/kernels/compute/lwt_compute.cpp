@@ -384,8 +384,7 @@ void lwt_compute() {
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
     static_assert(
-        kInlineTerminalScale != kInlineInverseScale,
-        "Exactly one scale policy must be selected for LWT or ILWT");
+        kInlineTerminalScale != kInlineInverseScale, "Exactly one scale policy must be selected for LWT or ILWT");
     constexpr uint32_t route_count =
         executable_step_count<Scheme>() - (kInlineTerminalScale ? 1U : 0U) - (kInlineInverseScale ? 2U : 0U);
     constexpr uint32_t inverse_even_scale =

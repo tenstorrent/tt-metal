@@ -34,6 +34,7 @@ ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_ope
 ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/compute/transformer_group_attn_matmul.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.hpp
+ttnn/cpp/ttnn/operations/wavelet/generated/schemes/**
 ttnn/cpp/ttnn/tensor/types.hpp
 
 tests/tt_metal/test_utils/env_vars.hpp

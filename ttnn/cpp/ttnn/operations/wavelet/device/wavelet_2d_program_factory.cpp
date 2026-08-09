@@ -65,9 +65,9 @@ struct WorkingBuffers2D {
     std::array<uint32_t, device_protocol::kLwt2DPlaneCount> plane_tile_counts{};
     uint32_t workspace_address{0};
     std::array<tt::tt_metal::Buffer*, device_protocol::kLwt2DBandCount> outputs{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config{};
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> band_config{};
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> chunk_config;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> route_config;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> band_config;
     std::vector<tt::tt_metal::CoreCoord> cores;
 };
 
@@ -666,7 +666,7 @@ void append_programs_2d(
     tt::tt_metal::WorkloadDescriptor& workload,
     tt::tt_metal::ProgramDescriptor descriptor,
     const MeshCoordinateRangeSet& tensor_coords) {
-    const auto ranges = tensor_coords.ranges();
+    const auto& ranges = tensor_coords.ranges();
     TT_FATAL(!ranges.empty(), "2D wavelet workload has no mesh coordinate range");
     for (size_t index = 0; index + 1 < ranges.size(); ++index) {
         workload.programs.push_back({ranges[index], descriptor});
