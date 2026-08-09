@@ -569,3 +569,34 @@ class TestUpdateCacheWithKVPE:
 
         logger.info(output)
         assert eq, output
+
+
+@pytest.mark.parametrize("num_users", [1, 2, 3, 5, 7, 9, 15])
+@pytest.mark.parametrize("head_dim", [64])
+@pytest.mark.parametrize("max_seq_len", [64])
+def test_update_cache_decode_odd_num_users(num_users, head_dim, max_seq_len, device):
+    """Every user's row must be updated, including when the cache batch is odd.
+
+    The kernels iterate u_count times over an inner loop of `granularity` rows. granularity
+    was min(2, Bcache), so for odd Bcache >= 3 u_count = Bcache / 2 truncated and the final
+    user's cache row was silently never written.
+    """
+    num_heads = 1
+    cache_idx = 0
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    x = torch.randn([num_users, num_heads, 1, head_dim]).bfloat16().float()
+    x_padded = x.clone()
+    if num_users < 32:
+        x_padded = torch.cat((x_padded, torch.zeros(32 - num_users, num_heads, 1, head_dim)), dim=0)
+    xt = ttnn.Tensor(x_padded.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    cachett = ttnn.update_cache(cachett, xt, cache_idx)
+    cache[0:num_users, 0:num_heads, cache_idx : cache_idx + 1, 0:head_dim] = x
+
+    got = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    stale = [u for u in range(num_users) if not torch.equal(got[u, :, cache_idx, :], cache[u, :, cache_idx, :])]
+    assert not stale, f"cache rows never updated for users {stale} (num_users={num_users})"
+    assert torch.equal(got, cache)
