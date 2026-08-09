@@ -68,16 +68,28 @@ def test_the_same_run_is_accepted(tmp_path, monkeypatch):
     assert PM.read_stage_isl(model="m", task="main") == 128
 
 
-def test_an_unstamped_document_is_accepted(tmp_path, monkeypatch):
-    """It predates stamping. Refusing it would blank the report for anyone who has not re-run."""
+def test_an_unstamped_document_is_refused(tmp_path, monkeypatch):
+    """A MEASUREMENT WITH NO PROVENANCE IS NOT A MEASUREMENT.
+
+    This was accepted, on the reasoning that an unstamped file predates stamping and refusing it
+    would blank the report for anyone who had not re-run. The cost showed up immediately: gemma-3's
+    report rendered `prefill 100.46 ms` from a file written 2026-08-07T00:07 -- forty hours BEFORE
+    the fix that let prefill trace at all -- beside a headline from a run that had measured nothing.
+    That file also predated `paths`, so the roofline could not mark it eager, and a pre-fix eager
+    number rendered wearing a traced one's clothes. It was read as "prefill is still eager today".
+
+    A blank says `not measured`, which is true and prompts a measurement. This said a number, which
+    was false."""
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     _write(tmp_path)  # no run key
     monkeypatch.setenv("PERF_MCP_RUN_ID", "run-B")
-    assert PM.read_stage_ms(model="m", task="main")["decode"] == 32.21
+    assert PM.read_stage_ms(model="m", task="main") == {}
+    assert PM.read_stage_paths(model="m", task="main") == {}
 
 
-def test_no_run_id_reads_everything(tmp_path, monkeypatch):
-    """Nothing declared a run, so nothing can be judged stale -- the old behaviour, unchanged."""
+def test_no_run_id_still_reads_a_stamped_document(tmp_path, monkeypatch):
+    """A reader that cannot name its own run can still trust a document that names ITS run: the
+    stamp is what makes the file attributable. Only the unstamped case is refused."""
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("PERF_MCP_RUN_ID", raising=False)
     _write(tmp_path, run="run-A")

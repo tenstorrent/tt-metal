@@ -3144,10 +3144,26 @@ def _model_root_for_report(repo_root):
     """The model directory this run is optimizing, from the run manifest. None if unknown.
 
     summary needs it for perf_target_inputs.json (params -> the compute roofs). It cannot resolve it
-    itself: loaded by path, perf_mcp's _MODEL_ROOT falls back to "." and the lookup silently misses."""
+    itself: loaded by path, perf_mcp's _MODEL_ROOT falls back to "." and the lookup silently misses.
+
+    _latest_manifest returns a PATH, not the parsed document. This called .get() on that Path, threw
+    AttributeError, and the bare `except` turned it into None -- on every run, silently, since the day
+    it was written. So the report never received the model directory it exists to supply, fell through
+    to perf_mcp's "." fallback, and read whatever perf_target_inputs.json was in the working directory:
+    on gemma-3 a 31 MB, 32-layer file the tool had itself written there, giving a prefill memory
+    ceiling of 0.061 ms against a 100 ms measurement, no param count, and therefore no compute roof
+    and no fidelity ladder.
+
+    The except stays -- a missing or malformed manifest must not take the report down -- but it now
+    guards a read that can actually succeed, and it no longer hides a bug in this function's own logic.
+    """
     try:
         md = _latest_manifest(repo_root / PERF_DIR)
-        return Path((md or {}).get("config", {}).get("model_root") or "") or None
+        if not md:
+            return None
+        cfg = json.loads(Path(md).read_text()).get("config", {}) or {}
+        root = str(cfg.get("model_root") or "").strip()
+        return Path(root) if root else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -4025,16 +4041,46 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
 def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> None:
     """Write perf_target_inputs.json into the model root so the decode ceiling can be computed.
 
-    Never raises and never overwrites: a file already there may have been hand-tuned with real
-    per-tensor dtypes, which is strictly better than what can be derived here.
+    Never raises. Two rules about WHERE and WHETHER, both learned the same way:
+
+    WHERE -- into a real, stated model directory or nowhere. With a relative or empty model_root this
+    wrote into the WORKING DIRECTORY, and perf_mcp's reader had the identical "." default, so the
+    file the run dropped in the repo root was then adopted as the model's facts. On gemma-3-12b that
+    meant a report priced against a 32-layer, hidden-1280, 30 MB model: prefill memory ceiling
+    0.061 ms against a 100 ms measurement, no param count, hence no compute roof and no fidelity
+    ladder. Three broken sections from one file written to the wrong place and read back from it.
+
+    WHETHER -- refresh the tool's OWN output, refuse to clobber a HAND-TUNED one. `never overwrites`
+    was written to protect a file someone had filled in with real per-tensor dtypes, which is right,
+    but applied to every file it also froze the tool's own first guess forever: the geometry keys
+    that prefill's byte model needs could never reach a model that already had a file, so the roof
+    silently degraded for exactly the models that had been run before. The file records who wrote it
+    in `source`, so the two cases are distinguishable rather than assumed.
     """
     try:
-        out = Path(model_root) / "perf_target_inputs.json"
-        if out.exists():
+        root = Path(model_root)
+        if not root.is_absolute() or not root.is_dir():
+            print(
+                "  [optimize/cc] not writing perf_target_inputs.json: model root %r is not a stated "
+                "directory (a model fact written to the working directory gets read back as some "
+                "other model's)" % str(model_root),
+                flush=True,
+            )
             return
+        out = root / "perf_target_inputs.json"
         facts = _perf_target_inputs(demo_dir, model_id_hint, manifest)
         if not facts:
             return
+        if out.exists():
+            try:
+                _prev = json.loads(out.read_text())
+            except Exception:  # noqa: BLE001
+                _prev = {}
+            _mine = str((_prev or {}).get("source") or "") == str(facts.get("source") or "")
+            if not (isinstance(_prev, dict) and _mine):
+                return  # hand-tuned (or unreadable): strictly better than what is derived here
+            if _prev == facts:
+                return
         out.write_text(json.dumps(facts, indent=2) + "\n")
         # ANCHOR IT IN THE LEDGER TOO. The file lives in the model directory, which the optimize loop
         # reverts between attempts -- it was rolled back twice in one run, each time restoring a

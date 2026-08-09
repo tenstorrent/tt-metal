@@ -33,6 +33,7 @@ def _pm(monkeypatch, tmp_path):
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_MODEL_ROOT", str(tmp_path / "gemma3"))
     monkeypatch.setenv("PERF_MCP_TASK", "main")
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-under-test")
     (tmp_path / "gemma3").mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location("pmcp_ops_evidence", str(_CC / "perf_mcp.py"))
     m = importlib.util.module_from_spec(spec)
@@ -65,11 +66,25 @@ def test_a_file_from_another_run_yields_no_evidence_either(monkeypatch, tmp_path
     assert m.read_stage_ops() == {} and m.read_stage_ms() == {}
 
 
-def test_an_older_state_file_has_no_ops_and_does_not_crash(monkeypatch, tmp_path):
+def test_a_stamped_file_without_the_ops_key_degrades_rather_than_crashing(monkeypatch, tmp_path):
+    """Absent evidence is not a crash and not a zero -- it is simply no evidence, while the timings
+    it was written beside stay readable."""
     m = _pm(monkeypatch, tmp_path)
-    (tmp_path / "perf_mcp_stage_ms_gemma3_main.json").write_text(json.dumps({"stages": {"decode": 32.22}}))
+    (tmp_path / "perf_mcp_stage_ms_gemma3_main.json").write_text(
+        json.dumps({"run": "run-under-test", "stages": {"decode": 32.22}})
+    )
     assert m.read_stage_ops() == {}
     assert m.read_stage_ms() == {"decode": 32.22}
+
+
+def test_a_pre_stamping_file_yields_nothing_at_all(monkeypatch, tmp_path):
+    """The gemma-3 case: a file predating both `run` and `paths` carried a pre-fix EAGER prefill of
+    100.46 ms, and with no paths key the roofline could not even mark it eager. Refused whole."""
+    m = _pm(monkeypatch, tmp_path)
+    (tmp_path / "perf_mcp_stage_ms_gemma3_main.json").write_text(
+        json.dumps({"stages": {"prefill": 100.4624, "decode": 50.8251}})
+    )
+    assert m.read_stage_ms() == {} and m.read_stage_ops() == {} and m.read_stage_paths() == {}
 
 
 def test_the_marker_is_parsed_from_the_workloads_own_line(monkeypatch, tmp_path):

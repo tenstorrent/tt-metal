@@ -76,6 +76,20 @@ _MODEL_ROOT_CONFIGURED = bool(
     or str(_MANIFEST.get("config", {}).get("model_root") or "").strip()
 )
 _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("config", {}).get("model_root", "."))
+# WAS THE MODEL DIRECTORY ACTUALLY STATED, or is this the "." default? The two are not the same
+# question as "does the path exist", and reading a model FACT from an unstated root means resolving
+# it against the WORKING DIRECTORY -- which is how the gemma-3-12b report came to price a 32-layer,
+# hidden-1280, 30 MB model: a stray perf_target_inputs.json in the repo root, describing the vision
+# tower, sitting where the loop happened to be cd'd. It produced a prefill memory ceiling of 0.061 ms
+# against a 100 ms measurement, no param count, therefore no compute roof, therefore no fidelity
+# ladder -- three broken sections from one silently-adopted file.
+#
+# A fact about the model has to come from the model's own directory. Unstated is UNKNOWN, and unknown
+# renders as "not measured", which is true -- rather than as a number, which was not.
+_MODEL_ROOT_STATED = bool(
+    str(os.environ.get("PERF_MCP_MODEL_ROOT") or "").strip()
+    or str(_MANIFEST.get("config", {}).get("model_root") or "").strip()
+)
 # PUBLISH the key every per-run artifact is named after. perf_mcp derived it from _MODEL_ROOT while
 # run.py and the ledger read PERF_MCP_MODEL_NAME -- which nothing ever set, so those fell back to the
 # literal "model". Reader and writer then pointed at different files (perf_mcp_baseline_model_main.json
@@ -2290,9 +2304,16 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
     place and forgotten in the next two -- which is exactly how the timings, their trace paths and
     the observed ISL came to be read back with three separate copies of the same lookup.
 
-    An unstamped file is accepted: it predates stamping, and refusing it would blank the report for
-    anyone who has not re-run since. A file stamped with a DIFFERENT run is refused, because that is
-    the case that produced a stale number wearing a current one's clothes.
+    A file stamped with a DIFFERENT run is refused. So is an UNSTAMPED one, which this used to accept
+    on the reasoning that it predates stamping and refusing it would blank the report for anyone who
+    had not re-run. That reasoning was wrong, and the cost showed up immediately: gemma-3's report
+    rendered `prefill 100.46 ms` from a file written 2026-08-07T00:07 -- forty hours BEFORE the fix
+    that let prefill trace at all -- beside a headline from a run that had measured nothing. Because
+    the file also predated `paths`, the roofline could not mark it eager, so a pre-fix eager number
+    rendered wearing a traced one's clothes and read as "prefill is still eager today".
+
+    A blank says `not measured`, which is TRUE and prompts a measurement. This said a number, which
+    was false. Absent evidence is not weak evidence -- it is the absence of a claim.
     """
     try:
         from pathlib import Path as _P
@@ -2304,7 +2325,7 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         if not isinstance(doc, dict):
             return {}
         _stamp, _now = str(doc.get("run") or ""), _stage_run_stamp()
-        if _stamp and _now and _stamp != _now:
+        if not _stamp or (_now and _stamp != _now):
             return {}
         return doc
     except Exception:  # noqa: BLE001
@@ -4692,13 +4713,20 @@ def _load_perf_target_inputs() -> dict | None:
     of the run. That is why a RUN_REPORT could show "modeled floor / NO_BAND / no weight-bytes input"
     for a model whose facts had existed minutes earlier. Rebuilding here costs one safetensors header
     read and makes the ceiling survive the revert instead of depending on it.
+
+    Read ONLY from a STATED model root. With the "." default this resolved against the working
+    directory and adopted whatever perf_target_inputs.json happened to be lying there -- see
+    _MODEL_ROOT_STATED. A fact about the model comes from the model's directory or not at all.
     """
     facts = None
-    try:
-        facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
-    except Exception:  # noqa: BLE001
-        pass
-    if facts is None:
+    if _MODEL_ROOT_STATED:
+        try:
+            facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    # The REBUILD path resolves the same relative "." and so re-adopted the working directory's file
+    # even after the direct read was guarded -- one rule, two doors. Both are shut by the same test.
+    if facts is None and _MODEL_ROOT_STATED:
         try:
             import importlib.util as _ilu
 

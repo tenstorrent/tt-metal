@@ -1180,7 +1180,25 @@ def _roofline_tables(
         for every stage the stages are columns rather than repeated blocks."""
         _cols = [(st, _roofs[st]) for st in ("prefill", "decode") if _roofs.get(st) and _roofs[st].get("flops")]
         if not (_fid and _cols):
-            return []
+            # NAME THE MISSING INPUT. This returned [] and the section simply was not there, which
+            # reads as "the tool does not do that" rather than "the tool could not". On gemma-3 the
+            # ladder vanished because the model facts had no param count -- no params, no FLOPs, no
+            # compute roof, no ladder -- and the report gave the reader nothing to act on. One line
+            # naming the cause turns a silent gap into a fixable one.
+            if not _cols:
+                return [
+                    "",
+                    "Fidelity ladder",
+                    "\u2500" * W,
+                    "  not shown: no compute roof for any stage " "(needs a param count in perf_target_inputs.json)",
+                ]
+            return [
+                "",
+                "Fidelity ladder",
+                "\u2500" * W,
+                "  not shown: the profile carries no matmul with "
+                "parsed MxKxN dims, so no per-precision floor can be computed",
+            ]
         _o = ["", "Fidelity ladder", "\u2500" * W]
         # Ruled and spaced like the tables above it, so the section does not read as loose text
         # dropped between two grids.
@@ -1249,7 +1267,16 @@ def _roofline_tables(
             _mark = "   \u2190 binds" if _binding else ""
             _lbl = "  %s%s" % (_roof, _mark)
             if not _c:
+                # SAY WHICH INPUT IS MISSING, not merely that the cell is empty. A compute roof
+                # needs a param count and a peak; "not measured" for both named neither, so a
+                # report missing its model facts looked identical to one whose model has no
+                # compute term at all.
                 out.append(_row(_lbl, "not measured", "not measured", ""))
+                # WHY, on its own line rather than in the cell -- the columns are 16 wide and a
+                # reason does not fit one. "not measured" for both halves named nothing, so a report
+                # missing its model facts looked identical to one whose model has no compute term.
+                if _roof == "compute" and not _rf.get("flops"):
+                    out.append("   (no compute roof: perf_target_inputs.json carries no param count)")
                 continue
             # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
             _lo_ms, _hi_ms = _c / _HIF, _c / _LOF

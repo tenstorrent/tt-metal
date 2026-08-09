@@ -59,8 +59,11 @@ def measured(tmp_path, monkeypatch):
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
     monkeypatch.setenv("PERF_MCP_TASK", "main")
+    monkeypatch.setenv("PERF_MCP_RUN_ID", "run-under-test")
+    # STAMPED, as the gate now writes it. An unstamped document is refused -- see
+    # test_stage_ms_belongs_to_a_run -- because a measurement with no provenance is not one.
     (tmp_path / "perf_mcp_stage_ms_gemma3_main.json").write_text(
-        json.dumps({"stages": {"prefill": 35.80, "decode": 138.49}})
+        json.dumps({"run": "run-under-test", "stages": {"prefill": 35.80, "decode": 138.49}})
     )
     return tmp_path
 
