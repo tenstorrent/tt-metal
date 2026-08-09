@@ -26,7 +26,7 @@
 static inline void report_value(uint32_t report_addr, uint32_t v) {
     volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     *r = v;
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     flush_l2_cache_line(report_addr);  // make the report visible to the host readback of TL1
 #endif
 }

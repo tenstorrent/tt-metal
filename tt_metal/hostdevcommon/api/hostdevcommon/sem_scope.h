@@ -8,7 +8,7 @@
 
 // Shared host/device home for the Quasar semaphore-scope enum. (The host-side intent enum,
 // SemaphoreScope, lives in experimental/metal2_host_api/semaphore_spec.hpp.)
-// (program_spec / genfiles) and the device Semaphore class name the SAME enum.
+// The host (program_spec / genfiles) and the device Semaphore class name the SAME enum.
 // Leaf header: no device- or host-only dependencies.
 
 /**
@@ -32,8 +32,9 @@
  *      negative value, wrap=31), serializing local and remote writers at one NIU.
  *      up() is fully atomic. down() is multi-consumer-safe on Quasar DM (a NoC-CAS
  *      lock serializes consumers; producers' increments commute); on Gen1 it remains
- *      single-consumer and the caller owns that invariant. Quasar EXTERNAL reserves
- *      the value 0xFFFFFFFF (CAS-return sentinel).
+ *      single-consumer and the caller owns that invariant (the emulator also compiles
+ *      the Gen1 arm, so emule rejects multi-consumer EXTERNAL at config time). Quasar
+ *      EXTERNAL reserves the value 0xFFFFFFFF (CAS-return sentinel).
  *      wait()/wait_min()/value() and set() use the plain uncached alias — set() is a
  *      non-atomic destructive store, so use it init/reset-only, never concurrently
  *      with up()/down().
