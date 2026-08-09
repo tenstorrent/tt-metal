@@ -651,7 +651,7 @@ void jit_build_genfiles_kernel_include(
     kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
 
     if (has_cached_sem) {
-        kernel_header_content += string("#undef kernel_main\nvoid kernel_main() {\n    sem::init_dm_cached();\n    ") +
+        kernel_header_content += string("\n#undef kernel_main\nvoid kernel_main() {\n    sem::init_dm_cached();\n    ") +
                                  kUserEntry + "();\n}\n";
     }
 

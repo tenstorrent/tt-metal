@@ -10,15 +10,15 @@
 // tt_t6_l1_pkg.sv). Modes selected by a -D from the host:
 //   PROBE_DECR_INCRGET : atomic decrement via the EXISTING INCR_GET path
 //                        (noc_semaphore_inc with incr = -1, wrap=31 => modular sub).
-//   PROBE_DECR_AMO     : atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, -1).
-//   PROBE_CAS          : 4-bit compare-and-swap via a raw NOC_AT_INS_CAS.
+//   PROBE_DECR_AMO     : atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, -1). Quasar-only.
+//   PROBE_CAS          : 4-bit compare-and-swap via a raw NOC_AT_INS_CAS. Quasar-only.
 //   PROBE_CAS_RET      : noc_fast_atomic_cas4 with program_ret_addr=true -- the response
 //                        must return the PRE-OP word on success AND failure (Quasar-only).
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 
-#if defined(PROBE_DECR_AMO) || defined(PROBE_CAS)
+#if (defined(PROBE_DECR_AMO) || defined(PROBE_CAS)) && defined(ARCH_QUASAR)
 // Raw NoC-atomic emit, mirroring noc_fast_atomic_increment (noc_nonblocking_api_v2.h)
 // but with a caller-supplied at_len (opcode+fields) and inline operand. Does NOT program
 // the return-value addr (like noc_semaphore_inc); result is verified by reading L1 back.
@@ -67,6 +67,7 @@ void kernel_main() {
     }
 
 #elif defined(PROBE_DECR_AMO)
+#if defined(ARCH_QUASAR)
     // Atomic decrement via raw NOC_AT_INS_RISCV_AMO / AMOADD (briscv_req_type 0x8 at
     // at_len[11:8]); src_index 0 requires a 16B-aligned target (l1_unreserved_base is).
     const uint64_t at_len_amoadd = NOC_AT_INS(NOC_AT_INS_RISCV_AMO) | ((uint64_t)0x8 << 8) | NOC_AT_IND_32(0);
@@ -74,6 +75,7 @@ void kernel_main() {
         noc_raw_atomic(self_noc_addr, at_len_amoadd, (uint32_t)(-1));
         noc_async_atomic_barrier();
     }
+#endif
 
 #elif defined(PROBE_CAS)
 #if defined(ARCH_QUASAR)

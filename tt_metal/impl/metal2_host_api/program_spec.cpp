@@ -107,9 +107,9 @@ struct CollectedSpecData {
         std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
         std::vector<BinderRecord> readers;  // OBSERVE bindings
         // Union of ALL binders' node sets (writers + readers), derived once kernel node sets exist.
-        // Used to validate DM_LOCAL_CACHED eligibility (forced and AUTO, via cached_geometry_ok()): the cached-only pool is per-core, so a
-        // binder on another node would address THAT node's pool copy and the semaphore would silently
-        // split. (Every binder being a DM kernel is validator-enforced, but re-checked at decision
+        // Used to validate DM_LOCAL_CACHED eligibility (forced and AUTO, via cached_geometry_ok()):
+        // the cached-only pool is per-core, so a binder on another node would address THAT node's
+        // pool copy and the semaphore would silently split. (Every binder being a DM kernel is validator-enforced, but re-checked at decision
         // time since validation can be skipped.)
         NodeRangeSet binder_node_set;
         // Distinct binder KERNELS (writers + readers, deduplicated). The cached pool slot is re-seeded
@@ -280,9 +280,10 @@ bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::Semap
 //                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
 //                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
 //                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      Two hazards FATAL here: a SET racing another writer (no scope can make a
-//                      destructive store atomic), and a CONSUME binder off the semaphore's node.
-//                      Multi-consumer down() itself is safe on both atomic tiers.
+//                      Two hazards FATAL here: a CONSUME binder off the semaphore's node (every
+//                      arch -- down() spins on the local word), and, on Gen2 only, a SET racing
+//                      another writer (Gen1 keeps its historical silent behavior). Multi-consumer
+//                      down() itself is safe on both atomic tiers.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: {
@@ -356,31 +357,14 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
         case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
         case SemaphoreScope::AUTO:
         default: {
-            // AUTO picks the CHEAPEST CORRECT mechanism from the who-touches census:
-            //
-            //   1 writer instance, single-cell sem  -> LOCAL_NONATOMIC (plain uncached RMW; nothing to
-            //                                          race, and no NoC round-trip -- cheapest of all)
-            //   many writers, all confined to the
-            //   semaphore's ONE node                -> DM_LOCAL_CACHED (cached-pool RISC-V AMO: atomic
-            //                                          among the node's mutually-coherent DM cores, and
-            //                                          no NoC round-trip)
-            //   anything else (multi-node sem, or a
-            //   binder off the sem's node)          -> EXTERNAL (self-targeted NoC atomic; serializes
-            //                                          local + remote writers at one NIU)
-            // Gen1 (Wormhole/Blackhole) keeps its historical behaviour: AUTO resolves to
-            // LOCAL_NONATOMIC, the plain uncached RMW every semaphore has always used there. This
-            // feature exists for the Quasar DM write-back cache, which has no Gen1 equivalent, and
-            // it does not silently change a mature platform's device mechanism. A Gen1 user who
-            // wants atomicity can still force SemaphoreScope::EXTERNAL (the NoC atomic increment is
-            // a standard Gen1 primitive).
-            if (!is_gen2_arch()) {
-                return SemScope::LOCAL_NONATOMIC;
-            }
-
+            // AUTO: decision table in the function header. Gen1 keeps its historical
+            // LOCAL_NONATOMIC (the Quasar DM cache has no Gen1 equivalent; a Gen1 user who wants
+            // atomicity forces EXTERNAL -- the NoC atomic increment is a standard Gen1 primitive).
             const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-            const bool single_node = sem_nodes.num_cores() == 1;
-            // Checked before the single-writer pick: even ONE off-node consumer would build and
-            // then hang (down() spins on the consumer's LOCAL word).
+            // Arch-independent, so checked before the Gen1 return: down() spins on the consumer's
+            // LOCAL word under EVERY mechanism, so even one off-node consumer builds and then hangs.
+            // (Off-node OBSERVE readers are tolerated: read-only, and a remote-fed shadow copy at
+            // coordinates the census cannot see is a legitimate pattern.)
             TT_FATAL(
                 binders.consuming_instance_count == 0 ||
                     sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
@@ -388,6 +372,11 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
                 "there. Run consumers on the semaphore's node(s).",
                 sem.unique_id);
+            if (!is_gen2_arch()) {
+                return SemScope::LOCAL_NONATOMIC;
+            }
+
+            const bool single_node = sem_nodes.num_cores() == 1;
             if (binders.writer_instance_count <= 1 && single_node) {
                 return SemScope::LOCAL_NONATOMIC;
             }
@@ -404,16 +393,10 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 sem.unique_id,
                 binders.writer_instance_count);
 
-            // Take the cached fast path only when it is PROVABLY safe. cached_geometry_ok() carries
-            // the structural half: a single-cell semaphore, exactly ONE binder kernel (every binding
-            // kernel's entry re-seeds the pool slot with an unsynchronised store, so a second binder
-            // -- even OBSERVE-only -- could reset a live counter), and every binder a DM kernel on the
-            // semaphore's node (the pool is per-core, in the DM cache domain). Checked here:
-            //   - no other kernel on this node binds a cached semaphore (the seeders share one
-            //     node-wide rendezvous slot: mixed groups hang or re-seed a live counter).
-            //   - Gen2: redundant with the Gen1 early return above; kept in case that return is ever
-            //     relaxed.
-            // Anything else => EXTERNAL, correct wherever selected.
+            // Cached fast path only when PROVABLY safe: cached_geometry_ok() carries the structural
+            // half (see its doc); the node-conflict flag covers the shared seeder-rendezvous slot.
+            // The is_gen2_arch() conjunct is redundant with the Gen1 return above -- kept in case
+            // that return is ever relaxed. Anything else => EXTERNAL.
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
                 return SemScope::DM_LOCAL_CACHED;
             }
@@ -2918,7 +2901,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
         // so an OBSERVE binding cannot compile a mutator -- the census excludes OBSERVE from the
         // writer count, so that promise must be enforced, not trusted.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
-        const bool read_only = semaphore_binding.access_type == KernelSpec::SemaphoreBinding::AccessType::OBSERVE;
+        const bool read_only = semaphore_binding.access_type == SemaphoreAccessType::OBSERVE;
         out.emplace(
             semaphore_binding.accessor_name,
             tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, read_only});
