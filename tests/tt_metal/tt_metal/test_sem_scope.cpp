@@ -706,8 +706,9 @@ TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "AUTO multi-writer up value(): {} (expected {})", observed, expected);
     EXPECT_EQ(observed, expected)
-        << "AUTO on a multi-writer semaphore did not stay exact -- overshoot or a wrong-word landing "
-           "(an undercount from a wrongly-picked LOCAL_NONATOMIC hangs in the reporter's wait, not here).";
+        << "AUTO on a multi-writer semaphore lost updates => the classifier wrongly picked "
+           "LOCAL_NONATOMIC (the reporter waits on the separate done semaphore, so an undercount "
+           "fails HERE, unlike the remote tests).";
 }
 
 // AUTO on a SINGLE-writer semaphore takes the cheap LOCAL_NONATOMIC path. Count-only end-to-end
