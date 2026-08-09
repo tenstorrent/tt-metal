@@ -178,6 +178,19 @@ def measure_adapter(adapter, device) -> float:
         NotTraceCapable = ()
     try:
         adapter.setup(device)
+        # THE ONLY MOMENT THE SERVED WIDTH EXISTS. setup() has built the model and the loader has
+        # decided each tensor's dtype; the checkpoint records what was on disk, and every byte rule
+        # downstream is a PREDICTION of what happened here. Walk it once and state it. Best-effort:
+        # a census that cannot run leaves the ceiling on its existing fallbacks rather than failing
+        # a measurement run.
+        try:
+            from .weight_census import census as _census, marker as _cmarker
+
+            _c = _census(getattr(adapter, "_pipe", None) or adapter, scope="pipeline")
+            if _c.get("weight_bytes"):
+                print(_cmarker(_c), flush=True)
+        except Exception:  # noqa: BLE001
+            pass
     except NotTraceCapable as exc:
         print("TRACE_NOT_TRACE_CAPABLE=1", flush=True)
         print("TRACE_REPLAY_SKIPPED=%r" % (exc,), flush=True)

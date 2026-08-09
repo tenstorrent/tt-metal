@@ -489,6 +489,19 @@ def compute_target(
     if bytes_per_unit and float(bytes_per_unit) > 0:
         ab = int(round(float(bytes_per_unit)))
         src = "anchored baseline bytes"
+    # THE CENSUS OUTRANKS EVERY RULE, because it is not a rule. agent/weight_census walks the BUILT
+    # model and sums each resident tensor's element count at its REAL dtype -- the only place the
+    # served width exists, since the checkpoint records what was on disk and not what the loader
+    # decided. Every other branch here predicts that width: params x 1.0 published voxtral at
+    # 141.8 tok/s/u against a true 54.7, and the checkpoint's own byte count gives gemma-3 a 21.0
+    # ceiling for a model measuring 30.8. An INCOMPLETE census (a dtype the census has no width for)
+    # is refused rather than used as a lower bound: too few bytes reads as too HIGH a ceiling, which
+    # is the direction that ends a run early believing it is at the wall.
+    if ab <= 0:
+        _dwb = _scalar(mf.get("device_weight_bytes", 0), 0)
+        if _dwb > 0 and mf.get("device_census_complete", True):
+            ab = int(_dwb)
+            src = "device census: %.3g GB resident at served dtype" % (_dwb / 1e9)
     if ab <= 0:
         ab = simple_active_bytes(mf)
         src = "params rule: %.3gB x %.2f B/param" % (ceiling_params(mf) / 1e9, _BYTES_PER_PARAM)

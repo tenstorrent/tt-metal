@@ -2332,6 +2332,36 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         return {}
 
 
+def _persist_device_weight_bytes(nbytes: int, complete: bool) -> None:
+    """Merge the census result into the model's own facts file. Best-effort; never raises.
+
+    Written to the MODEL directory, and only when that directory was STATED -- a model fact resolved
+    against the working directory is how a 31 MB, 32-layer file came to describe gemma-3-12b. The
+    two keys are merged rather than the file rewritten, so a hand-tuned per-tensor list beside them
+    survives."""
+    if not _MODEL_ROOT_STATED or not nbytes or nbytes <= 0:
+        return
+    try:
+        p = _MODEL_ROOT / "perf_target_inputs.json"
+        doc = {}
+        if p.is_file():
+            try:
+                doc = json.loads(p.read_text()) or {}
+            except Exception:  # noqa: BLE001
+                doc = {}
+        if not isinstance(doc, dict):
+            return
+        if doc.get("device_weight_bytes") == int(nbytes) and doc.get("device_census_complete") == bool(complete):
+            return
+        doc["device_weight_bytes"] = int(nbytes)
+        doc["device_census_complete"] = bool(complete)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=2) + "\n")
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _persist_stage_ms(
     stage_ms: dict, stage_paths: dict | None = None, stage_isl: dict | None = None, stage_ops: dict | None = None
 ) -> None:
@@ -2572,6 +2602,17 @@ def _run_full_pipeline_ms():
             # reader who doubted a label had nothing to check it against, and "prefill is traced"
             # could only be confirmed by re-running the workload by hand. It is the difference
             # between a claim and a measurement, and it costs one line to keep.
+            # THE MEASURED RESIDENT BYTE COUNT. Written into the model's facts so the ceiling
+            # divides by what is ON THE CHIP rather than by a rule about what might be. See
+            # agent/weight_census and perf_target.compute_target's census branch.
+            if "TRACE_WEIGHT_BYTES=" in line:
+                try:
+                    _wb = int(line.split("TRACE_WEIGHT_BYTES=", 1)[1].split()[0])
+                    _ok = "complete=1" in line
+                    if _wb > 0:
+                        _persist_device_weight_bytes(_wb, _ok)
+                except Exception:  # noqa: BLE001
+                    pass
             if "TRACE_STAGE_OPS[" in line:
                 try:
                     _nm = line.split("TRACE_STAGE_OPS[", 1)[1].split("]", 1)[0].strip()
