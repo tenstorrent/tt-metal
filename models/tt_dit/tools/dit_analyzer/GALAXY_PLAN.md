@@ -125,10 +125,26 @@ should not imply that it does. Untraced it also happens to halve the encoder's w
 elementwise ops inherit, and it moves small-op times in both directions. `--grid clamped` pins it
 so the A/B isolates the finding.
 
-**5. Ring collectives & the soundness gates (11c).**
-The shim *models* Ring but has only ever been conformed on Linear. Conform the ring all-gather /
-reduce-scatter and the fused ring-joint SDPA at 4×8; then the buffer-liveness and
-memory-feasibility gates that need real device state.
+**5. Ring collectives & the soundness gates (11c)** — *ring collectives done; the rest is split
+between one real task and three that are correctly parked.*
+
+- **Ring all-gather / reduce-scatter at 4×8: DONE 2026-08-08.** `conform_collectives.py --mesh 4 8
+  --topology ring --sp-axis 1 --tp-axis 0` → **3/3** (ag_tp, ag_sp, rs_tp) match real ttnn
+  per-device shapes. The harness had only ever run Linear on the 2×4 (topology and axes were baked
+  in); both are now selectable, and it needed the same `FABRIC_1D_RING` pairing as the others.
+- **Fused ring-joint SDPA at 4×8: open.** `conform_block.py` is the harness — it already
+  reconciles the fused call into its two hidden K/V sp all-gathers — but it needs a dry-run graph
+  regenerated for a 4×8 SD3.5 block, and SD3.5's shapes have to divide 8-way SP. That is a small
+  bring-up, not a re-run.
+- **The three 11c gates stay parked, deliberately.** The roadmap assessed them and deferred rather
+  than faked: *buffer liveness* needs buffer identity from a capture that does not exist (blocker
+  29) — a soundness verdict built on shim-modelled ping-pong slots would itself be "the shim
+  believes"; *barrier/sync intent* is implementable but does not fire on any current finding (the
+  gathers take the persistent-buffer, no-barrier path); *live-bytes / memory feasibility* needs an
+  L1/DRAM residency model (blocker 30). Building one just to make the gate emit a verdict is the
+  failure mode that note warns against. Worth recording: the fix this tool most wants to
+  recommend — the encoder submesh — is **memory-neutral by construction**, since SP carried
+  replication rather than shards, so each device holds exactly what it held before.
 
 **6. Real depth & the config matrix (12)** — *depth done 2026-08-08; the matrix is still open.*
 The scout now runs production depth at the `prod` preset: **encoder 50** layers

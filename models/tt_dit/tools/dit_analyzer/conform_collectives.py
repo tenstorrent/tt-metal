@@ -33,10 +33,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dit_analyzer.region import shard_chunk_size  # noqa: E402
 
 
-def _set_fabric_1d(ttnn) -> None:
-    """Mirror conftest.set_fabric for FABRIC_1D (collectives need a fabric)."""
+def _set_fabric_1d(ttnn, topo: str = "linear") -> None:
+    """Mirror conftest.set_fabric for FABRIC_1D (collectives need a fabric).
+
+    Ring needs a ring fabric: FABRIC_1D has no wrap link, so a ring hop across the seam has no
+    route and ttnn aborts with "Could not find any forwarding direction" (see conform_encoder).
+    """
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricConfig.FABRIC_1D_RING if topo == "ring" else ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -90,19 +94,24 @@ def coll_cases(sp_axis, tp_axis) -> List[CollCase]:
     ]
 
 
-def run(mesh_shape: Sequence[int]) -> int:
+def run(mesh_shape: Sequence[int], topo: str = "linear", sp_axis: int = 0, tp_axis: int = 1) -> int:
     import torch
 
     import ttnn
     from models.tt_dit.parallel.manager import CCLManager
 
-    sp_axis, tp_axis = 0, 1  # sd35_block preset: SP on axis0, TP on axis1
-    _set_fabric_1d(ttnn)
+    # sd35_block preset is SP on axis0 / TP on axis1; the H3 Galaxy config is sp1tp0, so the
+    # axes are selectable rather than baked in.
+    _set_fabric_1d(ttnn, topo)
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
     failures = 0
     try:
-        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=ttnn.Topology.Linear)
-        print("collective conformance on a real %s mesh (fabric 1D)\n" % (tuple(mesh_shape),))
+        topology = ttnn.Topology.Ring if topo == "ring" else ttnn.Topology.Linear
+        ccl = CCLManager(mesh_device=mesh, num_links=1, topology=topology)
+        print(
+            "collective conformance on a real %s mesh (fabric 1D%s, sp=axis%d tp=axis%d)\n"
+            % (tuple(mesh_shape), " ring" if topo == "ring" else "", sp_axis, tp_axis)
+        )
         print(
             "%-8s %-10s %-26s %-22s %-22s %s" % ("case", "op", "logical", "ttnn out (per dev)", "shim out", "verdict")
         )
@@ -148,8 +157,11 @@ def run(mesh_shape: Sequence[int]) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mesh", type=int, nargs=2, default=[2, 4], metavar=("R", "C"))
+    ap.add_argument("--topology", choices=["ring", "linear"], default="linear")
+    ap.add_argument("--sp-axis", type=int, choices=[0, 1], default=0)
+    ap.add_argument("--tp-axis", type=int, choices=[0, 1], default=1)
     args = ap.parse_args()
-    raise SystemExit(1 if run(args.mesh) else 0)
+    raise SystemExit(1 if run(args.mesh, args.topology, args.sp_axis, args.tp_axis) else 0)
 
 
 if __name__ == "__main__":
