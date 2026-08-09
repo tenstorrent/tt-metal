@@ -402,29 +402,28 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
     // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
     // keeps the per-expert path.
-    // Sparse multicast is a 1D-line primitive (hop-bitmask along one forwarding direction), so it is
-    // enabled only for a 1D line: Ring, or Linear with one mesh dimension == 1. Excludes 2D meshes
-    // (both dims > 1) whose Topology::Linear would otherwise match — those route along an axis and were
-    // never validated for the grouped path.
-    const bool sparse_topology_ok =
-        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear);
-    const bool sparse_mesh_is_1d_line = (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1);
+    // Sparse multicast (hop-bitmask along one forwarding direction) requires FABRIC_1D: the dispatch
+    // routes along a single cluster axis as a 1D line, and FABRIC_1D exposes the per-direction array
+    // connection the grouped writer indexes (fabric_connections[direction]). Enabled for ALL FABRIC_1D
+    // configs and topologies (any mesh shape) with fabric present. FABRIC_2D uses a portable
+    // RoutingPlaneConnectionManager (not array-indexable) and is excluded; this is_2d_fabric gate mirrors
+    // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
+    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     const bool sparse_has_fabric = (operation_attributes.num_links > 0);
-    const bool enable_sparse_mcast = sparse_topology_ok && sparse_mesh_is_1d_line && sparse_has_fabric;
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric;
     // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
-    // disabled, print each gate so the reason is obvious (wrong topology / not a 1D-line mesh / no fabric).
-    log_info(
+    // disabled, print each gate so the reason is obvious (2D fabric / no fabric).
+    log_warning(
         tt::LogOp,
         "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
-        "[gates: topology_ok={}, mesh_1d_line={}, has_fabric={}]",
+        "[gates: fabric_1d={}, has_fabric={}]",
         enable_sparse_mcast ? "ENABLED" : "DISABLED",
         is_row_major ? "row-major" : "tile",
         (int)topology,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         operation_attributes.num_links,
-        sparse_topology_ok,
-        sparse_mesh_is_1d_line,
+        is_1d_fabric,
         sparse_has_fabric);
     constexpr uint32_t grouped_route_info_u32 = 23;
     const uint32_t route_info_slot_stride_bytes =
