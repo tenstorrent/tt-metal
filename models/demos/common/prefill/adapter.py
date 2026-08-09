@@ -161,7 +161,7 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     def resolve_compressed_fp8_dispatch(self) -> bool:
-        """True iff the model is validated for FP8 MoE dispatch, the hardware is Blackhole,
+        """True if the model is validated for FP8 MoE dispatch, the hardware is Blackhole,
         and ``PREFILL_COMPRESSED_FP8_DISPATCH=0`` did not kill it. Under ``tt-run`` set the
         kill switch via the manifest ``env`` map — shell exports don't reach ranks."""
         env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
@@ -170,7 +170,7 @@ class PrefillModelAdapter(ABC):
         if env == "0":
             return False
 
-        from models.common.utility_functions import is_blackhole  # lazy: keeps this module import-light
+        from models.common.utility_functions import is_blackhole
 
         enabled = self.supports_compressed_fp8_dispatch and is_blackhole()
         if env == "1" and not enabled:
