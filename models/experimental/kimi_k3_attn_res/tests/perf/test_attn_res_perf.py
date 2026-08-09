@@ -209,10 +209,9 @@ def test_perf_block_split_vs_direct(mesh_device, num_sealed, fused_mix, rows_per
 
     def split():
         partials, shifts, masses = op.inter_block(tt_block, queries)
-        merged = [op.merge(p, s, m, tt_prefix, tt_query) for p, s, m in zip(partials, shifts, masses)]
-        for group in (partials, shifts, masses):
-            for tensor in group:
-                ttnn.deallocate(tensor)
+        merged = [op.merge(partials, shifts, masses, tt_prefix, tt_query, site) for site in range(len(queries))]
+        for tensor in (partials, shifts, masses):
+            ttnn.deallocate(tensor)
         return merged
 
     for label, form in (("direct", direct), ("split", split)):

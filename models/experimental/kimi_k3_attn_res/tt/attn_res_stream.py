@@ -107,6 +107,86 @@ def attn_res_layer(stream, layer_idx, q_pre, q_post, attn_fn, mlp_fn):
     ttnn.deallocate(h)
 
 
+def _block_sites(layers, q_pre, q_post, q_out, block_size):
+    """Queries grouped by the sealed set they read, in the order the walk consumes them.
+
+    A `block_residual` value outlives the block that installed it by one read. The seal
+    fires in the middle of layer `L`, between its two reads, so the sealed set spans layer
+    `L`'s post-attention read through layer `L + block_size`'s pre-attention read. Groups
+    are cut on the read sequence every `2 * block_size` sites for that reason, not on layer
+    boundaries — and the trailing group is short whenever the stack does not divide evenly.
+    """
+    order = []
+    for layer_idx in range(layers):
+        if layer_idx > 0:
+            order.append(q_pre[layer_idx])
+        order.append(q_post[layer_idx])
+    order.append(q_out)
+
+    sites = 2 * block_size
+    return [order[start : start + sites] for start in range(0, len(order), sites)]
+
+
+def attn_res_stack_split(op, hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, hook=None):
+    """Walk a whole stack's residual bookkeeping through the split read form.
+
+    Same schedule and same reads as `attn_res_stack`, equal to it up to rounding, with the
+    sealed half of every read hoisted into one `inter_block` per block. A sealed snapshot is
+    write-once, so that half is loop-invariant across a block's read sites; only `merge`,
+    which folds in the live stream, has to stay per site.
+
+    Layer 0's pre-attention read is skipped for want of a snapshot, so every executed read
+    runs at `S >= 1` and `inter_block`'s non-None precondition holds for all of them. The
+    direct form is never needed as a fallback.
+
+    Args: as `attn_res_stack`.
+    """
+    stream = TtAttnResStream(op, hidden_states, block_size=block_size)
+    blocks = iter(_block_sites(len(attn_fns), q_pre, q_post, q_out, block_size))
+    pending = iter(())
+    partials = shifts = masses = None
+
+    def read():
+        site, q = next(pending)
+        return op.merge(partials, shifts, masses, stream.prefix_sum, q, site)
+
+    for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns)):
+        h, borrowed = stream.prefix_sum, True
+        if stream.num_sealed > 0:
+            h, borrowed = read(), False
+
+        if layer_idx % block_size == 0:
+            stream.seal()
+            # The read just above is the outgoing block's last site, so replacing `pending`
+            # and freeing its batches here strands nothing. `inter_block` has to follow the
+            # seal, not precede it — the snapshot it batches over is the one just installed.
+            queries = next(blocks)
+            if shifts is not None:
+                ttnn.deallocate(partials)
+                ttnn.deallocate(shifts)
+                ttnn.deallocate(masses)
+            partials, shifts, masses = op.inter_block(stream.block_residual, queries)
+            pending = enumerate(queries)
+
+        stream.accumulate(attn_fn(h))
+        if not borrowed:
+            ttnn.deallocate(h)
+
+        h = read()
+        stream.accumulate(mlp_fn(h))
+        ttnn.deallocate(h)
+
+        if hook is not None:
+            hook(layer_idx, stream)
+
+    out = read()
+    ttnn.deallocate(partials)
+    ttnn.deallocate(shifts)
+    ttnn.deallocate(masses)
+    stream.deallocate()
+    return out
+
+
 def attn_res_stack(op, hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, hook=None):
     """Walk a whole stack's residual bookkeeping.
 

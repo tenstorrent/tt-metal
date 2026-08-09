@@ -144,8 +144,8 @@ def test_split_matches_reference(mesh_device, device_params):
 
     partials, shifts, masses = op.inter_block(tt_block, [tt_query] * READ_SITES)
     worst_pcc, worst_rel_err = 1.0, 0.0
-    for partial, shift, mass in zip(partials, shifts, masses):
-        merged = op.merge(partial, shift, mass, tt_prefix, tt_query)
+    for site in range(READ_SITES):
+        merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)
         got = _from_device(op, merged)
         ttnn.deallocate(merged)
         worst_pcc = min(worst_pcc, _pcc(got, want))
