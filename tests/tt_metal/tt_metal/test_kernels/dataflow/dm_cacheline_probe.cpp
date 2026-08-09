@@ -33,7 +33,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     const uint32_t base_addr = get_arg(args::base_addr);            // line-aligned sweep region
     const uint32_t report_addr = get_arg(args::report_addr);        // disjoint scratch (2 + 3*NUM_SEPS words)
     const uint32_t residency_addr = get_arg(args::residency_addr);  // disjoint scratch for Control A

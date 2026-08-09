@@ -37,7 +37,9 @@ struct KernelBarrier {
 // different thread counts would still share a slot (host validation admits at most one
 // same-role DFB instance per node today, so this is not a reachable topology); if that
 // ever becomes supported, key the barrier per kernel-group instead of per DFB role.
-// [0] = DFB producer side, [1] = DFB consumer side, [2] = free for kernel use.
+// [0] = DFB producer side, [1] = DFB consumer side, [2] = free for kernel use. Any slot
+// tolerates at most ONE rendezvous group (one participant count) per worker at a time --
+// mixed counts on one slot deadlock or release early (see wait_threads_on).
 constexpr uint32_t NUM_KERNEL_BARRIERS = 3;
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
 
@@ -114,6 +116,8 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
+// barrier_idx must be < NUM_KERNEL_BARRIERS: it is unchecked, and an out-of-range index
+// RMWs whatever firmware global follows the array (e.g. the dedicated seeder barrier).
 inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;

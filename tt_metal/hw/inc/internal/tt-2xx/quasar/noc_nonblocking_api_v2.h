@@ -846,6 +846,9 @@ inline __attribute__((always_inline)) void noc_fast_atomic_cas4(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    // The CAS is 4-BIT: cmp/swap are silently masked to [0,15] below, so an out-of-range cmp
+    // (e.g. 16 intended as "never match") would become 0 and could ACQUIRE a free lock.
+    ASSERT(cmp4 <= 0xF && swap4 <= 0xF);
     uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (posted ? CMD_BUF_MISC_POSTED : 0) |
                     (linked ? CMD_BUF_MISC_LINKED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);

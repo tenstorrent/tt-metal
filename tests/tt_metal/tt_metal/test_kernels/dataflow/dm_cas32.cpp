@@ -25,7 +25,7 @@ void kernel_main() {
     uint32_t* word = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(get_arg(args::sem_addr)));
     const uint32_t increment_times = get_arg(args::increment_times);
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     // Rerun safety: a previous run's flushed line may still be cache-resident and would hide
     // the host's fresh TL1 preload. ONE thread discards it, then all rendezvous before loading
     // (a per-thread invalidate could discard another thread's committed decrement mid-run).
@@ -46,7 +46,7 @@ void kernel_main() {
             word, &observed, observed - 1, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
     }
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     // Flush the write-back cache so the host readback of TL1 sees the drained word.
     // (Quasar-only kernel: lr.w/sc.w needs Zalrsc, which Blackhole lacks.)
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(word));

@@ -49,7 +49,7 @@ void kernel_main() {
         // Read the baked read_only bit back: proves the host actually emitted it (OBSERVE tests
         // assert 1), so forgetting to bake it can't leave enforcement silently inert.
         report[3] = static_cast<uint32_t>(sem::counter.read_only);
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         // Residency check: the ring slot (uncached alias = TL1 truth) must be untouched for a
         // cached semaphore -- its count lives in the pool.
         report[2] =

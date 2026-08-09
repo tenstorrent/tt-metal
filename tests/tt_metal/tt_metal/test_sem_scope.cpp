@@ -700,8 +700,8 @@ TEST_F(SemScopeFixture, TestAutoMultiWriterIsAtomic) {
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "AUTO multi-writer up value(): {} (expected {})", observed, expected);
     EXPECT_EQ(observed, expected)
-        << "AUTO on a multi-writer semaphore did not resolve to an atomic mechanism (lost updates => the "
-           "classifier wrongly picked LOCAL_NONATOMIC).";
+        << "AUTO on a multi-writer semaphore did not stay exact -- overshoot or a wrong-word landing "
+           "(an undercount from a wrongly-picked LOCAL_NONATOMIC hangs in the reporter's wait, not here).";
 }
 
 // AUTO on a SINGLE-writer semaphore takes the cheap LOCAL_NONATOMIC path. Count-only end-to-end
@@ -715,6 +715,9 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
 // ---- Remote up() proofs: the first exact-count tests of Semaphore::up(noc, x, y, v). ----
 // Every earlier test drives the semaphore from its own node; these drive it from a SECOND node,
 // through the class's remote up() (a NoC atomic under every non-cached scope).
+// FAILURE DIRECTIONS: the receiver wait_min()s for the expected total before reporting, so a LOST
+// increment manifests as a RunProgram hang, not a failed EXPECT; the exact-count EXPECTs catch
+// overshoot and wrong-word landings.
 
 // One off-node sender thread. Exact count proves remote up() reaches the semaphore's word and
 // loses nothing; the scope report proves it went through the forced mechanism.
@@ -726,8 +729,8 @@ TEST_F(SemScopeFixture, TestExternalRemoteUpExactCount) {
     log_info(LogTest, "EXTERNAL remote up: scope={} value={} (expected {})", scope, value, iterations);
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must be the scope baked into both kernels";
     EXPECT_EQ(value, iterations)
-        << "Semaphore::up(noc, x, y, 1) from an off-node single sender did not land the exact count -- "
-           "the remote increment hit the wrong word or was lost.";
+        << "Semaphore::up(noc, x, y, 1) from an off-node single sender overshot or hit the wrong word "
+           "(a LOST increment would hang in the receiver's wait_min, not fail here).";
 }
 
 // All user-DM sender threads hammer the SAME remote word. Exact count proves the remote
@@ -742,8 +745,8 @@ TEST_F(SemScopeFixture, TestExternalRemoteUpConcurrentExactCount) {
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "forced EXTERNAL must be the scope baked into both kernels";
     EXPECT_EQ(value, expected)
         << "concurrent Semaphore::up(noc, x, y, 1) from " << num_dms_
-        << " sender threads lost updates -- the remote atomics do not serialize at the destination NIU "
-           "when issued through the class.";
+        << " sender threads overshot or landed on the wrong word (undercount from lost updates would "
+           "hang in the receiver's wait_min before reporting).";
 }
 
 // AUTO with an off-node multi-threaded writer: the census sees a binder outside the semaphore's
@@ -817,6 +820,25 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
            "to the kernel_config ring.";
 }
 
+// POSITIVE CONTROL for the residency probe: under forced EXTERNAL the live count IS in the ring
+// slot, so report[2] must carry it (non-zero). Without this, a broken ring readback that always
+// returns 0 would make TestCachedSemLivesInPoolNotRing pass vacuously.
+TEST_F(SemScopeFixture, TestRingResidencyProbePositiveControl) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
+    const auto [scope, count] = run_census(
+        core,
+        {{.num_threads = num_dms_, .increments = concurrent_iterations, .reporter = true}},
+        SemaphoreScope::EXTERNAL);
+    ASSERT_EQ(scope, scope_val(SemScope::EXTERNAL));
+    EXPECT_EQ(count, num_dms_ * concurrent_iterations);
+    log_info(LogTest, "ring residency positive control: count={} ring_slot={}", count, census_ring_word_);
+    EXPECT_EQ(census_ring_word_, count)
+        << "an EXTERNAL semaphore's count lives in the ring slot, but the probe's ring readback did "
+           "not see it -- the residency check could pass vacuously";
+}
+
 // TWO cached-eligible semaphores, each with its own single binder kernel, on one node: the injected
 // pool seeders rendezvous on ONE node-wide dedicated barrier, so caching both would mix rendezvous
 // groups (unequal thread counts hang at entry; equal counts let a seed land after an increment).
@@ -828,7 +850,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
         GTEST_SKIP() << "needs >= 5 user DMs so both kernels are multi-threaded cached candidates "
                         "with different thread counts";
     }
-    std::vector<uint32_t> sentinel(3, kNoReport);
+    std::vector<uint32_t> sentinel(4, kNoReport);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
     // Two semaphores, two kernels of DIFFERENT thread counts, both on `core`, one kernel per semaphore.
@@ -889,8 +911,8 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);  // must COMPLETE (a cached pick here would hang at entry)
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
-    ASSERT_EQ(result.size(), 3u);
+    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 4u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
     EXPECT_EQ(result[0], scope_val(SemScope::EXTERNAL))
@@ -909,7 +931,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs for two multi-threaded kernels with different thread counts";
     }
-    std::vector<uint32_t> sentinel(3, kNoReport);
+    std::vector<uint32_t> sentinel(4, kNoReport);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
     const experimental::SemaphoreSpecName SEM_A{"sem_cached"};
@@ -970,8 +992,8 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);  // must COMPLETE (slot-2 seeder would hang KA at entry)
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
-    ASSERT_EQ(result.size(), 3u);
+    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 4u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "cached seeder vs user slot 2: scope={} count={}", result[0], result[1]);
     EXPECT_EQ(result[0], scope_val(SemScope::DM_LOCAL_CACHED))
@@ -1104,9 +1126,10 @@ TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
 }
 
 // A CONSUME binder off the semaphore's node would build and then hang (down() spins on its LOCAL
-// word), so both AUTO and forced EXTERNAL reject it at build time. increments stays 0: with
+// word), so EVERY scope rejects it at build time (the FATAL sits before the scope switch); the
+// three legs below cover AUTO plus the two forced escapes. increments stays 0: with
 // EXPECT_ANY_THROW the program never runs. (make_program_with_forced_scope cannot express a
-// CONSUME binding, so the forced leg reuses the census shape.)
+// CONSUME binding, so the forced legs reuse the census shape.)
 TEST_F(SemScopeFixture, TestCensusOffNodeConsumerFatal) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a consumer off the semaphore's node";
@@ -1140,6 +1163,61 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
     EXPECT_EQ(loc_scope, scope_val(SemScope::LOCAL_NONATOMIC))
         << "forced LOCAL_NONATOMIC must override the AUTO atomic pick (explicit escape hatch)";
     (void)loc_count;  // deliberately non-atomic here; the count may legitimately be short
+
+    // Forced CACHED must bake as cached: every other forced-cached test is count-only, and
+    // EXTERNAL would reproduce those counts exactly -- only this readback pins the resolution.
+    if (num_dms_ >= 2) {
+        const auto [cached_scope, cached_count] = run_census(
+            core,
+            {{.num_threads = 2, .increments = concurrent_iterations, .reporter = true}},
+            SemaphoreScope::DM_LOCAL_CACHED);
+        EXPECT_EQ(cached_scope, scope_val(SemScope::DM_LOCAL_CACHED))
+            << "forced DM_LOCAL_CACHED must bake as cached, not silently map to another mechanism";
+        EXPECT_EQ(cached_count, 2 * concurrent_iterations);
+    }
+}
+
+// The two forced-cached guards that had no negative test: a second binder KERNEL on the same
+// semaphore, and a second forced-cached SEMAPHORE on the same node, must each FATAL at build.
+TEST_F(SemScopeFixture, TestForcedCachedTwoBinderKernelsFatal) {
+    EXPECT_ANY_THROW(run_census(
+        core,
+        {{.num_threads = 1, .increments = 1, .reporter = true}, {.num_threads = 1, .increments = 1}},
+        SemaphoreScope::DM_LOCAL_CACHED))
+        << "forced DM_LOCAL_CACHED bound by TWO kernels must FATAL: each kernel's entry re-seed "
+           "would reset a counter its sibling is incrementing";
+}
+
+TEST_F(SemScopeFixture, TestForcedCachedNodeConflictFatal) {
+    const experimental::SemaphoreSpecName SEM_A{"fc_a"};
+    const experimental::SemaphoreSpecName SEM_B{"fc_b"};
+    experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
+    experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = core};
+    sem_a.scope = experimental::SemaphoreScope::DM_LOCAL_CACHED;
+    sem_b.scope = experimental::SemaphoreScope::DM_LOCAL_CACHED;
+    auto make_k = [&](const char* name, const experimental::SemaphoreSpecName& sem_name) {
+        return experimental::KernelSpec{
+            .unique_id = experimental::KernelSpecName{name},
+            .source = kernel_path_census,
+            .num_threads = 1,
+            .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+    };
+    experimental::WorkUnitSpec wu{
+        .name = "wu",
+        .kernels = {experimental::KernelSpecName{"fc_ka"}, experimental::KernelSpecName{"fc_kb"}},
+        .target_nodes = core};
+    experimental::ProgramSpec spec{
+        .name = "forced_cached_conflict",
+        .kernels = {make_k("fc_ka", SEM_A), make_k("fc_kb", SEM_B)},
+        .semaphores = {sem_a, sem_b},
+        .work_units = {wu}};
+    EXPECT_ANY_THROW({ auto program = experimental::MakeProgramFromSpec(*mesh_device_, spec); })
+        << "two kernels forcing cached semaphores on ONE node must FATAL: their injected seeders "
+           "share the node-wide rendezvous";
 }
 
 // ---- CONSUME / SET census behavior ----
@@ -1153,6 +1231,9 @@ TEST_F(SemScopeFixture, TestCensusForcedScopeOverridesAuto) {
 // pre-decision FATAL could have blocked it: it must now BUILD and resolve DM_LOCAL_CACHED
 // (whose CAS down() is multi-consumer-safe).
 TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs";
+    }
     const auto [scope, count] = run_census(
         core,
         {{.num_threads = 2, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 1, .reporter = true}});

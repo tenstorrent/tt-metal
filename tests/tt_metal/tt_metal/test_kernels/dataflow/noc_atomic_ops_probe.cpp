@@ -69,7 +69,7 @@ void kernel_main() {
 #elif defined(PROBE_DECR_AMO)
 #if defined(ARCH_QUASAR)
     // Atomic decrement via raw NOC_AT_INS_RISCV_AMO / AMOADD (briscv_req_type 0x8 at
-    // at_len[11:8]); src_index 0 requires a 16B-aligned target (l1_unreserved_base is).
+    // at_len[11:8]); lane 0 requires a 16B-aligned target (l1_unreserved_base is).
     const uint64_t at_len_amoadd = NOC_AT_INS(NOC_AT_INS_RISCV_AMO) | ((uint64_t)0x8 << 8) | NOC_AT_IND_32(0);
     for (uint32_t i = 0; i < increment_times; i++) {
         noc_raw_atomic(self_noc_addr, at_len_amoadd, (uint32_t)(-1));
@@ -86,13 +86,14 @@ void kernel_main() {
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     if (hart == 2) {  // Metal 2.0 reserves DM0/DM1; lowest user DM is 2
-        const uint32_t src_index = (uint32_t)((sem_addr >> 2) & 0x3);
-        const uint64_t at_len_cas_ok = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(9 & 0xF) << 6) |
-                                       ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
+        // NOC_AT_IND_32 selects the DESTINATION 32-bit lane within the target's 16B row (at_len[1:0]).
+        const uint32_t lane = (uint32_t)((sem_addr >> 2) & 0x3);
+        const uint64_t at_len_cas_ok =
+            NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(9 & 0xF) << 6) | ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(lane);
         noc_raw_atomic(self_noc_addr, at_len_cas_ok, 0);
         noc_async_atomic_barrier();
-        const uint64_t at_len_cas_fail = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(2 & 0xF) << 6) |
-                                         ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(src_index);
+        const uint64_t at_len_cas_fail =
+            NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(2 & 0xF) << 6) | ((uint64_t)(5 & 0xF) << 2) | NOC_AT_IND_32(lane);
         noc_raw_atomic(self_noc_addr, at_len_cas_fail, 0);
         noc_async_atomic_barrier();
     }

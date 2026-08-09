@@ -32,7 +32,7 @@ void kernel_main() {
     // Report the observed value to a scratch word for the host to verify.
     volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     *r = observed;
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     flush_l2_cache_line(report_addr);  // make the write visible to the host readback of TL1
 #endif
 }

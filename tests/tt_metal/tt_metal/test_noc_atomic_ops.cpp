@@ -29,9 +29,9 @@ namespace tt::tt_metal {
 // PROBE: NoC atomic operations beyond plain increment.
 // ============================================================================
 // Verifies that cross-domain atomic DECREMENT and compare-and-swap work on Quasar
-// via NoC atomics. The NoC HW defines SWAP/CAS/ACC/RISCV_AMO opcodes but tt-metal
-// SW only ever emits INCR_GET; if these pass, "all cross-domain ops atomic" is a
-// software deliverable on the EXTERNAL semaphore tier (no register file needed).
+// via NoC atomics. Historically tt-metal SW emitted only INCR_GET; this branch adds
+// the production 4-bit CAS (noc_fast_atomic_cas4, the EXTERNAL down() lock) whose
+// hardware semantics these tests pin.
 //   - TestAtomicDecrementIncrGet : decrement via the EXISTING INCR_GET path
 //     (noc_semaphore_inc with incr=-1, wrap=31). Highest-confidence.
 //   - TestAtomicDecrementAmo     : decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD).
@@ -222,7 +222,10 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
            "the 4-bit CAS is NOT safe next to words that can exceed 15.";
 
-    // ORDERING signal (not a correctness gate for the CAS semantics above).
+    // ORDERING gate: production down() does not RELY on this (sentinel pre-write + poll
+    // covers an unordered return), but the perf note in noc_semaphore.h ("polls exit on
+    // their first check") does -- a red here means that claim went stale, not that down()
+    // is broken.
     EXPECT_EQ(result[0], result[1])
         << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
            "any consumer of cas4 returns is REQUIRED, not optional.";

@@ -638,7 +638,8 @@ void jit_build_genfiles_kernel_include(
     // real kernel_main() as a wrapper that calls sem::init_dm_cached() first, so a kernel can never
     // read an unseeded pool word. Covers both a hand-written kernel_main() and the TT_KERNEL shim
     // appended below (the macro is still in effect for it).
-    static constexpr const char* kUserEntry = "_tt_dm_cached_user_kernel_main";
+    // No leading underscore: global-scope identifiers starting with _ are reserved ([lex.name]).
+    static constexpr const char* kUserEntry = "tt_dm_cached_user_kernel_main_";
     if (has_cached_sem) {
         kernel_header_content += string("#define kernel_main ") + kUserEntry + "\n";
     }
