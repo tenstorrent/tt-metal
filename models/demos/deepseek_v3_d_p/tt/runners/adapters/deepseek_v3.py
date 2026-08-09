@@ -20,7 +20,6 @@ class DeepSeekV3Adapter(MLAPrefillAdapter):
     default_gate_mode = "DEVICE_FP32"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad"
 
-    # Validated for FP8 MoE dispatch (DS/Kimi family): runs BY DEFAULT on Blackhole; PREFILL_COMPRESSED_FP8_DISPATCH=0 disables.
     supports_compressed_fp8_dispatch = True
 
     # --- test metadata (HF download coordinates + PCC thresholds) ---

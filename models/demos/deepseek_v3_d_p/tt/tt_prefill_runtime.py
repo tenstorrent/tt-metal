@@ -75,9 +75,7 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
-    # FP8 MoE dispatch: compress x to fp8_e4m3 (per-token/128-block fp32 scales riding in the
-    # dispatch metadata tail) before dispatch, decompress the dispatched buffer back to bf16 after.
-    # Halves dispatch fabric traffic. Blackhole only.
+
     compressed_fp8_dispatch: bool = False
 
     @property

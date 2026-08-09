@@ -18,8 +18,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6 import KimiK26Ad
 class KimiK27Adapter(KimiK26Adapter):
     # --- identity & runner defaults ---
     name = "kimi_k2_7"
-    # Validated for FP8 MoE dispatch (restated from KimiK26Adapter so the default-on decision
-    # for this checkpoint is auditable here — fp8 numerics are checkpoint-dependent).
     supports_compressed_fp8_dispatch = True
     ttnn_cache_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"

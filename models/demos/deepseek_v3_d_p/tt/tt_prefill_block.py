@@ -399,8 +399,6 @@ class TtPrefillBlock(LightweightModule):
             mesh_device.get_num_devices(),
             mesh_config.dispatch_group_size,
             dispatch_buffer_capacity_factor,
-            # fp8 dispatch ships each token's per-128-block fp32 scales in the metadata tail,
-            # so the metadata rows must be sized 3 + emb_dim/128.
             emb_dim=emb_dim,
             fp8_scaled_input=compressed_fp8_dispatch,
         )

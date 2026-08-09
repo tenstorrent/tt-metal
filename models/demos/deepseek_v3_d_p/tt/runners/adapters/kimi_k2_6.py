@@ -35,7 +35,6 @@ class KimiK26Adapter(MLAPrefillAdapter):
     l1_small_size = 512
     routing_use_l1_small_for_semaphores = True
 
-    # Validated for FP8 MoE dispatch (DS/Kimi family): runs BY DEFAULT on Blackhole; PREFILL_COMPRESSED_FP8_DISPATCH=0 disables.
     supports_compressed_fp8_dispatch = True
 
     # --- test metadata (HF download coordinates + PCC thresholds) ---
