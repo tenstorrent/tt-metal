@@ -145,6 +145,7 @@ def test_moe(
     else:
         x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
 
+    # Create TorchMoe module
     logger.debug(f"Creating MoE{' with HF weights from ' + model_id if use_hf_weights else ' with random weights'}...")
     moe = TorchMoe(
         dispatch_group_size=dispatch_group_size,
