@@ -13,7 +13,7 @@
 //             this kernel's barrier); tests where one does assert the reported scope only.
 // report[2] = this semaphore's RING slot (uncached alias). For a cached semaphore it must still
 //             hold the initial value: proves the count lives in the pool, not the ring.
-// report[3] = baked read_only bit (1 iff the host bound this kernel AccessType::OBSERVE)
+// report[3] = baked SemAccess value (mirrors the host AccessType; OBSERVE=3 for read-only)
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -31,8 +31,9 @@ void kernel_main() {
     // A DM_LOCAL_CACHED semaphore's pool slot is seeded by the auto-injected sem::init_dm_cached().
     Semaphore counter(sem::counter);  // CTAD deduces the host-baked scope AND access rights
 
-    // OBSERVE bakes read_only, making up() a compile error -- so guard on the baked bit itself.
-    if constexpr (!sem::counter.read_only) {
+    // OBSERVE makes up() a compile error -- so guard on the baked access itself. (up() is
+    // legal under every writer label: INCREMENT, CONSUME, and SET shapes all reuse this probe.)
+    if constexpr (sem::counter.access != SemAccess::OBSERVE) {
         for (uint32_t i = 0; i < increment_times; i++) {
             counter.up(1);
         }
@@ -46,9 +47,9 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
         report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
-        // Read the baked read_only bit back: proves the host actually emitted it (OBSERVE tests
+        // Read the baked access back: proves the host actually emitted it (OBSERVE tests
         // assert 1), so forgetting to bake it can't leave enforcement silently inert.
-        report[3] = static_cast<uint32_t>(sem::counter.read_only);
+        report[3] = static_cast<uint32_t>(sem::counter.access);
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         // Residency check: the ring slot (uncached alias = TL1 truth) must be untouched for a
         // cached semaphore -- its count lives in the pool.

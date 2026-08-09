@@ -1407,17 +1407,22 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // construct Semaphore(sem::weights_mcast_*) unconditionally (the mcast bodies are #ifndef SKIP_MCAST,
     // but the semaphore objects are built up-front), so the tokens must exist even when mcast is skipped.
     // target_nodes spans all kernel-placement cores (sender ∪ receiver ⊆ all_cores).
+    // SET-labeled handshake bindings: AUTO's racing-SET check would reject them -- forced
+    // EXTERNAL is the documented escape and preserves what AUTO resolves today.
     if (block_sharded) {
-        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores});
-        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores});
+        spec.semaphores.push_back(m2::SemaphoreSpec{
+            .unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
+        spec.semaphores.push_back(m2::SemaphoreSpec{
+            .unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
     }
     // Program A (split_program_tilize_only) registers no writer kernels, so nothing constructs the weights
     // mcast Semaphore objects — do not declare their tokens (an unbound semaphore is at best dead, and the
     // spec validator may reject it the same way it rejects unbound tensor parameters).
     if (!split_program_tilize_only) {
-        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores});
-        spec.semaphores.push_back(
-            m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores});
+        spec.semaphores.push_back(m2::SemaphoreSpec{
+            .unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
+        spec.semaphores.push_back(m2::SemaphoreSpec{
+            .unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
     }
 
     // ---- Dataflow buffers ----
@@ -1654,8 +1659,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         reader_sem_bindings = {
-            m2::SemaphoreBinding{.semaphore_spec_name = SEM_ACT_MCAST_SENDER, .accessor_name = "act_mcast_sender"},
-            m2::SemaphoreBinding{.semaphore_spec_name = SEM_ACT_MCAST_RECEIVER, .accessor_name = "act_mcast_receiver"},
+            m2::SemaphoreBinding{
+                .semaphore_spec_name = SEM_ACT_MCAST_SENDER,
+                .accessor_name = "act_mcast_sender",
+                .access_type = m2::SemaphoreAccessType::SET},
+            m2::SemaphoreBinding{
+                .semaphore_spec_name = SEM_ACT_MCAST_RECEIVER,
+                .accessor_name = "act_mcast_receiver",
+                .access_type = m2::SemaphoreAccessType::SET},
         };
     } else {
         // Height-sharded / depthwise reader: produces ACT (direct). act_sharded + reader_indices are read
@@ -1955,9 +1966,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
     writer_sender_spec.semaphore_bindings = {
-        m2::SemaphoreBinding{.semaphore_spec_name = SEM_WEIGHTS_MCAST_SENDER, .accessor_name = "weights_mcast_sender"},
         m2::SemaphoreBinding{
-            .semaphore_spec_name = SEM_WEIGHTS_MCAST_RECEIVER, .accessor_name = "weights_mcast_receiver"},
+            .semaphore_spec_name = SEM_WEIGHTS_MCAST_SENDER,
+            .accessor_name = "weights_mcast_sender",
+            .access_type = m2::SemaphoreAccessType::SET},
+        m2::SemaphoreBinding{
+            .semaphore_spec_name = SEM_WEIGHTS_MCAST_RECEIVER,
+            .accessor_name = "weights_mcast_receiver",
+            .access_type = m2::SemaphoreAccessType::SET},
     };
     if (block_sharded) {
         writer_sender_spec.runtime_arg_schema = {
@@ -2017,7 +2033,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             m2::SemaphoreBinding{
                 .semaphore_spec_name = SEM_WEIGHTS_MCAST_SENDER, .accessor_name = "weights_mcast_sender"},
             m2::SemaphoreBinding{
-                .semaphore_spec_name = SEM_WEIGHTS_MCAST_RECEIVER, .accessor_name = "weights_mcast_receiver"},
+                .semaphore_spec_name = SEM_WEIGHTS_MCAST_RECEIVER,
+                .accessor_name = "weights_mcast_receiver",
+                .access_type = m2::SemaphoreAccessType::SET},
         };
     }
     if (block_sharded) {

@@ -2886,7 +2886,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
-    const SemaphoreNameToScopeMap& semaphore_name_to_scope) {
+    const SemaphoreNameToScopeMap& semaphore_name_to_scope,
+    const std::unordered_set<SemaphoreSpecName>& external_multi_consumer_sems) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2898,14 +2899,25 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             semaphore_binding.semaphore_spec_name,
             id);
         // The host-resolved scope (ResolveSemaphoreScope) is baked into the kernel via the emitted
-        // SemaphoreBindingToken<id, scope, read_only> token. read_only carries the declared AccessType
-        // so an OBSERVE binding cannot compile a mutator -- the census excludes OBSERVE from the
-        // writer count, so that promise must be enforced, not trusted.
+        // SemaphoreBindingToken<id, scope, access> token. The declared AccessType rides whole:
+        // the census keys its checks on these labels (OBSERVE out of the writer count, CONSUME
+        // for the off-node rejection, SET for the racing-SET rejection), so the device mutators
+        // static_assert against them -- the promise is enforced, not trusted.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
-        const bool read_only = semaphore_binding.access_type == SemaphoreAccessType::OBSERVE;
+        const SemAccess access = [&] {
+            switch (semaphore_binding.access_type) {
+                case SemaphoreAccessType::INCREMENT: return SemAccess::INCREMENT;
+                case SemaphoreAccessType::CONSUME: return SemAccess::CONSUME;
+                case SemaphoreAccessType::SET: return SemAccess::SET;
+                case SemaphoreAccessType::OBSERVE: return SemAccess::OBSERVE;
+            }
+            TT_THROW("unknown AccessType {}", static_cast<int>(semaphore_binding.access_type));
+        }();
+        const bool external_multi_consumer =
+            external_multi_consumer_sems.contains(semaphore_binding.semaphore_spec_name);
         out.emplace(
             semaphore_binding.accessor_name,
-            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, read_only});
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, access, external_multi_consumer});
     }
     return out;
 }
@@ -3401,6 +3413,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     SemaphoreNameToScopeMap semaphore_name_to_scope;
+    std::unordered_set<SemaphoreSpecName> external_multi_consumer_sems;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
@@ -3412,8 +3425,14 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // into every kernel that binds this semaphore (see ResolveSemaphoreScope for the AUTO rules;
         // on Gen1 AUTO always resolves to LOCAL_NONATOMIC). Contradiction/honesty violations FATAL in
         // ValidateProgramSpec -- or here, when validation is skipped.
-        semaphore_name_to_scope[semaphore_name] =
-            ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
+        const auto& binders = SemaphoreBinders(collected, semaphore_name);
+        semaphore_name_to_scope[semaphore_name] = ResolveSemaphoreScope(semaphore_spec, binders);
+        // EXTERNAL with >1 consuming instances is fine on real Quasar (NoC-CAS lock) but NOT on
+        // emule, which compiles the single-consumer Gen1 down() arm; record it so the emule
+        // backend can refuse instead of silently downgrading.
+        if (semaphore_name_to_scope[semaphore_name] == SemScope::EXTERNAL && binders.consuming_instance_count > 1) {
+            external_multi_consumer_sems.insert(semaphore_name);
+        }
     }
 
     // Create Kernels (arch-specific)
@@ -3424,8 +3443,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
             MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
-        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id, semaphore_name_to_scope);
+        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles = MakeSemaphoreBindingHandles(
+            kernel_spec, semaphore_name_to_id, semaphore_name_to_scope, external_multi_consumer_sems);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer

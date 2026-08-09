@@ -145,12 +145,12 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint16_t id;
         SemScope scope;
-        bool read_only;
+        SemAccess access;
     };
     vector<SemEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id, SemScope scope, bool read_only) {
-            sem_entries.push_back({name, id, scope, read_only});
+        [&sem_entries](const string& name, uint16_t id, SemScope scope, SemAccess access, bool /*emc*/) {
+            sem_entries.push_back({name, id, scope, access});
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -275,8 +275,8 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "namespace sem {\n";
             for (const auto& entry : sem_entries) {
                 content << "constexpr ::SemaphoreBindingToken<" << entry.id << "u, static_cast<::SemScope>("
-                        << static_cast<int>(entry.scope) << "), " << (entry.read_only ? "true" : "false") << "> "
-                        << entry.name << "{};\n";
+                        << static_cast<int>(entry.scope) << "), static_cast<::SemAccess>("
+                        << static_cast<int>(entry.access) << ")> " << entry.name << "{};\n";
             }
             if (has_cached_sem) {
                 // Seed the cached-only pool, which the dispatcher never NoC-writes: thread 0 copies

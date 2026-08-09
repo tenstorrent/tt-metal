@@ -581,12 +581,10 @@ struct Metal2BindingsSnapshot {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
         for (const auto& [name, h] : sem_accessors) {
-            // Fold the baked scope and access bit too: same id under a different scope or access
+            // Fold the baked scope and access too: same id under a different scope or access
             // compiles a different token and must not reuse the first kernel's .so.
-            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
-            if (h.read_only) {
-                s += ":ro";
-            }
+            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope)) + ":a" +
+                 std::to_string(static_cast<int>(h.access));
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -804,8 +802,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id, SemScope scope, bool read_only) {
-            s.sem_accessors[name] = {id, scope, read_only};
+        [&s](const std::string& name, uint16_t id, SemScope scope, SemAccess access, bool external_multi_consumer) {
+            s.sem_accessors[name] = {id, scope, access, external_multi_consumer};
         });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
@@ -912,13 +910,23 @@ static void emit_metal2_namespaces(
                 "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
                 "or LOCAL_NONATOMIC for this semaphore when running under emule.",
                 name);
+            // Same shape of refusal for EXTERNAL multi-consumer: emule compiles the Gen1
+            // single-consumer down() arm (TT_EMULE_USE_L1_POOL), so >1 consuming instance would
+            // race unlocked and produce silently wrong results.
+            TT_FATAL(
+                !(h.scope == SemScope::EXTERNAL && h.external_multi_consumer),
+                "Semaphore '{}' is EXTERNAL with more than one consuming (down()) instance, but the "
+                "emule backend compiles the single-consumer Gen1 down() arm -- results would be "
+                "silently wrong. Restructure to one consumer under emule, or run on real Quasar.",
+                name);
         }
-        // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, read_only> (see
+        // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access> (see
         // genfiles.cpp); CTAD gives the kernel's Semaphore the host-resolved mechanism and access.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
             f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
-              << static_cast<int>(h.scope) << "), " << (h.read_only ? "true" : "false") << "> " << name << "{};\n";
+              << static_cast<int>(h.scope) << "), static_cast<::SemAccess>(" << static_cast<int>(h.access) << ")> "
+              << name << "{};\n";
         }
         f << "}  // namespace sem\n";
     }
