@@ -94,6 +94,8 @@ ttnn:
     wh_galaxy: 120
     bh_galaxy: 40
     bh_p100: 805
+    # +7 over the prior 1045 for the two AttnRes op jobs in ops_unit_tests.yaml
+    # (fast_weighted_reduce_nc at 2 min, attn_res_{stats,scores,merge} at 5).
     bh_p150b_civ2: 1052
     wh_n150_civ2: 1205
     wh_n300_civ2: 1180
