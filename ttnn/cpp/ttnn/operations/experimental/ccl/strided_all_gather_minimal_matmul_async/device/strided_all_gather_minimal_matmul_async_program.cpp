@@ -79,7 +79,7 @@ strided_all_gather_minimal_matmul_async_program(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
-    std::vector<Tensor> matmul_output_tensors,
+    const std::vector<Tensor>& matmul_output_tensors,
     bool read_local_slice_from_input,
 
     /* All Gather Params */
