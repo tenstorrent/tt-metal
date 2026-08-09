@@ -816,13 +816,6 @@ Result conv2d_L1(
         }
     }
 
-    // [#48552] NOTE: an earlier HEIGHT_SHARDED per-core weights-buffer guard (FATAL if
-    // per_core_N * act_block_w * tile > 65535 16-byte units) was REMOVED here. Its 65535-unit (uint16, 1 MB)
-    // threshold was the OLD compute-DFB ring limit; main f6b15a/6079b5f widened ring_size to uint32, so the real
-    // ceiling is the ~4 MB L1 bank, already enforced by dataflow_buffer.cpp:812 (ring_bytes <= unreserved_l1_size).
-    // The stale 1 MB guard false-FATAL'd valid HEIGHT_SHARDED convs whose weights fit the uint32 ring (e.g. layer3
-    // 256->256 3x3 = 576 tiles ~1.15 MB, which runs fine), blocking the layer3 HS workaround. Genuine bank
-    // overflows (e.g. layer4 512->512 3x3 = 4.6 MB) still FATAL at dataflow_buffer.cpp:812.
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
