@@ -6,7 +6,16 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# This directory is swept wholesale per-PR, so landing the file here also enlists
+# it on Wormhole and on both simulators — architectures this op has never been
+# built for. The L2 nightly entry that scopes it to bh_p150b_civ2 does not
+# prevent that sweep; only this does.
+pytestmark = pytest.mark.skipif(
+    not is_blackhole(), reason="fast_weighted_reduce_nc has only been validated on Blackhole"
+)
 
 
 # The op exists to remove an intermediate, not to change the arithmetic, so the
@@ -20,6 +29,7 @@ def _place(tensor, device, dtype=ttnn.bfloat16):
 
 
 def _reference(torch_input, torch_weight):
+    """`[1, C, H, W]` against `[R, C, H, 1]` -> `[R, 1, H, W]`, in fp32."""
     return (torch_input.float() * torch_weight.float()).sum(dim=1, keepdim=True)
 
 
@@ -33,7 +43,6 @@ def _reference(torch_input, torch_weight):
         [1, 5, 64, 64],
         [1, 13, 64, 64],
         [1, 1, 64, 64],
-        [2, 9, 128, 128],
         [1, 9, 128, 32],
         [1, 9, 32, 512],
     ),
@@ -51,25 +60,66 @@ def _reference(torch_input, torch_weight):
         "c13_granularity_1",
         # C=1 makes the reduction a plain scale.
         "c1_degenerate",
-        # B=2 exercises the batch stride in both the input and the weight index.
-        "batched",
         # Wt=1: every output tile starts a new token row, so the weight set turns
-        # over on every single tile. Ht=1: one row per batch, so it never does.
+        # over on every single tile. Ht=1: one row, so it never does.
         "wt1_refetch_every_tile",
         "ht1_single_row",
     ],
 )
 def test_fast_weighted_reduce_nc(shape, device):
     torch.manual_seed(2026)
-    batch, candidates, height, width = shape
+    _, candidates, height, width = shape
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    torch_weight = torch.randn([batch, candidates, height, 1], dtype=torch.bfloat16)
+    torch_weight = torch.randn([1, candidates, height, 1], dtype=torch.bfloat16)
 
     output = ttnn.experimental.fast_weighted_reduce_nc(_place(torch_input, device), _place(torch_weight, device), dim=1)
 
-    assert list(output.shape) == [batch, 1, height, width]
+    assert list(output.shape) == [1, 1, height, width]
     assert_with_pcc(_reference(torch_input, torch_weight), ttnn.to_torch(output).float(), PCC)
+
+
+@pytest.mark.parametrize("num_sites", (1, 3, 5, 8, 24))
+def test_fast_weighted_reduce_nc_weight_batch(num_sites, device):
+    """R weight sets against one input, every plane checked.
+
+    The sets are reduced in groups sized by what DEST holds, so R decides both
+    how many accumulators run at once and whether the last group is short. A
+    single-plane test would pass with the group loop broken in either direction:
+    an accumulator that is not reset between groups, or a tail group that runs
+    at full width and writes past the output. R=24 is what AttnRes asks for."""
+    torch.manual_seed(2026)
+    torch_input = torch.randn([1, 9, 128, 256], dtype=torch.bfloat16)
+    torch_weight = torch.randn([num_sites, 9, 128, 1], dtype=torch.bfloat16)
+
+    output = ttnn.experimental.fast_weighted_reduce_nc(_place(torch_input, device), _place(torch_weight, device), dim=1)
+
+    assert list(output.shape) == [num_sites, 1, 128, 256]
+    got = ttnn.to_torch(output).float()
+    want = _reference(torch_input, torch_weight)
+    for site in range(num_sites):
+        assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
+
+
+def test_fast_weighted_reduce_nc_weight_batch_matches_per_site(device):
+    """A batch of R sets against R calls of one set each.
+
+    The batching exists to read the input once for a whole group instead of once
+    per set; that is only a valid trade if the two give the same answer, and
+    torch alone cannot say so — both could be within PCC of it while differing
+    from each other."""
+    torch.manual_seed(2026)
+    tt_input = _place(torch.randn([1, 9, 128, 256], dtype=torch.bfloat16), device)
+    torch_weight = torch.randn([6, 9, 128, 1], dtype=torch.bfloat16)
+
+    batched = ttnn.experimental.fast_weighted_reduce_nc(tt_input, _place(torch_weight, device), dim=1)
+    got = ttnn.to_torch(batched).float()
+
+    for site in range(torch_weight.shape[0]):
+        alone = ttnn.experimental.fast_weighted_reduce_nc(
+            tt_input, _place(torch_weight[site : site + 1], device), dim=1
+        )
+        assert_with_pcc(ttnn.to_torch(alone).float(), got[site : site + 1], PCC)
 
 
 def test_fast_weighted_reduce_nc_unaligned_rows(device):
@@ -153,7 +203,8 @@ def test_fast_weighted_reduce_nc_matches_composed(device):
     (
         ("dim", "supports dim == 1 only"),
         ("weight_width", "weight must carry one scalar per row"),
-        ("leading_dims", "the leading three dims must match"),
+        ("leading_dims", "the candidate and row dims must match"),
+        ("input_batch", "takes an unbatched input"),
         ("rank", "requires rank-4 operands"),
         ("input_dtype", "input only supports specific data types"),
     ),
@@ -175,6 +226,10 @@ def test_fast_weighted_reduce_nc_rejects(bad, message, device, expect_error):
         tt_weight = _place(torch.randn([1, 9, 128, 128], dtype=torch.bfloat16), device)
     elif bad == "leading_dims":
         tt_weight = _place(torch.randn([1, 8, 128, 1], dtype=torch.bfloat16), device)
+    elif bad == "input_batch":
+        # Dim 0 belongs to the weight. A batched input would need its own read per
+        # plane, which is the reuse the op is built on.
+        tt_input = _place(torch.randn([2, 9, 128, 128], dtype=torch.bfloat16), device)
     elif bad == "rank":
         tt_input = _place(torch.randn([9, 128, 128], dtype=torch.bfloat16), device)
         tt_weight = _place(torch.randn([9, 128, 1], dtype=torch.bfloat16), device)

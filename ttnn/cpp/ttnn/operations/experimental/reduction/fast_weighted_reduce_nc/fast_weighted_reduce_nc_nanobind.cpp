@@ -22,17 +22,22 @@ void bind_fast_weighted_reduce_nc(nb::module_& mod) {
         R"doc(
             Reduces `input` along `dim`, weighting each slice by `weight`, in a single pass:
 
-                out[b][0][h][w] = sum_c input[b][c][h][w] * weight[b][c][h][0]
+                out[r][0][h][w] = sum_c input[0][c][h][w] * weight[r][c][h][0]
 
-            `weight` carries one scalar per (batch, slice, row) and is broadcast along
+            `weight` carries one scalar per (set, slice, row) and is broadcast along
             the last dim. It must be TILE layout with a logical last dim of 1; that is
             already the layout the hardware column broadcast reads, so no transpose or
             repeat is needed on the caller's side.
 
+            The weight's dim 0 batches the output: R weight sets reduce the same
+            unbatched input into an `[R, 1, H, W]` result. Hold every set in one tensor
+            and take them in one dispatch — sets are reduced in groups that share a
+            single read of the input, so R of them cost far less than R calls.
+
             Only `dim == 1` on a rank-4 bfloat16 input is implemented.
 
-            Equivalent to `ttnn.sum(input * weight, dim=dim, keepdim=True)` without the
-            full-size intermediate, and without reading `input` more than once.
+            Equivalent to `ttnn.sum(input * weight, dim=dim, keepdim=True)` per weight
+            set, without the full-size intermediate.
         )doc",
         &ttnn::experimental::reduction::fast_weighted_reduce_nc,
         nb::arg("input").noconvert(),

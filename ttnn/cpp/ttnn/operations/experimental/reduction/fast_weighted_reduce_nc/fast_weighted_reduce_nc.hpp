@@ -9,15 +9,21 @@
 
 namespace ttnn::experimental::reduction {
 
-// out[b][0][h][w] = sum_c input[b][c][h][w] * weight[b][c][h][0]
+// out[r][0][h][w] = sum_c input[0][c][h][w] * weight[r][c][h][0]
 //
 // A reduction over `dim` fused with the per-row weighting that would otherwise
 // need a separate `mul` and its full-size intermediate. The product is MAC'd
 // into the accumulator, so the tensor is read once instead of three times.
 //
-// `weight` carries one scalar per (c, h) and is broadcast along the last dim,
+// `weight` carries one scalar per (r, c, h) and is broadcast along the last dim,
 // which is what `BroadcastType::COL` does natively — no transpose, and no
 // padding beyond the tile width the layout already imposes.
+//
+// The weight's dim 0 batches the output: R weight sets reduce the same input
+// into R planes. A caller holding R sets gets them in one dispatch, and the
+// input costs one read per group of sets rather than one per set — which is the
+// difference between the op being bound by its own arithmetic and being bound by
+// re-reading a tensor it has already seen.
 //
 // Only `dim == 1` is implemented. See the device op's validation.
 ttnn::Tensor fast_weighted_reduce_nc(
