@@ -103,6 +103,11 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Preserve Galaxy's 128K layout while accommodating larger vocabularies."""
+    return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
+
+
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
@@ -2732,7 +2737,7 @@ class ModelArgs:
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
         if self.is_galaxy:
-            self.padded_vocab_size = 128 * 1024
+            self.padded_vocab_size = compute_galaxy_padded_vocab_size(self.vocab_size, self.num_devices)
         elif self.num_devices == 0:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size

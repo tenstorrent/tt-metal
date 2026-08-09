@@ -4,7 +4,11 @@
 
 import pytest
 
-from models.tt_transformers.tt.model_config import compute_padded_vocab_size, should_pad_sampling_logits_to_power_of_2
+from models.tt_transformers.tt.model_config import (
+    compute_galaxy_padded_vocab_size,
+    compute_padded_vocab_size,
+    should_pad_sampling_logits_to_power_of_2,
+)
 
 
 @pytest.mark.parametrize(
@@ -26,9 +30,25 @@ def test_compute_padded_vocab_size(vocab_size, num_devices, expected):
     assert (padded_vocab_size // num_devices) % 32 == 0
 
 
-def test_compute_padded_vocab_size_rejects_invalid_num_devices():
-    with pytest.raises(ValueError, match="num_devices must be >= 1"):
+def test_compute_padded_vocab_size_rejects_invalid_num_devices(expect_error):
+    with expect_error(ValueError, "num_devices must be >= 1"):
         compute_padded_vocab_size(32000, 0)
+
+
+@pytest.mark.parametrize(
+    ("vocab_size", "num_devices", "expected"),
+    [
+        (128256, 32, 128 * 1024),
+        (151936, 32, 152576),
+        (152064, 32, 152576),
+    ],
+)
+def test_compute_galaxy_padded_vocab_size(vocab_size, num_devices, expected):
+    padded_vocab_size = compute_galaxy_padded_vocab_size(vocab_size, num_devices)
+
+    assert padded_vocab_size == expected
+    assert padded_vocab_size >= vocab_size
+    assert padded_vocab_size % (32 * num_devices) == 0
 
 
 @pytest.mark.parametrize(
@@ -43,6 +63,6 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
     assert should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_size, sampling_splits) is expected
 
 
-def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits():
-    with pytest.raises(ValueError, match="sampling_splits must be >= 1"):
+def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
+    with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
