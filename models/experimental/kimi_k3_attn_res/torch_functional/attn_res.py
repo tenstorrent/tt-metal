@@ -5,8 +5,7 @@
 
 Softmax attention over residual-stream snapshots: one live stream `prefix_sum`
 plus `S` write-once sealed snapshots `block_residual`, mixed by a softmax over
-RMS-normalized scores. `API_SPEC.md` in this directory holds the full contract.
-The invariants that bite:
+RMS-normalized scores. The invariants that bite:
 
   * Keys are RMS-normalized, values are **not** — the mixture is over raw `v`.
   * RMS is a per-(token, candidate) scalar, so the normalized tensor is never
