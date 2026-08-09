@@ -63,14 +63,21 @@ void FastWeightedReduceNCDeviceOperation::validate_on_program_cache_miss(
         weight.logical_shape()[-1] == 1,
         "FastWeightedReduceNC weight must carry one scalar per row, i.e. a logical last dim of 1, got {}",
         weight.logical_shape()[-1]);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 1; i < 3; ++i) {
         TT_FATAL(
             input_shape[i] == weight_shape[i],
-            "FastWeightedReduceNC weight dim {} is {} but input's is {}; the leading three dims must match",
+            "FastWeightedReduceNC weight dim {} is {} but input's is {}; the candidate and row dims must match",
             i,
             weight_shape[i],
             input_shape[i]);
     }
+    // The weight's dim 0 is the output's batch, so the input carries none. The
+    // kernel's whole structure rests on one input serving every weight set; an
+    // input batch would need a separate read per set and buy nothing.
+    TT_FATAL(
+        input_shape[0] == 1,
+        "FastWeightedReduceNC takes an unbatched input, got dim 0 of {}; the batch comes from the weight",
+        input_shape[0]);
     TT_FATAL(
         input_shape[-1] % TILE_WIDTH == 0 && input_shape[-2] % TILE_HEIGHT == 0,
         "FastWeightedReduceNC requires tile-aligned inner dims, got {} x {}",
@@ -91,6 +98,7 @@ tt::tt_metal::TensorSpec FastWeightedReduceNCDeviceOperation::compute_output_spe
     // since they work in tiles either way.
     auto output_shape = tensor_args.input.logical_shape();
     output_shape[args.dim] = 1;
+    output_shape[0] = tensor_args.weight.logical_shape()[0];
     return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(

@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/reduction/fast_weighted_reduce_nc/device/fast_weighted_reduce_nc_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -47,47 +49,50 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
     const uint32_t Ht = input_shape[-2] / TILE_HEIGHT;
     const uint32_t num_candidates = input_shape[operation_attributes.dim];
     const uint32_t inner_tile_size = Ht * Wt;
-    const uint32_t reduce_tile_size = num_candidates * inner_tile_size;
 
-    // The weight is [B, C, H, 1] in TILE layout, i.e. one tile column wide, so
+    // The weight is [R, C, H, 1] in TILE layout, i.e. one tile column wide, so
     // its inner block is Ht tiles against the input's Ht*Wt. Every tile in an
     // input row of Wt shares one weight tile — that sharing is what the work
     // split below is arranged to exploit.
     const uint32_t weight_inner_tile_size = Ht;
     const uint32_t weight_reduce_tile_size = num_candidates * Ht;
+    const uint32_t num_sites = tensor_args.weight.padded_shape()[0];
 
-    const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    // Largest factor of num_candidates that is <= 8. Divisibility is required,
-    // not just preferred: the compute kernel derives a candidate's weight index
-    // from its position in the granule as `j * granularity + k`, which is only
-    // the true candidate index when the granule tiles a whole reduction.
-    uint32_t input_granularity;
-    for (input_granularity = 8; input_granularity > 1; --input_granularity) {
-        if (num_candidates % input_granularity == 0) {
-            break;
-        }
-    }
+    // Sites are reduced in groups, one DEST tile per site in the group, so a
+    // group's worth of accumulators has to fit in DEST — which the sync mode and
+    // fp32 accumulation each halve. Exceeding it does not fault, it corrupts the
+    // tiles past the end, so the group size is derived rather than chosen.
+    const uint32_t dest_capacity = get_dest_reg_count(operation_attributes.compute_kernel_config);
+    const uint32_t sites_per_group = std::min(num_sites, dest_capacity);
+    const uint32_t num_groups = (num_sites + sites_per_group - 1) / sites_per_group;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
+    // Split the input's tile positions, not the output's tiles. Every site reads
+    // the same input, so a core that owns a position produces that position for
+    // all R sites and reads the candidates for it once per group. Splitting the
+    // output instead would scatter one position across cores and each of them
+    // would re-read the whole reduction.
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_x = grid.x;
     auto [num_cores_to_be_used, all_cores, core_group_1, core_group_2, num_tiles_group_1, num_tiles_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
+        tt::tt_metal::split_work_to_cores(grid, inner_tile_size, /*row_wise=*/true);
 
     ProgramDescriptor desc;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    // No intermediate CB: the running sum lives in dst0 for the whole reduction,
+    // No intermediate CB: the running sums live in DEST for the whole reduction,
     // which is what lets one pass over the input do the multiply and the add.
+    // A whole reduction's candidates are one CB unit, so the group loop can walk
+    // them repeatedly without the reader re-fetching between sites.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = input_granularity * 2 * input_tile_size,
+        .total_size = num_candidates * 2 * input_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
@@ -96,11 +101,12 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
         }}},
     });
 
-    // Two full candidate sets: the reader prefetches the next row's weights
-    // while compute is still consuming the current row's. Sized in tiles, so a
-    // large reduction dim costs L1 here; C is 9 for the case this was built for.
+    // One group's weight sets, single-buffered. The set turns over once every Wt
+    // output tiles, so a prefetch buffer would idle through nearly the whole row
+    // while doubling what is already the largest CB here: sites_per_group * C
+    // tiles, over a hundred kilobytes at the shape AttnRes asks for.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_candidates * 2 * weight_tile_size,
+        .total_size = sites_per_group * num_candidates * weight_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
@@ -110,7 +116,7 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
     });
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * output_tile_size,
+        .total_size = sites_per_group * 2 * output_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
@@ -126,17 +132,18 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
     // and by Wt once per output tile, and RISC-V has no divide instruction —
     // constants let the compiler emit multiply-shift instead of a libcall.
     std::vector<uint32_t> reader_compile_time_args = {
-        input_granularity,
         num_candidates,
         inner_tile_size,
-        reduce_tile_size,
         Wt,
         weight_inner_tile_size,
-        weight_reduce_tile_size};
+        weight_reduce_tile_size,
+        num_sites,
+        sites_per_group,
+        num_groups};
     TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*tensor_args.weight.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {inner_tile_size, num_sites, sites_per_group, num_groups};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_kernel_desc;
@@ -164,7 +171,7 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
     compute_kernel_desc.kernel_source = std::string(kKernelDir) + "weighted_reduce_nc.cpp";
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = {num_candidates, input_granularity, Wt};
+    compute_kernel_desc.compile_time_args = {num_candidates, Wt, num_sites, sites_per_group, num_groups};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -175,13 +182,13 @@ tt::tt_metal::ProgramDescriptor FastWeightedReduceNCProgramFactory::create_descr
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // Contiguous, not round-robin. fast_reduce_nc hands core i output tiles
+    // Contiguous, not round-robin. fast_reduce_nc hands core i tiles
     // i, i+num_cores, i+2*num_cores, ... which is free when every output tile
     // reads a disjoint input column. It is not free here: consecutive strides of
     // num_cores land on a different token row almost every time, so the weight
-    // set would be refetched per output tile — one extra pass over a tensor the
-    // size of the input. Contiguous ranges give each core ~num_tiles/Wt distinct
-    // rows, so the weights are read about once.
+    // set would be refetched per position — G times a pass over the weight.
+    // Contiguous ranges give each core ~num_tiles/Wt distinct rows, so the
+    // weights are read about once per group.
     auto* const input_buffer = tensor_args.input.buffer();
     auto* const weight_buffer = tensor_args.weight.buffer();
     auto* const output_buffer = tensor_return_value.buffer();
