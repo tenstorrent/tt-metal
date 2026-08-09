@@ -73,7 +73,7 @@ def test_compute_galaxy_width_shard_cores(width, expected):
     [
         ("Llama-3.1-70B", 128256, 4, True),
         ("Llama-3.1-70B", 131072, 4, False),
-        ("Llama-3.1-8B", 128256, 4, False),
+        ("Llama-3.1-8B", 128256, 4, True),
     ],
 )
 def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_size, sampling_splits, expected):
