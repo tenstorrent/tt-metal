@@ -51,6 +51,8 @@ public:
 
     uint32_t buffer_address() const;
     uint32_t config_address() const;
+    uint32_t credit_reset_address() const;
+    uint32_t credit_reset_size() const;
     uint32_t entry_size() const;
     uint32_t num_entries() const;
 
@@ -78,6 +80,8 @@ private:
     CoreRangeSet all_cores_;
     uint32_t entry_size_ = 0;
     uint32_t num_entries_ = 0;
+    uint32_t credit_reset_offset_ = 0;
+    uint32_t credit_reset_size_ = 0;
 };
 
 /**
@@ -113,8 +117,8 @@ CrossNodeDFB CreateCrossNodeDFB(
  * @param core_spec     Cores to configure (must be senders or receivers of gdfb).
  * @param gdfb          The CrossNodeDFB.
  * @param relay_dfb_name  Optional accessor name of the local DFB in the kernel that
- *                  should be auto-aligned when the CrossNodeDFB entry size changes.
- *                  Resolved to a logical handle at JIT finalization time.
+ *                  should be relayed for compute. Resolved to a logical handle at JIT
+ *                  finalization time (Phase 3: host L1 aliasing + align emit).
  * @return Runtime-assigned slot index for kernel compile-time args. Re-attaching the
  *         same CrossNodeDFB returns the same slot.
  */

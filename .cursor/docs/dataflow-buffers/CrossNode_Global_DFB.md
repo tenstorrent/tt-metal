@@ -41,9 +41,9 @@ Stash applied ~**3.4k LOC** of WH/BH CrossNodeDFB onto `abhullar/gb-cn-dfbs` (gi
 | Shared constants | `tt_metal/hw/inc/hostdev/cross_node_dfb_constants.h` (`MAX_CROSS_NODE_DFBS=16`, `CROSS_NODE_DFB_OFFSET_NONE=0xFF`) |
 | Device API | `tt_metal/hw/inc/api/dataflow/cross_node_dfb.h` |
 | Init / iface | `tt_metal/hw/inc/internal/cross_node_dfb_init.h`, `cross_node_dfb_interface.h` |
-| FW (tt-1xx) | `brisc.cc` / `ncrisc.cc` / `trisc.cc` — BRISC `setup_cross_node_dfb_interfaces</*reset_credits=*/true>`; NCRISC/TRISC `false` |
-| Program / dispatch | `program.cpp`, `program_impl.hpp`, `dispatch.cpp` / `.hpp` — attach, finalize region, `CrossNodeDFBCommandGenerator` |
-| Slow-dispatch write | `tt_metal/impl/host_api/tt_metal.cpp` (kernel-config CrossNode region) |
+| FW (tt-1xx) | `brisc.cc` / `ncrisc.cc` / `trisc.cc` — local iface setup only; no credit writes |
+| Program / dispatch | `program.cpp`, `program_impl.hpp`, `dispatch.cpp` / `.hpp` — attach, finalize region, config-page credit reset before GO, `CrossNodeDFBCommandGenerator` |
+| Slow-dispatch write | `tt_metal/impl/host_api/tt_metal.cpp` (kernel-config CrossNode region + config-page credit reset) |
 | Build | `tt_metal/impl/sources.cmake`, `tests/.../api/sources.cmake` |
 | Tests | `tests/tt_metal/tt_metal/api/test_cross_node_dfb.cpp`, `cross_node_dfb_test_utils.hpp`, kernels `cross_node_dfb_{sender,receiver,relay_receiver,relay_trisc}.cpp` |
 
@@ -66,19 +66,21 @@ experimental::UpdateDynamicCrossNodeDFBAddress(program, dfb)
 Layered API matches the Phase 0 FAQ:
 
 ```text
-Sender:   reserve_back[_for_receiver] → write_{multicast,to_receiver,strided} → barrier → push_back[_to_receiver]
+Sender:   reserve_back[_for_receiver] → write_{broadcast,to_receiver,strided} → flush_writes → push_back[_to_receiver]
 Receiver: wait_front → get_read_ptr → pop_front
-Relay:    register_relay_dfb / push_relay_front / align on resize
+Relay:    register_relay_dfb / push_relay_front
 ```
 
 - Prefix layout matches Remote CB so credit helpers can `reinterpret_cast`.
+- Payload writes and `pages_sent` increments are posted; `flush_writes()` flushes payload commands before credit publication.
+- `entry_size` is fixed at Create for CrossNodeDFB; mid-flight resize is deferred unless a same-program temporal use case requires it.
 - Config page `word[4]` = fifo wr/rd checkpoint **reserved for GlobalDFB**; CrossNode FW **always** inits iface ptrs from `fifo_start_addr`.
 - WH/BH only in comments (`Quasar support planned`).
 
 ### Firmware reset contract (as landed)
 
 - Every `setup_*` resets fifo ptrs to `fifo_start_addr`.
-- BRISC additionally zeros local `pages_sent` / `pages_acked` when `reset_credits=true` (no NOC; each core clears its own config page).
+- Fast and slow dispatch zero the actual config-page credit region before GO. Firmware never zeros credits, avoiding a late local reset that could erase a faster peer's increment.
 - This is the CrossNode “reset on program init” path — **not** FW auto-commit.
 
 ### Tests present (Gen1 `CreateKernel`, not Metal 2.0 ProgramSpec)
@@ -90,15 +92,14 @@ Relay:    register_relay_dfb / push_relay_front / align on resize
 | `TensixCreateCrossNodeDFBs_MultiSender` | Multi-sender create |
 | `TensixProgramCrossNodeDFBsAPI_RelayDFBNames` | Attach stores `relay_dfb_name` |
 | `TensixBasicPushPop_1to1` | DM↔DM 1:1 |
-| `TensixWriteMulticast_1to4` | Multicast write + collective credit |
+| `TensixWriteBroadcast_1to4` | Broadcast loop-unicast + collective credit |
 | `TensixWriteStrided_1to4` | Strided scatter |
 | `TensixWriteToReceiver_ReceiverContiguous` | Per-receiver write + collective credit |
 | `TensixRoundRobinPushBackToReceiver` | Per-receiver credit (Flow C) |
 | `TensixDecoupledWriteThenCredit` | Write then separate push |
 | `TensixMultipleSenders_MtoN` | Multi-sender |
 | `TensixProgramInitResetsPointers` | **Correct** CrossNode semantics (replaces old CrossProgramPersistence) |
-| `TensixMidFlightResize` | Mid-flight entry_size change |
-| `TensixRelayDFBAlignment` | Same-program relay + resize realign |
+| `TensixRelayDFBAlignment` | Same-program relay attachment + fixed-size push/pop |
 | `TensixBarrierCompletesAll` | Barrier |
 
 Explicitly **not** present (and called out in comments): `TensixRelayDFBTriscCrossProgramPersistence` — deferred to GlobalDFB / Phase 2–3.
@@ -161,8 +162,8 @@ Do **not** bake STRIDED/ALL into the buffer config. Layered sender API (do not b
 
 ```text
 Sender:   reserve_back[_for_receiver]
-       → write_multicast | write_to_receiver | write_strided
-       → barrier
+       → write_broadcast | write_to_receiver | write_strided
+       → flush_writes
        → push_back | push_back_to_receiver   # credits only
 
 Receiver: wait_front → get_read_ptr / read → pop_front
@@ -238,7 +239,7 @@ RTA vs config overwrite (`fix_crossnodedfb_rta_ordering_bug_*`): re-verify on th
 ### Phase 1a — WH/BH CrossNode — IN PROGRESS (code on branch)
 
 - [x] CrossNode sources on `gb-cn-dfbs` (stash applied; not necessarily committed)
-- [x] Program-init resets fifo ptrs; BRISC resets credits
+- [x] Program-init resets fifo ptrs; dispatch resets config-page credits before GO
 - [x] Layered device API (write_* then credit push)
 - [x] Create / Attach / UpdateDynamic + GlobalCB mutual exclusion
 - [x] DM↔DM tests + `TensixProgramInitResetsPointers` (not CrossProgramPersistence)

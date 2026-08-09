@@ -180,7 +180,7 @@ int main(int argc, char* argv[]) {
             uint32_t tt_l1_ptr* dfb_region =
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.cross_node_dfb_offset);
             const uint32_t num_cross_node_dfbs = dfb_region[0];
-            experimental::setup_cross_node_dfb_interfaces</*reset_credits=*/false>(dfb_region + 1, num_cross_node_dfbs);
+            experimental::setup_cross_node_dfb_interfaces(dfb_region + 1, num_cross_node_dfbs);
         }
 #endif
 

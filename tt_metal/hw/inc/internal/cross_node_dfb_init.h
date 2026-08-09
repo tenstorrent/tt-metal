@@ -42,9 +42,6 @@ namespace experimental {
 
 // Populate one CrossNodeDFB slot from a kernel-config entry [config_page_ptr, entry_size].
 // CrossNode is same-program only: every setup resets fifo ptrs to fifo_start_addr.
-// reset_credits=true (BRISC only): also zero local pages_sent/pages_acked in this core's
-// config page L1. No NOC traffic — each sender/receiver BRISC clears its own counters.
-template <bool reset_credits = false>
 FORCE_INLINE void setup_one_cross_node_dfb_slot(uint32_t dfb_id, uint32_t config_page_ptr, uint32_t entry_size_word) {
     if (config_page_ptr == 0) {
         return;
@@ -79,18 +76,6 @@ FORCE_INLINE void setup_one_cross_node_dfb_slot(uint32_t dfb_id, uint32_t config
         iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, remote_cnt_ptr);
         iface.fifo_limit_page_aligned = fifo_limit;
 
-        // BRISC: zero all pages_sent/pages_acked pairs (N receivers, L1_ALIGNMENT stride).
-        if constexpr (reset_credits) {
-            volatile tt_l1_ptr uint32_t* cnt_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_cnt_ptr);
-            const uint32_t pair_stride = (2 * L1_ALIGNMENT) / sizeof(uint32_t);
-            const uint32_t word_stride = L1_ALIGNMENT / sizeof(uint32_t);
-            for (uint32_t i = 0; i < num_receivers; ++i) {
-                cnt_ptr[0] = 0;            // pages_sent
-                cnt_ptr[word_stride] = 0;  // pages_acked
-                cnt_ptr += pair_stride;
-            }
-        }
-
     } else {
         // Receiver page: sender NOC XY is stored at word[8..9], noc_xy_addr points there.
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
@@ -114,64 +99,20 @@ FORCE_INLINE void setup_one_cross_node_dfb_slot(uint32_t dfb_id, uint32_t config
         // Relay registration is filled later by register_relay_dfb() from the kernel.
         iface.relay_id = RELAY_DFB_INVALID;
 
-        // BRISC: zero this receiver's local pages_sent / pages_acked pair.
-        if constexpr (reset_credits) {
-            volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_cnt_ptr);
-            volatile tt_l1_ptr uint32_t* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_acked_ptr);
-            *sent_ptr = 0;
-            *acked_ptr = 0;
-        }
     }
 }
 
 // Populate g_cross_node_*_dfb_interface[0 .. num_cross_node_dfbs-1] from the dense slot
 // array (pointer already past the region header word).
 // Called by firmware when cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE.
-// reset_credits: true on BRISC (zeros local L1 credit counters); false on NCRISC/TRISC
-// (iface / ptr setup only — avoids triple-clearing the same L1 words).
-template <bool reset_credits = false>
 FORCE_INLINE void setup_cross_node_dfb_interfaces(uint32_t tt_l1_ptr* dfb_l1_base, uint32_t num_cross_node_dfbs) {
     volatile tt_l1_ptr uint32_t* dfb_config_addr = dfb_l1_base;
 
     for (uint32_t dfb_id = 0; dfb_id < num_cross_node_dfbs; ++dfb_id) {
-        setup_one_cross_node_dfb_slot<reset_credits>(dfb_id, dfb_config_addr[0], dfb_config_addr[1]);
+        setup_one_cross_node_dfb_slot(dfb_id, dfb_config_addr[0], dfb_config_addr[1]);
         dfb_config_addr += UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG;
     }
 }
-
-#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-#include "hostdev/dev_msgs.h"
-#include "api/dataflow/dataflow_api.h"
-
-// Kernel-side fallback when firmware has not populated g_cross_node_*_dfb_interface[] yet
-// (e.g. precompiled firmware predating CrossNodeDFB setup). Reads the 2-word kernel-config
-// slot from the active launch message and initializes this slot on first use.
-FORCE_INLINE void ensure_cross_node_dfb_initialized(uint8_t dfb_id) {
-    // config_ptr is at the same offset in sender and receiver views (unioned).
-    if (get_cross_node_sender_dfb_interface(dfb_id).config_ptr != 0) {
-        return;
-    }
-
-    const uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-    tt_l1_ptr launch_msg_t* launch = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-    const uint16_t cross_node_dfb_offset = launch->kernel_config.cross_node_dfb_offset;
-    if (cross_node_dfb_offset == CROSS_NODE_DFB_OFFSET_NONE) {
-        return;
-    }
-
-    const uint32_t kernel_config_base = launch->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
-    volatile tt_l1_ptr uint32_t* region =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + cross_node_dfb_offset);
-    const uint32_t num_cross_node_dfbs = region[0];
-    if (dfb_id >= num_cross_node_dfbs) {
-        return;
-    }
-
-    volatile tt_l1_ptr uint32_t* slot = region + 1 + dfb_id * UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG;
-
-    setup_one_cross_node_dfb_slot</*reset_credits=*/true>(dfb_id, slot[0], slot[1]);
-}
-#endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
 // Mirror experimental::align_local_cbs_to_remote_cb for CrossNodeDFB relay DFBs.
 // TRISC calls this at kernel start so its local CB interface matches the live

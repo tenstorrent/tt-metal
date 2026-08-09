@@ -170,6 +170,8 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type, uint32_t max_num_receiv
     // Mirror GlobalCB layout: noc_xy table at word[8], then L1-aligned pages_sent/pages_acked pairs.
     const uint32_t noc_xy_address = config_base_addr + num_header_words * sizeof(uint32_t);
     const uint32_t pages_sent_address = tt::align(noc_xy_address + noc_xy_words * sizeof(uint32_t), l1_alignment);
+    credit_reset_offset_ = pages_sent_address - config_base_addr;
+    credit_reset_size_ = config_page_size - credit_reset_offset_;
 
     std::vector<uint32_t> config_host_buffer(config_page_size * num_all_cores / sizeof(uint32_t), 0);
 
@@ -232,6 +234,8 @@ const Buffer& CrossNodeDFB::dfb_buffer() const { return *dfb_buffer_.get_buffer(
 const Buffer& CrossNodeDFB::config_buffer() const { return *config_buffer_.get_buffer(); }
 uint32_t CrossNodeDFB::buffer_address() const { return static_cast<uint32_t>(dfb_buffer().address()); }
 uint32_t CrossNodeDFB::config_address() const { return static_cast<uint32_t>(config_buffer().address()); }
+uint32_t CrossNodeDFB::credit_reset_address() const { return config_address() + credit_reset_offset_; }
+uint32_t CrossNodeDFB::credit_reset_size() const { return credit_reset_size_; }
 uint32_t CrossNodeDFB::entry_size() const { return entry_size_; }
 uint32_t CrossNodeDFB::num_entries() const { return num_entries_; }
 const CoreRangeSet& CrossNodeDFB::sender_cores() const { return sender_cores_; }

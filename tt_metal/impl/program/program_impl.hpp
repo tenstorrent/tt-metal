@@ -306,6 +306,8 @@ public:
     struct CrossNodeDFBAttachment {
         uint8_t remote_dfb_id;
         uint32_t config_page_addr;
+        uint32_t credit_reset_addr;
+        uint32_t credit_reset_size;
         uint32_t entry_size;
         std::optional<std::string> relay_dfb_name;
     };

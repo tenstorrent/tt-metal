@@ -17,7 +17,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/remote_circular_buffer.h"
-#include "internal/cross_node_dfb_init.h"
 
 // Credit helpers take Remote*CBInterface; CrossNode prefix layout matches for reinterpret_cast.
 static_assert(sizeof(CrossNodeSenderDFBInterface) == sizeof(RemoteSenderCBInterface));
@@ -39,8 +38,12 @@ namespace experimental {
 // Not persistent across programs: firmware resets fifo ptrs and credit counters on every
 // program init. Cross-program persistence is GlobalDFB.
 //
-// Sync counters (pages_sent / pages_acked) are in L1_ALIGNMENT-byte units, which allows
-// mid-flight entry_size changes without restarting the counter protocol.
+// entry_size is fixed at Create for the life of a CrossNodeDFB. Mid-flight entry_size
+// reconfiguration (remote CB / prefetcher style) is intentionally omitted here — CrossNode
+// is reset-on-init and same-program only. Add set_*_entry_size later if a same-program
+// multi-phase op needs it; prefer that path on GlobalDFB where the ring outlives programs.
+//
+// Sync counters (pages_sent / pages_acked) are in L1_ALIGNMENT-byte units.
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  SENDER FLOWS
@@ -48,8 +51,8 @@ namespace experimental {
 //
 //  Flow A — Broadcast (same data to all receivers):
 //    reserve_back(n);                         // wait for space on all receivers
-//    write_multicast(src, n);                 // post NOC writes to all receivers
-//    noc_async_write_barrier();               // ensure all writes land before credit
+//    write_broadcast(src, n);                 // post NOC writes to all receivers
+//    flush_writes();                          // flush posted writes before credit
 //    push_back(n);                            // advance wr_ptr + signal all receivers
 //
 //  Flow B — Receiver-contiguous / unique-per-receiver:
@@ -57,7 +60,7 @@ namespace experimental {
 //    write_to_receiver(0, src_a, n);          // receiver 0 gets tensor shard A
 //    write_to_receiver(1, src_b, n);          // receiver 1 gets tensor shard B
 //    ...
-//    noc_async_write_barrier();
+//    flush_writes();
 //    push_back(n);                            // one collective credit to all receivers
 //
 //  Flow C — Per-receiver credit (round-robin, uneven shards):
@@ -66,7 +69,7 @@ namespace experimental {
 //    for r in 0..num_recv:
 //      reserve_back_for_receiver(r, n);         // polls only receiver r, no head-of-line block
 //      write_to_receiver(r, src, n);            // NOC write only to receiver r
-//      noc_async_write_barrier();
+//      flush_writes();
 //      push_back_to_receiver(r, n);             // advance wr_ptr + credit only receiver r
 //
 //  Flow D — Interleaved scatter (prefetcher / write_strided):
@@ -75,7 +78,7 @@ namespace experimental {
 //    Each chunk is written to the corresponding receiver's FIFO in one loop.
 //    reserve_back(n);
 //    write_strided(src, num_rows, pages_per_row, page_size);  // all receivers, one call
-//    noc_async_write_barrier();
+//    flush_writes();
 //    push_back(n);                              // advance wr_ptr + credit all receivers
 //
 // ═══════════════════════════════════════════════════════════════════════
@@ -97,9 +100,8 @@ namespace experimental {
 //  via pop_front; Compute reads from the relay DFB's local interface.
 //
 //  The relay DFB shares the same L1 FIFO buffer as the CrossNodeDFB.  Its rd_ptr is
-//  managed independently by Compute (via cb_pop_front) and starts aligned to the
-//  CrossNodeDFB rd_ptr at registration time.  fifo_limit and fifo_page_size are
-//  re-propagated automatically only on set_receiver_entry_size (not on every pop_front).
+//  managed independently by Compute (via pop_front) and starts aligned to the
+//  CrossNodeDFB rd_ptr at registration time.
 //
 //  DM (receiver kernel):
 //    DataflowBuffer<...> relay_dfb(local_handle);     // local DFB backed by same FIFO
@@ -119,11 +121,7 @@ namespace experimental {
 //                                                     // DM's pop_front already acked sender
 class CrossNodeDFB {
 public:
-    FORCE_INLINE explicit CrossNodeDFB(uint8_t remote_dfb_id) : id_(remote_dfb_id) {
-#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-        ensure_cross_node_dfb_initialized(id_);
-#endif
-    }
+    FORCE_INLINE explicit CrossNodeDFB(uint8_t remote_dfb_id) : id_(remote_dfb_id) {}
 
     // -----------------------------------------------------------------------
     // Sender-side API
@@ -201,11 +199,14 @@ public:
         uint32_t len_bytes,
         uint32_t noc_x,
         uint32_t noc_y,
-        uint8_t noc_id) {
-        const uint32_t remote_noc_xy =
-            uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc_id, noc_x), DYNAMIC_NOC_Y(noc_id, noc_y)));
-        const uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_l1_addr);
-        noc_async_write(src_l1_addr, dest_noc_addr, len_bytes, noc_id);
+        const Noc& noc) {
+        UnicastEndpoint dst;
+        noc.async_write<NocOptions::POSTED>(
+            CoreLocalMem<uint32_t>(src_l1_addr),
+            dst,
+            len_bytes,
+            {},
+            {.noc_x = noc_x, .noc_y = noc_y, .addr = dest_l1_addr});
     }
 
     // Interleaved scatter
@@ -252,10 +253,10 @@ public:
     }
 
     // Broadcast: write n entries of identical data from src_l1_addr to all receivers
-    // at their current fifo_wr_ptr.  Uses loop-unicast (true NOC multicast requires
-    // rectangle topology; callers needing multicast unicast should call write_to_receiver
-    // per receiver).
-    FORCE_INLINE void write_multicast(uint32_t src_l1_addr, uint32_t num_entries, const Noc& noc = Noc{}) {
+    // at their current fifo_wr_ptr. Uses loop-unicast (hardware NOC multicast requires
+    // a rectangular destination grid). For different bytes per receiver, use
+    // write_to_receiver / write_strided instead.
+    FORCE_INLINE void write_broadcast(uint32_t src_l1_addr, uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = get_cross_node_sender_dfb_interface(id_);
         const uint32_t entry_size = iface.fifo_page_size;
         const uint32_t len_bytes = num_entries * entry_size;
@@ -267,12 +268,11 @@ public:
         DPRINT("src_l1_addr: {}\n", src_l1_addr);
         DPRINT("dest_l1_base: {}\n", dest_l1_base);
 
-        const uint8_t noc_id = noc.get_noc_id();
         for (uint32_t i = 0; i < num_recv; ++i) {
             const uint32_t noc_x = xy_base[2 * i];
             const uint32_t noc_y = xy_base[2 * i + 1];
             DPRINT("noc_x: {} noc_y: {}\n", noc_x, noc_y);
-            noc_unicast_write_l1(src_l1_addr, dest_l1_base, len_bytes, noc_x, noc_y, noc_id);
+            noc_unicast_write_l1(src_l1_addr, dest_l1_base, len_bytes, noc_x, noc_y, noc);
         }
     }
 
@@ -291,8 +291,14 @@ public:
 
         const uint32_t noc_x = xy_base[2 * receiver_idx];
         const uint32_t noc_y = xy_base[2 * receiver_idx + 1];
-        const uint8_t noc_id = noc.get_noc_id();
-        noc_unicast_write_l1(src_l1_addr, dest_l1_base, len_bytes, noc_x, noc_y, noc_id);
+        noc_unicast_write_l1(src_l1_addr, dest_l1_base, len_bytes, noc_x, noc_y, noc);
+    }
+
+    // Flush all posted payload writes from this core before publishing pages_sent.
+    // Posted writes do not return completion acknowledgements; receiver visibility of
+    // the subsequently posted credit is the end-to-end synchronization point.
+    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) {
+        noc.async_writes_flushed<NocOptions::POSTED>();
     }
 
     // Credit-only: advance fifo_wr_ptr by num_entries and NOC-inc pages_sent on ALL
@@ -313,7 +319,7 @@ public:
         const uint32_t num_units = len_bytes / L1_ALIGNMENT;
         const uint8_t noc_id = noc.get_noc_id();
         detail::update_pages_sent(
-            reinterpret_cast<const RemoteSenderCBInterface&>(iface), num_units, noc_id, false, write_at_cmd_buf);
+            reinterpret_cast<const RemoteSenderCBInterface&>(iface), num_units, noc_id, true, write_at_cmd_buf);
     }
 
     // Credit-only for one receiver: advance fifo_wr_ptr by num_entries and NOC-inc
@@ -420,95 +426,6 @@ public:
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
     // -----------------------------------------------------------------------
-    // Dynamic entry size reconfiguration
-    // -----------------------------------------------------------------------
-
-#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-    template <bool update_remote_over_noc = true>
-    FORCE_INLINE void set_sender_entry_size(uint32_t new_entry_size, const Noc& noc = Noc{}) {
-        CrossNodeSenderDFBInterface& iface = get_cross_node_sender_dfb_interface(id_);
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-        const uint32_t fifo_start = iface.fifo_start_addr;
-        const uint32_t fifo_wr = iface.fifo_wr_ptr;
-        const uint32_t size_aligned = fifo_size - (fifo_size % new_entry_size);
-        const uint32_t new_limit = fifo_start + size_aligned;
-
-        uint32_t new_wr = fifo_start + align(fifo_wr - fifo_start, new_entry_size);
-        if constexpr (update_remote_over_noc) {
-            uint32_t skip_units = 0;
-            if (new_wr >= new_limit) {
-                skip_units = (fifo_start + fifo_size - fifo_wr) / L1_ALIGNMENT;
-                new_wr = fifo_start;
-            } else if (new_wr != fifo_wr) {
-                skip_units = (new_wr - fifo_wr) / L1_ALIGNMENT;
-            }
-            if (skip_units > 0) {
-                const uint8_t noc_id = noc.get_noc_id();
-                detail::update_pages_sent(
-                    reinterpret_cast<const RemoteSenderCBInterface&>(iface),
-                    skip_units,
-                    noc_id,
-                    true,
-                    write_at_cmd_buf);
-            }
-        } else if (new_wr >= new_limit) {
-            new_wr = fifo_start;
-        }
-        iface.fifo_wr_ptr = new_wr;
-        iface.fifo_limit_page_aligned = new_limit;
-        iface.fifo_page_size = new_entry_size;
-    }
-
-    template <bool update_remote_over_noc = true>
-    FORCE_INLINE void set_receiver_entry_size(uint32_t new_entry_size, const Noc& noc = Noc{}) {
-        CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-        const uint32_t fifo_start = iface.fifo_start_addr;
-        const uint32_t fifo_rd = iface.fifo_rd_ptr;
-        const uint32_t size_aligned = fifo_size - (fifo_size % new_entry_size);
-        const uint32_t new_limit = fifo_start + size_aligned;
-
-        uint32_t new_rd = fifo_start + align(fifo_rd - fifo_start, new_entry_size);
-        if constexpr (update_remote_over_noc) {
-            uint32_t skip_units = 0;
-            if (new_rd >= new_limit) {
-                skip_units = (fifo_start + fifo_size - fifo_rd) / L1_ALIGNMENT;
-                new_rd = fifo_start;
-            } else if (new_rd != fifo_rd) {
-                skip_units = (new_rd - fifo_rd) / L1_ALIGNMENT;
-            }
-            if (skip_units > 0) {
-                volatile tt_l1_ptr uint32_t* acked_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_acked_ptr);
-                volatile tt_l1_ptr uint32_t* sent_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_acked_ptr - L1_ALIGNMENT);
-                do {
-                    invalidate_l1_cache();
-                } while ((*sent_ptr - *acked_ptr) < skip_units);
-
-                const uint8_t noc_id = noc.get_noc_id();
-                detail::update_pages_acked(
-                    reinterpret_cast<const RemoteReceiverCBInterface&>(iface),
-                    skip_units,
-                    noc_id,
-                    false,
-                    write_at_cmd_buf);
-            }
-        } else if (new_rd >= new_limit) {
-            new_rd = fifo_start;
-        }
-        iface.fifo_rd_ptr = new_rd;
-        iface.fifo_limit_page_aligned = new_limit;
-        iface.fifo_page_size = new_entry_size;
-
-        // Propagate new limit/page_size to the relay DFB so TRISC sees the updated FIFO bounds.
-        // fifo_rd_ptr and fifo_wr_ptr are intentionally left untouched (TRISC and the
-        // receiver DM manage them independently after register_relay_dfb() initialized them).
-        align_relay_resize();
-    }
-#endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
-
-    // -----------------------------------------------------------------------
     // Relay DFB registration and alignment
     // -----------------------------------------------------------------------
 
@@ -519,7 +436,7 @@ public:
     //
     // Intra-core sync (same as GlobalCB receiver):
     //   - relay.fifo_wr_ptr is managed by the receiver DM via push_relay_front() after wait_front()
-    //   - relay.fifo_rd_ptr is managed by TRISC via cb_pop_front()
+    //   - relay.fifo_rd_ptr is managed by TRISC via pop_front()
     //   - The receiver DM must never write relay.fifo_rd_ptr after init
     //
     // Typical receiver-DM loop:
@@ -586,7 +503,7 @@ private:
 
     // Init: set relay fifo_wr_ptr = fifo_rd_ptr = CrossNodeDFB start, plus limit/page_size.
     // Called once from register_relay_dfb(). After this, the receiver DM owns fifo_wr_ptr
-    // (advances via push_relay_front) and TRISC owns fifo_rd_ptr (advances via cb_pop_front).
+    // (advances via push_relay_front) and TRISC owns fifo_rd_ptr (advances via pop_front).
     FORCE_INLINE void align_relay_init() {
         CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
         if (iface.relay_id == RELAY_DFB_INVALID) {
@@ -595,17 +512,6 @@ private:
         LocalCBInterface& relay = get_local_cb_interface(iface.relay_id);
         relay.fifo_wr_ptr = iface.fifo_rd_ptr;
         relay.fifo_rd_ptr = iface.fifo_rd_ptr;
-        relay.fifo_limit = iface.fifo_limit_page_aligned;
-        relay.fifo_page_size = iface.fifo_page_size;
-    }
-
-    // Resize: propagate only fifo_limit and fifo_page_size to the registered relay.
-    FORCE_INLINE void align_relay_resize() {
-        CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(id_);
-        if (iface.relay_id == RELAY_DFB_INVALID) {
-            return;
-        }
-        LocalCBInterface& relay = get_local_cb_interface(iface.relay_id);
         relay.fifo_limit = iface.fifo_limit_page_aligned;
         relay.fifo_page_size = iface.fifo_page_size;
     }

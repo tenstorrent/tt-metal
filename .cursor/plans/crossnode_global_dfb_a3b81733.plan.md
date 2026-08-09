@@ -87,7 +87,7 @@ flowchart LR
 
 Both CrossNode and Global expose the **same** producer/consumer patterns (from #47637 `cross_node_dfb.h` Flows A–D).
 
-**Lay**`ack`* / `push_back*` = spa**ered contract (all sender flows):** `write_`* = data only (NOC into receiver L1 at current `fifo_wr_ptr`); `reserve_b`ce wait / credit. Never advance credits inside a write.
+**Layered contract (all sender flows):** `write_*` = posted data only (NOC into receiver L1 at current `fifo_wr_ptr`); `reserve_back` = space wait; `push_back*` = credit. Flush posted writes before publishing credit. Never advance credits inside a write.
 
 ```mermaid
 sequenceDiagram
@@ -97,7 +97,7 @@ sequenceDiagram
   Note over S: reserve_back waits free space
   S->>R0: write_* NOC data
   S->>R1: write_* NOC data
-  Note over S: noc_async_write_barrier
+  Note over S: flush_writes (posted)
   S->>R0: push_back credit pages_sent
   S->>R1: push_back credit pages_sent
 ```
@@ -106,7 +106,7 @@ sequenceDiagram
 
 ---
 
-#### Flow A — Broadcast (`write_multicast`)
+#### Flow A — Broadcast (`write_broadcast`)
 
 Same payload bytes → every receiver FIFO. Use when all consumers need identical tiles.
 
@@ -122,8 +122,8 @@ flowchart LR
 
 ```text
 reserve_back(n)
-write_multicast(src, n)       // loop-unicast today
-noc_async_write_barrier()
+write_broadcast(src, n)       // loop-unicast today
+flush_writes()
 push_back(n)                  // credit ALL receivers
 ```
 
@@ -151,7 +151,7 @@ reserve_back(n)               // space on ALL
 write_to_receiver(0, src_a, n)
 write_to_receiver(1, src_b, n)
 ...
-noc_async_write_barrier()
+flush_writes()
 push_back(n)                  // one collective credit
 ```
 
@@ -181,7 +181,7 @@ sequenceDiagram
 for r in receivers:
   reserve_back_for_receiver(r, n)   // poll only r
   write_to_receiver(r, src, n)
-  noc_async_write_barrier()
+  flush_writes()
   push_back_to_receiver(r, n)       // credit only r
 ```
 
@@ -214,11 +214,11 @@ flowchart TB
 ```text
 reserve_back(n)
 write_strided(src, num_rows, pages_per_row, page_size)
-noc_async_write_barrier()
+flush_writes()
 push_back(n)
 ```
 
-**vs multicast:** multicast = identical blob to all; strided = different interleaved chunks per receiver in one helper (caller does not loop `write_to_receiver`).
+**vs broadcast:** broadcast = identical blob to all; strided = different interleaved chunks per receiver in one helper (caller does not loop `write_to_receiver`).
 
 ---
 
@@ -383,7 +383,7 @@ Host (experimental Gen1, not ProgramSpec):
 Device (same patterns for both types):
 
 ```text
-Sender:   reserve_back[_for_receiver] → write_to_receiver | write_multicast | write_strided → [barrier] → push_back[_to_receiver]
+Sender:   reserve_back[_for_receiver] → write_to_receiver | write_broadcast | write_strided → flush_writes → push_back[_to_receiver]
 Receiver: wait_front → get_read_ptr → pop_front
 Relay:    register_relay_dfbs → DM wait_front + push_relay_front; compute local DFB wait/pop
 Global:   commit()
@@ -401,6 +401,8 @@ Global:   commit()
 - Program init path zeros rd/wr + credits when CrossNodeDFBs are attached.
 - Memory: default program-allocated receiver-sharded L1; borrowed user sharded L1 with shard-spec validation.
 - Ship DM↔DM first; relay host plumbing (`relay_dfb_names`) can land early, full relay correctness in Phase 3.
+- **Write contract:** all `write_*` use **posted** unicast NOC writes; caller uses `flush_writes()` before `push_back`. Collective and per-receiver `pages_sent` increments are posted as well, matching RemoteCB ordering.
+- **Program-init credit reset:** prefer host/dispatch ensuring config credit words are 0 before GO; FW setup fills iface only (no BRISC zero that can race a peer `push_back`). Peer iface setup is not required for sender NOC data/credits — only for that core’s own wait/pop.
 
 **Tests** (evolve #47637; Metal 2.0 kernels): create/topology reject; attach/slot; UpdateDynamic; borrowed mismatch; `BasicPushPop_1to1`; multicast/strided/write_to_receiver/RR; `DecoupledWriteThenCredit`; multi-sender; `**ProgramInitResetsPointers`** (replaces CrossProgramPersistence); barrier.
 
@@ -440,7 +442,7 @@ Global:   commit()
 - **Streaming-only** (or DM-linearized) for Global→compute; no RotatedView abstraction in this phase.
 - Quasar: co-init with local DFB/TC (shared ring, separate SW rd vs remote credits).
 
-**Tests:** `RelayDFB_DM_to_Compute_1to1` (CrossNode); entry-size resize align; `RelayDFB_Global_Streaming`; Quasar relay smoke; plus existing DM↔DM tests remain without relay.
+**Tests:** `RelayDFB_DM_to_Compute_1to1` (CrossNode); `RelayDFB_Global_Streaming`; Quasar relay smoke; plus existing DM↔DM tests remain without relay. (No CrossNode mid-flight entry_size resize — fixed at Create; resize belongs on GlobalDFB if needed.)
 
 ### Relay considerations — connecting a local DFB to CrossNode/Global
 
@@ -462,7 +464,7 @@ Host creates CrossNode/Global + a separate local CB/DFB; kernels take `remote_df
 |------|------|
 | Minimal host API; flexible per-kernel | Easy to mis-alias addresses; host does not validate the pair |
 | Matches “DM owns credits” clearly | Every kernel re-implements the wiring |
-| Fine for DM↔DM (no relay) | Resize/realign relies on device remembering `relay_id` |
+| Fine for DM↔DM (no relay) | Every kernel re-implements align / pairing |
 
 #### Approach B — Attach metadata only (`relay_dfb_name`)
 
@@ -502,6 +504,19 @@ Host sees the pair and injects init so kernels never call `register_relay_dfb`.
 | | Resize / multi-relay / mid-kernel rebinding get magical |
 | | Prefetcher-style switching is awkward |
 
+#### TRISC `align_local_cbs_to_cross_node_receiver_dfb` — long-term wiring
+
+Keep the **helper**; stop requiring **user kernels** to call it.
+
+| Today (scaffolding) | Phase 3 target (GlobalCB mirror) |
+|---------------------|----------------------------------|
+| Test TRISC kernels manually call `align_local_cbs_to_cross_node_receiver_dfb` | Host Approach **C** aliases local CB/DFB to `dfb_buffer()` |
+| DM still `register_relay_dfb` | `program.cpp` JIT-emits `ALIGN_LOCAL_CBS_TO_CROSS_NODE_DFBS` (name TBD) that expands to the helper — same pattern as `ALIGN_LOCAL_CBS_TO_REMOTE_CBS` / `set_remote_circular_buffer_init` |
+| | TRISC kernels only `cb_wait_front` / `cb_pop_front` on the local relay index |
+| | DM keeps explicit `register_relay_dfb` + `push_relay_front` / `pop_front` (credit ownership stays visible; do not fully hide like Approach D for v1) |
+
+The helper remains the implementation behind the emitted define (analogous to `align_local_cbs_to_remote_cb`). Manual calls in `cross_node_dfb_relay_trisc.cpp` are temporary Approach A scaffolding until JIT emit lands.
+
 #### Plan default (Phase 3)
 
 | Concern | Who |
@@ -509,6 +524,7 @@ Host sees the pair and injects init so kernels never call `register_relay_dfb`.
 | Same L1 address / size / cores | **Host** — prefer **Approach C** |
 | Optional name/handle for tooling & Metal 2.0 | Host metadata on Attach (**B** as supplement — resolve it or drop it; do not rely on it alone) |
 | Credit bridge (`push_relay_front` / `pop_front`) | **Device** — keep `register_relay_dfb` (or one-shot align) explicit on DM |
+| TRISC local CB ptr/limit sync | **Host/JIT** — emit align define; kernels do not call `align_local_cbs_to_cross_node_receiver_dfb` by hand |
 
 **Avoid for production ops:** device-only (A) as the sole contract — address sharing will silently break. **Avoid:** Attach string as the only API (B alone). **Avoid for v1:** fully hiding relay in FW (D).
 

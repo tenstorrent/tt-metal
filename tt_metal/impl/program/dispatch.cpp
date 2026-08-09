@@ -1500,7 +1500,11 @@ private:
 class CrossNodeDFBCommandGenerator {
 public:
     void construct_commands(
-        IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers,
+        BatchedTransfers& credit_reset_transfers) {
         const auto& per_core_cross_node_dfbs = program.get_per_core_cross_node_dfbs();
         if (per_core_cross_node_dfbs.empty()) {
             return;
@@ -1554,6 +1558,19 @@ public:
                 auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                 const uint32_t start_addr = cross_node_dfb_offset;
 
+                // CrossNode state resets on every program launch. Reset credits in the
+                // actual config pages before GO; firmware only initializes its local
+                // interface and must not zero a counter after a peer has incremented it.
+                for (const auto& attachment : it->second) {
+                    credit_reset_payloads_.emplace_back(attachment.credit_reset_size, 0u);
+                    auto& reset_payload = credit_reset_payloads_.back();
+                    credit_reset_transfers[std::make_pair(noc_xy_addr, core_range.size())]
+                                          [attachment.credit_reset_addr] =
+                        std::vector<Transfer>{
+                            {.start = attachment.credit_reset_addr,
+                             .data = ttsl::Span<const uint8_t>(reset_payload.data(), reset_payload.size())}};
+                }
+
                 batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                     {.start = start_addr,
                      .data =
@@ -1565,6 +1582,7 @@ public:
 private:
     // Payload buffers kept alive until batched_transfers is consumed.
     std::vector<std::vector<uint32_t>> payloads_;
+    std::vector<std::vector<uint8_t>> credit_reset_payloads_;
 };
 
 class ProgramBinaryCommandGenerator {
@@ -1938,7 +1956,9 @@ public:
 
     // Assemble the batched transfer commands into the device command sequence.
     void assemble_commands(
-        ProgramCommandSequence& program_command_sequence, HostMemDeviceCommand& device_command_sequence) {
+        ProgramCommandSequence& program_command_sequence,
+        HostMemDeviceCommand& device_command_sequence,
+        DispatchWriteOffsets write_offset = DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE) {
         const auto& hal = MetalContext::instance().hal();
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
@@ -1992,7 +2012,7 @@ public:
                 batched_data,
                 &data_collection_location,
                 0,
-                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+                write_offset);
 
             last_end = cmd_data.front().start;
             size_t j = 0;
@@ -2373,6 +2393,7 @@ void assemble_device_commands(
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
+    BatchedTransfers cross_node_credit_reset_transfers;
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;
@@ -2388,15 +2409,23 @@ void assemble_device_commands(
     dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
     CrossNodeDFBCommandGenerator cross_node_dfb_command_generator;
-    cross_node_dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
+    cross_node_dfb_command_generator.construct_commands(
+        mesh_device, constants, program, batched_transfers, cross_node_credit_reset_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
+    BatchedTransferGenerator cross_node_credit_reset_generator;
+    cross_node_credit_reset_generator.construct_commands(
+        cross_node_credit_reset_transfers, program_config_buffer_calculator);
 
     program_command_sequence.program_config_buffer_command_sequence =
         HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
     batched_transfer_generator.assemble_commands(
         program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
+    cross_node_credit_reset_generator.assemble_commands(
+        program_command_sequence,
+        program_command_sequence.program_config_buffer_command_sequence,
+        DISPATCH_WRITE_OFFSET_ZERO);
     semaphore_command_generator.assemble_unicast_commands(
         program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence

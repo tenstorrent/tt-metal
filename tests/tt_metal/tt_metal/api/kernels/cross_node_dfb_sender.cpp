@@ -8,15 +8,12 @@
 //   [0] remote_dfb_id      - runtime-assigned slot (return value of AttachCrossNodeDFB on host)
 //   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
 //   [2] num_entries        - number of entries to push per receiver
-//   [3] write_primitive    - 0=write_multicast, 1=write_strided,
+//   [3] write_primitive    - 0=write_broadcast, 1=write_strided,
 //                            2=write_to_receiver+push_back (receiver-contiguous),
 //                            3=write_to_receiver+push_back_to_receiver (per-receiver credit)
 //   [4] data_pattern       - 0=multicast counter layout, 1=strided per-receiver layout,
 //                            2=per-receiver constant layout (see cross_node_dfb_test_utils.hpp)
-//   [5] do_resize          - 1 to perform mid-flight resize after initial entries
-//   [6] entry_size_resized - new entry_size after resize (valid if do_resize==1)
-//   [7] num_entries_after  - entries to push after resize (valid if do_resize==1)
-//   [8] do_barrier         - 1 to call barrier() after pushing all entries
+//   [5] do_barrier         - 1 to call barrier() after pushing all entries
 //
 // Runtime args:
 //   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
@@ -33,10 +30,7 @@ void kernel_main() {
     constexpr uint32_t num_entries = get_compile_time_arg_val(2);
     constexpr uint32_t write_primitive = get_compile_time_arg_val(3);
     constexpr uint32_t data_pattern = get_compile_time_arg_val(4);
-    constexpr uint32_t do_resize = get_compile_time_arg_val(5);
-    constexpr uint32_t entry_size_resized = get_compile_time_arg_val(6);
-    constexpr uint32_t num_entries_after = get_compile_time_arg_val(7);
-    constexpr uint32_t do_barrier = get_compile_time_arg_val(8);
+    constexpr uint32_t do_barrier = get_compile_time_arg_val(5);
 
     // Must match SenderDataPattern in cross_node_dfb_test_utils.hpp.
     constexpr uint32_t pattern_multicast_counter = 0;
@@ -48,10 +42,6 @@ void kernel_main() {
     Noc noc;
     // Spot-check: log first byte of each entry (host pre-populated staging)
     DPRINT("l1_staging_addr: 0x{:x}\n", staging_base);
-    for (uint32_t i = 0; i < num_entries; ++i) {
-        const volatile uint8_t* p = reinterpret_cast<const volatile uint8_t*>(staging_base + i * entry_size);
-        DPRINT("staging entry[{}] first byte: 0x{:02x}\n", i, (uint32_t)p[0]);
-    }
 
     experimental::CrossNodeDFB gdfb(remote_dfb_id);
     DPRINT("gdfb initial write_ptr: 0x{:x}\n", gdfb.get_write_ptr());
@@ -60,7 +50,7 @@ void kernel_main() {
 
     static_assert(
         write_primitive != 0 || data_pattern == pattern_multicast_counter,
-        "write_multicast expects multicast counter staging");
+        "write_broadcast expects multicast counter staging");
     static_assert(
         write_primitive != 1 || data_pattern == pattern_strided_per_receiver, "write_strided expects strided staging");
     static_assert(
@@ -72,13 +62,13 @@ void kernel_main() {
 
     if constexpr (write_primitive == 0) {
         for (uint32_t i = 0; i < num_entries; ++i) {
-            DPRINT("Reserving back for multicast\n");
+            DPRINT("Reserving back for broadcast\n");
             gdfb.reserve_back(1);
-            DPRINT("Done reserve back for multicast to {}\n", staging_addr(staging_base, i * entry_size));
-            gdfb.write_multicast(staging_addr(staging_base, i * entry_size), 1, noc);
-            DPRINT("Done write multicast\n");
-            noc.async_write_barrier();
-            DPRINT("Done async write barrier\n");
+            DPRINT("Done reserve back for broadcast to {}\n", staging_addr(staging_base, i * entry_size));
+            gdfb.write_broadcast(staging_addr(staging_base, i * entry_size), 1, noc);
+            DPRINT("Done write broadcast\n");
+            gdfb.flush_writes(noc);
+            DPRINT("Done posted write flush\n");
             gdfb.push_back(1, noc);
             DPRINT("Done push back\n");
         }
@@ -88,7 +78,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_entries; ++i) {
             gdfb.reserve_back(1);
             gdfb.write_strided(staging_addr(staging_base, i * row_bytes), 1, 1, entry_size, noc);
-            noc.async_write_barrier();
+            gdfb.flush_writes(noc);
             gdfb.push_back(1, noc);
         }
     } else if constexpr (write_primitive == 2) {
@@ -98,7 +88,7 @@ void kernel_main() {
             for (uint32_t r = 0; r < num_recv; ++r) {
                 gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
             }
-            noc.async_write_barrier();
+            gdfb.flush_writes(noc);
             gdfb.push_back(1, noc);
         }
     } else if constexpr (write_primitive == 3) {
@@ -107,53 +97,8 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_entries; ++i) {
                 gdfb.reserve_back_for_receiver(r, 1);
                 gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
-                noc.async_write_barrier();
+                gdfb.flush_writes(noc);
                 gdfb.push_back_to_receiver(r, 1, noc);
-            }
-        }
-    }
-
-    if constexpr (do_resize) {
-        gdfb.set_sender_entry_size(entry_size_resized, noc);
-
-        if constexpr (write_primitive == 0) {
-            const uint32_t resize_offset = num_entries * entry_size;
-            for (uint32_t i = 0; i < num_entries_after; ++i) {
-                gdfb.reserve_back(1);
-                gdfb.write_multicast(staging_addr(staging_base, resize_offset + i * entry_size_resized), 1, noc);
-                noc.async_write_barrier();
-                gdfb.push_back(1, noc);
-            }
-        } else if constexpr (write_primitive == 1) {
-            const uint32_t num_recv = gdfb.num_receivers();
-            const uint32_t resize_offset = num_entries * num_recv * entry_size;
-            const uint32_t row_bytes = num_recv * entry_size_resized;
-            for (uint32_t i = 0; i < num_entries_after; ++i) {
-                gdfb.reserve_back(1);
-                gdfb.write_strided(
-                    staging_addr(staging_base, resize_offset + i * row_bytes), 1, 1, entry_size_resized, noc);
-                noc.async_write_barrier();
-                gdfb.push_back(1, noc);
-            }
-        } else if constexpr (write_primitive == 2) {
-            const uint32_t num_recv = gdfb.num_receivers();
-            for (uint32_t i = 0; i < num_entries_after; ++i) {
-                gdfb.reserve_back(1);
-                for (uint32_t r = 0; r < num_recv; ++r) {
-                    gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
-                }
-                noc.async_write_barrier();
-                gdfb.push_back(1, noc);
-            }
-        } else if constexpr (write_primitive == 3) {
-            const uint32_t num_recv = gdfb.num_receivers();
-            for (uint32_t r = 0; r < num_recv; ++r) {
-                for (uint32_t i = 0; i < num_entries_after; ++i) {
-                    gdfb.reserve_back_for_receiver(r, 1);
-                    gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
-                    noc.async_write_barrier();
-                    gdfb.push_back_to_receiver(r, 1, noc);
-                }
             }
         }
     }

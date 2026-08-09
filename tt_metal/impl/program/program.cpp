@@ -1341,7 +1341,13 @@ uint8_t detail::ProgramImpl::attach_cross_node_dfb(
                     remote_dfb_id,
                     core.str());
             }
-            attachments.push_back({remote_dfb_id, gdfb.config_address(), gdfb.entry_size(), relay_dfb_name});
+            attachments.push_back(
+                {remote_dfb_id,
+                 gdfb.config_address(),
+                 gdfb.credit_reset_address(),
+                 gdfb.credit_reset_size(),
+                 gdfb.entry_size(),
+                 relay_dfb_name});
             TT_FATAL(
                 remote_dfb_id == static_cast<uint8_t>(attachments.size() - 1),
                 "CrossNodeDFB remote_dfb_id {} must be dense (expected {}) on core {}",
@@ -1372,6 +1378,8 @@ void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(const experiment
                     "UpdateDynamicCrossNodeDFBAddress: core {} is not in the CrossNodeDFB's all_cores",
                     core.str());
                 a.config_page_addr = gdfb.config_address();
+                a.credit_reset_addr = gdfb.credit_reset_address();
+                a.credit_reset_size = gdfb.credit_reset_size();
                 a.entry_size = gdfb.entry_size();
                 found = true;
             }

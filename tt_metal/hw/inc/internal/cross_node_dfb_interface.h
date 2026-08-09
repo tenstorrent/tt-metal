@@ -10,7 +10,7 @@
 #include "hostdev/dev_msgs.h"
 #include "hostdev/cross_node_dfb_constants.h"
 
-// Sentinel: no local DFB/CB relay registered for this CrossNodeDFB receiver slot.
+// Sentinel: no local DFB relay registered for this CrossNodeDFB receiver slot.
 constexpr static uint8_t RELAY_DFB_INVALID = 0xFF;
 
 // Pack/unpack helpers for CrossNodeSenderDFBInterface::num_receivers_and_remote_pages_sent_ptr.
@@ -65,7 +65,7 @@ struct CrossNodeReceiverDFBInterface {
     // Address on the sender's L1 where this receiver's pages_acked NOC inc lands.
     uint32_t remote_pages_acked_ptr;
 
-    // Receiver-only: one local DFB/CB that shares this CrossNode FIFO for TRISC.
+    // Receiver-only: one local DFB that shares this CrossNode FIFO for TRISC.
     uint8_t relay_id;  // RELAY_DFB_INVALID if none
     uint8_t pad[3];
 };

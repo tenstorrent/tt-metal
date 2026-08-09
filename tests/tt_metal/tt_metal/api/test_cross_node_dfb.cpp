@@ -350,7 +350,7 @@ static uint32_t run_1toN_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {remote_dfb_id, entry_size, num_entries, write_primitive, data_pattern, 0u, 0u, 0u, 0u}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, write_primitive, data_pattern, 0u}});
 
     auto recvs = corerange_to_cores(receiver_cores);
     for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
@@ -362,7 +362,7 @@ static uint32_t run_1toN_program(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {remote_dfb_id, entry_size, num_entries, ri, 0u, 0u, 0u, 0u}});
+                .compile_args = {remote_dfb_id, entry_size, num_entries, ri}});
     }
 
     // Runtime args must be set before run_on_mesh_device (which internally calls
@@ -443,7 +443,7 @@ TEST_F(MeshDispatchFixture, TensixBasicPushPop_1to1) {
     EXPECT_EQ(pass, 1u) << "1:1 basic push/pop failed";
 }
 
-TEST_F(MeshDispatchFixture, TensixWriteMulticast_1to4) {
+TEST_F(MeshDispatchFixture, TensixWriteBroadcast_1to4) {
     auto mesh_device = devices_[0];
 
     CoreCoord sender_core(0, 0);
@@ -453,7 +453,7 @@ TEST_F(MeshDispatchFixture, TensixWriteMulticast_1to4) {
     const uint32_t num_entries = 4;
 
     uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 0);
-    EXPECT_EQ(pass, 4u) << "write_multicast 1:4 failed";
+    EXPECT_EQ(pass, 4u) << "write_broadcast 1:4 failed";
 }
 
 TEST_F(MeshDispatchFixture, TensixWriteStrided_1to4) {
@@ -502,7 +502,7 @@ TEST_F(MeshDispatchFixture, TensixRoundRobinPushBackToReceiver) {
 TEST_F(MeshDispatchFixture, TensixDecoupledWriteThenCredit) {
     auto mesh_device = devices_[0];
 
-    // Sender issues multiple write_multicast calls before a single push_back.
+    // Sender issues multiple write_broadcast calls before a single push_back.
     // Verifies that credits are not prematurely visible.
     // We use num_entries=1 and write_primitive=0 (multicast) for simplicity;
     // the test is about verifying no hang (credits not visible before writes).
@@ -550,7 +550,7 @@ TEST_F(MeshDispatchFixture, TensixMultipleSenders_MtoN) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u, 0u, 0u, 0u}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
     for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
         CoreRangeSet single = CoreRangeSet(CoreRange(recvs[ri]));
         tt::tt_metal::CreateKernel(
@@ -560,7 +560,7 @@ TEST_F(MeshDispatchFixture, TensixMultipleSenders_MtoN) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {remote_dfb_id, entry_size, num_entries, ri, 0u, 0u, 0u, 0u}});
+                .compile_args = {remote_dfb_id, entry_size, num_entries, ri}});
     }
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
@@ -621,11 +621,8 @@ TEST_F(MeshDispatchFixture, TensixProgramInitResetsPointers) {
                     remote_dfb_id,
                     entry_size,
                     entries_per_program,
-                    0u,  // write_multicast
+                    0u,  // write_broadcast
                     data_pattern,
-                    0u,
-                    0u,
-                    0u,
                     0u}});
         tt::tt_metal::CreateKernel(
             program,
@@ -634,7 +631,7 @@ TEST_F(MeshDispatchFixture, TensixProgramInitResetsPointers) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {remote_dfb_id, entry_size, entries_per_program, 0u, 0u, 0u, 0u, 0u}});
+                .compile_args = {remote_dfb_id, entry_size, entries_per_program, 0u}});
         cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
         cross_node_dfb_test::write_sender_l1_staging(
             device, sender_cores, gdfb, data_pattern, entry_size, entries_per_program, 1, counter_base);
@@ -673,113 +670,10 @@ TEST_F(MeshDispatchFixture, TensixProgramInitResetsPointers) {
         << "Program-init reset: second program should write from fifo_start (counter_base=0xA0 at ring start)";
 }
 
-TEST_F(MeshDispatchFixture, TensixMidFlightResize) {
-    auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-
-    CoreCoord sender_core(0, 0);
-    CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
-    CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
-    const CoreCoord receiver_core(1, 0);
-
-    const uint32_t entry_size_initial = 256;
-    const uint32_t entry_size_resized = 512;
-    const uint32_t num_entries_initial = 2;
-    const uint32_t num_entries_after = 2;
-
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto gdfb =
-        experimental::CreateCrossNodeDFB(device, mapping, entry_size_initial, num_entries_initial + num_entries_after);
-
-    tt_metal::Program program = CreateProgram();
-
-    const uint8_t remote_dfb_id = experimental::AttachCrossNodeDFB(program, sender_cores, gdfb);
-    experimental::AttachCrossNodeDFB(program, receiver_cores, gdfb);
-
-    constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
-    const uint32_t staging_size = cross_node_dfb_test::sender_staging_size_bytes(
-        data_pattern, entry_size_initial, num_entries_initial, 1, entry_size_resized, num_entries_after);
-    tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
-        sender_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {
-                remote_dfb_id,
-                entry_size_initial,
-                num_entries_initial,
-                0u,
-                data_pattern,
-                1u,
-                entry_size_resized,
-                num_entries_after,
-                0u}});
-    tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
-        receiver_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {
-                remote_dfb_id,
-                entry_size_initial,
-                num_entries_initial,
-                0u,
-                1u,
-                entry_size_resized,
-                num_entries_after,
-                0u}});
-
-    cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
-    cross_node_dfb_test::write_sender_l1_staging(
-        device,
-        sender_cores,
-        gdfb,
-        data_pattern,
-        entry_size_initial,
-        num_entries_initial,
-        1,
-        0,
-        entry_size_resized,
-        num_entries_after);
-
-    distributed::MeshWorkload workload;
-    run_on_mesh_device(mesh_device, std::move(program), workload);
-
-    EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device,
-        gdfb,
-        receiver_core,
-        data_pattern,
-        entry_size_initial,
-        num_entries_initial,
-        0,
-        1,
-        0,
-        entry_size_resized,
-        num_entries_after))
-        << "Mid-flight resize test failed";
-}
-
-// TensixRelayDFBAlignment: verifies mid-flight resize correctly propagates fifo_limit
-// and fifo_page_size into the relay DFB registered via register_relay_dfb().
-//
-// Relay DFB pattern (DM + TRISC split):
-//   DM (NCRISC/BRISC):
-//     LocalDFB relay(handle);            // pre-allocated, shares CrossNodeDFB FIFO
-//     gdfb.register_relay_dfb(relay);    // align relay; auto-realign on resize
-//     gdfb.pop_front(n);                // DM advances rd_ptr + acks sender
-//     gdfb.set_receiver_entry_size(sz); // relay fifo_limit + fifo_page_size re-synced
-//   TRISC (reads relay, no CrossNodeDFB knowledge):
-//     cb_wait_front(relay_id, n);       // polls pages_sent counter
-//     cb_pop_front(relay_id, n);        // TRISC advances its own local rd_ptr
-//                                       // (DM's pop_front already acked sender)
-//
-// In this test there is no TRISC kernel; the DM receiver pops entries and host verifies data.
 TEST_F(MeshDispatchFixture, TensixRelayDFBAlignment) {
+    // Same-program relay metadata + fixed entry_size smoke. Mid-flight entry_size resize is
+    // not supported on CrossNodeDFB (see device header); full DM→TRISC relay correctness is
+    // Phase 3 (host L1 aliasing + JIT align like GlobalCB).
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device.get();
 
@@ -788,22 +682,20 @@ TEST_F(MeshDispatchFixture, TensixRelayDFBAlignment) {
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const CoreCoord receiver_core(1, 0);
 
-    const uint32_t entry_size_initial = 256;
-    const uint32_t entry_size_resized = 512;
+    const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto gdfb = experimental::CreateCrossNodeDFB(device, mapping, entry_size_initial, num_entries);
+    auto gdfb = experimental::CreateCrossNodeDFB(device, mapping, entry_size, num_entries);
 
     tt_metal::Program program = CreateProgram();
 
-    // Host side: attach with relay DFB name for cross-program tracking / metadata setup.
     experimental::AttachCrossNodeDFB(program, receiver_cores, gdfb, "local_relay_dfb");
     const uint8_t remote_dfb_id = experimental::AttachCrossNodeDFB(program, sender_cores, gdfb);
 
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
-    const uint32_t staging_size = cross_node_dfb_test::sender_staging_size_bytes(
-        data_pattern, entry_size_initial, num_entries, 1, entry_size_resized, num_entries);
+    const uint32_t staging_size =
+        cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 1);
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
@@ -811,16 +703,7 @@ TEST_F(MeshDispatchFixture, TensixRelayDFBAlignment) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {
-                remote_dfb_id,
-                entry_size_initial,
-                num_entries,
-                0u,
-                data_pattern,
-                1u,
-                entry_size_resized,
-                num_entries,
-                0u}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
     tt::tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
@@ -828,43 +711,22 @@ TEST_F(MeshDispatchFixture, TensixRelayDFBAlignment) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {
-                remote_dfb_id, entry_size_initial, num_entries, 0u, 1u, entry_size_resized, num_entries, 0xFFu}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u}});
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device,
-        sender_cores,
-        gdfb,
-        data_pattern,
-        entry_size_initial,
-        num_entries,
-        1,
-        0,
-        entry_size_resized,
-        num_entries);
+        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1);
 
     distributed::MeshWorkload workload;
     run_on_mesh_device(mesh_device, std::move(program), workload);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device,
-        gdfb,
-        receiver_core,
-        data_pattern,
-        entry_size_initial,
-        num_entries,
-        0,
-        1,
-        0,
-        entry_size_resized,
-        num_entries))
-        << "Relay DFB alignment test failed";
+        device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1))
+        << "Relay DFB attach + fixed-size push/pop failed";
 }
 
 // Cross-program relay + TRISC persistence is Phase 2/3 (GlobalDFB). CrossNode resets on
 // program init, so TensixRelayDFBTriscCrossProgramPersistence is not applicable here.
-// Same-program relay alignment is covered by TensixRelayDFBAlignment above.
 
 TEST_F(MeshDispatchFixture, TensixBarrierCompletesAll) {
     auto mesh_device = devices_[0];
@@ -895,7 +757,7 @@ TEST_F(MeshDispatchFixture, TensixBarrierCompletesAll) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u, 0u, 0u, 1u}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 1u}});
 
     auto recvs = corerange_to_cores(receiver_cores);
     for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
@@ -907,7 +769,7 @@ TEST_F(MeshDispatchFixture, TensixBarrierCompletesAll) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {remote_dfb_id, entry_size, num_entries, ri, 0u, 0u, 0u, 0u}});
+                .compile_args = {remote_dfb_id, entry_size, num_entries, ri}});
     }
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, send_k, sender_cores, gdfb, staging_size);

@@ -520,8 +520,7 @@ int main() {
                         (uint32_t tt_l1_ptr*)(kernel_config_base +
                                               launch_msg_address->kernel_config.cross_node_dfb_offset);
                     const uint32_t num_cross_node_dfbs = dfb_region[0];
-                    experimental::setup_cross_node_dfb_interfaces</*reset_credits=*/true>(
-                        dfb_region + 1, num_cross_node_dfbs);
+                    experimental::setup_cross_node_dfb_interfaces(dfb_region + 1, num_cross_node_dfbs);
                 }
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
@@ -550,8 +549,7 @@ int main() {
                             (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                   launch_msg_address->kernel_config.cross_node_dfb_offset);
                         const uint32_t num_cross_node_dfbs = dfb_region[0];
-                        experimental::setup_cross_node_dfb_interfaces</*reset_credits=*/true>(
-                            dfb_region + 1, num_cross_node_dfbs);
+                        experimental::setup_cross_node_dfb_interfaces(dfb_region + 1, num_cross_node_dfbs);
                     }
                 }
                 start_ncrisc_kernel_run(enables);

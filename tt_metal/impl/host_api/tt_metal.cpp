@@ -1189,6 +1189,13 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
                         cross_node_dfb_vec[base + 0] = attachment.config_page_addr;
                         cross_node_dfb_vec[base + 1] = attachment.entry_size;
+
+                        // Reset the actual config-page credits before GO. Firmware only
+                        // initializes its local interface, so it cannot erase a credit
+                        // that a faster peer has already sent for this launch.
+                        std::vector<uint8_t> zero_credits(attachment.credit_reset_size, 0u);
+                        MetalContext::instance().get_cluster().write_core(
+                            device_id, physical_core, zero_credits, attachment.credit_reset_addr);
                     }
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
                     MetalContext::instance().get_cluster().write_core(

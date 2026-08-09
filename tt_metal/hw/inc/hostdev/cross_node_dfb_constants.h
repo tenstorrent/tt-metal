@@ -7,7 +7,6 @@
 #include <cstdint>
 
 // Shared CrossNodeDFB layout constants for host and device.
-// Host-safe (cstdint only); do not pull risc_attribs / circular_buffer_interface here.
 
 // Sentinel for kernel_config_msg_t::cross_node_dfb_offset when no CrossNodeDFBs are attached.
 // Valid offsets are L1-aligned and therefore never equal 0xFF.

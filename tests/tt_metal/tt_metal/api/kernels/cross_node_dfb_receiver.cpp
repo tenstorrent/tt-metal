@@ -7,23 +7,15 @@
 // Compile-time parameters (via kernel compile_args):
 //   [0] remote_dfb_id
 //   [1] entry_size
-//   [2] num_entries        - entries to pop before optional resize
+//   [2] num_entries
 //   [3] receiver_idx       - unused (reserved for test harness symmetry)
-//   [4] do_resize          - 1 to resize after initial entries
-//   [5] entry_size_resized - new entry_size after resize
-//   [6] num_entries_after  - entries to pop after resize
-//   [7] relay_cb_id        - 0xFF to disable relay DFB registration in-kernel
 
 #include "api/dataflow/cross_node_dfb.h"
 #include "api/dataflow/noc.h"
 
 void kernel_main() {
     constexpr uint8_t remote_dfb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t entry_size = get_compile_time_arg_val(1);
     constexpr uint32_t num_entries = get_compile_time_arg_val(2);
-    constexpr uint32_t do_resize = get_compile_time_arg_val(4);
-    constexpr uint32_t entry_size_resized = get_compile_time_arg_val(5);
-    constexpr uint32_t num_entries_after = get_compile_time_arg_val(6);
 
     Noc noc;
 
@@ -35,13 +27,5 @@ void kernel_main() {
         DPRINT("Done wait front\n");
         gdfb.pop_front(1, noc);
         DPRINT("Done pop front\n");
-    }
-
-    if constexpr (do_resize) {
-        gdfb.set_receiver_entry_size(entry_size_resized, noc);
-        for (uint32_t i = 0; i < num_entries_after; ++i) {
-            gdfb.wait_front(1);
-            gdfb.pop_front(1, noc);
-        }
     }
 }
