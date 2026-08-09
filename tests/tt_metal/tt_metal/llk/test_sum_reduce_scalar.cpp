@@ -201,41 +201,44 @@ using namespace tt::tt_metal::unit_tests::compute::sum_reduce_scalar;
 
 // Runs on any single card (Wormhole or Blackhole): sum_reduce_scalar builds on
 // mul_reduce_scalar's reduce tail, which is supported on both architectures.
-class SumReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+//
+// Match Blaze LayerNorm's interpreted-tile selection exactly. It picks the tallest
+// legal height in {32, 16, 8, 4, 2, 1} that covers the width with at most eight
+// whole tiles, so only the height/count pairs below are generated today.
+class SumReduceScalarBlazeShapeTest : public LLKMeshDeviceSingleCardFixture,
+                                      public testing::WithParamInterface<SumReduceScalarConfig> {};
 
-// Standard 32x32-tile suite parametrized by tile count. One tile skips the accumulate
-// loop entirely; 8 is the DEST half-sync bf16 capacity, so every copied tile must still
-// be resident when the reduce consumes it.
-TEST_P(SumReduceScalarTest, SumReduceScalar) {
+TEST_P(SumReduceScalarBlazeShapeTest, SumReduceScalarBlazeShape) {
     auto& mesh_device = *devices_[0];
-    int num_tiles = GetParam();
-    ASSERT_TRUE(run_sum_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles, .tile_height = 32}));
+    ASSERT_TRUE(run_sum_reduce_scalar_test(mesh_device, GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    SumReduceScalarTests, SumReduceScalarTest, testing::Values(1, 3, 8), [](const testing::TestParamInfo<int>& info) {
-        return "SumReduceScalar_" + std::to_string(info.param) + "_Tiles";
-    });
-
-// Tile geometry suite parametrized by tile height. 16x32 halves num_faces to 2 while
-// face_r_dim stays 16; heights below 16 shrink face_r_dim itself, which reconfigures the
-// packer and GAPOOL. blaze reaches all of (32, 16, 8, 4, 2, 1) by picking the tallest
-// tile dividing the width, so bracket the sub-16 range at 8 and 1 rather than
-// enumerating 4 and 2 as well.
-class SumReduceScalarTileHeightTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
-
-TEST_P(SumReduceScalarTileHeightTest, SumReduceScalarTileHeight) {
-    auto& mesh_device = *devices_[0];
-    int tile_height = GetParam();
-    ASSERT_TRUE(run_sum_reduce_scalar_test(mesh_device, {.num_tiles = 8, .tile_height = tile_height}));
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    SumReduceScalarTileHeightTests,
-    SumReduceScalarTileHeightTest,
-    testing::Values(16, 8, 1),
-    [](const testing::TestParamInfo<int>& info) {
-        return "SumReduceScalar_" + std::to_string(info.param) + "x32_8_Tiles";
+    SumReduceScalarBlazeShapes,
+    SumReduceScalarBlazeShapeTest,
+    testing::Values(
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 1},
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 2},
+        SumReduceScalarConfig{.num_tiles = 3, .tile_height = 2},
+        SumReduceScalarConfig{.num_tiles = 5, .tile_height = 2},
+        SumReduceScalarConfig{.num_tiles = 7, .tile_height = 2},
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 4},
+        SumReduceScalarConfig{.num_tiles = 3, .tile_height = 4},
+        SumReduceScalarConfig{.num_tiles = 5, .tile_height = 4},
+        SumReduceScalarConfig{.num_tiles = 7, .tile_height = 4},
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 8},
+        SumReduceScalarConfig{.num_tiles = 3, .tile_height = 8},
+        SumReduceScalarConfig{.num_tiles = 5, .tile_height = 8},
+        SumReduceScalarConfig{.num_tiles = 7, .tile_height = 8},
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 16},
+        SumReduceScalarConfig{.num_tiles = 3, .tile_height = 16},
+        SumReduceScalarConfig{.num_tiles = 1, .tile_height = 32},
+        SumReduceScalarConfig{.num_tiles = 2, .tile_height = 32},
+        SumReduceScalarConfig{.num_tiles = 4, .tile_height = 32},
+        SumReduceScalarConfig{.num_tiles = 8, .tile_height = 32}),
+    [](const testing::TestParamInfo<SumReduceScalarConfig>& info) {
+        return "SumReduceScalar_" + std::to_string(info.param.tile_height) + "x32_" +
+               std::to_string(info.param.num_tiles) + "_Tiles";
     });
 
 // Native fp32 DEST with full sync, parametrized by tile count. A separate instantiation
