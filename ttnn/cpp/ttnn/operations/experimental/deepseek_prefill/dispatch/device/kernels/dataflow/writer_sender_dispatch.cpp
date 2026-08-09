@@ -397,10 +397,11 @@ void kernel_main() {
                         // Exactly the documented metadata contract, identical to the local and legacy
                         // cross-device paths in writer_worker_dispatch: three int32 routing fields
                         // [src chip, global token idx, top-k slot]. Nothing beyond meta[2] may be
-                        // written here — with the default metadata_len == 3 the slot holds only these
-                        // three words, and under fp8_scaled_input meta[3..] is the FP8 scale tail
-                        // (which this path cannot produce, hence the host-side fp8 gate on
-                        // SPARSE_MCAST_DISPATCH).
+                        // written here. With the default metadata_len == 3 the slot holds only these
+                        // three words. Under fp8_scaled_input meta[3..] is the per-token FP8 scale
+                        // tail, which the producer has already staged into this very slot (it is a
+                        // per-token constant, so one staging serves the whole group) — overwriting
+                        // [0..2] leaves that tail intact, and the full page is forwarded below.
                         meta[0] = (int32_t)linearized_mesh_coord;
                         meta[1] = (int32_t)token_idx;
                         meta[2] = (int32_t)route_info[11 + i];  // top-k slot

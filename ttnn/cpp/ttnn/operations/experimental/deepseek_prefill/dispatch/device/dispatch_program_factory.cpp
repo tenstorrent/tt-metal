@@ -412,18 +412,17 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
     const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     const bool sparse_has_fabric = (operation_attributes.num_links > 0);
-    // fp8_scaled_input extends metadata to 3 routing fields + one word per per-128-block scale, and the
-    // grouped path stages no metadata at the producer — the sender rebuilds it from route_info alone and
-    // has no access to the token's scale rows (they live in the worker's scales CB). Until grouped scale
-    // transport exists, fp8 stays on the legacy per-expert path, which copies the scale tail itself.
-    const bool sparse_not_fp8 = !operation_attributes.fp8_scaled_input;
-    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_not_fp8;
+    // fp8_scaled_input is supported: it extends metadata to 3 routing fields + one word per
+    // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
+    // is a per-token constant. The grouped producer stages the page (tail included) once per slot and
+    // the sender overwrites only the three routing fields per destination — see writer_worker_dispatch.
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric;
     // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
-    // disabled, print each gate so the reason is obvious (2D fabric / no fabric / fp8-scaled input).
+    // disabled, print each gate so the reason is obvious (2D fabric / no fabric).
     log_warning(
         tt::LogOp,
         "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
-        "[gates: fabric_1d={}, has_fabric={}, not_fp8={}]",
+        "[gates: fabric_1d={}, has_fabric={}]",
         enable_sparse_mcast ? "ENABLED" : "DISABLED",
         is_row_major ? "row-major" : "tile",
         (int)topology,
@@ -431,8 +430,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         mesh_view.num_cols(),
         operation_attributes.num_links,
         is_1d_fabric,
-        sparse_has_fabric,
-        sparse_not_fp8);
+        sparse_has_fabric);
     constexpr uint32_t grouped_route_info_u32 = 15;
     const uint32_t route_info_slot_stride_bytes =
         enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
