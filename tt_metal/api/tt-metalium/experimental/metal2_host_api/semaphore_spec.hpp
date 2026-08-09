@@ -32,8 +32,7 @@ namespace tt::tt_metal::experimental {
 // BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec and
 //   signal it (up() takes explicit coordinates for remote targets). Consumers
 //   (down()) must run on the semaphore's node -- the host rejects off-node
-//   CONSUME binders at build time (except under forced LOCAL_NONATOMIC, which
-//   is unvalidated; see `scope` below).
+//   CONSUME binders at build time, under every scope.
 //
 // ============================================================================
 
@@ -52,11 +51,11 @@ struct SemaphoreSpec {
     //////////////////////////////////////////////////////////////////////////////
     SemaphoreAdvancedOptions advanced_options;
 
-    // Physical-path INTENT for this semaphore. AUTO lets the host derive it. Forcing
-    // DM_LOCAL_CACHED is validated at build time (e.g. multi-node is a FATAL); forced
-    // EXTERNAL still rejects off-node CONSUME binders; LOCAL_NONATOMIC passes through
-    // unvalidated. The host resolves this to a device SemScope that the kernel picks up
-    // via CTAD (see noc_semaphore.h).
+    // Physical-path INTENT for this semaphore. AUTO lets the host derive it. An off-node
+    // CONSUME binder is rejected under every scope (guaranteed hang). Forcing
+    // DM_LOCAL_CACHED is additionally validated at build time (e.g. multi-node is a
+    // FATAL). The host resolves this to a device SemScope that the kernel picks up via
+    // CTAD (see noc_semaphore.h).
     SemaphoreScope scope = SemaphoreScope::AUTO;
 };
 
