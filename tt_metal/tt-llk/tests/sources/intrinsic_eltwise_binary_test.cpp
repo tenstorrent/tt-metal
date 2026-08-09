@@ -132,8 +132,10 @@ using namespace ckernel;
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
 #define INTR_ELWMUL __builtin_xttwh_elwmul
+#define INTR_MATH_HW_CONFIGURE __builtin_xttwh_math_hw_configure
 #else
 #define INTR_ELWMUL __builtin_xttbh_elwmul
+#define INTR_MATH_HW_CONFIGURE __builtin_xttbh_math_hw_configure
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -141,10 +143,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Semaphore + dest-section sync only.  The compiler's config pass emits the
-    // ALU hw_configure baseline (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/
-    // zero-flag/dest-base) and the per-compute reconfig for the intrinsic below.
+    // Semaphore + dest-section sync only.  Math-thread setup is an author-written
+    // config-declaration intrinsic (__builtin_xtt{wh,bh}_math_hw_configure):
+    // the compiler derives _llk_math_hw_configure_ + set_dest_section_base
+    // (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base) from the
+    // declared formats and emits it, so there is no _llk_math_hw_configure_ call
+    // in the compiler-managed build.  The per-compute reconfig for the elwmul
+    // below is compiler-emitted too.  The runtime-formats path is skipped (a
+    // runtime format is the U8 escape hatch -- the compiler cannot derive config
+    // from it, so no declaration is emitted).
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+
+#if defined(TT_COMPILER_EMITS_MATH_CONFIG)
+    INTR_MATH_HW_CONFIGURE(MATH_FORMAT, MATH_FORMAT);
+#endif
 
     // One 16x16 tile (one 16-row face) at dest index 0.  A single TTELWMUL
     // computes 8 rows (MAX_FPU_ROWS); a 16-row face needs two ELWMULs with an
