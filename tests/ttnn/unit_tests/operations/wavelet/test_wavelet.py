@@ -418,6 +418,51 @@ def test_ilwt_1d_external_coefficients_shorter_than_one_stick(
     assert_fp32_close_1d(reconstructed, signal)
 
 
+def test_ilwt_1d_batched_external_canonical_coefficients_more_than_one_stick(
+    device: ttnn.MeshDevice,
+) -> None:
+    batch = 2
+    original_length = 65
+    wavelet = "db4"
+    values = torch.arange(batch * original_length, dtype=torch.float32).reshape(batch, 1, 1, original_length)
+    signals = torch.sin(values * 0.071) + values * 0.002
+
+    approximation_references: list[torch.Tensor] = []
+    detail_references: list[torch.Tensor] = []
+    reconstruction_references: list[torch.Tensor] = []
+    for batch_index in range(batch):
+        approximation, detail = pywt.dwt(
+            signals[batch_index, 0, 0].numpy(),
+            wavelet,
+            mode="symmetric",
+        )
+        reconstructed = pywt.idwt(approximation, detail, wavelet, mode="symmetric")[:original_length]
+        approximation_references.append(torch.from_numpy(approximation))
+        detail_references.append(torch.from_numpy(detail))
+        reconstruction_references.append(torch.from_numpy(reconstructed))
+
+    coefficient_length = approximation_references[0].numel()
+    assert coefficient_length == ttnn.dwt_coeff_len(original_length, wavelet)
+    assert coefficient_length > 32
+
+    approximation_values = torch.stack(approximation_references).reshape(batch, 1, 1, coefficient_length)
+    detail_values = torch.stack(detail_references).reshape(batch, 1, 1, coefficient_length)
+    assert tuple(approximation_values.shape) == (batch, 1, 1, coefficient_length)
+    assert tuple(detail_values.shape) == (batch, 1, 1, coefficient_length)
+
+    reconstructed = ttnn.idwt(
+        to_device_1d(device, approximation_values),
+        to_device_1d(device, detail_values),
+        wavelet,
+        original_length,
+        boundary_mode="symmetric",
+    )
+    reconstructed_values = ttnn.to_torch(reconstructed).reshape(batch, 1, -1)[..., :original_length]
+
+    for batch_index, reference in enumerate(reconstruction_references):
+        assert_fp32_close(reconstructed_values[batch_index, 0], reference)
+
+
 def test_wavelet_1d_interleaved_l1_input_matches_dram_multichunk(
     device: ttnn.MeshDevice,
 ) -> None:
