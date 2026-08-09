@@ -8,13 +8,13 @@
  * defines set -- every thread's one-time setup is an author-written
  * config-declaration intrinsic:
  *
- *   UNPACK: __builtin_xttbh_unpack_hw_configure (config-declaration) + inline
- *           __builtin_xttbh_unpacr words (the per-tile data op, replacing the
+ *   UNPACK: __builtin_rvtt_bh_unpack_hw_configure (config-declaration) + inline
+ *           __builtin_rvtt_bh_unpacr words (the per-tile data op, replacing the
  *           MOP)
- *   MATH:   __builtin_xttbh_math_hw_configure (config-declaration) +
- *           __builtin_xttbh_elwmul (the per-compute reconfig)
- *   PACK:   __builtin_xttbh_pack_hw_configure (config-declaration) + inline
- *           __builtin_xttbh_pacr words (the per-tile data op)
+ *   MATH:   __builtin_rvtt_bh_math_hw_configure (config-declaration) +
+ *           __builtin_rvtt_bh_elwmul (the per-compute reconfig)
+ *   PACK:   __builtin_rvtt_bh_pack_hw_configure (config-declaration) + inline
+ *           __builtin_rvtt_bh_pacr words (the per-tile data op)
  *
  * The real-hardware golden: each thread's compiler-emitted config is
  * value-identical to the LLK's configure_* baseline (elfray-verified), and this

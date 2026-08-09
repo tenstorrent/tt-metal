@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /* Elementwise binary test whose MATH thread drives the compute through the
- * compiler-managed Tensix compute intrinsics (__builtin_xtt*_elwmul)
+ * compiler-managed Tensix compute intrinsics (__builtin_rvtt_*_elwmul)
  * instead of the LLK's llk_math_eltwise_binary_* API.  The compiler's config
  * pass emits the ALU hw_configure baseline + per-compute reconfig (the LLK's
  * _llk_math_hw_configure_ / _llk_math_reconfig_data_format_ equivalents), so
@@ -36,11 +36,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 // Compiler-managed unpack intrinsics, arch-prefixed like INTR_ELWMUL.
 #if defined(ARCH_WORMHOLE)
-#define INTR_UNPACK_HW_CONFIGURE __builtin_xttwh_unpack_hw_configure
-#define INTR_UNPACR __builtin_xttwh_unpacr
+#define INTR_UNPACK_HW_CONFIGURE __builtin_rvtt_wh_unpack_hw_configure
+#define INTR_UNPACR __builtin_rvtt_wh_unpacr
 #else
-#define INTR_UNPACK_HW_CONFIGURE __builtin_xttbh_unpack_hw_configure
-#define INTR_UNPACR __builtin_xttbh_unpacr
+#define INTR_UNPACK_HW_CONFIGURE __builtin_rvtt_bh_unpack_hw_configure
+#define INTR_UNPACR __builtin_rvtt_bh_unpacr
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                                   : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
 #if defined(TT_COMPILER_EMITS_UNPACK_CONFIG)
-    // Compiler-managed unpack config: __builtin_xtt{wh,bh}_unpack_hw_configure
+    // Compiler-managed unpack config: __builtin_rvtt_{wh,bh}_unpack_hw_configure
     // is a config-declaration intrinsic -- pass_rvtt_config derives the
     // configure_unpack_AB baseline (in/out data format, SrcUnsigned, LF8,
     // strides, tile descriptors, dest, x-dim) from the 6 semantic operands and
@@ -131,11 +131,11 @@ using namespace ckernel;
 // J-format field widths differ per arch).  Selected by the harness's
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
-#define INTR_ELWMUL __builtin_xttwh_elwmul
-#define INTR_MATH_HW_CONFIGURE __builtin_xttwh_math_hw_configure
+#define INTR_ELWMUL __builtin_rvtt_wh_elwmul
+#define INTR_MATH_HW_CONFIGURE __builtin_rvtt_wh_math_hw_configure
 #else
-#define INTR_ELWMUL __builtin_xttbh_elwmul
-#define INTR_MATH_HW_CONFIGURE __builtin_xttbh_math_hw_configure
+#define INTR_ELWMUL __builtin_rvtt_bh_elwmul
+#define INTR_MATH_HW_CONFIGURE __builtin_rvtt_bh_math_hw_configure
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     // Semaphore + dest-section sync only.  Math-thread setup is an author-written
-    // config-declaration intrinsic (__builtin_xtt{wh,bh}_math_hw_configure):
+    // config-declaration intrinsic (__builtin_rvtt_{wh,bh}_math_hw_configure):
     // the compiler derives _llk_math_hw_configure_ + set_dest_section_base
     // (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base) from the
     // declared formats and emits it, so there is no _llk_math_hw_configure_ call
@@ -202,8 +202,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // Compiler-managed pack intrinsics.  BH-only this slice (the WH pack
 // intrinsics + config geometry are deferred, like WH unpack).
-#define INTR_PACK_HW_CONFIGURE __builtin_xttbh_pack_hw_configure
-#define INTR_PACR __builtin_xttbh_pacr
+#define INTR_PACK_HW_CONFIGURE __builtin_rvtt_bh_pack_hw_configure
+#define INTR_PACR __builtin_rvtt_bh_pacr
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -228,7 +228,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);
 
 #if defined(TT_COMPILER_EMITS_PACK_CONFIG)
-    // Compiler-managed pack config: __builtin_xttbh_pack_hw_configure is a
+    // Compiler-managed pack config: __builtin_rvtt_bh_pack_hw_configure is a
     // config-declaration intrinsic -- pass_rvtt_config derives configure_pack's
     // baseline (strides, Dstacc, formats word, PCK_DEST_RD_CTRL, counters,
     // edge/mapping, the ADDR_MOD slots the inline pacrs' AddrMode selects, and

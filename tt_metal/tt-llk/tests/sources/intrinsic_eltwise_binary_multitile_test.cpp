@@ -6,7 +6,7 @@
 /* Multi-tile elementwise binary test.  As in the single-tile oracle
  * (intrinsic_eltwise_binary_test.cpp), the MATH thread drives the compute
  * through the compiler-managed Tensix compute intrinsics
- * (__builtin_xtt*_elwmul) and deliberately does NOT call the LLK math
+ * (__builtin_rvtt_*_elwmul) and deliberately does NOT call the LLK math
  * configure/reconfig functions: the compiler's config pass emits the ALU
  * hw_configure baseline + per-compute reconfig.  What this thread DOES own is
  * dest-walking across a block of tiles (the agreed programming model):
@@ -100,9 +100,9 @@ using namespace ckernel;
 // J-format field widths differ per arch).  Selected by the harness's
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
-#define INTR_ELWMUL __builtin_xttwh_elwmul
+#define INTR_ELWMUL __builtin_rvtt_wh_elwmul
 #else
-#define INTR_ELWMUL __builtin_xttbh_elwmul
+#define INTR_ELWMUL __builtin_rvtt_bh_elwmul
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
