@@ -6,6 +6,32 @@ feedback round lands.
 
 ---
 
+## Round 23 — independent rotating senders and Matmul remediation (2026-08-07)
+
+- **Trigger (API-009/Matmul review):** block-sharded Matmul can have shard senders outside its
+  output-work receiver rectangle. Widening that rectangle changed traffic, receiver roles, and ACK
+  fan-out; the degenerate helper path had also changed the original local-copy primitive.
+- **API:** `Mcast1D` and `Mcast2D` now accept ordered rotating sender sets independently of their
+  fixed receiver rectangles. Semaphore ownership covers the receiver/sender union, and the existing
+  dense-fan-out sentinel lets each device sender derive area-1 ACKs inside the rect or area ACKs
+  outside it. The existing v11 CT/RT wire already represented this, so the version remains **11**.
+- **Kernel semantics:** degenerate self-only copies again use same-core `noc.async_write` with no
+  immediate barrier. The block-sharded reader delegates that case to `SenderPipe::send()` instead of
+  duplicating it at the call site.
+- **Matmul:** legacy and descriptor factories restore the original receiver rectangles and carry
+  shard sender order separately; reuse their descriptor NoCs; use one unconditional `McastArgs` ABI;
+  append helper blocks after fixed operation fields; and preserve TensorAccessor chaining. The sparse
+  factory received the same shared-kernel ABI treatment after focused triage exposed stale bindings.
+- **Correctness:** host build passed; host wire tests 30/30; source audit 17/17; helper normal and
+  Watcher suites 80/80 each; full Matmul 816 passed, 310 expected skips, 2 known xfails; sparse Matmul
+  18/18. The outside-sender and degenerate helper/production cases passed with the intended kernels.
+- **Performance:** at 800 MHz, three warmups and 20 measured records gave +0.643% for 2D SDXL,
+  +0.809% for 1D SDXL, and -0.045% for transposed 2D versus matched `4a1d6a97ca9` artifacts. New
+  sensitive-path records measured 2,548.925 ns for 1x1 degenerate and 11,787.407 ns for the
+  sender-span-greater-than-receiver-span case; both asserted the intended kernel source.
+
+---
+
 ## Round 22 — typed Flag control values, API v11 (2026-08-06)
 
 - **Trigger (API-007):** Matmul's sparsity batch-validity exchange carries `VALID` or

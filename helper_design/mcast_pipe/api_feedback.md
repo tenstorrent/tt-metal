@@ -462,3 +462,64 @@ This formulation both avoids constructor initialization of a remotely written
 Flag and closes the existing lost-wakeup window in which a worker can clear the
 next round's `VALID` after its prior-round arrival has released the
 coordinator. The helper API and wire remain at v10 for this migration.
+
+## API-009 — Decouple rotating senders from the receiver rectangle
+
+- **Date:** 2026-08-07
+- **Status:** Implemented
+- **Surface:** `ttnn::kernel_lib::host::Mcast1D`, `Mcast2D`, and the rotating
+  host/runtime wire
+- **Migration evidence:** block-sharded Matmul in0 multicast
+
+### Current limitation
+
+The rotating helpers derive the sender set from the multicast rectangle:
+`Mcast1D` rotates over every core on the line, while `Mcast2D` requires a
+rotating sender to be inside its rectangle. They therefore cannot represent
+the original block-sharded Matmul topology when the shard has more sender
+cores than the output has receiver cores: later senders are outside the fixed
+output receiver rectangle.
+
+Expanding the receiver rectangle to include those senders is not an equivalent
+migration. It makes shard-only cores receive and acknowledge every other
+sender's rounds, increases the payload and semaphore fan-out, and turns
+formerly external senders into loopback senders.
+
+### Required behavior
+
+Support an ordered rotating sender set that is independent of the fixed
+receiver rectangle. The protocol must derive or encode the correct per-sender
+acknowledgement count and include/exclude-source mode: a sender inside the
+receiver rectangle waits for all other receivers, while a sender outside it
+waits for every receiver and does not loop data back to itself.
+
+Matmul should restore its original rectangles after this capability exists;
+until then, the API limitation must remain explicit rather than being hidden by
+widening the multicast geometry.
+
+### Resolution
+
+Implemented on 2026-08-07 without changing the v11 device wire. `Mcast1D` now
+accepts one explicit ordered sender sequence per receiver line, and `Mcast2D`
+accepts one explicit ordered sender sequence for its fixed rectangle. Sender
+sequences may contain cores outside the receiver rectangle; helper-owned
+semaphores cover the union of receivers and senders. Empty, duplicate,
+misaligned, non-dense, and inconsistent line configurations fail on the host.
+
+The existing rotating RT layout already carries a fixed destination rectangle
+followed by ordered sender coordinates, so no wire expansion was needed. The
+host emits the existing `0xFFFFFFFF` dense-fan-out sentinel for the ACK field.
+`SenderPipe` then derives the correct count per round: rectangle area minus one
+for an inside sender and the full rectangle area for an outside sender.
+
+Block-sharded Matmul now supplies its shard sender order separately while
+retaining the original output-work receiver rectangles in both legacy and
+descriptor builders. A focused device case rotates across an inside sender and
+an outside sender for multiple rounds and verifies payload order plus handshake
+completion; complete helper normal and Watcher suites passed 80/80. Host wire,
+validation, role-query, and semaphore-union coverage passed 30/30. The full
+Matmul suite passed 816 tests with 310 expected skips and 2 known xfails, and
+the sparse Matmul suite passed 18/18 after its shared-kernel ABI bindings were
+audited. Matched 3-warmup/20-record Blackhole performance deltas versus
+`4a1d6a97ca9` were +0.643% (2D SDXL), +0.809% (1D SDXL), and -0.045%
+(transposed 2D), all within the 1.5% gate.
