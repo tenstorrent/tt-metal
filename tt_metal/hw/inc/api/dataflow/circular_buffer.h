@@ -135,10 +135,6 @@ public:
     [[nodiscard]] auto scoped_lock() {
 #ifndef COMPILE_FOR_TRISC
         auto& iface = get_local_cb_interface(cb_id_);
-        // cb_addr_shift is 0 outside TRISC (circular_buffer_interface.h), so these fifo fields are
-        // already byte values here -- same convention get_write_ptr()/get_read_ptr() return. Scaling
-        // them by 16 overflowed setLockedRegion()'s 16-bit field, so the recorded extent was both 16x
-        // too large and aliased to the wrong address.
         uint32_t addr = iface.fifo_limit - iface.fifo_size;
         uint32_t num_bytes = iface.fifo_size;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);

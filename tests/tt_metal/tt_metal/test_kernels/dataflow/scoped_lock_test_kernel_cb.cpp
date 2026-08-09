@@ -16,8 +16,6 @@ void kernel_main() {
     uint32_t other_sem_id = get_arg_val<uint32_t>(2);
     uint32_t other_noc_x = get_arg_val<uint32_t>(3);
     uint32_t other_noc_y = get_arg_val<uint32_t>(4);
-    // Local L1 word the locked CB base is staged into: NOC'd to the writer so it can target the
-    // locked region directly, and left in place for the host to read back and assert against.
     uint32_t local_scratch = get_arg_val<uint32_t>(5);
     uint32_t writer_inbox = get_arg_val<uint32_t>(6);
 
@@ -30,10 +28,7 @@ void kernel_main() {
     {
         auto lock = cb.scoped_lock();
 
-        // Publish the locked base (stage in local L1, then NOC it across). Nothing has been pushed
-        // into the CB, so the write pointer is still its base -- the same byte address scoped_lock()
-        // records as the locked extent. The host asserts the flagged address equals this value, so
-        // the two failing to agree shows up as a test failure rather than silently passing.
+        // Publish the locked base (stage in local L1, then NOC it across).
         volatile tt_l1_ptr uint32_t* staged = (volatile tt_l1_ptr uint32_t*)(uintptr_t)local_scratch;
         *staged = cb.get_write_ptr();
         CoreLocalMem<uint32_t> addr_src(local_scratch);

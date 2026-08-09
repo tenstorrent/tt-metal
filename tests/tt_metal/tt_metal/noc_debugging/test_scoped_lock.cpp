@@ -355,8 +355,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
 
         uint32_t write_size = alignment;
         // The locker stages its locked CB base here and NOCs it to the same offset on the writer,
-        // so the writer can target the locked region directly. Offset matches the DFB tests' choice
-        // of scratch, clear of the buffers under test.
+        // so the writer can target the locked region directly.
         uint32_t scratch_addr = unreserved_addr + 0x20000;
 
         KernelHandle locker_kernel = CreateKernel(
@@ -399,8 +398,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         distributed::Finish(mesh_device->mesh_command_queue());
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        // The locker left its locked CB base in scratch, so the flagged address can be checked
-        // exactly rather than just for being non-zero.
         std::vector<uint32_t> published;
         detail::ReadFromDeviceL1(mesh_device->get_devices()[0], locker_core, scratch_addr, sizeof(uint32_t), published);
         ASSERT_FALSE(published.empty());
@@ -463,7 +460,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
 
         uint32_t write_size = alignment;
-        // Same staging slot as the issue variant; see ScopedLockConcurrentAccessCBIssue.
         uint32_t scratch_addr = unreserved_addr + 0x20000;
 
         KernelHandle locker_kernel = CreateKernel(
@@ -471,8 +467,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel_cb_no_issue.cpp",
             locker_core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-        // Same writer as the issue variant: only the locker differs, so the two tests write to the
-        // identical address and differ solely in whether the lock is held.
         KernelHandle writer_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel.cpp",

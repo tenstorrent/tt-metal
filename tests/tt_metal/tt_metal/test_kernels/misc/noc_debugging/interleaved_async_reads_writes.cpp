@@ -12,12 +12,6 @@ void kernel_main() {
     UnicastEndpoint unicast_endpoint;
 
     constexpr uint32_t num_bytes = 64;
-    // 10 matches async_reads.cpp / async_writes.cpp: both issues this test looks for (write-after-write
-    // from one source address, read-after-read to one destination) are already tripped by the second
-    // iteration, so more buys no detection. Note that going past 4096 would additionally cross the
-    // NOC counter wrap the host tracker compares with wrap_ge() -- that is deliberately not bought
-    // here, because it costs ~32s in a single dispatch and trips CI's hang detector. Cover the
-    // wrapping arithmetic with a host-side unit test instead.
     constexpr uint32_t num_iterations = 10;
 
     for (uint32_t i = 0; i < num_iterations; ++i) {

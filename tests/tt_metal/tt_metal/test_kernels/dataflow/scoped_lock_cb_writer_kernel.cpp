@@ -8,9 +8,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 
-// Writes into a CB on the locker core, at the address the locker publishes. Whether those writes
-// are violations is decided entirely by the locker kernel: it either holds the CB lock across the
-// first write (scoped_lock_test_kernel_cb.cpp) or does not (..._cb_no_issue.cpp).
+// Writes into a CB on the locker core, at the address the locker publishes.
 void kernel_main() {
     uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
     uint32_t write_size = get_arg_val<uint32_t>(1);

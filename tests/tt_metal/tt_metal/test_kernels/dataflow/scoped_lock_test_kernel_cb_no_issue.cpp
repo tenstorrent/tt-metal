@@ -16,7 +16,6 @@ void kernel_main() {
     uint32_t other_sem_id = get_arg_val<uint32_t>(2);
     uint32_t other_noc_x = get_arg_val<uint32_t>(3);
     uint32_t other_noc_y = get_arg_val<uint32_t>(4);
-    // Same staging slots as the issue variant; see scoped_lock_test_kernel_cb.cpp.
     uint32_t local_scratch = get_arg_val<uint32_t>(5);
     uint32_t writer_inbox = get_arg_val<uint32_t>(6);
 
@@ -26,10 +25,7 @@ void kernel_main() {
     UnicastEndpoint unicast_endpoint;
     CircularBuffer cb(cb_id);
 
-    // Publish the CB base with no lock held: the writer targets the same region as the issue
-    // variant, so the only difference between the two tests is whether the lock is held while it
-    // writes. Nothing has been pushed, so the write pointer is still the base (see
-    // scoped_lock_test_kernel_cb.cpp).
+    // Publish the CB base with no lock held
     volatile tt_l1_ptr uint32_t* staged = (volatile tt_l1_ptr uint32_t*)(uintptr_t)local_scratch;
     *staged = cb.get_write_ptr();
     CoreLocalMem<uint32_t> addr_src(local_scratch);
