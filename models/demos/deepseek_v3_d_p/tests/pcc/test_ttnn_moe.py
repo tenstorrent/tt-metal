@@ -141,15 +141,12 @@ def run_model(
         f"emb_dim={emb_dim}, experts={num_routed_experts}"
     )
 
-    # fp8 mode: TtMoe and TorchMoe both cast x to fp8 before dispatch and cast the buffer
-    # back after it, so their outputs stay directly comparable. The only expected difference
-    # is the scales — the device computes them in its own arithmetic, within ~1e-2 of torch
-    # (pinned by the cast op unit test) — hence the tolerant buffer/scale checks below.
     logger.info(f"compressed_fp8_dispatch={compressed_fp8_dispatch} for this run (dispatch path under test)")
 
-    # A bf16-dispatch entry for a model whose production path is fp8 only covers the
-    # PREFILL_COMPRESSED_FP8_DISPATCH=0 debugging fallback — not worth CI device time; it stays
-    # runnable locally. Wormhole (no fp8 ops) keeps its bf16 coverage.
+    if compressed_fp8_dispatch and not is_blackhole():
+        pytest.skip("compressed fp8 dispatch ops are Blackhole-only")
+    if compressed_fp8_dispatch and not variant.supports_compressed_fp8_dispatch:
+        pytest.skip(f"{variant.name} does not support compressed fp8 dispatch")
     if (
         (is_ci_env or is_ci_v2_env)
         and is_blackhole()
@@ -683,8 +680,7 @@ MESH_TOPOLOGY_PARAMS = [
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced, "
-        "compressed_fp8_dispatch"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
     ),
     [
         # fmt: off
@@ -692,27 +688,21 @@ MESH_TOPOLOGY_PARAMS = [
         # padding-aware dispatch shrinks every device's token loop. Only enabled for the
         # perf-device-256 (DEVICE_FP32, non-PCC) row — the only one that builds a padding_config;
         # the rest keep sequential placement (their reference / PCC path isn't zigzag).
-        # compressed_fp8_dispatch column: the dispatch path this entry tests. True (production
-        # path for DS/Kimi) requires Blackhole — the per_token_cast ops don't exist elsewhere,
-        # so True entries carry the Blackhole-only mark; entries that also run on Wormhole
-        # pin False.
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  True, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole. Lighter dispatch capacity (5
         # vs 8) keeps the soak time bounded.
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, False),
-        # fp8 twin of the 64-expert PCC entry above (which stays bf16 because it also runs on
-        # Wormhole): keeps the fp8 HOST_ALL/64-expert combination covered on Blackhole.
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-host-64-fp8"),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=pytest.mark.timeout(900), id="pcc-host-64"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, True, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
     ],
 )
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -769,22 +759,21 @@ def test_ds_moe(
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced, "
-        "compressed_fp8_dispatch"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
     ),
     [
         # fmt: off
         # GLM-5.2 MoE (256 experts / top-8, emb 6144, moe_int 2048). Exercises the >64-expert unfused
         # extract->FFN->insert routed-expert path on GLM dims. Gate grouping comes from the GLM config
         # (n_group=1 -> plain top-k); GLM's noaux_tc knife-edge gate is validated at the transformer
-        # level. compressed_fp8_dispatch=False everywhere: GLM production runs bf16 dispatch
-        # (supports_compressed_fp8_dispatch=False on its adapter). 25k = 3200 per-chip x 8.
-        pytest.param(1600, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
-        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL,    True,  False, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-glm-256"),
+        # level. 25k = 3200 per-chip x 8.
+        pytest.param(1600, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(3200, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL,    True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-glm-256"),
         # fmt: on
     ],
 )
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -841,19 +830,18 @@ def test_glm_moe(
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, compressed_fp8_dispatch"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
     ),
     [
         # fmt: off
-        # compressed_fp8_dispatch=True everywhere: Kimi production runs fp8 dispatch, and every
-        # entry is Blackhole-only.
-        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf"),
-        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc"),
-        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-perf"),
-        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-pcc"),
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf"),
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-perf"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-pcc"),
         # fmt: on
     ],
 )
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8", "bf16"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
