@@ -930,9 +930,11 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
+            ff1_reduce_scatter_width = self.hidden_dim // self.cluster_shape[1]
+            ff1_reduce_scatter_cores = compute_galaxy_width_shard_cores(ff1_reduce_scatter_width)
             self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
+                shape=(32, ff1_reduce_scatter_width // ff1_reduce_scatter_cores),
+                core_grid=num_to_coregrid(ff1_reduce_scatter_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

@@ -59,6 +59,8 @@ def test_compute_galaxy_padded_vocab_size(vocab_size, num_devices, expected):
         (1024, 32),
         (1280, 20),
         (2048, 32),
+        (3584, 28),
+        (4096, 32),
     ],
 )
 def test_compute_galaxy_width_shard_cores(width, expected):
