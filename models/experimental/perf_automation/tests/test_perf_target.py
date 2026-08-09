@@ -201,3 +201,22 @@ def test_rate_and_band_never_inverts_or_goes_negative():
         theo, band = pt.rate_and_band(byts, peak, frac=frac, tp_degree=tp)
         assert theo >= 0.0, (byts, peak, frac, tp, theo)
         assert band[0] <= band[1], (byts, peak, frac, tp, band)
+
+
+# --- the three roofline defects found on the run-50 report ------------------------------------
+
+
+def test_the_attention_flops_are_counted_not_only_the_weight_matmuls():
+    """2 x params x tokens counts every WEIGHT matmul -- each parameter is multiplied once per token,
+    so every projection in every layer is already there. What it omitted is the attention SCORE path,
+    QK^T and A.V, which uses no parameters and scales with the SQUARE of the sequence.
+
+    0.4% of prefill FLOPs at ISL 128 -- invisible, which is why it survived -- 3.3% at 1024 and 21.3%
+    at 8192, where it decides whether the stage reads compute-bound or memory-bound at all."""
+    L, H, P = 48, 3840, 11_180_446_320
+    for toks, want_pct in ((128, 0.4), (1024, 3.3), (8192, 21.3)):
+        weights = 2.0 * P * toks
+        attn = 4.0 * L * toks * toks * H
+        assert abs(100.0 * attn / (weights + attn) - want_pct) < 0.2, toks
+    # and it is ADDITIVE, never a replacement: the weight term still dominates at the benchmark point
+    assert 4.0 * L * 128 * 128 * H < 0.01 * (2.0 * P * 128)

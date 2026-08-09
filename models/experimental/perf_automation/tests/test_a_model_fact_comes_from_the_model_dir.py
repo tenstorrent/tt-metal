@@ -165,3 +165,56 @@ def test_a_manifest_without_a_model_root_is_none_not_the_cwd(tmp_path):
     got = r._model_root_for_report(tmp_path)
     assert got is None, got
     assert got != Path("."), "an empty model_root degraded back into the working directory"
+
+
+# --- the geometry that makes prefill differ from decode ----------------------------------------
+
+_GEMMA3_CFG = {
+    "text_config": {
+        "hidden_size": 3840,
+        "intermediate_size": 15360,
+        "num_key_value_heads": 8,
+        "num_attention_heads": 16,
+        "num_hidden_layers": 48,
+    },
+    "vision_config": {"hidden_size": 1152, "intermediate_size": 4304, "num_hidden_layers": 27},
+}
+
+
+def _cfg_probe(cfg):
+    """Run the emitter's config reader over a config and return what it would record."""
+    spec = _ilu.spec_from_file_location("cc_run_cfg_ut", str(_PA / "cc_optimize" / "run.py"))
+    r = _ilu.module_from_spec(spec)
+    sys.modules["cc_run_cfg_ut"] = r
+    spec.loader.exec_module(r)
+    return r
+
+
+def test_the_geometry_is_read_from_the_nested_text_config(monkeypatch, tmp_path):
+    """THE LESSON WAS LEARNED FOR ONE KEY AND NOT THE FOUR BESIDE IT.
+
+    `layers` already had a nested fallback, with a comment saying in as many words that "gemma3
+    declares it under text_config and a flat .get() reads 0 for every multimodal config".
+    hidden_size, intermediate_size, num_key_value_heads and head_dim kept the FLAT lookup, read 0 on
+    every multimodal model, were dropped by the `if val` filter, and never reached the facts file.
+
+    Without them active_bytes(regime="prefill") has no KV and no activation term to add, so it
+    returns decode's figure -- and the report printed ONE memory ceiling on both stages."""
+    r = _cfg_probe(_GEMMA3_CFG)
+    monkeypatch.setattr(r, "_hf_cache_dims", lambda *a, **k: dict(_GEMMA3_CFG), raising=False)
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _perf_target_inputs")
+    body = src[i : src.index("\ndef ", i + 1)]
+    for key in ("hidden_size", "intermediate_size", "num_key_value_heads", "head_dim"):
+        assert "_cfgv(" in body, "the geometry still uses the flat lookup"
+    assert 'cfg.get("hidden_size")' not in body, "hidden_size is still read flat only"
+
+
+def test_the_vision_tower_is_never_taken_for_the_text_tower():
+    """gemma3's vision_config ALSO carries hidden_size (1152), and a naive walk into the first
+    sub-config that has the key would price prefill's activations for the wrong tower entirely --
+    which is how a 1280-wide hidden ended up in a facts file in the first place."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _cfgv")
+    body = src[i : i + 900]
+    assert '"vision"' in body and '"audio"' in body, "the walk does not exclude the non-text towers"

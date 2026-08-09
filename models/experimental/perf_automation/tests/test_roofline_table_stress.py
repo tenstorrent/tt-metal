@@ -610,3 +610,68 @@ def test_the_model_root_is_given_not_guessed(monkeypatch, fid, tmp_path):
     monkeypatch.setattr(S, "_MODEL_ROOT_HINT", tmp_path / "nonexistent")
     monkeypatch.setattr(S, "_perf_mcp", lambda: None)
     assert S._model_facts() is None
+
+
+def test_the_two_stages_never_disagree_about_the_weights_they_share():
+    """ONE MODEL, ONE BYTE COUNT. _bytes_for recomputed decode's read set from weight_bytes while the
+    HEADLINE ceiling came from the params rule, so a single report carried both:
+
+        stage roof   24.37 GB -> 47.61 ms      (weight_bytes)
+        headline     11.18 GB -> 21.84 ms      (params x 1.0 B/param)
+
+    2.18x apart, with the stop gate judging against one number and the reader looking at the other.
+    `active_bytes` (the argument) has already been through the agreed precedence -- pinned anchor,
+    then measured per-op bytes, then the params rule -- so whatever it decided is THE answer, and
+    prefill is that plus only what prefill alone reads."""
+    import summary as S
+
+    mf = {
+        "weight_bytes": 24374793024,
+        "total_params": 11180446320,
+        "dominant_dtype": "bfloat16",
+        "layers": 48,
+        "hidden_size": 3840,
+        "intermediate_size": 15360,
+        "kv_heads": 8,
+        "head_dim": 256,
+    }
+    _saved_f, _saved_t = S._model_facts, S._prefill_tokens
+    try:
+        S._model_facts = lambda: mf
+        S._prefill_tokens = lambda: 128
+        ab = int(11.18e9)
+        r = S._stage_roofs(active_bytes=ab, peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
+        assert abs(r["decode"]["bytes"] - ab) < 1.0, "decode invented a second byte count"
+        assert r["prefill"]["bytes"] > r["decode"]["bytes"], "prefill must add its KV + activations"
+    finally:
+        S._model_facts, S._prefill_tokens = _saved_f, _saved_t
+
+
+def test_prefill_crosses_from_memory_bound_to_compute_bound_with_the_prompt():
+    """The whole reason the two stages get separate roofs: prefill's FLOPs scale with the sequence
+    and decode's do not, so the same model binds differently in each stage -- and differently at
+    different prompt lengths. A single reused ceiling could not express that."""
+    import summary as S
+
+    mf = {
+        "weight_bytes": 24374793024,
+        "total_params": 11180446320,
+        "dominant_dtype": "bfloat16",
+        "layers": 48,
+        "hidden_size": 3840,
+        "intermediate_size": 15360,
+        "kv_heads": 8,
+        "head_dim": 256,
+    }
+    _saved_f, _saved_t = S._model_facts, S._prefill_tokens
+    try:
+        S._model_facts = lambda: mf
+        binds = {}
+        for isl in (128, 8192):
+            S._prefill_tokens = lambda i=isl: i
+            r = S._stage_roofs(active_bytes=int(11.18e9), peak_bw_gbps=512.0, tp_degree=1, unit="tok/s/u", profile=None)
+            binds[isl] = r["prefill"]["binds"]
+        assert binds[128] == "memory", binds
+        assert binds[8192] == "compute", binds
+    finally:
+        S._model_facts, S._prefill_tokens = _saved_f, _saved_t

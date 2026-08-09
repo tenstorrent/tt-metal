@@ -905,13 +905,26 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
         Falls back to the passed-in figure when the facts are too thin to model the extra terms, so a
         model with no layer geometry still gets its weights floor rather than nothing.
         """
-        if not mf:
+        if not mf or regime != "prefill":
+            # DECODE IS THE CEILING'S OWN BYTE COUNT, NOT A SECOND OPINION ON IT. This recomputed the
+            # read set from weight_bytes while the headline ceiling came from the params rule, so one
+            # report carried two figures for one model: 24.37 GB (47.61 ms) in the stage roof against
+            # 11.18 GB (21.84 ms) in the headline -- 2.18x apart, with the stop gate judging against
+            # one and the reader looking at the other. `active_bytes` (the argument) already went
+            # through the agreed precedence: pinned anchor, then measured per-op bytes, then the
+            # params rule. Whatever it decided is THE answer for this run.
             return per_dev_bytes
         try:
             from agent.perf_target import active_bytes as _ab
 
-            b = float(_ab(mf, regime=regime, seq_len=int(toks or 0)) or 0.0) / tp
-            return b if b > 0 else per_dev_bytes
+            # PREFILL IS DECODE PLUS WHAT PREFILL ALONE READS. Taking the difference between the two
+            # regimes isolates the KV it writes and the activations it carries, and adds them to the
+            # agreed figure -- so the two stages can never disagree about the weights they share,
+            # however that figure was established.
+            _extra = float(_ab(mf, regime="prefill", seq_len=int(toks or 0)) or 0.0) - float(
+                _ab(mf, regime="decode", seq_len=0) or 0.0
+            )
+            return per_dev_bytes + max(0.0, _extra) / tp
         except Exception:  # noqa: BLE001
             return per_dev_bytes
 
@@ -951,8 +964,17 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None):
     _pt = _prefill_tokens() if str(unit or "").strip().lower().startswith("tok") else 0
     if _pt:
         stages.insert(0, ("prefill", _pt))
+    _L = int((mf or {}).get("layers") or 0)
+    _H = int((mf or {}).get("hidden_size") or 0)
     for name, toks in stages:
-        flops = (2.0 * float(params) * float(toks) / tp) if params else 0.0
+        # 2 x params x tokens counts every WEIGHT matmul -- each parameter is multiplied once per
+        # token, so every projection in every layer is already in there. What it omits is the
+        # attention score path, QK^T and A.V, which uses no parameters at all and scales with the
+        # SQUARE of the sequence: 4 x layers x tokens^2 x hidden. Absent, prefill's compute floor is
+        # understated by 0.4% at ISL 128 -- invisible, which is why it survived -- but 3.3% at 1024
+        # and 21.3% at 8192, where it decides whether the stage reads compute- or memory-bound.
+        _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
+        flops = ((2.0 * float(params) * float(toks) + _attn) / tp) if params else 0.0
         comp_ms = ((flops / peak_flops) * 1000.0) if (flops and peak_flops > 0) else None
         _b = _bytes_for("prefill" if name == "prefill" else "decode", toks if name == "prefill" else 0)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0

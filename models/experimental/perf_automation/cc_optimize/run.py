@@ -4011,17 +4011,46 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     # multimodal config, and 0 layers feeds the roofline facts.
     from agent.layer_depth import _depth_from_mapping as _dfm
 
+    # THE SAME NESTING THAT HID THE LAYER COUNT HIDES ITS FOUR NEIGHBOURS. The comment above is
+    # explicit -- "gemma3 declares it under text_config and a flat .get() reads 0 for every
+    # multimodal config" -- and the fallback was given to `layers` alone. hidden_size,
+    # intermediate_size, num_key_value_heads and head_dim kept the flat lookup, so on every
+    # multimodal model they read 0, were dropped by the `if val` below, and never reached the file.
+    #
+    # Without them active_bytes(regime="prefill") has no KV and no activation term to add, so it
+    # returns decode's figure and the report prints ONE memory ceiling on both stages -- which is
+    # what it did for gemma-3-12b and for voxtral. A lesson learned for one key and not applied to
+    # the four beside it.
+    def _cfgv(*names):
+        """A config value, flat first then one level down into a sub-config (text/decoder/llm)."""
+        for n in names:
+            v = _sc(cfg.get(n), 0)
+            if v:
+                return v
+        for _k, _sub in (cfg or {}).items():
+            if not isinstance(_sub, dict):
+                continue
+            # The TEXT tower, never the vision one: gemma3's vision_config also carries hidden_size
+            # (1280), and taking it produced a prefill activation term for the wrong tower entirely.
+            if "vision" in str(_k).lower() or "audio" in str(_k).lower():
+                continue
+            for n in names:
+                v = _sc(_sub.get(n), 0)
+                if v:
+                    return v
+        return 0
+
     layers = _sc(cfg.get("num_hidden_layers") or cfg.get("n_layer") or cfg.get("num_layers"), 0) or _sc(_dfm(cfg), 0)
-    kv_heads = _sc(cfg.get("num_key_value_heads") or cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
-    hidden = _sc(cfg.get("hidden_size") or cfg.get("d_model"), 0)
-    heads = _sc(cfg.get("num_attention_heads") or cfg.get("num_heads"), 0)
-    head_dim = _sc(cfg.get("head_dim"), 0) or ((hidden // heads) if (hidden and heads) else 0)
+    kv_heads = _cfgv("num_key_value_heads", "num_attention_heads", "num_heads")
+    hidden = _cfgv("hidden_size", "d_model")
+    heads = _cfgv("num_attention_heads", "num_heads")
+    head_dim = _cfgv("head_dim") or ((hidden // heads) if (hidden and heads) else 0)
     # hidden_size and intermediate_size join the geometry because PREFILL'S byte model needs them:
     # its activations are (2*hidden + 2*intermediate) per layer per token, and without them
     # active_bytes(regime="prefill") falls back to the weights-only figure -- which is decode's, and
     # is exactly how both stages came to print one memory ceiling twice. Emitted from the same config
     # read that already produced layers/kv_heads/head_dim; no new source.
-    inter = _sc(cfg.get("intermediate_size") or cfg.get("ffn_dim") or cfg.get("d_ff"), 0)
+    inter = _cfgv("intermediate_size", "ffn_dim", "d_ff")
     for key, val in (
         ("layers", layers),
         ("kv_heads", kv_heads),
