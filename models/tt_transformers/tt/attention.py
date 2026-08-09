@@ -623,7 +623,17 @@ class Attention(LightweightModule):
             # select the bias tensor based on the number of tiles in the rows
             # WARNING: must not change the batch size between compiling and executing a trace
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
-            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
+            wqkv_bias = self.wqkv_bias_decode[num_tiles - 1]
+            if wqkv_bias.shape[-2] != xqkv_fused_sharded.shape[-2]:
+                # Keep the tile-padded storage while matching the linear output's logical batch height.
+                # The TG interleaved linear preserves sub-tile decode batch sizes, whereas the cached
+                # bias is expanded to a whole tile for trace execution.
+                wqkv_bias = ttnn.reshape(
+                    wqkv_bias,
+                    (xqkv_fused_sharded.shape[-2], wqkv_bias.shape[-1]),
+                    wqkv_bias.padded_shape,
+                )
+            xqkv_fused_sharded = xqkv_fused_sharded + wqkv_bias
 
         ttnn.deallocate(x)
         qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
