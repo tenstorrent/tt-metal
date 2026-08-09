@@ -132,10 +132,25 @@ between one real task and three that are correctly parked.*
   --topology ring --sp-axis 1 --tp-axis 0` → **3/3** (ag_tp, ag_sp, rs_tp) match real ttnn
   per-device shapes. The harness had only ever run Linear on the 2×4 (topology and axes were baked
   in); both are now selectable, and it needed the same `FABRIC_1D_RING` pairing as the others.
-- **Fused ring-joint SDPA at 4×8: open.** `conform_block.py` is the harness — it already
-  reconciles the fused call into its two hidden K/V sp all-gathers — but it needs a dry-run graph
-  regenerated for a 4×8 SD3.5 block, and SD3.5's shapes have to divide 8-way SP. That is a small
-  bring-up, not a re-run.
+- **Fused ring-joint SDPA at 4×8: DONE 2026-08-08**, and against *H3's* attention rather than
+  SD3.5's block. `conform_ring_sdpa.py` tests the claim the analysis actually rests on — that
+  `dryrun/fused.py`'s expansion of the kernel into `("all_gather", "sdpa")` is faithful — by
+  running both sides on the mesh: the real
+  `ttnn.transformer.ring_joint_scaled_dot_product_attention` (called as
+  `attention_minimax_h3.py:368` calls it: persistent K/V ping-pong buffers, ring topology,
+  `cluster_axis` = SP, empty joint inputs, `joint_strategy="rear"`) against an explicit
+  `all_gather` of K and V over the same axis followed by a plain SDPA. **Worst PCC 0.999319 over
+  all 32 devices** (a PCC bar, not `max|Δ|=0`: ring streaming and one monolithic attend reduce in
+  different orders, so bf16 cannot be bit-exact here).
+  The harness also counts what a naive collective log would see: **fused path 0, expanded path 2.**
+  That is the whole argument for `fused.py` in one number — the kernel moves K and V around the
+  ring while logging nothing, so without the expansion every gather inside H3's attention is
+  invisible and no redundancy inside it could ever be flagged.
+  One real constraint found: L1 bounds the *product* of the SDPA chunk sizes, not each side. The
+  generic (256, 512) rule overflows a Blackhole core's 1.5 MB of CB space at 14 heads × head_dim
+  128 ("circular buffers grow to 1641408 B"), which is the same bound
+  `attention_minimax_h3._sdpa_program_config` documents for the production shapes; the harness
+  takes `--q-chunk` / `--k-chunk` and defaults to a pair that fits.
 - **The three 11c gates stay parked, deliberately.** The roadmap assessed them and deferred rather
   than faked: *buffer liveness* needs buffer identity from a capture that does not exist (blocker
   29) — a soundness verdict built on shim-modelled ping-pong slots would itself be "the shim
