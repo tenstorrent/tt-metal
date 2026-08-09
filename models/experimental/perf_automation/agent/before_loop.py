@@ -476,8 +476,46 @@ def before_loop(
         from .model_contract import check as _contract_check, report as _contract_report
 
         _cf = _contract_check(model_root)
-        _blocking = [f for f in _cf if f.severity == "error"]
+        _blocking = [f for f in _cf if f.blocking]
         print(_contract_report(_cf, model_root), file=sys.stderr, flush=True)
+
+        # REPAIR WHAT THE MODEL GETS WRONG ABOUT THE HARNESS -- opt-in, and only the compatibility
+        # clauses. A blocking clause means this run WILL fail: gemma-3's trace gate ignored the
+        # harness, the profiled baseline traced anyway, and 194 fatals later there was no data and
+        # no baseline, after the weights had loaded. The edit that fixes it is the same edit every
+        # time, which is why it can be automated at all.
+        #
+        # OPT-IN, because this writes to source the tool did not author. A run that silently edits a
+        # model leaves the next reader a change nobody made, in a file they own, with no record of
+        # why -- worse than the bug. PERF_MCP_REPAIR_MODEL=1 is someone deciding.
+        #
+        # The PORTING clauses are never touched: generating PIPELINE_STAGES, the per-stage hooks and
+        # the self-tests needs the model's stage decomposition and reference outputs, which is
+        # emit-e2e's job.
+        if _blocking:
+            from .model_repair import apply as _repair_apply, plan as _repair_plan, report as _repair_report
+
+            _edits = _repair_plan(model_root)
+            print(_repair_report(_edits, model_root), file=sys.stderr, flush=True)
+            if _edits and os.environ.get("PERF_MCP_REPAIR_MODEL") == "1":
+                _res = _repair_apply(model_root, _edits)
+                # RE-CHECKED, not assumed. A repair that does not clear its clause is a failed
+                # repair, and the run must hear that now rather than discover it on the device.
+                print(
+                    "  [repair] wrote %d file(s); blocking clauses now: %s"
+                    % (len(_res["written"]), [f.clause for f in _res["remaining"]] or "none"),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _cf = _contract_check(model_root)
+                _blocking = [f for f in _cf if f.blocking]
+            elif _edits:
+                print(
+                    "  [repair] not applied — set PERF_MCP_REPAIR_MODEL=1 to write these edits, or "
+                    "make them by hand. This run will fail on the blocking clause(s) above.",
+                    file=sys.stderr,
+                    flush=True,
+                )
         if _blocking and os.environ.get("PERF_MCP_REQUIRE_CONTRACT") == "1":
             raise SystemExit(
                 "  [contract] %d blocking clause(s) unmet and PERF_MCP_REQUIRE_CONTRACT=1 — "

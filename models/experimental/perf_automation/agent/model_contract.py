@@ -53,10 +53,27 @@ class Finding:
     detail: str
     remedy: str
     severity: str = "error"  # error = cannot be measured; warn = measurable, worse
+    # COMPATIBILITY vs PORTING, and only the first can block.
+    #
+    # A model EMITTED by emit-e2e satisfies the porting clauses by construction -- PIPELINE_STAGES,
+    # the per-stage hooks, the self-tests are its output. But optimize is also run DIRECTLY on
+    # hand-written tt-metal models that never went through it, and those legitimately lack that
+    # shape: gemma-3 and llama3_1_8b_p150 are both in that category. Refusing them for not looking
+    # like emit-e2e's output would refuse the entire direct path.
+    #
+    # What is never acceptable, emitted or not, is a model that FIGHTS the harness: a trace gate the
+    # harness cannot reach, a depth cap of 0, a factory that runs the model instead of returning it.
+    # Those break the tool no matter how the model was written, and they are what may block.
+    kind: str = "compatibility"
+
+    @property
+    def blocking(self) -> bool:
+        """Only a COMPATIBILITY error stops a run. A porting gap is reported and stepped over."""
+        return self.severity == "error" and self.kind == "compatibility"
 
     def __str__(self) -> str:  # pragma: no cover - formatting only
         return "%s [%s] %s\n      -> %s" % (
-            "FAIL" if self.severity == "error" else "warn",
+            "FAIL" if self.blocking else ("port" if self.kind == "porting" else "warn"),
             self.clause,
             self.detail,
             self.remedy,
@@ -153,6 +170,7 @@ def _c_build_pipeline(src: Source) -> list:
                 "no module-level build_pipeline(device, ...) found",
                 "expose build_pipeline(device, model=None, layers=None, **kwargs) returning the "
                 "pipeline object -- the harness opens the device ONCE and passes it in",
+                kind="porting",
             )
         ]
     out = []
@@ -208,6 +226,7 @@ def _c_stages(src: Source) -> list:
                     "-- and they are not the same currency: decode recurs per token, prefill once "
                     "per request",
                     severity="warn",
+                    kind="porting",
                 )
             ]
         return [
@@ -216,6 +235,7 @@ def _c_stages(src: Source) -> list:
                 "no PIPELINE_STAGES and no decode_step",
                 "declare PIPELINE_STAGES and expose <stage>_trace_setup(inputs) / <stage>_trace_step() "
                 "for each; without them there is nothing the harness can measure",
+                kind="porting",
             )
         ]
     out = []
@@ -290,12 +310,119 @@ def _c_depth_knob(src: Source) -> list:
     return []
 
 
+def _c_selftests(src: Source) -> list:
+    """The model's OWN proofs, which emit_e2e specifies and nothing was checking.
+
+    trace_capture_selftest(device) is the answer to "does every stage work traced": for EACH stage it
+    captures one step, executes it, releases the trace before the next (stage traces must not
+    co-reside), and returns True only if every stage captured host-free AND matched its reference by
+    PCC. That is precisely the question a harness cannot answer from outside -- it can observe that a
+    stage traced, but not that the traced output is still correct.
+
+    host_op_selftest() is the authoritative fully-on-device check: ttnn ops do not dispatch through
+    torch, so a genuinely on-device forward fires ZERO host aten ops. Anything it does fire is host
+    compute that the ttnn-crossing heuristics cannot see -- a host-built prefix embedding uploaded via
+    as_tensor, an HF submodule forward, sampling left on the host.
+
+    Both are specified in emit_e2e's contract and both are checkable by name here; whether they PASS
+    is the dynamic tier's question.
+    """
+    out = []
+    for fn, why, remedy in (
+        (
+            "trace_capture_selftest",
+            "no per-stage trace/PCC self-test",
+            "expose trace_capture_selftest(device): for EACH stage capture one step, execute_trace "
+            "it, RELEASE it before the next, and return True only if every stage captured host-free "
+            "and matched its reference by PCC. Without it, 'this stage can be traced correctly' is "
+            "assumed rather than proven",
+        ),
+        (
+            "host_op_selftest",
+            "no fully-on-device check",
+            "expose host_op_selftest(): run the forward under host_op_observer.observe_host_ops() "
+            "with encoding and weight-build OUTSIDE the observed region, and return "
+            "host_op_observer.verdict(ops). A truly on-device forward fires ZERO host aten ops",
+        ),
+    ):
+        if not (list(src.functions(fn)) or src.mentions("def %s" % fn)):
+            out.append(Finding("selftests", why, remedy, severity="warn", kind="porting"))
+    return out
+
+
+def _c_decode_contract(src: Source) -> list:
+    """An autoregressive stage keeps the decode contract, or its per-token step cannot be measured.
+
+    decode_prefill seeds the resident KV (self- and, for a seq2seq decoder, cross-attention);
+    decode_step reads them and NEVER recomputes. A decode_step that re-derives its KV is not a decode
+    step -- it prices a prefill on every token, and tok/s/u is then a number about the wrong work.
+    """
+    stages = None
+    for _p, node in src.assigns("PIPELINE_STAGES"):
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            stages = [e.value for e in node.value.elts if isinstance(e, ast.Constant)]
+            break
+    ar = [s for s in (stages or []) if isinstance(s, str) and "decode" in s.lower()]
+    if not ar and not src.mentions("def decode_step"):
+        return []
+    out = []
+    for hook in ("decode_prefill", "decode_step"):
+        if not (list(src.functions(hook)) or src.mentions("def %s" % hook)):
+            out.append(
+                Finding(
+                    "decode-contract",
+                    "autoregressive stage present but %s is missing" % hook,
+                    "expose decode_prefill (seeds resident self- and cross-attn KV) and decode_step "
+                    "(reads them, never recomputes). A step that re-derives its KV prices a prefill "
+                    "on every token",
+                    kind="porting",
+                )
+            )
+    return out
+
+
+def _c_build_returns(src: Source) -> list:
+    """build_pipeline RETURNS the resident object; it must not run the model.
+
+    A factory that calls generate()/run() and hands back a result exposes none of the per-stage
+    hooks, so the trace engine has nothing to capture and skips the model entirely -- while looking
+    like it worked.
+    """
+    out = []
+    for p, fn in src.functions("build_pipeline"):
+        returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+        if not returns:
+            out.append(
+                Finding(
+                    "build-pipeline",
+                    "%s: returns nothing" % p.name,
+                    "return the resident pipeline OBJECT -- the one carrying PIPELINE_STAGES and the "
+                    "per-stage hooks. A factory that returns None gives the harness nothing to measure",
+                )
+            )
+            continue
+        seg = _segment(src, p, fn)
+        if re.search(r"return\s+\w*\.?(generate|run_tts|run_demo|forward)\s*\(", seg):
+            out.append(
+                Finding(
+                    "build-pipeline",
+                    "%s: returns the RESULT of running the model, not the pipeline" % p.name,
+                    "return the object, do not run it. A one-shot result exposes none of the hooks, "
+                    "so the trace engine skips the model while appearing to succeed",
+                )
+            )
+    return out
+
+
 CLAUSES = (
     ("sources", _c_parses),
     ("build-pipeline", _c_build_pipeline),
     ("stages", _c_stages),
     ("trace-authority", _c_trace_authority),
     ("depth-knob", _c_depth_knob),
+    ("selftests", _c_selftests),
+    ("decode-contract", _c_decode_contract),
+    ("build-returns", _c_build_returns),
 )
 
 
@@ -320,12 +447,14 @@ def check(model_root) -> list:
                     name, "clause could not be checked (%s)" % str(exc)[:120], "report this: the check itself failed"
                 )
             )
-    return sorted(out, key=lambda f: 0 if f.severity == "error" else 1)
+    return sorted(out, key=lambda f: (0 if f.blocking else 1, 0 if f.kind == "compatibility" else 1))
 
 
 def report(findings, model_root) -> str:
-    n_err = sum(1 for f in findings if f.severity == "error")
+    n_err = sum(1 for f in findings if f.blocking)
     if not findings:
         return "  [contract] %s meets all %d clauses" % (Path(model_root).name, len(CLAUSES))
-    head = "  [contract] %s: %d clause(s) unmet (%d blocking)" % (Path(model_root).name, len(findings), n_err)
+    n_port = sum(1 for f in findings if f.kind == "porting")
+    head = "  [contract] %s: %d unmet — %d BLOCKING, %d porting-shape (informational for a model "
+    head = (head + "optimize runs on directly)") % (Path(model_root).name, len(findings), n_err, n_port)
     return "\n".join([head] + ["    " + str(f) for f in findings])

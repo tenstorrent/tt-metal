@@ -46,6 +46,14 @@ _GOOD_PIPE = """
     def prefill_trace_step(): ...
     def decode_trace_setup(inputs): ...
     def decode_trace_step(): ...
+    def decode_prefill(inputs): ...
+    def decode_step(): ...
+
+    def trace_capture_selftest(device):
+        return True
+
+    def host_op_selftest():
+        return True
 
     def can_enable_trace(seq_len, cached=0):
         import os
@@ -189,3 +197,51 @@ def test_blocking_findings_sort_first():
     a = Finding("x", "d", "r", severity="warn")
     b = Finding("y", "d", "r")
     assert sorted([a, b], key=lambda f: 0 if f.severity == "error" else 1)[0] is b
+
+
+# ---------------------------------------------------------------- compatibility vs porting
+
+
+def test_missing_emit_e2e_shape_never_blocks_a_direct_optimize_model(tmp_path):
+    """OPTIMIZE IS ALSO RUN DIRECTLY ON HAND-WRITTEN MODELS. A model EMITTED by emit-e2e satisfies
+    PIPELINE_STAGES, the per-stage hooks and the self-tests by construction -- they are its output.
+    gemma-3 and llama3_1_8b_p150 never went through it and legitimately lack that shape. Refusing
+    them for not resembling emit-e2e's output would refuse the entire direct path.
+
+    So the porting clauses are reported and stepped over; they are the porting TASK, not a defect."""
+    root = _model(
+        tmp_path, **{"m.py": "def build_pipeline(device, model=None, layers=None, **kw):\n    return object()\n"}
+    )
+    f = check(root)
+    assert f, "a bare model should still report the porting gaps"
+    assert all(not x.blocking for x in f), [str(x) for x in f]
+    assert any(x.kind == "porting" for x in f)
+
+
+def test_fighting_the_harness_blocks_however_the_model_was_written(tmp_path):
+    """The other half of the rule. Not looking like emit-e2e's output is fine; a trace gate the
+    harness cannot reach is not -- that is what produced 194 fatals and no baseline."""
+    root = _model(
+        tmp_path,
+        **{
+            "m.py": """
+            def build_pipeline(device, model=None, layers=None, **kw):
+                return object()
+            def can_enable_trace(seq_len, cached=0):
+                return seq_len in self.trace_prefill_supported_seq_lens
+            """
+        },
+    )
+    blk = [x for x in check(root) if x.blocking]
+    assert [x.clause for x in blk] == ["trace-authority"], [str(x) for x in check(root)]
+    assert blk[0].kind == "compatibility"
+
+
+def test_a_factory_that_runs_the_model_blocks(tmp_path):
+    """A one-shot result exposes none of the hooks, so the trace engine skips the model entirely --
+    while appearing to succeed."""
+    root = _model(
+        tmp_path,
+        **{"m.py": "def build_pipeline(device, model=None, layers=None, **kw):\n    return model.generate()\n"},
+    )
+    assert any(x.blocking and "not the pipeline" in x.detail for x in check(root)), [str(x) for x in check(root)]
