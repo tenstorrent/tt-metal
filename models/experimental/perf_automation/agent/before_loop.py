@@ -459,6 +459,38 @@ def before_loop(
             "the run HALTS later only if a material op actually reaches the tt-lang rung"
         )
 
+    # THE MODEL'S SHAPE, BEFORE ANYTHING IS BUILT OR RUN. Read-only, sub-second, no device: a model
+    # that cannot be measured the way this tool measures should be told so here rather than forty
+    # minutes later as a crash with no obvious connection to its cause. gemma-3's prefill decides its
+    # own traced-vs-eager from an allow-list inside the model, so a profiled run traced anyway and
+    # died with 194 x "Event Synchronization is not supported during trace capture" -- after the
+    # weights had loaded and the board had been busy for minutes. That clause is visible in the
+    # source.
+    #
+    # WARN, NOT REFUSE, for now. gemma-3 is the only model exercised end to end and it fails two
+    # clauses today; gating hard would block the work that proves the clauses are right. Set
+    # PERF_MCP_REQUIRE_CONTRACT=1 to make an unmet blocking clause stop the run, which is where this
+    # should land once the compliance cost is known.
+    stages.start("model_contract", "Checking the model against the optimize contract")
+    try:
+        from .model_contract import check as _contract_check, report as _contract_report
+
+        _cf = _contract_check(model_root)
+        _blocking = [f for f in _cf if f.severity == "error"]
+        print(_contract_report(_cf, model_root), file=sys.stderr, flush=True)
+        if _blocking and os.environ.get("PERF_MCP_REQUIRE_CONTRACT") == "1":
+            raise SystemExit(
+                "  [contract] %d blocking clause(s) unmet and PERF_MCP_REQUIRE_CONTRACT=1 — "
+                "refusing to optimize a model that cannot be measured as specified." % len(_blocking)
+            )
+        stages.done(
+            "meets all clauses" if not _cf else "%d unmet (%d blocking) — see above" % (len(_cf), len(_blocking))
+        )
+    except SystemExit:
+        raise
+    except Exception as _ce:  # noqa: BLE001 -- a contract check must never take the run down
+        stages.done("skipped (%s)" % str(_ce)[:120])
+
     stages.start("discover", "Mapping the model's pipelines & building perf tests")
     agent_calls_path = run.dir / "agent_calls.jsonl"
     agent_totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}

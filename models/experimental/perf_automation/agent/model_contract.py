@@ -1,0 +1,331 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""What a model must provide before it can be optimized -- checked by READING it, before anything runs.
+
+THE TOOL HAS BEEN ADAPTING TO MODELS INSTEAD OF STATING WHAT IT NEEDS. Every requirement here was
+already written down somewhere -- perf_adapter's docstring describes the per-stage hooks, emit_e2e's
+prompt specifies build_pipeline's signature -- as PROSE, in the place that consumes it. Prose is
+checked by whoever happens to read it, which is how a model reaches the device missing a clause and
+the tool discovers it forty minutes in, as a crash with no obvious connection to the cause.
+
+The case that produced this file: gemma-3's prefill decides its own traced-vs-eager, from an
+allow-list inside the model, while decode is controlled by the harness. The tool asks for eager
+before profiling -- the profiler measures per-op time from eager dispatch, and a traced region emits
+none -- and prefill traced anyway. 194 fatals, no profiling data, no baseline, and a run that had
+already spent minutes on the device. Nothing about that failure names its cause; the C++ says
+"Event Synchronization is not supported during trace capture".
+
+That clause is visible in the SOURCE. `can_enable_trace` consults `trace_prefill_supported_seq_lens`
+and nothing else -- no harness signal reaches it. A reader can see that in seconds, and so can this.
+
+WHY STATIC FIRST. The dynamic checks (does the depth cap actually reduce op count, does the census
+complete, does batch reach the stage) need a built model and a device. These need a file. Running
+them first means a model in the wrong shape is turned away before the perf test is generated, before
+the weights load, before the board is touched -- and the answer is a list of what to change rather
+than a stack trace.
+
+WHAT THIS DELIBERATELY DOES NOT DO. It does not judge whether the model is FAST, or correct, or
+whether its numbers are good. It answers one question: can this model be measured the way the tool
+measures? A clause here must be something a model can comply with by construction, and something a
+reader of the source can confirm -- otherwise it belongs in the dynamic tier, where behaviour is
+observed rather than inferred.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# A stage is measured BOTH ways: eager for per-op profiling, traced for end-to-end latency. So every
+# stage needs both paths, and the CHOICE has to belong to the harness -- one authority, not one per
+# stage. These are the names the harness sets; a model that reads any of them is participating.
+HARNESS_TRACE_SIGNALS = ("TT_PERF_TRACE", "TT_METAL_DEVICE_PROFILER")
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One unmet clause. `remedy` is the porting task, stated so it can be acted on without
+    rediscovering the reasoning -- it is the whole point of checking early."""
+
+    clause: str
+    detail: str
+    remedy: str
+    severity: str = "error"  # error = cannot be measured; warn = measurable, worse
+
+    def __str__(self) -> str:  # pragma: no cover - formatting only
+        return "%s [%s] %s\n      -> %s" % (
+            "FAIL" if self.severity == "error" else "warn",
+            self.clause,
+            self.detail,
+            self.remedy,
+        )
+
+
+@dataclass
+class Source:
+    """The model's python sources, parsed once. Files that do not parse are reported, not skipped:
+    a clause that cannot be checked has not been met, and silence would read as compliance."""
+
+    root: Path
+    trees: dict = field(default_factory=dict)  # path -> ast.Module
+    texts: dict = field(default_factory=dict)  # path -> str
+    unparsed: list = field(default_factory=list)
+
+    @classmethod
+    def load(cls, model_root, max_files: int = 4000) -> "Source":
+        s = cls(root=Path(model_root))
+        for p in sorted(s.root.rglob("*.py"))[:max_files]:
+            # Generated perf tests are the TOOL's output, not the model's: judging the model by a
+            # file the tool wrote would make the contract self-satisfying.
+            if p.name.startswith("test_main_perf") or "__pycache__" in p.parts:
+                continue
+            try:
+                txt = p.read_text(errors="ignore")
+                s.texts[p] = txt
+                s.trees[p] = ast.parse(txt)
+            except SyntaxError as exc:
+                s.unparsed.append((p, "%s line %s" % (exc.msg, exc.lineno)))
+            except OSError:
+                continue
+        return s
+
+    def functions(self, name: str):
+        """(path, node) for every def/async def with this name."""
+        for p, tree in self.trees.items():
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                    yield p, node
+
+    def assigns(self, name: str):
+        for p, tree in self.trees.items():
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                    yield p, node
+
+    def mentions(self, text: str) -> bool:
+        return any(text in t for t in self.texts.values())
+
+
+def _segment(src: Source, path: Path, node) -> str:
+    """The source text of one function, for asking what it reads."""
+    try:
+        lines = src.texts[path].splitlines()
+        return "\n".join(lines[node.lineno - 1 : (node.end_lineno or node.lineno)])
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# --------------------------------------------------------------------------- the clauses
+
+
+def _c_parses(src: Source) -> list:
+    if not src.trees and not src.unparsed:
+        return [
+            Finding(
+                "sources",
+                "no python sources found under %s" % src.root,
+                "point --model-dir at the directory holding the model's implementation",
+            )
+        ]
+    return [
+        Finding(
+            "sources",
+            "%s does not parse (%s)" % (p.name, why),
+            "fix the syntax error; a file the tool cannot read is a clause it cannot check",
+        )
+        for p, why in src.unparsed
+    ]
+
+
+def _c_build_pipeline(src: Source) -> list:
+    """The single entry point the harness builds through.
+
+    `layers=None` means ALL layers and must never be 0: a literal 0 arrives truthy in an env var and
+    has been read by builders as "build zero layers", which measures nothing and reports no markers.
+    """
+    found = list(src.functions("build_pipeline"))
+    if not found:
+        return [
+            Finding(
+                "build-pipeline",
+                "no module-level build_pipeline(device, ...) found",
+                "expose build_pipeline(device, model=None, layers=None, **kwargs) returning the "
+                "pipeline object -- the harness opens the device ONCE and passes it in",
+            )
+        ]
+    out = []
+    for p, fn in found:
+        args = [a.arg for a in fn.args.args]
+        if not args or args[0] not in ("device", "dev", "mesh_device"):
+            out.append(
+                Finding(
+                    "build-pipeline",
+                    "%s: first parameter is %r, not the device" % (p.name, args[0] if args else "(none)"),
+                    "take the device as the first positional parameter; the test fixture is the sole "
+                    "device opener, and a second open has no memory left for its KV cache",
+                )
+            )
+        if not fn.args.kwarg:
+            out.append(
+                Finding(
+                    "build-pipeline",
+                    "%s: no **kwargs" % p.name,
+                    "accept **kwargs so the harness can pass knobs this model does not know about "
+                    "without the call failing",
+                    severity="warn",
+                )
+            )
+        for a, d in zip(reversed(args), reversed(fn.args.defaults or [])):
+            if a == "layers" and isinstance(d, ast.Constant) and d.value == 0:
+                out.append(
+                    Finding(
+                        "build-pipeline",
+                        "%s: layers defaults to 0" % p.name,
+                        "default layers to None (= all layers). 0 arrives truthy from an env var and "
+                        "has been read as 'build zero layers', which measures nothing",
+                    )
+                )
+    return out
+
+
+def _c_stages(src: Source) -> list:
+    """PIPELINE_STAGES plus the per-stage hooks, because the tool measures each stage separately."""
+    declared = None
+    for _p, node in src.assigns("PIPELINE_STAGES"):
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            declared = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            break
+    if declared is None:
+        if src.mentions("def decode_step"):
+            return [
+                Finding(
+                    "stages",
+                    "no PIPELINE_STAGES; only the legacy single-step decode contract",
+                    "declare PIPELINE_STAGES = ['prefill', 'decode', ...]. The legacy path still "
+                    "works but collapses to ONE stage, so prefill and decode cannot be told apart "
+                    "-- and they are not the same currency: decode recurs per token, prefill once "
+                    "per request",
+                    severity="warn",
+                )
+            ]
+        return [
+            Finding(
+                "stages",
+                "no PIPELINE_STAGES and no decode_step",
+                "declare PIPELINE_STAGES and expose <stage>_trace_setup(inputs) / <stage>_trace_step() "
+                "for each; without them there is nothing the harness can measure",
+            )
+        ]
+    out = []
+    for st in declared:
+        for hook in ("%s_trace_setup" % st, "%s_trace_step" % st):
+            if not (list(src.functions(hook)) or src.mentions(hook)):
+                out.append(
+                    Finding(
+                        "stages",
+                        "stage %r declared but %s is missing" % (st, hook),
+                        "expose %s -- setup does host prep OUTSIDE the trace, step is one "
+                        "fixed-shape host-op-free call reading only resident buffers" % hook,
+                    )
+                )
+    return out
+
+
+def _c_trace_authority(src: Source) -> list:
+    """THE CLAUSE THIS FILE EXISTS FOR: the harness chooses traced or eager, for every stage.
+
+    A stage must support BOTH -- eager so the profiler can attribute per-op device time, traced so
+    end-to-end latency is measured the way the model ships -- and the choice must come from outside.
+    A model that decides for itself cannot be profiled: the tool asks for eager, the model traces,
+    and the capture dies with "Event Synchronization is not supported during trace capture".
+
+    Checked by asking what the model's own trace gate READS. gemma-3's consults an allow-list and
+    nothing else, so no harness signal can reach it -- visible without running anything.
+    """
+    out = []
+    gates = list(src.functions("can_enable_trace")) + list(src.functions("get_trace_prefill_supported_seq_lens"))
+    if not gates:
+        return out  # no model-side trace gate: the harness is the only authority, which is the goal
+    reads_signal = False
+    for p, fn in gates:
+        seg = _segment(src, p, fn)
+        if any(sig in seg for sig in HARNESS_TRACE_SIGNALS):
+            reads_signal = True
+    if not reads_signal:
+        names = sorted({fn.name for _p, fn in gates})
+        out.append(
+            Finding(
+                "trace-authority",
+                "%s %s tracing from model state alone; no harness signal (%s) reaches %s"
+                % (
+                    ", ".join(names),
+                    "decides" if len(names) == 1 else "decide",
+                    " / ".join(HARNESS_TRACE_SIGNALS),
+                    "it" if len(names) == 1 else "them",
+                ),
+                "have the trace gate consult the harness: return no traceable shapes when "
+                "TT_METAL_DEVICE_PROFILER=1 or TT_PERF_TRACE=0. The profiler measures per-op time "
+                "from EAGER dispatch -- a traced region emits none, and syncing inside a capture is "
+                "fatal, so 'profiler on' and 'traced' cannot both be true",
+            )
+        )
+    return out
+
+
+def _c_depth_knob(src: Source) -> list:
+    """A depth cap the builder honours, so coverage can be profiled at a fraction of the model."""
+    if not any(re.search(r"TT_PERF_LAYERS|num_layers\s*=|n_layers\s*=|layers\s*=", t) for t in src.texts.values()):
+        return [
+            Finding(
+                "depth-knob",
+                "no layer-count parameter reaches the builder",
+                "thread a layer count (TT_PERF_LAYERS, or build_pipeline(layers=...)) through to "
+                "model construction. Without it every profile runs the whole model, and a coverage "
+                "window cannot be measured",
+                severity="warn",
+            )
+        ]
+    return []
+
+
+CLAUSES = (
+    ("sources", _c_parses),
+    ("build-pipeline", _c_build_pipeline),
+    ("stages", _c_stages),
+    ("trace-authority", _c_trace_authority),
+    ("depth-knob", _c_depth_knob),
+)
+
+
+def check(model_root) -> list:
+    """Every unmet clause, worst first. Empty means the model is measurable as the tool measures.
+
+    Never raises: a contract check that takes the run down with it is worse than the gap it looks
+    for. An internal failure is reported AS a finding, because a clause that could not be checked
+    has not been met -- the same rule the rest of the tool applies to a guard that could not run.
+    """
+    try:
+        src = Source.load(model_root)
+    except Exception as exc:  # noqa: BLE001
+        return [Finding("sources", "could not read %s (%s)" % (model_root, str(exc)[:120]), "check the path")]
+    out = []
+    for name, fn in CLAUSES:
+        try:
+            out.extend(fn(src))
+        except Exception as exc:  # noqa: BLE001
+            out.append(
+                Finding(
+                    name, "clause could not be checked (%s)" % str(exc)[:120], "report this: the check itself failed"
+                )
+            )
+    return sorted(out, key=lambda f: 0 if f.severity == "error" else 1)
+
+
+def report(findings, model_root) -> str:
+    n_err = sum(1 for f in findings if f.severity == "error")
+    if not findings:
+        return "  [contract] %s meets all %d clauses" % (Path(model_root).name, len(CLAUSES))
+    head = "  [contract] %s: %d clause(s) unmet (%d blocking)" % (Path(model_root).name, len(findings), n_err)
+    return "\n".join([head] + ["    " + str(f) for f in findings])

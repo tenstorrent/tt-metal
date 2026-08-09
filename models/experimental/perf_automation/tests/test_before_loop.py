@@ -102,6 +102,10 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
         # claude_agent_sdk import before discovery touched it. There is no in-process SDK any more --
         # every model call is a `claude` CLI subprocess -- so the stage went with it.
         "ensure_tt_lang",
+        # Read-only, sub-second, no device -- and BEFORE discovery, because a model that cannot be
+        # measured the way this tool measures should be told so before the perf test is generated and
+        # the weights load, not forty minutes later as a crash whose cause is not in the message.
+        "model_contract",
         "discover",
         "lead_review",
         "preflight",
