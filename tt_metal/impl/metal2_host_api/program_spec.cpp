@@ -329,12 +329,12 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 "exactly one kernel (its threads may be many), or use SemaphoreScope::EXTERNAL.",
                 sem.unique_id,
                 binders.binder_kernel_count);
-            // Same reason, one level up: the seeder's rendezvous slot is node-wide, so only ONE
+            // Same reason, one level up: the seeder's rendezvous barrier is node-wide, so only ONE
             // kernel per node may FORCE cached semaphores (AUTO candidates yield by demoting).
             TT_FATAL(
                 !binders.cached_blocked_by_node_conflict,
                 "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but another kernel on the same node also "
-                "FORCES a cached semaphore; the pool seeders share one node-wide rendezvous slot, so two "
+                "FORCES a cached semaphore; the pool seeders share one node-wide rendezvous barrier, so two "
                 "forced-binder kernels can hang or re-seed a live counter. Bind all forced-cached "
                 "semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL. (AUTO "
                 "cached candidates yield automatically.)",
@@ -385,7 +385,7 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData
                 binders.writer_instance_count);
 
             // Cached fast path only when PROVABLY safe: cached_geometry_ok() carries the structural
-            // half (see its doc); the node-conflict flag covers the shared seeder-rendezvous slot.
+            // half (see its doc); the node-conflict flag covers the shared seeder-rendezvous barrier.
             // The is_gen2_arch() conjunct is redundant with the Gen1 return above -- kept in case
             // that return is ever relaxed. Anything else => EXTERNAL.
             if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
@@ -900,8 +900,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         sem_info.binder_kernel_count = static_cast<uint32_t>(binder_kernels.size());
     }
 
-    // Per-NODE cached-pool conflict pass. The injected pool seeder rendezvouses on a single node-wide
-    // barrier slot, so at most ONE kernel per node may bind cached semaphores -- a constraint the
+    // Per-NODE cached-pool conflict pass. The injected pool seeders rendezvous on a single node-wide
+    // dedicated barrier, so at most ONE kernel per node may bind cached semaphores -- a constraint the
     // per-semaphore binder_kernel_count rule cannot express (two distinct semaphores, one kernel each,
     // co-resident on a node, both eligible). Collect every cached CANDIDATE, group by node, and flag
     // all candidates on any node reached by more than one distinct kernel. Order-independent, so the

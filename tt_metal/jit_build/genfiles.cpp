@@ -298,7 +298,8 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 }
                 content << "    }\n";
                 // Rendezvous on the dedicated seeder barrier -- not addressable via sync_threads(idx),
-                // so a co-resident kernel's barrier-slot choice can never mix with this rendezvous.
+                // so a co-resident kernel's (in-bounds) barrier-slot choice can never mix with this
+                // rendezvous.
                 content << "    ::wait_threads_on(::g_cached_sem_init_barrier, ::get_num_threads());\n";
                 content << "#endif\n";
                 content << "}\n";
