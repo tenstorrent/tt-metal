@@ -199,6 +199,28 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="ltx_ff2_4864_4096_4096_x12_y8_b888",
         ),
+        # Same 8/8/8 blocking, but handed over through a 2-block window. Unwindowed it does not fit:
+        # the 19x11 tile resident shard leaves less L1 than 8/8/8's ~1.05 MB of matmul CBs need, and
+        # the op throws at program validation. The window shrinks the shard to 2*8 x 11 tiles, which
+        # is what makes the blocking reachable at all.
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4864,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=3,
+                mm_window_blocks=2,
+            ),
+            id="ltx_ff2_4864_4096_4096_x12_y8_b888_window2",
+        ),
         # LTX ff2, tuned: on the (12,8) grid (rows 8-9 reserved for RS workers)
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
