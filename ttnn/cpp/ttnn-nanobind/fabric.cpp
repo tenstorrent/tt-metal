@@ -372,6 +372,18 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "get_forwarding_link_indices",
+        &tt::tt_fabric::get_forwarding_link_indices,
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Return the forwarding links available from src to dst, in control-plane preference order.
+
+            The returned indices can be passed to setup_routing_plane_connection when callers must
+            assign distinct links to concurrent connection managers before mutating program descriptors.
+        )");
+
+    mod.def(
         "get_all_fabric_mesh_ids",
         &tt::tt_metal::internal::get_all_fabric_mesh_ids,
         R"(
