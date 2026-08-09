@@ -10,7 +10,7 @@ mixes the **raw** candidates rather than the normalized ones.
 Deliberately the naive form. It materializes the normalized keys, applies
 `res_norm.weight` and `res_proj.weight` as two separate factors in the order the
 modules do, and spells the softmax and the mixture out as arithmetic.
-`torch_functional/` and `tt/` both fold the two weights into one query and pull
+`attn_res.py` and `tt/attn_res/` both fold the two weights into one query and pull
 `rsqrt` out of the dot; a reference that shared that algebra could not detect an
 error in it, so nothing here takes a shortcut those paths take.
 
@@ -21,7 +21,7 @@ would be free to drift from it.
 
 Intended import form, which keeps the short names unambiguous at the call site:
 
-    from models.experimental.kimi_k3_attn_res.reference import attn_res_reference as ref
+    from models.demos.deepseek_v3_d_p.reference.attn_res import attn_res_reference as ref
     out = ref.read(prefix_sum, block_residual, norm_weight, proj_weight, eps)
 """
 

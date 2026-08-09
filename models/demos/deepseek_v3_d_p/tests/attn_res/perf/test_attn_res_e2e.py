@@ -26,13 +26,13 @@ import time
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.common.utility_functions import is_blackhole
-from models.experimental.kimi_k3_attn_res.torch_functional.attn_res import EPS
-from models.experimental.kimi_k3_attn_res.tt.attn_res import TtAttnRes
-from models.experimental.kimi_k3_attn_res.tt.attn_res_stream import BLOCK_SIZE, attn_res_stack, attn_res_stack_split
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack, attn_res_stack_split
 
 HIDDEN_SIZE = 7168
 PRODUCTION_TOKENS = 5120

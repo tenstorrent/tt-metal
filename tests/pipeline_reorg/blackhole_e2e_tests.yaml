@@ -276,7 +276,7 @@
   # TP factor of 4. Every case is parametrized at (2,4) and (8,4); the (8,4) half skips
   # here on chip count and is covered on Galaxy. 640 rows per chip is prefill's own shape.
   cmd: |
-    pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_kimi_k3_attn_res.py -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res.py -vvv --tb=short
   skus:
     bh_loudbox:
       timeout: 3
