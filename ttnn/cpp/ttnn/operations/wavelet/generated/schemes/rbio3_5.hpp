@@ -1,0 +1,98 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/operations/wavelet/planner/static_scheme.hpp"
+
+namespace ttnn::operations::wavelet::schemes {
+
+struct rbio3_5_inverse;
+
+struct rbio3_5 {
+    static constexpr const char* name = "rbio3.5";
+    static constexpr uint32_t tap_size = 12U;
+    static constexpr int32_t delay_even = 3;
+    static constexpr int32_t delay_odd = 3;
+    static constexpr uint32_t num_steps = 5U;
+    static constexpr const char* compute_scheme_header = "\"ttnn/cpp/ttnn/operations/wavelet/generated/schemes/rbio3_5.hpp\"";
+    static constexpr const char* compute_scheme_type = "ttnn::operations::wavelet::schemes::rbio3_5";
+    using inverse = rbio3_5_inverse;
+
+    template <std::size_t I>
+    struct step;
+};
+
+template <>
+struct rbio3_5::step<0> {
+    using type = StaticStep<StepType::kPredict, -1, 0x3eaaaaabU>;
+    static_assert(type::k == 1U);
+};
+
+template <>
+struct rbio3_5::step<1> {
+    using type = StaticStep<StepType::kUpdate, 0, 0x3f900000U, 0x3ec00000U>;
+    static_assert(type::k == 2U);
+};
+
+template <>
+struct rbio3_5::step<2> {
+    using type = StaticStep<StepType::kPredict, -2, 0x3c8e38e4U, 0xbdf1c71cU, 0xbee38e39U, 0x3df1c71cU, 0xbc8e38e4U>;
+    static_assert(type::k == 5U);
+};
+
+template <>
+struct rbio3_5::step<3> {
+    using type = StaticStep<StepType::kScaleEven, 0, 0x3ef15befU>;
+    static_assert(type::k == 1U);
+};
+
+template <>
+struct rbio3_5::step<4> {
+    using type = StaticStep<StepType::kScaleOdd, 0, 0x4007c3b6U>;
+    static_assert(type::k == 1U);
+};
+
+struct rbio3_5_inverse {
+    static constexpr const char* name = "rbio3.5-inverse";
+    static constexpr uint32_t tap_size = 12U;
+    static constexpr uint32_t num_steps = 5U;
+    static constexpr const char* compute_scheme_header = "\"ttnn/cpp/ttnn/operations/wavelet/generated/schemes/rbio3_5.hpp\"";
+    static constexpr const char* compute_scheme_type = "ttnn::operations::wavelet::schemes::rbio3_5_inverse";
+
+    template <std::size_t I>
+    struct step;
+};
+
+template <>
+struct rbio3_5_inverse::step<0> {
+    using type = StaticStep<StepType::kScaleOdd, 0, 0x3ef15bf0U>;
+    static_assert(type::k == 1U);
+};
+
+template <>
+struct rbio3_5_inverse::step<1> {
+    using type = StaticStep<StepType::kScaleEven, 0, 0x4007c3b6U>;
+    static_assert(type::k == 1U);
+};
+
+template <>
+struct rbio3_5_inverse::step<2> {
+    using type = StaticStep<StepType::kPredict, -2, 0xbc8e38e4U, 0x3df1c71cU, 0x3ee38e39U, 0xbdf1c71cU, 0x3c8e38e4U>;
+    static_assert(type::k == 5U);
+};
+
+template <>
+struct rbio3_5_inverse::step<3> {
+    using type = StaticStep<StepType::kUpdate, 0, 0xbf900000U, 0xbec00000U>;
+    static_assert(type::k == 2U);
+};
+
+template <>
+struct rbio3_5_inverse::step<4> {
+    using type = StaticStep<StepType::kPredict, -1, 0xbeaaaaabU>;
+    static_assert(type::k == 1U);
+};
+
+}  // namespace ttnn::operations::wavelet::schemes
