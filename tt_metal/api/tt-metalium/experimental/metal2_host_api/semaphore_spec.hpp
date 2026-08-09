@@ -32,7 +32,8 @@ namespace tt::tt_metal::experimental {
 // BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec and
 //   signal it (up() takes explicit coordinates for remote targets). Consumers
 //   (down()) must run on the semaphore's node -- the host rejects off-node
-//   CONSUME binders at build time.
+//   CONSUME binders at build time (except under forced LOCAL_NONATOMIC, which
+//   is unvalidated; see `scope` below).
 //
 // ============================================================================
 

@@ -73,7 +73,9 @@ void kernel_main() {
     // Every INCR_GET this hart issues ALSO returns its pre-op word to the sticky ret_slot.
     // Consume it with the same sentinel discipline as the CASes, or a late-landing return
     // could overwrite the NEXT CAS's sentinel and corrupt the lock verdict. (Sem pre-op is a
-    // small count plus 0x10000000-sized poisons in both modes -- never the sentinel.)
+    // small count plus 0x10000000-sized poisons -- never the sentinel, EXCEPT a double grant
+    // spending the last credit, which wraps to 0xFFFFFFFF and hangs this poll: see the host
+    // EXPECT message.)
     auto consumed_inc = [&](uint64_t noc_addr, uint32_t incr) {
         *uncached(ret_slot) = SENTINEL;
         noc_semaphore_inc(noc_addr, incr);
@@ -101,7 +103,7 @@ void kernel_main() {
                 continue;
             }
             if (*uncached(sem_addr) < 1) {
-                // Credit vanished before we locked: release and retry (lets a producer in).
+                // Credit vanished before we locked: released; back to the lock-free wait.
                 release_lock();
                 continue;
             }
