@@ -10,7 +10,7 @@
 // Typed, NON-convertible accessor for a host-baked semaphore.
 //
 // genfiles emits, per binding:
-//     namespace sem { constexpr SemaphoreBindingToken<<id>, <baked SemScope>, <read-only>> <name>{}; }
+//     namespace sem { constexpr SemaphoreBindingToken<<id>, <baked SemScope>, <baked SemAccess>> <name>{}; }
 // so `Semaphore s(sem::<name>);` deduces the baked scope and access rights via the CTAD guide in
 // noc_semaphore.h, with no kernel-source change.
 //
@@ -20,16 +20,15 @@
 // scope/read-only mismatch; a pin that happens to match compiles and is caught by the hygiene
 // sweep (test_semaphore_binding_hygiene) instead.
 //
-// ReadOnly is the host's KernelSpec::SemaphoreBinding::access_type collapsed to one bit
-// (AccessType::OBSERVE => true). OBSERVE bindings are excluded from ResolveSemaphoreScope's
-// writer census, so a write through one could leave a contended semaphore on the non-atomic
-// path -- hence every Semaphore mutator static_asserts on it. Defaults to false so a
-// two-argument token means "mutable".
-template <uint32_t Id, SemScope S, bool ReadOnly = false>
+// Access is the host's KernelSpec::SemaphoreBinding::access_type, baked whole: every Semaphore
+// mutator static_asserts against it (down() needs CONSUME, set() needs SET, up() anything but
+// OBSERVE), so the labels the census trusts are the labels the kernel can actually exercise.
+// Defaults to INCREMENT so a two-argument token means "plain writer".
+template <uint32_t Id, SemScope S, SemAccess Access = SemAccess::INCREMENT>
 struct SemaphoreBindingToken {
     static constexpr uint32_t id = Id;
     static constexpr SemScope scope = S;
-    // True iff the host declared this binding AccessType::OBSERVE. Exposed as a member (like id
-    // and scope) so a probe kernel can read back what the host actually baked.
-    static constexpr bool read_only = ReadOnly;
+    // Exposed as members (like id) so a probe kernel can read back what the host actually baked.
+    static constexpr SemAccess access = Access;
+    static constexpr bool read_only = (Access == SemAccess::OBSERVE);
 };

@@ -159,12 +159,13 @@ struct KernelSpec {
         //   CONSUME:   down()
         //   SET:       set() / set_multicast() / relay_* destination
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
-        // A binding using SEVERAL mutators: anything that down()s is CONSUME -- the off-node
-        // hang rejection keys on that label, and the AUTO-only SET-race check it forgoes has
-        // forced scope as its documented escape. Otherwise pick the stronger of SET > INCREMENT
-        // (e.g. up() + set() through one binding is SET). OBSERVE only for a pure reader. Every
-        // non-OBSERVE label counts as a writer, so the choice never changes the mechanism --
-        // only which hazard checks apply.
+        // A binding using SEVERAL mutators: anything that down()s is CONSUME (down() only
+        // compiles under it -- the off-node hang rejection keys on that label); otherwise
+        // anything that set()s is SET (set() only compiles under it -- the racing-SET rejection
+        // keys on it; up() stays legal under both). OBSERVE only for a pure reader. Every
+        // non-OBSERVE label counts as a writer, so the label never changes the mechanism --
+        // only which hazard checks apply. A single binding cannot both down() and set(); use
+        // two bindings (or restructure) if a kernel genuinely needs both.
         // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
         // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
         enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
@@ -173,11 +174,13 @@ struct KernelSpec {
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
         // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only raise the
         // writer count, pushing AUTO toward an atomic mechanism, never onto the non-atomic path.
-        // Mark OBSERVE to opt a read-only binding out of the writer census. OBSERVE is compile-time
-        // enforced: the emitted sem:: token carries read_only, and every Semaphore mutator
-        // static_asserts on it -- but only through the token; the raw-id Semaphore(uint32_t) ctor
-        // bypasses it. SET and CONSUME are unenforced hints for the host's scope checks: the AUTO
-        // census, plus the off-node CONSUME rejection, which also fires under forced EXTERNAL.
+        // Mark OBSERVE to opt a read-only binding out of the writer census.
+        // The WHOLE label is compile-time enforced through the emitted sem:: token: down()
+        // compiles only under CONSUME, set()/set_multicast() only under SET, up() under any
+        // writer label, reads always -- so the labels the census trusts (the off-node-CONSUME
+        // and racing-SET rejections key on them) are exactly what the kernel can exercise.
+        // The raw-id Semaphore(uint32_t) ctor sits outside this (device-only RAW access, no
+        // census); the hygiene lint flags it in Metal 2.0 sources.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
