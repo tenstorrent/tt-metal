@@ -8,6 +8,8 @@ import torch
 
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_with_ulp
+
 
 # nextafter moves its input by exactly one ULP, so a correlation check cannot referee it: a PCC
 # threshold cannot separate `a + 1ulp` from `a - 1ulp`, nor either of them from `a` left alone.
@@ -41,10 +43,8 @@ def test_nextafter_is_exact(device, dtype, a_value, b_value):
     b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.nextafter(a, b))
 
-    assert torch.equal(actual, expected), (
-        f"nextafter({a_value}, {b_value}) in {dtype}: got {actual[0, 0, 0, 0].item()!r}, "
-        f"expected {expected[0, 0, 0, 0].item()!r}"
-    )
+    # ulp_threshold=0 is exactness in the units this op is defined in.
+    assert_with_ulp(expected, actual, 0)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -66,8 +66,4 @@ def test_nextafter_moves_toward_the_target(device, dtype):
             b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
             actual = ttnn.to_torch(ttnn.nextafter(a, b))
 
-            assert torch.equal(actual, torch.nextafter(torch_a, torch_b)), (
-                f"nextafter({magnitude}, {target}) in {dtype}: got "
-                f"{actual[0, 0, 0, 0].item()!r}, expected "
-                f"{torch.nextafter(torch_a, torch_b)[0, 0, 0, 0].item()!r}"
-            )
+            assert_with_ulp(torch.nextafter(torch_a, torch_b), actual, 0)
