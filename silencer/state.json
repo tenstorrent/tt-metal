@@ -129,17 +129,18 @@
       "note": "Validation run 31249794076 (vllm-model-tests) overall success except one unrelated infra failure. Sampled tail showed zero occurrences of the op at all -- inconclusive. Comment posted, moved to ready-for-review on 2026-08-09."
     },
     {
-      "number": null,
+      "number": 52631,
       "branch": "silencer/dedupe-neighbor-pad-capped-links-warning",
       "pattern": "neighbor_pad_async: Capped num_links... warning fires once per mesh coordinate/device with identical values (2880x in one job sample)",
-      "status": "open-pr-just-created",
-      "note": "New PR opened 2026-08-09 from models-t1-unit-tests run 31197332405 job 92943200808 (TT-DiT Wan2.2-I2V-A14B, wh_galaxy). Warn-once-per-distinct-tuple fix, mirrors #51894 pattern. Dispatched models-t1-unit-tests (model=wan-2.2-i2v) against the branch for validation; PR number not yet known from this sandbox (assigned by GitHub after safe-output apply) -- update on next run by matching branch name."
+      "status": "validation-inconclusive-infra-failure",
+      "note": "Validation run 31278143407 (models-t1-unit-tests) job failure was mesh-sizing TT_FATAL in unrelated test setup; neighbor_pad_async never reached. Comment posted, marked ready for review 2026-08-09."
     },
     {
       "branch": "silencer/deprecate-all-gather-legacy-args-in-sampling",
       "pattern": "ttnn.all_gather deprecated num_links/topology/chunks_per_sync/... args warning (1376x in one job sample)",
-      "status": "open-pr-just-created",
-      "note": "New PR opened 2026-08-09 from galaxy-demo-tests run 31285846176 job 93177804513 (DeepSeek v3 demo test). models.common.sampling tt_sampling.py/tt_log_probs.py _perform_all_gather fallback (used when tt_ccl lacks line_all_gather) passed dead num_links/topology kwargs to ttnn.all_gather; both are unconditionally ignored by all_gather.cpp (falls through to composite/prim paths that don't read them). Removed from 4 call sites (common + llama32_1b_quasar fork duplicate). Dispatched galaxy-demo-tests (model=deepseek_v3) for validation. PR number not yet known from this sandbox -- update on next run by matching branch name."
+      "status": "validation-inconclusive-infra-failure",
+      "note": "Validation run 31305109253 (galaxy-demo-tests) failed at board reset step (hardware infra issue), never reached test execution. Comment posted; mark-ready-for-review budget (1/run) already used on PR #52631 this run, needs marking next run.",
+      "number": 52657
     }
   ],
   "backlog_cursor": {
