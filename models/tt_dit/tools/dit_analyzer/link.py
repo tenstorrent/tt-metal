@@ -42,7 +42,7 @@ def _primary_input(g: Graph, shape) -> Optional[str]:
     return next((s for s in entries if g.symbols[s].shape == shape), entries[0] if entries else None)
 
 
-def link_stages(stages: Sequence[Tuple], connect: bool = False) -> Graph:
+def link_stages(stages: Sequence[Tuple], connect: bool = False, stage_steps: Optional[Dict[str, int]] = None) -> Graph:
     """Merge stage graphs into one linked multi-stage graph.
 
     Each entry is ``(name, graph)``, ``(name, graph, in_sym)``, or
@@ -169,4 +169,14 @@ def link_stages(stages: Sequence[Tuple], connect: bool = False) -> Graph:
     linked.outputs = outputs
     linked.meta["stages"] = [s[0] for s in stages]
     linked.meta["connected"] = connect
+    # How often each stage runs in ONE generation. Stages in a pipeline do not run at the same
+    # rate -- MiniMax-H3 encodes the prompt once and then evaluates the DiT once per denoise
+    # step -- so a single per-forward total silently adds quantities with different frequencies.
+    # Recording it per stage lets the report state per-generation cost without pretending the
+    # graph itself is unrolled (the loop dimension proper is still blocker 24).
+    if stage_steps:
+        unknown = set(stage_steps) - {s[0] for s in stages}
+        if unknown:
+            raise ValueError("stage_steps names a stage that was not linked: %s" % ", ".join(sorted(unknown)))
+        linked.meta["stage_steps"] = dict(stage_steps)
     return linked

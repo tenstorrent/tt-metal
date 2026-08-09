@@ -45,6 +45,15 @@ MESH, SP_AXIS, TP_AXIS, L, NUM_AUDIO, NUM_VIDEO = PRESETS[preset]
 # `prod` therefore runs real depth; the smoke presets stay at 1 so they stay seconds-long.
 # Override per stage with DITCHECK_ENC_LAYERS / DITCHECK_DIT_LAYERS / DITCHECK_REFINER_LAYERS —
 # analysis cost grows with depth, so bisecting it is often what you want.
+# How often each stage runs in ONE generation. The prompt is encoded once and the VAEs decode
+# once; only the DiT sits inside the denoise loop. pipeline_minimax_h3 defaults to
+# num_inference_steps=50, and scheduler.py is explicit that the count is grid points and drives
+# `num_inference_steps - 1` model evaluations -- so 49 DiT forwards, not 50. Without this the
+# report adds a once-per-generation encoder to a per-step DiT as if they ran equally often.
+NUM_INFERENCE_STEPS = int(os.environ.get("DITCHECK_STEPS", 50))
+DIT_EVALS = max(1, NUM_INFERENCE_STEPS - 1)
+STAGE_STEPS = {"encoder": 1, "dit": DIT_EVALS, "vae": 1, "audio_vae": 1}
+
 _DEPTH = {"prod": (50, 50, 2)}.get(preset, (1, 1, 1))
 ENC_LAYERS = int(os.environ.get("DITCHECK_ENC_LAYERS", _DEPTH[0]))
 DIT_LAYERS = int(os.environ.get("DITCHECK_DIT_LAYERS", _DEPTH[1]))
@@ -56,6 +65,11 @@ PADDED = -(-SEQ // ALIGN) * ALIGN
 print(
     "preset %s: mesh %s  sp=axis%d tp=axis%d  text/audio/video=%d/%d/%d  packed_seq=%d (padded %d)"
     % (preset, MESH, SP_AXIS, TP_AXIS, L, NUM_AUDIO, NUM_VIDEO, SEQ, PADDED)
+)
+print(
+    "depth: encoder %d, dit %d, refiner %d   |   %d inference steps -> %d DiT evaluations "
+    "(encoder and VAEs run once per generation)"
+    % (ENC_LAYERS, DIT_LAYERS, REFINER_LAYERS, NUM_INFERENCE_STEPS, DIT_EVALS)
 )
 # Axis names must follow the preset, not the 2x4 habit: at 4x8 (and prod) sp is axis1, so a
 # hardcoded ("sp", "tp") labels every finding's mesh_axis with the *other* parallelism. That
@@ -217,5 +231,6 @@ linked = link_stages(
         ("audio_vae", avae_graph, audio_in.sym, ("dit", 1)),  # <- the DiT's audio output (index 1)
     ],
     connect=True,
+    stage_steps=STAGE_STEPS,
 )
 print("\n" + render_report(analyze_graph(linked), top=8, proof=False))

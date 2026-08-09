@@ -113,12 +113,45 @@ def render_summary(report: Report, link_bw_gbs: Optional[float] = None) -> str:
             "                      largest single finding: ~%s/device at %.1f GB/s"
             % (_us(worst, link_bw_gbs), link_bw_gbs)
         )
+    lines += _render_per_generation(report)
     if report.diagnostics:
         codes: Dict[str, int] = {}
         for d in report.diagnostics:
             codes[d.code] = codes.get(d.code, 0) + 1
         lines.append("diagnostics:          %s" % ", ".join("%s=%d" % kv for kv in sorted(codes.items())))
     return "\n".join(lines)
+
+
+def _stage_of(node_id: str) -> str:
+    return node_id.split("/", 1)[0] if "/" in node_id else ""
+
+
+def _render_per_generation(report: Report) -> List[str]:
+    """Per-generation cost, when the stages run at different rates.
+
+    A pipeline's stages are not called equally often: MiniMax-H3 encodes the prompt once and
+    then evaluates the DiT once per denoise step. Summing both into one "per forward" number
+    adds quantities with different frequencies, and which stage dominates can invert between
+    the two views -- so report the per-forward total *and* the per-generation one, never a
+    blend. Frequencies come from `link_stages(..., stage_steps=...)`; without them this is
+    silent rather than guessing 1.
+    """
+    freq = report.graph.meta.get("stage_steps")
+    if not freq:
+        return []
+    per_stage: Dict[str, float] = {}
+    for f in report.findings:
+        if f.scope != "forward":
+            continue
+        stage = _stage_of(f.nodes[0]) if f.nodes else ""
+        per_stage[stage] = per_stage.get(stage, 0.0) + f.bytes_per_forward
+    total = sum(per_stage.get(st, 0.0) * n for st, n in freq.items())
+    parts = ", ".join(
+        "%s %sx%d" % (st, human_bytes(per_stage.get(st, 0.0)), n) for st, n in freq.items() if per_stage.get(st)
+    )
+    return [
+        "per generation:       %s  (%s)" % (human_bytes(total), parts),
+    ]
 
 
 def _is_collective(graph: Graph, node_id: str) -> bool:

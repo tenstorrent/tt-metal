@@ -184,6 +184,23 @@ dominates: 23.5 of 26.3 GiB (89%)** across four call sites in `model_qwen3vl.py`
 fix from workstream 4 removes roughly **20.6 GiB per forward** — which is the magnitude that
 workstream was looking for, and it makes the fix already conformed *and* measured the top item.
 
+**Stages do not run at the same rate, and that inverts the ranking again.** H3 encodes the prompt
+once and then evaluates the DiT once per denoise step — `pipeline_minimax_h3` defaults to
+`num_inference_steps=50`, and `scheduler.py` is explicit that the count is grid points driving
+`num_inference_steps - 1` **model evaluations**, so 49 DiT forwards, not 50. Summing both stages
+into one "per forward" number adds quantities with different frequencies:
+
+| view | encoder | DiT | dominant |
+|---|---|---|---|
+| per forward | 23.7 GiB ×1 | 2.6 GiB ×1 | encoder, 89% |
+| **per generation** | 23.7 GiB | **125.9 GiB** | **DiT, 84%** |
+
+Both are true and they point at different fixes. Per forward the encoder submesh is the prize;
+**per generation — what a user actually waits through — the DiT's per-layer redundancies are 5×
+the encoder's**, because they pay 49 times. `link_stages(..., stage_steps=...)` records the
+frequencies and the report prints both lines, never a blend; without frequencies it stays silent
+rather than guessing 1. `DITCHECK_STEPS` overrides (a distilled 8-step schedule gives 41.7 GiB).
+
 **The rollup that made this readable (phase 9).** 321 findings behind a top-8 cut showed one
 repeat eight times instead of eight distinct problems. `report.rollup_findings` groups on what
 makes two findings the same problem — rule, source chain, per-call bytes, verdict — and ranks by
