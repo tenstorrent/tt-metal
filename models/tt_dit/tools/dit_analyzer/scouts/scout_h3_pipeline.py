@@ -14,6 +14,7 @@ axis, so its output is identical on every SP row but the handoff consumes one --
 rows wasted at 2x4, 7 of 8 at 4x8. It is clean analysed standalone; the finding appears
 only once the stages are connected.
 """
+import os
 import sys
 
 TOOLS = "models/tt_dit/tools"
@@ -35,6 +36,19 @@ PRESETS = {
 }
 preset = sys.argv[1] if len(sys.argv) > 1 else "4x8"
 MESH, SP_AXIS, TP_AXIS, L, NUM_AUDIO, NUM_VIDEO = PRESETS[preset]
+
+# Depth. Every byte count this tool reports is per *forward*, so a stack built one layer deep
+# reports one layer's traffic — a floor, not the number. Production MiniMax-H3 is 50 DiT layers
+# (tests/models/minimax_h3/project_block_perf.py: DEFAULT_LAYERS) and a text conditioner truncated
+# at the tapped layer, MINIMAX_H3_TEXT_ENCODER_LAYER = 50 (pipelines/minimax_h3/packing.py), which
+# is exactly what pipeline_minimax_h3 builds. The refiner's 2 is already the real value.
+# `prod` therefore runs real depth; the smoke presets stay at 1 so they stay seconds-long.
+# Override per stage with DITCHECK_ENC_LAYERS / DITCHECK_DIT_LAYERS / DITCHECK_REFINER_LAYERS —
+# analysis cost grows with depth, so bisecting it is often what you want.
+_DEPTH = {"prod": (50, 50, 2)}.get(preset, (1, 1, 1))
+ENC_LAYERS = int(os.environ.get("DITCHECK_ENC_LAYERS", _DEPTH[0]))
+DIT_LAYERS = int(os.environ.get("DITCHECK_DIT_LAYERS", _DEPTH[1]))
+REFINER_LAYERS = int(os.environ.get("DITCHECK_REFINER_LAYERS", _DEPTH[2]))
 HID = 5120  # encoder hidden == DiT text_dim (the real contract)
 SEQ = L + NUM_AUDIO + NUM_VIDEO
 ALIGN = MESH[SP_AXIS] * 32  # the DiT pads the packed sequence to a multiple of sp_factor * TILE
@@ -70,7 +84,7 @@ enc = Qwen3VlTextEncoder(
     hidden_size=HID,
     intermediate_size=25600,
     hidden_act="silu",
-    num_hidden_layers=1,
+    num_hidden_layers=ENC_LAYERS,
     num_attention_heads=64,
     num_key_value_heads=8,
     rms_norm_eps=1e-6,
@@ -99,8 +113,8 @@ dit = MiniMaxH3Transformer3DModel(
     num_attention_heads=56,
     attention_head_dim=128,
     hidden_size=5376,
-    num_layers=1,
-    num_refiner_layers=1,
+    num_layers=DIT_LAYERS,
+    num_refiner_layers=REFINER_LAYERS,
     ffn_dim=14336,
     in_channels=24,
     audio_in_channels=32,

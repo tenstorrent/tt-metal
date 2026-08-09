@@ -130,9 +130,34 @@ The shim *models* Ring but has only ever been conformed on Linear. Conform the r
 reduce-scatter and the fused ring-joint SDPA at 4×8; then the buffer-liveness and
 memory-feasibility gates that need real device state.
 
-**6. Real depth & the config matrix (12).**
-Full layer count so aggregate traffic is measured, not extrapolated; `ditcheck matrix` over
-topology × resolution × `has_audio`, device-sampled.
+**6. Real depth & the config matrix (12)** — *depth done 2026-08-08; the matrix is still open.*
+The scout now runs production depth at the `prod` preset: **encoder 50** layers
+(`MINIMAX_H3_TEXT_ENCODER_LAYER`, the tap `pipeline_minimax_h3` actually builds), **DiT 50**
+(`project_block_perf.py: DEFAULT_LAYERS`), refiner 2 (already real). Override per stage with
+`DITCHECK_ENC_LAYERS` / `DITCHECK_DIT_LAYERS` / `DITCHECK_REFINER_LAYERS`.
+
+Cost is linear and cheap — 5838 nodes, 512 distinct collectives, **21.7 s** on a laptop, memory
+flat — so there was never a reason to report one layer.
+
+**Depth changed the ranking, not just the magnitudes.** That is the result:
+
+| | 1 layer | real depth |
+|---|---|---|
+| recoverable traffic | 2.7 GiB/forward | **26.3 GiB/forward** |
+| findings | 27 | 321 (25 distinct) |
+| #1 finding | DiT output-head `participant_shrink`, 664.5 MiB | **encoder `replicated_stage`, 8.2 GiB** |
+
+At one layer the DiT output head looked like the biggest prize. At real depth the **encoder
+dominates: 23.5 of 26.3 GiB (89%)** across four call sites in `model_qwen3vl.py`, each repeating
+50×; the output head falls to #5. Since that encoder redundancy is 7-of-8 replication, the submesh
+fix from workstream 4 removes roughly **20.6 GiB per forward** — which is the magnitude that
+workstream was looking for, and it makes the fix already conformed *and* measured the top item.
+
+**The rollup that made this readable (phase 9).** 321 findings behind a top-8 cut showed one
+repeat eight times instead of eight distinct problems. `report.rollup_findings` groups on what
+makes two findings the same problem — rule, source chain, per-call bytes, verdict — and ranks by
+*total* impact, so the report reads "×50 occurrences (same call site, one per layer) = 8.2 GiB
+across the stack". 321 → 25 rows, and the ranking finally reflects what is worth fixing first.
 
 **Watch-out that governs all of it:** scale changes the *numbers* (7/8, not 1/2); it must not
 change the *verdicts*. A finding that flips real↔false at 4×8 Ring is a shim bug to chase, not a

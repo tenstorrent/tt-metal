@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .ir import Graph
 from .rules import Finding, Report
@@ -197,12 +197,67 @@ def render_finding(
     return "\n".join(lines)
 
 
-def render_findings(report: Report, top: int = 10, link_bw_gbs: Optional[float] = None, proof: bool = True) -> str:
+def rollup_findings(findings: List[Finding]) -> List[Tuple[Finding, int, int]]:
+    """Collapse a finding repeated across layers into one entry.
+
+    A 50-layer stack reports the same redundancy 50 times -- same rule, same call site, same
+    per-call cost, different node ids. Listing them separately buries every *other* finding
+    below a wall of duplicates (at production depth: 321 findings, 211 of them one rule), and
+    a top-N cut then shows one repeat 8 times instead of 8 distinct problems.
+
+    Groups on what makes two findings the same problem: rule, source chain, per-call bytes and
+    verdict. Returns (representative, occurrences, total bytes per forward), ranked by total.
+    """
+    groups: Dict[Tuple, List[Finding]] = {}
+    order: List[Tuple] = []
+    for f in findings:
+        key = (f.rule, tuple(f.source_chain), f.bytes_per_call, f.severity, f.confidence, f.scope)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(f)
+    rolled = [(groups[k][0], len(groups[k]), sum(x.bytes_per_forward for x in groups[k])) for k in order]
+    rolled.sort(key=lambda t: -t[2])
+    return rolled
+
+
+def render_findings(
+    report: Report,
+    top: int = 10,
+    link_bw_gbs: Optional[float] = None,
+    proof: bool = True,
+    rollup: bool = True,
+) -> str:
     if not report.findings:
         return "no redundancy findings: every collective is needed by a downstream consumer."
-    out = ["ranked findings (top %d of %d)" % (min(top, len(report.findings)), len(report.findings))]
-    for i, f in enumerate(report.findings[:top], start=1):
-        out.append(render_finding(i, f, report.graph, link_bw_gbs, proof))
+    if not rollup:
+        out = ["ranked findings (top %d of %d)" % (min(top, len(report.findings)), len(report.findings))]
+        for i, f in enumerate(report.findings[:top], start=1):
+            out.append(render_finding(i, f, report.graph, link_bw_gbs, proof))
+        out.append("-" * 100)
+        return "\n".join(out)
+
+    rolled = rollup_findings(report.findings)
+    header = "ranked findings (top %d of %d distinct; %d total across layers)" % (
+        min(top, len(rolled)),
+        len(rolled),
+        len(report.findings),
+    )
+    out = [header]
+    for i, (f, n, total) in enumerate(rolled[:top], start=1):
+        body = render_finding(i, f, report.graph, link_bw_gbs, proof)
+        if n > 1:
+            body = body.replace(
+                "#%d  [%s/%s]  %s" % (i, f.severity.upper(), f.confidence, f.rule),
+                "#%d  [%s/%s]  %s   x%d occurrences (same call site, one per layer)"
+                % (i, f.severity.upper(), f.confidence, f.rule, n),
+            )
+            body += "\n    rolled:  %s x %d occurrences = %s per forward across the stack" % (
+                human_bytes(f.bytes_per_forward),
+                n,
+                human_bytes(total),
+            )
+        out.append(body)
     out.append("-" * 100)
     return "\n".join(out)
 
@@ -313,11 +368,12 @@ def render_report(
     states: bool = False,
     link_bw_gbs: Optional[float] = None,
     proof: bool = True,
+    rollup: bool = True,
 ) -> str:
     parts = [render_header(report.graph), render_summary(report, link_bw_gbs), ""]
     if states:
         parts += [render_states(report), ""]
-    parts += [render_findings(report, top=top, link_bw_gbs=link_bw_gbs, proof=proof), ""]
+    parts += [render_findings(report, top=top, link_bw_gbs=link_bw_gbs, proof=proof, rollup=rollup), ""]
     hints = render_hints(report)
     if hints:
         parts += [hints, ""]
