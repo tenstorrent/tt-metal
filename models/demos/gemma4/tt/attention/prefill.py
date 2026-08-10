@@ -224,14 +224,18 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     tail_start = kseq - take
     k_part = ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
     v_part = ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
+    # ``ttnn.slice`` may share storage with ``tt_k``/``tt_v``. Source layers with
+    # ``keep_kv=True`` (E2B/E4B: num_kv_shared_layers) must keep those parents
+    # alive for later shared layers. Deallocating the slice (or left-pad of it)
+    # was freeing keep_kv tensors → SDPA ``input_tensor.is_allocated()`` on the
+    # first KV-shared sliding layer during WH N150 warmup (run 31353872112).
+    k_owned = ttnn.clone(k_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    v_owned = ttnn.clone(v_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if take < hist and allow_short_pad:
-        # Eager only: traced capture forbids ttnn.zeros (host write).
-        k_part, v_part = _left_pad_kv_to_hist(k_part, v_part, hist, head_dim, deallocate_inputs=True)
-    k_out = ttnn.clone(k_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    v_out = ttnn.clone(v_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    k_part.deallocate(True)
-    v_part.deallocate(True)
-    return (k_out, v_out)
+        # Eager only: traced capture forbids ttnn.zeros (host write). Safe to
+        # deallocate the owned clones inside left-pad — not the keep_kv parents.
+        return _left_pad_kv_to_hist(k_owned, v_owned, hist, head_dim, deallocate_inputs=True)
+    return (k_owned, v_owned)
 
 
 def flush_deferred_bounded_fills(layers):
