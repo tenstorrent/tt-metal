@@ -1205,6 +1205,19 @@ class CRK_TILE_DIMM(RuntimeParameter):
 
 
 @dataclass
+class IN0_FACE_R_DIM(RuntimeParameter):
+    # in0 partial-tile row dimension for the experimental custom_mm LLK (see test_custom_mm.py).
+    # in0 tile shape is [{1, 2, 4, 8}, 32]; this is the leading dimension (rows in a single active face).
+    in0_face_r_dim: int = 8
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t IN0_FACE_R_DIM = {self.in0_face_r_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t IN0_FACE_R_DIM;", "I"
+
+
+@dataclass
 class NUM_TILES_IN_BLOCK(RuntimeParameter):
     num_tiles_in_block: int = 1
     input_num_tiles_in_block: int = None
