@@ -140,8 +140,9 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
     // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row.
     {1, 1, 2, DataType::UINT16, BufferType::DRAM},
     // The following Wt == 2 / Wt == 5 tile geometries are deliberately absent from this table:
-    // codegen beats native on every one of them, they only trail generic_op, so demoting would
-    // route a case that wins to the slower path.
+    // on wormhole codegen beats native on every one of them, they only trail generic_op, so
+    // demoting would route a case that wins to the slower path. On blackhole they lose and are
+    // routed by the arch-calibrated column-concurrency predicate in is_demoted() above instead.
     //   NC 2, Ht 6, Wt 7  ([2, 192, 224]) — both placements.
     //   NC 4, Ht 7, Wt 5  ([4, 224, 160]) — L1 only; the DRAM twin is not in this class.
     //   NC 7, Ht 3, Wt 5  ([7, 96, 160])  — L1 only; the DRAM twin is not in this class.
@@ -171,8 +172,7 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
 
 }  // namespace
 
-bool is_demoted(
-    const TilizeCodegenParams& operation_attributes, [[maybe_unused]] const TilizeCodegenInputs& tensor_args) {
+bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
     // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
     // codegen's pipelining has nothing to overlap, and native has a route built for that request.
@@ -201,6 +201,51 @@ bool is_demoted(
     // Wt == 1 counterexample, so this is a condition rather than another block of exact rows.
     if (operation_attributes.Wt == 1) {
         return true;
+    }
+
+    // GENERAL PREDICATE, arch-calibrated — 2D-column stream concurrency against strip width.
+    // The column reader issues, per core, 32 strided reads of strip_bytes at row-pitch stride;
+    // once concurrent strided streams outgrow the strip width, native's contiguous full-row
+    // streams win. The crossover is arch-specific because the two sides scale differently across
+    // arches: on blackhole native's contiguous reads run ~2x faster than on wormhole while the
+    // column reader's strided narrow streams do not (an identical column program — same ncol,
+    // same core count — still measures 1.2-1.3x slower on BH), so one configuration can be a win
+    // on WH and a loss on BH. Thresholds are measured on the cross-arch sweep suite, not derived:
+    // on BH, cores * 2 >= strip_bytes catches every measured loser and sacrifices no win; WH
+    // measures wins up to twice that concurrency, so the rule arms only where a regression was
+    // measured. Scoring the dispatch's own ncol (rather than a re-derived one) keeps the rule
+    // correct on harvested grids. Forced implementation=codegen never consults this gate.
+    if (is_device_tensor(tensor_args.input_tensor)) {
+        IDevice* device = tensor_args.input_tensor.device();
+        uint32_t streams_per_64b = 0;  // 0: rule not armed on this arch
+        switch (device->arch()) {
+            case tt::ARCH::BLACKHOLE: streams_per_64b = 32; break;
+            default: break;
+        }
+        if (streams_per_64b != 0) {
+            const TilizeCodegenDispatch dispatch =
+                tilize_codegen_dispatch(device, operation_attributes, tensor_args.input_tensor);
+            if (dispatch.path == TilizeCodegenPath::Column) {
+                uint32_t elt_bytes = 0;
+                switch (operation_attributes.input_dtype) {
+                    case DataType::BFLOAT16:
+                    case DataType::UINT16: elt_bytes = 2; break;
+                    case DataType::FLOAT32:
+                    case DataType::UINT32:
+                    case DataType::INT32: elt_bytes = 4; break;
+                    default: break;
+                }
+                if (elt_bytes != 0) {
+                    // Narrowest block of the (possibly ragged) ncol split sets the strip width.
+                    const uint32_t strip_bytes =
+                        (operation_attributes.Wt / dispatch.ncol) * tt::constants::TILE_WIDTH * elt_bytes;
+                    const uint32_t cores = operation_attributes.NC * operation_attributes.Ht * dispatch.ncol;
+                    if (cores * 64 >= streams_per_64b * strip_bytes) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
     // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's
