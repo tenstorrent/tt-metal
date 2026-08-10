@@ -992,11 +992,34 @@ clear_back2back_batch() {
 flush_back2back_batch() {
     [[ ${#batch_filters[@]} -eq 0 ]] && return
 
+    # Mixing empty (run-all) and named filters in one gtest invocation is illegal:
+    # combine_gtest_filters would drop or corrupt the empty entries (e.g. "" + "*Foo*"
+    # becomes just "*Foo*"), so "run everything" would silently not happen.
+    local has_empty=false has_named=false f
+    for f in "${batch_filters[@]}"; do
+        if [[ -z "$f" ]]; then
+            has_empty=true
+        else
+            has_named=true
+        fi
+    done
+    if [[ "$has_empty" == true && "$has_named" == true ]]; then
+        echo "ERROR: back2back batch for group '$batch_group' (config '$batch_config') mixes empty filter (run all) with named filters:"
+        for f in "${batch_filters[@]}"; do
+            if [[ -z "$f" ]]; then
+                echo "  - (empty / run all)"
+            else
+                echo "  - $f"
+            fi
+        done
+        echo "       Give every entry a filter, or keep run-all entries in their own non-mixed batch."
+        exit 1
+    fi
+
     run_num=$((run_num + 1))
     local label
     if [[ "$batch_runner" == "pytest" && ${#batch_filters[@]} -gt 1 ]]; then
         local -a nodes=()
-        local f
         for f in "${batch_filters[@]}"; do
             nodes+=("$(pytest_node_id "$batch_group" "$f")")
         done

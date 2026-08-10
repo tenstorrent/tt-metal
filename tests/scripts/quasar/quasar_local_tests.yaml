@@ -15,6 +15,8 @@
 #                         same group, config, env, and gtest_repeat. Used by
 #                         run_quasar_regression.sh. Defaults to false.
 #                         Illegal for runner: pytest.
+#                         Illegal to mix empty filter (run all) with named filters in
+#                         the same back2back batch.
 #
 # Example gtest entry
 #
