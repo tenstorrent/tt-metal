@@ -920,8 +920,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
     const tt::tt_metal::DataType output_dtype) {
-    // Sharded A: grid/per_core come from shard_spec; user_core_coord is not applied
-    // (see TODO in get_matmul_program_config).
+    // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
     if (input_tensor_a.is_sharded()) {
         bool bmm = user_run_batched;
         return get_matmul_program_config(
