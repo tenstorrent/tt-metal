@@ -744,10 +744,14 @@ class TtHCA(_TtHCABase):
         )
         # Checked on tokens, not entry_count: a dropped partial window is invisible there (4097 tokens
         # still lands on 32 entries) and the next chunk would start at the wrong window position.
-        chunk_align = compress_rate * ttnn.TILE_SIZE
-        assert state.kv_actual % chunk_align == 0, (
-            f"cannot append after a chunk with {state.kv_actual % chunk_align} leftover tokens; only the "
-            f"final chunk may be ragged, non-final chunks must be a multiple of {chunk_align}"
+        #
+        # A non-final chunk that ends mid-window strands the leftover tokens: they never join a
+        # compression window, and the next chunk's windows would start off the global grid. So every
+        # chunk but the last has to carry whole windows, which keeps kv_actual a multiple of
+        # compress_rate and every chunk's slab aligned to the window grid the compressor assumes.
+        assert state.kv_actual % compress_rate == 0, (
+            f"cannot append after a chunk with {state.kv_actual % compress_rate} leftover tokens; only "
+            f"the final chunk may be ragged, non-final chunks must be a multiple of {compress_rate}"
         )
 
         # The rope op matches cos/sin to the tensor seq, so the stems need one position per PADDED row.
