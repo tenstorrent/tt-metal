@@ -48,7 +48,15 @@ sys.modules[f"{__name__}.core"] = core
 optimizers = _ttml.optimizers
 sys.modules[f"{__name__}.optimizers"] = optimizers
 
-from ._mesh import Mesh, open_device_mesh, close_device_mesh, maybe_mesh, mesh, sync_gradients
+from ._mesh import (
+    Mesh,
+    open_device_mesh,
+    close_device_mesh,
+    maybe_mesh,
+    mesh,
+    sync_gradients,
+    sync_sequence_parallel_gradients,
+)
 
 from . import fsdp
 

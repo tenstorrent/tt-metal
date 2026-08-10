@@ -73,12 +73,13 @@ class LlamaMLP(AbstractModuleBase):
         super().__init__()
 
         use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         # Distinct mask per device only when each holds distinct data. Too coarse under DP+TP:
         # ttnn offsets the seed by flat device id, so sharing within TP also shares across DP.
-        self.dropout_per_device_seed = not use_tp
+        self.dropout_per_device_seed = sequence_parallel or not use_tp
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -105,6 +106,7 @@ class LlamaMLP(AbstractModuleBase):
                 gate_up_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.w2 = RowParallelLinear(
@@ -112,6 +114,7 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 has_bias=False,
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -162,6 +165,10 @@ class LlamaBlock(AbstractModuleBase):
     ) -> None:
         super().__init__()
 
+        # Under sequence parallelism the residual stream (and hence the two RMSNorm
+        # inputs) is sequence-sharded across the TP axis; the norms are per-token so
+        # they need no change. The attention/MLP linears gather to full sequence for
+        # their matmuls and reduce-scatter back, so the block wiring is unchanged.
         self.mlp = LlamaMLP(
             hidden_size,
             intermediate_size,
