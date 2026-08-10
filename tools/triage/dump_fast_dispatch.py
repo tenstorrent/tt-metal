@@ -199,9 +199,6 @@ def read_wait_globals(
     command_pointer: int | None = None
     if dispatcher_core_data.kernel_name == "cq_dispatch_subordinate":
         try:
-            # Shared-binary subordinates mirror wait/cmd state by channel. Prefer that when present
-            # so TLS migration does not regress 1CQ triage. Colocated 2CQ Inspector association is
-            # intentionally unchanged from main.
             processor_index = location.noc_block.risc_names.index(risc_name)
             triage_states = kernel_elf.get_global("dispatch_s_triage_state", loc_mem_access)
             triage_state = None
@@ -213,7 +210,6 @@ def read_wait_globals(
                 try:
                     candidate_dm_index = int(candidate.dm_index)
                 except Exception:
-                    # Older one-channel array ELFs do not record the DM index.
                     triage_state = candidate if channel_index == 0 else None
                     break
                 if candidate_dm_index == processor_index:
@@ -227,7 +223,6 @@ def read_wait_globals(
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
-            # Legacy subordinate ELFs expose scalar globals.
             last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access, check_value=True)
             last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access, check_value=True)
             command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=True)
