@@ -33,7 +33,7 @@ INC="$D/incumbent.json"
 if [ ! -s "$INC" ]; then
   err "no incumbent.json. Without a frozen control the delta is not a measurement."
 else
-  python3 - <<'PY' || fail=1
+  python3 - <<'PY'
 import json, os, statistics, sys
 d = json.load(open(os.environ["CH_D"] + "/incumbent.json")); bad = []
 r = d.get("repeats_ms")
@@ -74,6 +74,16 @@ if not isinstance(it, int):
 elif it < 50:
     soft.append(f"iters_per_repeat is {it}: each timed block averages too few replays to tighten the floor "
                 "much. The corpus cell that reached a 0.03% floor used 50.")
+po = d.get("process_ordinal")
+if po is None:
+    soft.append("process_ordinal missing: record which harness process of the session this was. The first "
+                "process of a session measured a floor 60x the same configuration's in a later one -- "
+                "cross-process JIT-cache warmth, which per-process warm-up cannot remove -- and the floor "
+                "decides feasibility.verdict.")
+elif po == 1:
+    soft.append("the incumbent was measured in the FIRST harness process of the session, so its floor "
+                "carries cross-process warm-up. Run once with --label warmup_discard, delete the output, "
+                "then measure the control.")
 wu = d.get("warmup_replays")
 if not isinstance(wu, int) or wu < 10:
     bad.append(f"warmup_replays is {wu!r}: record >=10 untimed warm-up replays before the timed blocks. "
@@ -95,8 +105,9 @@ if isinstance(r, list) and len(r) >= 3:
 for b in bad: print(f"CRITICAL: incumbent.json: {b}", file=sys.stderr)
 for b in soft: print(f"{'CRITICAL' if os.environ.get('CH_STRICT') == '1' else 'WARN'}: incumbent.json: {b}",
                      file=sys.stderr)
-sys.exit(1 if bad or (soft and os.environ.get("CH_STRICT") == "1") else 0)
+sys.exit(1 if bad or (soft and os.environ.get("CH_STRICT") == "1") else (2 if soft else 0))
 PY
+  case $? in 0) ;; 2) warn=$((warn+1)) ;; *) fail=1 ;; esac
   [ "$fail" = 0 ] && ok "incumbent.json: n>=5, incumbent_ms = median, policy sourced from execution"
 fi
 
@@ -144,6 +155,16 @@ if not r.get("capture_policy_source"):
     bad.append("capture_policy_source unset: nothing records that the traced decoder was built with the "
                "SHIPPED policy rather than class defaults. Dtypes are checked below; layouts and "
                "DRAM-sharding flags are not, so name the artifact the policy came from.")
+if not (prov.get("capture_scope") or r.get("capture_scope")):
+    bad.append("capture_scope unset: record ops_attempted, methods_substituted, env_knobs and stopped_at. "
+               "Fifteen corpus captures ran 54-290 lines and five stopped at the same terminal op in four "
+               "different places, from 30 ops captured down to 5, with nothing saying so -- and where a "
+               "model method is substituted before tracing, the advice for that region is advice for the "
+               "STAND-IN, which a reader cannot otherwise know.")
+if not os.path.isfile(os.path.join(os.path.dirname(os.environ["CH_RJ"]), "final_ir.mlir")):
+    bad.append("no final_ir.mlir beside report.json. It is the only artifact carrying the advised SHARD "
+               "SHAPES and the full CoreRangeSet, so it is what the plan must be implemented from; "
+               "report.json has neither and understates 58% of advised core counts.")
 cb, ib, rb = r.get("capture_batch"), i.get("decode_batch"), i.get("requested_decode_batch")
 for nm, v in (("report.json capture_batch", cb), ("incumbent.json decode_batch", ib),
               ("incumbent.json requested_decode_batch", rb)):
@@ -173,7 +194,7 @@ if [ ${#recs[@]} -eq 0 ]; then
 else
   for rc in "${recs[@]}"; do
     export CH_RC="$rc"
-    python3 - <<'PY' || fail=1
+    python3 - <<'PY'
 import json, os, sys
 d = json.load(open(os.environ["CH_RC"])); nm = os.path.basename(os.environ["CH_RC"])
 strict = os.environ.get("CH_STRICT") == "1"
@@ -193,7 +214,18 @@ kept = [c for c in d.get("chains", []) if (c.get("verdict") or "").lower() == "k
 if fv == "not_measurable" and kept:
     crit.append(f"ceiling {f.get('ceiling_us')}us is {f.get('ceiling_vs_floor')}x the "
                 f"{f.get('noise_floor_us')}us noise floor, yet {len(kept)} chain(s) are kept. A win below "
-                "the floor is not attributable to the advice -- tighten the harness or report zero.")
+                "the floor is not attributable to the advice -- report zero with the arithmetic.")
+# A ZERO BOUNDARY CEILING IS NOT A ZERO RESULT. The ceiling prices only boundary conversions the advice does
+# not place, so re-gridding an op inside its L1 chain is worth 0.000us to it while measuring up to
+# 236.8us/layer on hardware. Two of the corpus's three biggest wins came from cells whose ceiling said zero.
+cliff = d.get("cliff_candidates") or []
+unscreened = [c for c in cliff if not (c.get("measured_ms") or c.get("hard_error"))]
+if unscreened:
+    crit.append(f"{len(unscreened)} of {len(cliff)} cliff_candidates have neither a measured_ms nor a quoted "
+                f"hard_error: {', '.join(str(c.get('op')) for c in unscreened[:4])}. These are material ops "
+                "on <=2 cores where the advisor wants strictly more -- the class that produced every "
+                "double-digit win in the reference corpus, and the one the boundary ceiling cannot see. "
+                "Screen them, or quote the error that stops you.")
 if fv == "aggregate_only" and not any(len(c.get("ops") or []) and c.get("combined_with") for c in d.get("chains", [])):
     warn.append(f"no single chain clears the {f.get('noise_floor_us')}us floor, so chains screened alone "
                 "return zero regardless of the advice. Apply the top chains together as one candidate and "
@@ -223,11 +255,20 @@ for r in d.get("disagreements", []):
     if r.get("bucket") == "dram_resident" and not r.get("verdict"):
         warn.append(f"{r.get('device')} dram_resident at {r.get('share_pct')}% has no verdict -- "
                     "'leave it in DRAM' is advice and de-sharding has won here")
+    # and the mirror image: an op the advisor DECLARED unplaceable must not be screened. 41 of 54 such
+    # declarations in the reference corpus were screened anyway, rediscovering the advisor's own error string.
+    if r.get("advisor_unfixable") and r.get("measured_ms") is not None:
+        warn.append(f"{r.get('device')} was measured although the advisor declared it unplaceable with an "
+                    "exact runtime error. If you believe the declaration is wrong, disprove it with an "
+                    "isolated single-op test in the advised config, not a whole-decoder measurement.")
+if not (d.get("advised_plan") or {}).get("source"):
+    crit.append("reconcile.py was run without --ir, so advised_plan carries no shard shapes and the advisor's "
+                "plan cannot be implemented as written. Re-run with --ir shard_advise/<kind>/final_ir.mlir.")
 for b in crit: print(f"CRITICAL: {nm}: {b}", file=sys.stderr)
 for b in warn: print(f"{'CRITICAL' if strict else 'WARN'}: {nm}: {b}", file=sys.stderr)
-sys.exit(1 if crit or (warn and strict) else 0)
+sys.exit(1 if crit or (warn and strict) else (2 if warn else 0))
 PY
-    [ $? -ne 0 ] && [ "${CHALLENGER_STRICT:-0}" != 1 ] && warn=$((warn+1))
+    case $? in 0) ;; 2) warn=$((warn+1)) ;; *) fail=1 ;; esac
   done
   [ "$fail" = 0 ] && ok "reconciliation: tool-generated, closes at 100%, chains resolved"
 fi
@@ -237,7 +278,7 @@ FIN="$D/final.json"
 if [ ! -s "$FIN" ]; then
   err "no final.json -- the contribution is unrecorded"
 else
-  python3 - <<'PY' || fail=1
+  python3 - <<'PY'
 import json, os, sys
 f = json.load(open(os.environ["CH_D"] + "/final.json"))
 try: i = json.load(open(os.environ["CH_D"] + "/incumbent.json"))
@@ -262,12 +303,36 @@ elif me["before_us"] > 0 and abs(me["after_us"] - me["before_us"]) < me["band_us
 if not f.get("oracle"): crit.append("oracle missing -- name the correctness oracle the result passed")
 if f.get("oracle_passed") is not True:
     crit.append("oracle_passed is not true -- a faster decoder that fails its oracle is a regression")
-# WHAT KIND OF ORACLE THIS STAGE NEEDS. 02b changes PLACEMENT, not precision, so by $optimize's own rule
-# (line 170 / OPT-012 -- "synthetic runs can catch crashes and op-contract failures, but precision vetoes
-# need real weights") synthetic weights are adequate here, PROVIDED the comparison is differential: the same
-# weights on both sides, candidate against the frozen incumbent, at the incumbent's own PCC bar. Real weights
-# are required only when the shipped change touches dtype or fidelity. Do not demand more of this stage than
-# the single-chip optimize stage demands of itself.
+# WHICH ORACLE IS THE VETO. v2 asked for a differential oracle, warned in the same section that a
+# differential oracle "cannot fail", and told cells to reject a candidate that "moves PCC at all". The only
+# reading satisfying all three is a differential bar near 1.0 -- and a re-grid of a reduction moves the last
+# few decimals BY CONSTRUCTION, so that made the highest-yield change in this stage unshippable. One cell
+# wrote comp_pcc(..., 0.999999) and discarded a 13.4%-faster candidate that was MORE accurate than what it
+# shipped (0.99904 vs 0.99890 against the HF reference, at a model bar of 0.995).
+#
+# v3: the ABSOLUTE comparison at the model's own bar is the veto; the differential one is an observation.
+ok_ = str(f.get("oracle_kind") or "").lower()
+if ok_ not in ("absolute", "differential"):
+    crit.append("oracle_kind missing: record 'absolute' (candidate vs a reference the change cannot move) or "
+                "'differential' (candidate vs the frozen incumbent). They answer different questions and only "
+                "the first can veto -- a differential PCC moves in the last decimals whenever a reduction's "
+                "core count changes, which is exactly the change this stage exists to find.")
+bar, bar_src = f.get("oracle_pcc_bar"), f.get("oracle_bar_source")
+if not isinstance(bar, (int, float)):
+    crit.append("oracle_pcc_bar missing -- record the bar as a number, read from the model's own test.")
+if not bar_src:
+    crit.append("oracle_bar_source missing -- name the file:line the bar was read from. An invented bar is "
+                "how one cell held itself to 0.999999 while every other cell in the corpus used 0.995.")
+if isinstance(bar, (int, float)) and bar > 0.9999 and not f.get("oracle_bar_justification"):
+    crit.append(f"oracle_pcc_bar {bar} is tighter than any model's own test bar in the reference corpus "
+                "(0.995, or a recorded model-specific value). A bar that tight asks 'is this bitwise "
+                "unchanged?', which no re-grid of a reduction can answer yes to. Read the bar from the "
+                "model's test, or record oracle_bar_justification.")
+if ok_ == "absolute" and f.get("changed") and f.get("incumbent_pcc_vs_reference") is None:
+    crit.append("incumbent_pcc_vs_reference missing. The ship rule is 'within the bar AND no worse than the "
+                "incumbent', which needs the incumbent scored against the same reference -- and a "
+                "differential oracle cannot tell which side moved. On one corpus pair the candidate scored "
+                "0.99931 and the shipped incumbent 0.98347, failing the model's own 0.995 bar.")
 od = (str(f.get("oracle") or "") + " " + str(f.get("oracle_scope") or "")
       + " " + str(f.get("oracle_reference") or "")).lower()
 ow = str(f.get("oracle_weights") or "").lower()
@@ -305,6 +370,26 @@ for k, v in f.items():
                                  "say so explicitly and attribute it to the earlier stage."))
 if isinstance(fm, (int, float)) and isinstance(im, (int, float)) and fm > im:
     crit.append(f"final_ms {fm} > incumbent_ms {im}: this stage may not ship a slower decoder")
+# DID ANYONE APPLY THE ADVICE AS WRITTEN? The largest measured defect in the reference corpus: it screened
+# chain by chain from the incumbent and never applied the plan whole. Where that could be measured afterwards
+# the plan was worth -10.43% against the -4.88% the cell shipped, at bit-identical output, rising to -17.84%
+# with the advised norm -- 3.7x. Four cells never tried it and recorded no reason, and their artefacts are
+# indistinguishable from a measured rejection. So the apply-all candidate is required to exist and to resolve.
+apv = f.get("advised_plan_verbatim")
+if not isinstance(apv, dict):
+    crit.append("advised_plan_verbatim missing. Candidate #1 is the advisor's whole plan, built from "
+                "final_ir.mlir with unfixable_ops dropped. Record it with measured_ms and a verdict, or with "
+                "hard_error naming the item that would not run and the single-op test that isolated it -- "
+                "'not tried' must not look like 'tried and lost'.")
+elif apv.get("measured_ms") is None and not apv.get("hard_error"):
+    crit.append("advised_plan_verbatim has neither measured_ms nor hard_error, so it was not actually tried.")
+if not f.get("reachable_by_advisor"):
+    warn.append("reachable_by_advisor missing -- record which kinds were captured and the untraced window "
+                "share, so a contribution of zero reads as 'nothing to find' rather than 'could not look'. "
+                "4 of the reference corpus's 7 zeros were the second kind and nothing said so.")
+if f.get("changed") and not (f.get("perf_report_incumbent") and f.get("perf_report_winner")):
+    warn.append("no before/after perf report pair (perf_report_incumbent + perf_report_winner). 1 of 15 "
+                "corpus cells kept one, which is why op-level verification is impossible for the rest.")
 if f.get("changed"):
     sets = (f.get("combination") or {}).get("measured_sets")
     if not isinstance(sets, list) or not sets:
@@ -320,6 +405,24 @@ if f.get("changed"):
                 crit.append(f"measured_sets[{n}]: neither `chains` nor `set` -- the number is unattributable")
             if not s.get("repeats_ms"):
                 warn.append(f"measured_sets[{n}]: no repeats_ms, so non-overlap cannot be checked")
+            if not s.get("op_under_test"):
+                warn.append(f"measured_sets[{n}]: no op_under_test {{name, incumbent_grid, candidate_grid, "
+                            "legal_ladder}}. Without the incumbent's own grid two arms using the same knob "
+                            "name with different defaults produce deltas that look comparable and are not.")
+        if not f.get("candidate_shape_assumptions"):
+            warn.append("candidate_shape_assumptions missing for a shipped change -- tile rows, "
+                        "divisibility, grid shape. The corpus's largest wins are batch-pinned by "
+                        "construction (one fails at batch 64 with 'Shard height 32 must match physical "
+                        "height 64' and at batch 8 at build) and nothing recorded it.")
+        # PRODUCTS WITHIN A KIND ARE REQUIRED, not optional: two disjoint winners' product beat every isolate
+        # in both corpus cells that built one, and only 2 of 15 did.
+        winners = [s for s in sets if isinstance(s.get("measured_ms"), (int, float))
+                   and len(s.get("chains") or s.get("set") or []) == 1]
+        if len(winners) >= 2 and not any(len(s.get("chains") or s.get("set") or []) >= 2 for s in sets):
+            warn.append(f"{len(winners)} single-chain candidates were measured and no product of them was. "
+                        "Once two winners touch disjoint ops their product is a required candidate -- "
+                        "additivity is not predictable, and in both corpus cells that tried it the product "
+                        "beat every isolate (-13.24% vs -7.60%; -2.82% vs -1.86%).")
         best = min((s["measured_ms"] for s in sets if isinstance(s.get("measured_ms"), (int, float))),
                    default=None)
         if best is not None and isinstance(fm, (int, float)) and fm > best:
@@ -342,9 +445,9 @@ if isinstance(it, list):
     if len(it) > 3: crit.append(f"{len(it)} iterations exceeds the cap of 3")
 for b in crit: print(f"CRITICAL: final.json: {b}", file=sys.stderr)
 for b in warn: print(f"{'CRITICAL' if strict else 'WARN'}: final.json: {b}", file=sys.stderr)
-sys.exit(1 if crit or (warn and strict) else 0)
+sys.exit(1 if crit or (warn and strict) else (2 if warn else 0))
 PY
-  [ $? -ne 0 ] && [ "${CHALLENGER_STRICT:-0}" != 1 ] && warn=$((warn+1))
+  case $? in 0) ;; 2) warn=$((warn+1)) ;; *) fail=1 ;; esac
   [ "$fail" = 0 ] && ok "final.json: non-overlap holds, oracle passed, outcome stated"
 fi
 

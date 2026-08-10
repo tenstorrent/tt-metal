@@ -10,18 +10,19 @@ NON-NEGOTIABLE — each maps to a gate check:
 
 1. Everything at decode batch DECODE_BATCH: decode_batch, requested_decode_batch, capture_batch.
 2. layer_counts {<kind>: <count>} in incumbent.json, from the model config, summing to num_hidden_layers.
-3. Freeze the incumbent BEFORE the capture: captured_at after measured_at.
-4. Time with scripts/harness_template.py — do NOT write your own harness. Every candidate too, in a FRESH process.
-5. Capture with scripts/capture_template.py, NOT $shard-advise's advise_decoder.py.
+3. Freeze the incumbent BEFORE the capture: captured_at after measured_at. Throw the session's first harness process away (--label warmup_discard) and record process_ordinal.
+4. Time with scripts/harness_template.py — do NOT write your own harness. Every candidate too, in a FRESH process. Build each candidate policy with dataclasses.replace on the frozen one and record the one-field diff.
+5. Capture with scripts/capture_template.py, NOT $shard-advise's advise_decoder.py. Record capture_scope, including every model method you substitute before tracing.
 6. shipped_policy and shipped_weight_dtypes from what EXECUTED, never constructor_defaults.
-7. Run scripts/reconcile.py per layer kind WITH --incumbent, and use its ranking. Never hand-author its output; if it aborts or reports DEGRADED, fix the input.
-8. Obey feasibility.verdict: not_measurable means do NOT screen — report zero with the arithmetic; aggregate_only means apply the top chains TOGETHER first.
-9. Ship iff every candidate repeat beats every incumbent repeat, then confirm in a fresh process.
-10. Decide across layer kinds on advisor_removes_per_model_us, not the per-layer figure.
-11. A shipped change needs a real-weight oracle: record oracle_weights.
-12. Keep every losing knob default-off and name it in rejected_knobs.
-13. Never sweep only at or below an advised core count — it is one candidate, not a recommendation.
+7. Run scripts/reconcile.py per layer kind WITH --incumbent AND --ir final_ir.mlir. Record verdicts with --evidence; never hand-author its output. If it aborts or reports DEGRADED, fix the input.
+8. CANDIDATE #1 IS THE ADVISOR'S WHOLE PLAN, built from advised_plan.ops with unfixable_ops dropped — record it as advised_plan_verbatim with a measured_ms or a hard_error. Then ablate one advised item at a time. Never screen an advisor_unfixable op.
+9. Screen cliff_candidates before chains, and sweep each one's legal_ladder on BOTH sides of the advised value. A zero boundary ceiling is not a zero result.
+10. Obey feasibility.verdict: not_measurable means do NOT screen — report zero with the arithmetic; aggregate_only means apply the top chains TOGETHER first; regrid_only means screen the cliff. Do not chase an overlap with more replays per block.
+11. Ship iff every candidate repeat beats every incumbent repeat, then confirm in a fresh process. Two disjoint winners in one kind make their product a required candidate.
+12. Decide across layer kinds on advisor_removes_per_model_us, not the per-layer figure.
+13. The oracle that VETOES is absolute — candidate vs a reference the change cannot move, at the model's OWN bar, and no worse than the incumbent against that same reference. Record oracle_kind, oracle_pcc_bar, oracle_bar_source, incumbent_pcc_vs_reference, oracle_weights. A differential PCC is an observation, not a veto: any re-grid of a reduction moves it by construction.
+14. Keep every losing knob default-off and name it in rejected_knobs. Keep the before/after perf reports, op_under_test per candidate, candidate_shape_assumptions per shipped knob, and reachable_by_advisor.
 
-Report but never screen: model_estimate.layer_handoff and advised_boundaries.us_advisor_agrees. Both are real time; neither is the advisor's contribution.
+Report but never screen: model_estimate.layer_handoff, advised_boundaries.us_advisor_agrees, starved_ops_not_attributable. All real time; none of it the advisor's contribution. Also rank the profile's own conversion ops by cost independently of the advice, and report the top ones — that lens found the largest number in the previous corpus and no advisor-derived worklist can reach it.
 
 Then run .agents/prompts/model_bringup_multigoal/02b-advisor-challenger.check.sh MODEL_DIR and resolve what it reports.
