@@ -661,13 +661,13 @@ size_t serialize_dfb_config_for_core(
             // assigns iface.block_size unconditionally. Byte 28 of the 32B header.
             entry.dm_block_size =
                 (dfb->config.cap == ::dfb::AccessPattern::BLOCKED)
-                    ? dfb_narrow_field<uint8_t>(
+                    ? dfb_narrow_field<uint16_t>(
                           std::max<uint32_t>(
                               rc.is_producer ? dfb->config.producer_block_size : dfb->config.consumer_block_size,
                               1u),
                           dfb->id,
                           "block_size")
-                    : uint8_t{1};
+                    : uint16_t{1};
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
             entry.entry_size = dfb->config.entry_size;
@@ -2221,8 +2221,8 @@ void ProgramImpl::finalize_single_dfb_config(
     // The device blob stores each side's block_size in a uint8_t; >= 256 would truncate silently and
     // corrupt the credit cadence (a truncation to 0 makes the device's `% block_size` degenerate).
     TT_FATAL(
-        config.producer_block_size <= 0xFFu && config.consumer_block_size <= 0xFFu,
-        "DFB {}: block_size must be <= 255 to fit the device config blob (uint8_t); got producer_block_size={}, "
+        config.producer_block_size <= 0xFFFFu && config.consumer_block_size <= 0xFFFFu,
+        "DFB {}: block_size must be <= 65535 to fit the device config blob (uint16_t); got producer_block_size={}, "
         "consumer_block_size={}.",
         dfb->id,
         config.producer_block_size,
