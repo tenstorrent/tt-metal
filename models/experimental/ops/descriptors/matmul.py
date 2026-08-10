@@ -63,8 +63,7 @@ def matmul(
     """
     device = input_a.device()
 
-    # Detect gather_in0 early — the factory it selects (MeshWorkload) has no
-    # Python binding, so matmul_select_program_factory_for_python would raise a TypeError.
+    # Detect gather_in0 early — the selector TT_FATALs on it, so raise a clearer error here.
     if getattr(program_config, "gather_in0", False):
         raise ValueError(
             "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory (gather_in0) "

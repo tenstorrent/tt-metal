@@ -30,7 +30,6 @@ set(TTNN_OP_MATMUL_API_HEADERS
     device/config/matmul_program_config.hpp
     device/config/matmul_program_config_types.hpp
     shared_with_host/activation_type.hpp
-    for_python/matmul_program_factory_for_python.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
