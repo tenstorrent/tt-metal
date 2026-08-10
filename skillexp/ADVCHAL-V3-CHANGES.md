@@ -289,6 +289,18 @@ steps 2 onwards are not worth running. Two mechanisms have to fire and both are 
 `advised_plan_verbatim` measured (§2.1), and the norm shipping under an absolute oracle at 0.995 rather than
 being rejected at 0.999999 (§2.2).
 
+### ⚠ The per-cell targets below are SUPERSEDED
+
+[`ADVCHAL-V3-EXPECTATIONS.md`](ADVCHAL-V3-EXPECTATIONS.md) replaces them, and
+[`ADVCHAL-V3-ANALYST-PITFALLS.md`](ADVCHAL-V3-ANALYST-PITFALLS.md) records why each moved and whether it was a
+misjudgement or new knowledge. In short: these were **v2 headline percentages carried across as targets**, and
+the nmFN shakedown showed that at least two trace to measurements that do not reproduce, while the rest were
+sized on a per-rung value the same corpus contradicted and hardware measured at a tenth of it. The step-1 gate
+is restated there as process criteria rather than a number, because the old one could fail for a capability
+reason and stop a correct run.
+
+They are kept below, unedited, as the record of what was predicted before any cell ran.
+
 ### Steps 2–8, in decreasing expected value
 
 | # | cell | v2 | v3 expected | mechanism |
