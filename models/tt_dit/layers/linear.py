@@ -13,6 +13,9 @@ from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
+# Fidelity per weight dtype. Quantized dtypes (e.g. bfloat8_b) are deliberately absent: callers
+# look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
+# explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
@@ -31,6 +34,37 @@ _FUSED_GELU_VARIANTS = {
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
     "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
 }
+
+
+def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
+    """Cast an activation that is about to cross the fabric, if a quant config asked for it.
+
+    Must be applied BEFORE the collective, never after: the win is in the bytes the gather moves,
+    and the gather's page size is the tile size of the gathered dtype (bfloat8_b tiles are 1088 B
+    vs bfloat16's 2048 B). A cast placed after the gather buys nothing and costs a full pass.
+
+    The op-level constraint that makes this legal: the AG-matmul validates the activation and the
+    weight dtypes independently, so a bf8 activation composes with the bf16-weight carve-out the
+    fused addcmul epilogue requires.
+    """
+    if activation_dtype is None or x.get_dtype() == activation_dtype:
+        return x
+    return ttnn.typecast(x, activation_dtype)
+
+
+def resolve_output_dtype(dtype, x: ttnn.Tensor):
+    """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
+
+    Called only by a linear whose quant config opted in (``pin_output_bf16``), so no other
+    model's default output dtype (``output_dtype.value_or(in0.dtype())``) changes. Keyed on the input's
+    dtype so it covers an input that arrived block-float from upstream (e.g. the gate projection fed
+    the shared bf8 activation), not just one this linear cast itself; without the pin a bf8 activation
+    would push downstream into the residual stream and ``DistributedRMSNorm``, which rejects anything
+    but bf16.
+    """
+    if dtype is None and x.get_dtype() in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return ttnn.bfloat16
+    return dtype
 
 
 class Linear(Module):
@@ -70,7 +104,7 @@ class Linear(Module):
         """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -140,6 +174,8 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        activation_dtype=None,
+        pin_output_bf16=False,
     ):
         super().__init__()
 
@@ -167,9 +203,20 @@ class ColParallelLinear(Module):
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
 
+        # Optional cast of the *input* activation, set by a quant config. This is the only Linear
+        # variant that honours it, because it is the only one whose input crosses the fabric: at
+        # TP>1 the input is the payload of the fused all-gather, and the gather's page size follows
+        # the dtype of the gathered tensor. Casting a RowParallel/replicated Linear's input would
+        # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
+        # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
+        self.activation_dtype = activation_dtype
+        # Pin a bf8/bf4-fed output back to bf16 (see resolve_output_dtype). Set by the quant config on
+        # the linears on its path; off elsewhere so no other model's default output dtype changes.
+        self.pin_output_bf16 = pin_output_bf16
+
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -225,6 +272,10 @@ class ColParallelLinear(Module):
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
         """
+        x = maybe_cast_activation(x, self.activation_dtype)
+        if self.pin_output_bf16:
+            dtype = resolve_output_dtype(dtype, x)
+
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -337,7 +388,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
+            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
