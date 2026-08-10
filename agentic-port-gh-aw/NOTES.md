@@ -1003,3 +1003,40 @@ in flight:
 |---|---|
 | Probe rewritten as explicit `if`/`else`, renamed `Resolve the remote ccache endpoint`, ends `exit 1` when the name does not resolve | Says the answer in one warning line instead of dying silently; still non-fatal, but no longer green when it fails. Also checks `github.com` to separate "cluster DNS specifically" from "DNS broken", and prints `/etc/resolv.conf`. |
 | The remote is configured only when the probe resolved it, via `PORT_CCACHE_REMOTE` | Stops 1395 futile lookups per build. Auto-enables again if the pool changes, so nothing needs remembering. |
+
+### 14.9 The agent ran, and it was the harness that failed the task
+
+The whole point of run #12: the agent leg went green in **7m 26s**, ↑1.3M tokens (all cached) / ↓10.8k,
+and produced `Changes +0 -0`. A green agent step means the CLI exited 0, nothing more — so what it
+*did* is the only thing worth reading:
+
+> Reported incomplete: the entire `pad/codegen/` scaffold tree (the stub files I'm meant to fill in)
+> is owned `root:root` with no write access for the `ubuntu` user this session runs as, while
+> everything else in the repo is writable. All research (manifest, porting guide, generator sources,
+> kernel contracts, reference `repeat` port) is done, but I cannot write any code due to this
+> permissions defect. No PR was opened; no privilege escalation was attempted, per policy.
+
+It navigated the codebase, found the reference `repeat` port on its own, diagnosed the defect with
+`stat` and `findmnt`, tried the `create` tool when `cp` failed, checked `sudo -n` once, and on
+finding it prohibited **stopped and reported rather than working around it**. That is the behaviour
+section 11's hardening rules were written to produce, demonstrated unprompted on the first run that
+ever reached the agent. The remaining doubt about this design is not whether the agent respects the
+sandbox.
+
+**The defect is mine.** `docker exec` runs as root and `/work` is a bind mount of the runner's
+checkout, so `Scaffold the port` wrote every stub as `root:root 644` into an otherwise
+ubuntu-owned tree — the agent runs as `ubuntu` and therefore could not write precisely the files it
+was asked to fill in. Cost: a 25-minute build and an hour of card time to learn one `chown`.
+
+Fixed by scaffolding as the runner user (`docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp`) plus an
+assertion in the same step that every scaffolded file *and directory* is writable by that user. The
+check uses `[ -w ]` rather than a permission-bit test, because a root-owned `644` file has `u+w` set
+for a user we are not; the first draft used `find ! -writable`, which is GNU-only and failed its own
+local test on macOS. Verified against three cases: all-writable passes, a read-only file fails and
+is named, and a read-only subdirectory fails — the last matters because the agent adds kernel files.
+
+**Third false read in two days, same shape.** I told the user the agent had produced no output,
+having seen `Write agent output placeholder if missing` echo `{"items":[]}` — that was the step's
+own script text, not its behaviour. The agent's `report_incomplete` had succeeded. 12.9, 14.2, 14.7
+and now this were all cases of reading something adjacent to the evidence and stopping there. The
+habit that keeps working: find the line where the thing itself says what it did.

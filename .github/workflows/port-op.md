@@ -204,11 +204,39 @@ steps:
 
   # Scaffold before building, not after: this registers the codegen sources in CMake once, so
   # every rebuild the agent triggers is a plain incremental compile with no re-configure.
+  #
+  # `-u` is load-bearing. `docker exec` runs as root and /work is a bind mount of the runner's
+  # checkout, so scaffolding as root left every stub owned `root:root 644` inside an otherwise
+  # ubuntu-owned tree. In run 31402361412 the agent read the manifest, the porting guide, the
+  # generator sources and the reference `repeat` port, then found it could not write the very files
+  # it was asked to fill in, declined to escalate privileges, and reported incomplete -- correct
+  # behaviour costing a 25-minute build and an hour of card time. Create the stubs as the user the
+  # agent actually is.
   - name: Scaffold the port
     run: |
-      docker exec portdev python3 .github/scripts/port/scaffold.py \
+      docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
+        python3 .github/scripts/port/scaffold.py \
         --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
         --ttmetal-home /work --codegen-root /codegen
+
+      # And assert it, because the agent cannot do its job without write access and this is the only
+      # place the answer is cheap. This runs as the same user the agent runs as, so it is exactly the
+      # test the agent had to perform for itself. `[ -w ]` asks the kernel whether *this* user can
+      # write, which is the question; a permission-bit test would pass a root-owned 644 file, since
+      # u+w is set for a user we are not.
+      dir="ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'pad' }}/codegen"
+      if [ ! -d "$dir" ]; then
+        echo "::error::scaffold.py reported success but $dir does not exist"
+        exit 1
+      fi
+      unwritable=$(find "$dir" -exec sh -c 'for p; do [ -w "$p" ] || printf "%s\n" "$p"; done' sh {} +)
+      if [ -n "$unwritable" ]; then
+        echo "::error::The agent runs as $(id -un) and cannot write the scaffolded stubs it is asked to fill in."
+        printf '%s\n' "$unwritable" | head -20
+        stat -c '%U:%G %a %n' "$dir" "$dir"/* | head -20
+        exit 1
+      fi
+      echo "scaffolded $(find "$dir" -type f | wc -l) stub files, all writable by $(id -un)"
 
   # `garage.garage.svc.cluster.local` is cluster-internal DNS and does not resolve on this runner
   # pool: `getent hosts` exits 2 here, in runs 31398278036 and 31402361412. That is the whole
