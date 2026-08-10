@@ -338,6 +338,60 @@ static inline void __emule_stray_check(bool is_worker, uint32_t offset, const ch
     backtrace_symbols_fd(bt, n, 2);
 }
 
+// [SEMWATCH] trace mcast/fabric writes+increments to the sparse_layer reduce-handshake recv-sems that
+// deadlock (0xacec0 = dev5 DM1 receiver; 0x93e00 = dev2 DM0; 0x106840 = dev6 DM0 — the chained
+// multi-device handshake stall, tt-emule-blaze#261). Env TT_EMULE_SEMWATCH. A deadlocking run then shows,
+// per watched sem: never-sent (no line), mis-routed (a line with the WRONG dst_chip), or
+// delivered-below-threshold (lines but the count stays short). Pair with TT_EMULE_FABRIC_DROP to catch
+// the unresolved/dropped incs too.
+static inline bool __emule_semwatch_on() {
+    static const bool _sw = std::getenv("TT_EMULE_SEMWATCH") != nullptr;
+    return _sw;
+}
+static inline bool __emule_semwatch_hit(uint32_t off) {
+    const uint32_t o = off & L1_SLOT_MASK;
+    // Watch the whole reduce/mcast sem region so one run shows the full cross-device reduce handshake:
+    // 0xacec0 (hub VALID mcast), 0xaca00 (hub reduce-gather recv), 0xac1c0/200/240 (reduce fan-in),
+    // 0x93c00..0x93e00 (DM0 sems), 0x106840.
+    return (o >= 0xac000u && o < 0xad400u) || (o >= 0x93000u && o < 0x94000u) || o == 0x106840u;
+}
+// Low-perturbation ring buffer: record watched-sem events CHEAPLY (one relaxed atomic increment + a POD
+// store; NO fprintf/syscall on the hot path). fprintf-per-event perturbs the flaky DM0<->DM1 handshake
+// away (Heisenbug); this records silently and dumps once at the deadlock census (teardown_and_throw calls
+// __emule_semw_dump). path: 0=MCAST 1=INLINE_WRITE 2=ATOMIC_INC 3=FUSED_INC.
+struct __EmuleSemwEvt {
+    uint32_t chip, off, oldv, newv;
+    uint16_t rx0, rx1, ry0, ry1;
+    uint8_t path;
+};
+static constexpr uint32_t kSemwRing = 16384;
+static __EmuleSemwEvt g_semw_ring[kSemwRing];
+static std::atomic<uint32_t> g_semw_idx{0};
+static inline void __emule_semw_record(uint8_t path, uint32_t chip, uint32_t off, uint32_t oldv, uint32_t newv,
+                                       uint16_t rx0 = 0, uint16_t rx1 = 0, uint16_t ry0 = 0, uint16_t ry1 = 0) {
+    if (!__emule_semwatch_on() || !__emule_semwatch_hit(off)) {
+        return;
+    }
+    __EmuleSemwEvt& e = g_semw_ring[g_semw_idx.fetch_add(1, std::memory_order_relaxed) % kSemwRing];
+    e.chip = chip; e.off = off & L1_SLOT_MASK; e.oldv = oldv; e.newv = newv;
+    e.rx0 = rx0; e.rx1 = rx1; e.ry0 = ry0; e.ry1 = ry1; e.path = path;
+}
+extern "C" void __emule_semw_dump() {  // called from the scheduler at the deadlock census
+    if (!__emule_semwatch_on()) {
+        return;
+    }
+    const uint32_t total = g_semw_idx.load(std::memory_order_relaxed);
+    const uint32_t n = total < kSemwRing ? total : kSemwRing;
+    const uint32_t start = total < kSemwRing ? 0u : (total % kSemwRing);
+    static const char* pn[] = {"MCAST", "INLINE_WRITE", "ATOMIC_INC", "FUSED_INC", "NOC_RESOLVE"};
+    fprintf(stderr, "[SEMWATCH-DUMP] %u watched-sem events (chronological, oldest first):\n", total);
+    for (uint32_t k = 0; k < n; k++) {
+        const __EmuleSemwEvt& e = g_semw_ring[(start + k) % kSemwRing];
+        fprintf(stderr, "  #%u %-12s chip=%u off=0x%x %u->%u rect x[%u..%u] y[%u..%u]\n",
+                k, e.path < 5 ? pn[e.path] : "?", e.chip, e.off, e.oldv, e.newv, e.rx0, e.rx1, e.ry0, e.ry1);
+    }
+}
+
 // [MPWATCH] mprotect page-watch: catch the stray writer that clobbers the merged_gather rt-args
 // (~bridge_l1+0xa1b0) via a raw/cached pointer invisible to every emule resolver. We mprotect the
 // 4 KB L1 page holding the rt-args (PROT_READ) after launch and SIGSEGV-trap the store. CTXREG proved
@@ -474,6 +528,15 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             uint32_t offset = is_worker ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                         : static_cast<uint32_t>(local_addr);
             __emule_stray_check(is_worker, offset, "resolve_noc_addr");
+            if (__emule_semwatch_on() && is_worker && __emule_semwatch_hit(offset)) {
+                // NOC access to a watched sem (noc_semaphore_inc / write). Record SOURCE core (oldv,newv)
+                // and TARGET core (rect x[noc_x..noc_x] y[noc_y..noc_y]) so a deadlock shows WHO tried to
+                // inc e.g. 0xaca00 and WHERE it landed (mis-route) vs no attempt at all (stalled sender).
+                __emule_semw_record(4 /*NOC_RESOLVE*/, __emule_self->chip_id, offset,
+                                    __emule_self->core ? (uint32_t)__emule_self->core->logical_x : 0u,
+                                    __emule_self->core ? (uint32_t)__emule_self->core->logical_y : 0u,
+                                    (uint16_t)noc_x, (uint16_t)noc_x, (uint16_t)noc_y, (uint16_t)noc_y);
+            }
             return it->second->l1_ptr(offset);
         }
     }
@@ -551,6 +614,12 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
         uint32_t t;
         t = x_start; x_start = x_end; x_end = t;
         t = y_start; y_start = y_end; y_end = t;
+    }
+
+    if (__emule_semwatch_on() && __emule_semwatch_hit(static_cast<uint32_t>(l1_offset))) {
+        const uint32_t v = (size >= 4 && src) ? *reinterpret_cast<const uint32_t*>(src) : 0;
+        __emule_semw_record(0, __emule_self->chip_id, static_cast<uint32_t>(l1_offset), 0, v,
+                            (uint16_t)x_start, (uint16_t)x_end, (uint16_t)y_start, (uint16_t)y_end);
     }
 
     // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
@@ -2749,6 +2818,7 @@ static void __emule_fabric_deliver(
             if (d != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(d)->store(value, std::memory_order_release);
                 __emule_fiber_wake(d);
+                __emule_semw_record(1, dst_chip, (uint32_t)(noc_address & NOC_LOCAL_MASK), 0, value);
             }
             break;
         }
@@ -2762,6 +2832,7 @@ static void __emule_fabric_deliver(
                             dst_chip, (void*)d, old, old + val, val);
                 }
                 __emule_fiber_wake(d);
+                __emule_semw_record(2, dst_chip, (uint32_t)(noc_address & NOC_LOCAL_MASK), old, old + val);
             } else if (getenv("TT_EMULE_FABRIC_DROP")) {
                 fprintf(stderr, "[FABRIC_DROP] atomic_inc chip=%u noc_addr=0x%llx off=0x%x UNRESOLVED val=%u DROPPED\n",
                         dst_chip, (unsigned long long)noc_address,
@@ -2780,8 +2851,9 @@ static void __emule_fabric_deliver(
             }
             uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
             if (s != nullptr) {
-                reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+                uint32_t old3 = reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
                 __emule_fiber_wake(s);
+                __emule_semw_record(3, dst_chip, (uint32_t)(sem_addr & NOC_LOCAL_MASK), old3, old3 + val);
             } else if (getenv("TT_EMULE_FABRIC_DROP")) {
                 fprintf(stderr, "[FABRIC_DROP] fused_atomic_inc chip=%u sem_addr=0x%llx off=0x%x UNRESOLVED val=%u DROPPED\n",
                         dst_chip, (unsigned long long)sem_addr,

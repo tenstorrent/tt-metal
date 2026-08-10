@@ -57,6 +57,8 @@ struct Fiber {
     std::exception_ptr eptr;
     unsigned home = 0;              // pinned worker — a fiber NEVER migrates (the JIT kernel
                                     // caches the thread_local __emule_self address)
+    uint64_t yields = 0;            // [SCHEDSTATE] cumulative yield() count — a large value on a
+                                    // still-Running fiber marks a busy yield-spinner (vs a stuck non-yielder)
 
     ~Fiber() {
         if (map_base) {
@@ -111,6 +113,7 @@ struct FiberSchedulerImpl {
     unsigned idle_ = 0;        // workers waiting on cv_ (under mu_)
     unsigned running_ = 0;     // fibers currently executing on a worker (under mu_)
     unsigned active_ = 0;      // fibers not yet Done (under mu_)
+    std::vector<Fiber*> running_fiber_;  // [SCHEDSTATE] per-worker currently-running fiber (nullptr = none)
     bool deadlock_ = false;
     bool abort_flag_ = false;
     bool persistent_ = false;  // run_persistent/pump in flight: a host-fed socket wait quiescing is
@@ -363,11 +366,13 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
         f->state = FiberState::Running;
         ++running_;
         t_current = f;
+        running_fiber_[w] = f;               // [SCHEDSTATE] record the fiber this worker runs
         install_fiber(f);
         resumptions_.fetch_add(1, std::memory_order_relaxed);
         mu_.unlock();
         swapcontext(&t_sched, &f->ctx);      // run/resume f; returns with mu_ LOCKED
         --running_;
+        running_fiber_[w] = nullptr;         // [SCHEDSTATE] worker no longer running that fiber
         if (f->state == FiberState::Done) {
             if (f->eptr && !first_eptr_) {
                 first_eptr_ = f->eptr;
@@ -494,6 +499,7 @@ void FiberScheduler::yield() {
         }
     }
     p_->mu_.lock();
+    f->yields++;                             // [SCHEDSTATE] spinner detector
     f->state = FiberState::Ready;
     p_->ready_[f->home].push_back(f);        // back to its pinned worker (== this worker)
     p_->cv_.notify_all();
@@ -552,19 +558,34 @@ std::string FiberSchedulerImpl::dump_parked() {
             }
             // Best-effort key naming: a CB if the key lands in this fiber's cbs[] array.
             const char* name = nullptr;
-            char buf[64];
+            char buf[224];
             if (ctx && ctx->cbs) {
                 auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
                     const auto* cb = reinterpret_cast<const tt_emule::CBSyncState*>(key);
+                    // [CBPROD] resolve the CB's registered producer ctx -> its core/proc (who fills it).
+                    const void* prod = cb->producer.load(std::memory_order_acquire);
+                    bool multi = cb->multi_producer.load(std::memory_order_acquire);
+                    int pdev = -1, plx = -1, ply = -1, pproc = -1;
+                    const char* pkind = "?";
+                    if (prod) {
+                        for (auto& up : all_) {
+                            if (up && up->owned_ctx.get() == prod) {
+                                pdev = int(up->owned_ctx->chip_id);
+                                plx = up->id.logical_x; ply = up->id.logical_y; pproc = int(up->id.proc_id);
+                                pkind = (up->owned_ctx->kind == ThreadCommonCtx::Kind::Compute) ? "CMP" : "DM";
+                                break;
+                            }
+                        }
+                    }
                     std::snprintf(buf, sizeof(buf),
-                                  "CB %zu occ=%u rcv_cmp=%u ackd=%u npages=%u",
+                                  "CB %zu occ=%u rcv_cmp=%u ackd=%u npages=%u prod=dev%d(log%d,%d)p%d/%s%s",
                                   (k - base) / sizeof(tt_emule::CBSyncState),
                                   cb->occupied.load(std::memory_order_acquire),
                                   cb->received_compute.load(std::memory_order_acquire),
                                   cb->acked.load(std::memory_order_acquire),
-                                  cb->num_pages);
+                                  cb->num_pages, pdev, plx, ply, pproc, pkind, multi ? "[multi]" : "");
                     name = buf;
                 }
             }
@@ -648,6 +669,7 @@ std::string FiberSchedulerImpl::dump_all() {
     return os.str();
 }
 
+extern "C" void __emule_semw_dump();  // [SEMWATCH] ring-buffer dump (defined in the runner TU)
 void FiberSchedulerImpl::watchdog() {
     const auto interval = std::chrono::milliseconds(250);
     const uint64_t window = env_size("TT_EMULE_FIBER_PROGRESS_WINDOW", 200000);
@@ -687,6 +709,57 @@ void FiberSchedulerImpl::watchdog() {
                 std::fprintf(stderr, "%s",
                              [this] { std::lock_guard<std::mutex> g(mu_); return dump_all(); }().c_str());
             }
+            {  // [SCHEDSTATE] discriminate cv-lost-wakeup (a Ready fiber sits in a sleeping worker's
+               // queue) vs busy-yield starvation (running_>0 from a yield()-spinner). Snapshot the
+               // worker-scheduling counters + every READY (non-parked) fiber and its pinned home worker.
+                std::lock_guard<std::mutex> g(mu_);
+                std::string rdump;
+                size_t total_ready = 0;
+                for (unsigned w = 0; w < ready_.size(); ++w) {
+                    if (ready_[w].empty()) {
+                        continue;
+                    }
+                    total_ready += ready_[w].size();
+                    char b[96];
+                    std::snprintf(b, sizeof(b), "    ready_[%u]: %zu fiber(s)\n", w, ready_[w].size());
+                    rdump += b;
+                    for (Fiber* f : ready_[w]) {
+                        const auto* ctx = f->owned_ctx.get();
+                        char c[256];
+                        std::snprintf(c, sizeof(c),
+                            "      dev %d core(log %d,%d phys %d,%d) proc %d kind=%s home=%u kernel %s\n",
+                            ctx ? int(ctx->chip_id) : -1, f->id.logical_x, f->id.logical_y, f->id.phys_x,
+                            f->id.phys_y, int(f->id.proc_id),
+                            (ctx && ctx->kind == ThreadCommonCtx::Kind::Compute) ? "CMP" : "DM", f->home,
+                            f->id.kernel_src ? f->id.kernel_src : "?");
+                        rdump += c;
+                    }
+                }
+                std::fprintf(stderr,
+                    "[SCHEDSTATE] W_=%u idle_=%u running_=%u active_=%u any_ready=%d total_ready=%zu\n%s",
+                    W_, idle_, running_, active_, any_ready() ? 1 : 0, total_ready, rdump.c_str());
+                std::string run_d;
+                for (unsigned w = 0; w < running_fiber_.size(); ++w) {
+                    Fiber* f = running_fiber_[w];
+                    if (!f) {
+                        char b[48];
+                        std::snprintf(b, sizeof(b), "    worker[%u] running: <none>\n", w);
+                        run_d += b;
+                        continue;
+                    }
+                    const auto* ctx = f->owned_ctx.get();
+                    char c[288];
+                    std::snprintf(c, sizeof(c),
+                        "    worker[%u] RUNNING dev %d core(log %d,%d phys %d,%d) proc %d kind=%s state=%d yields=%llu kernel %s\n",
+                        w, ctx ? int(ctx->chip_id) : -1, f->id.logical_x, f->id.logical_y, f->id.phys_x,
+                        f->id.phys_y, int(f->id.proc_id),
+                        (ctx && ctx->kind == ThreadCommonCtx::Kind::Compute) ? "CMP" : "DM", int(f->state),
+                        (unsigned long long)f->yields, f->id.kernel_src ? f->id.kernel_src : "?");
+                    run_d += c;
+                }
+                std::fprintf(stderr, "[SCHEDSTATE-RUNNING]\n%s", run_d.c_str());
+            }
+            __emule_semw_dump();  // [SEMWATCH] print recorded watched-sem events at the watchdog abort
             std::abort();
         }
         last_resump = r;
@@ -703,6 +776,7 @@ void FiberScheduler::launch_and_wait(bool initial) {
     // threads live until ~FiberScheduler. See tt-emule docs/fiber-engine.md.
     if (p_->pool_.empty()) {
         p_->K_ = static_cast<unsigned>(env_size("TT_EMULE_FIBER_WORKERS", 64));
+        p_->running_fiber_.assign(p_->K_, nullptr);  // [SCHEDSTATE] per-worker current fiber
         p_->pool_.reserve(p_->K_);
         for (unsigned i = 0; i < p_->K_; ++i) {
             p_->pool_.emplace_back([this, i] { p_->worker_main(i); });
@@ -784,6 +858,7 @@ void FiberScheduler::launch_and_wait(bool initial) {
 // Collect results + clear the registry for the next program / mesh. Rethrows the first fiber
 // exception; throws on a quiescent deadlock. Called only after a run reaches Completed (never on a
 // resumable HostWait — then the fibers must stay alive).
+extern "C" void __emule_semw_dump();  // [SEMWATCH] ring-buffer dump (defined in the runner TU)
 void FiberScheduler::teardown_and_throw() {
     std::exception_ptr eptr;
     bool deadlock;
@@ -794,6 +869,7 @@ void FiberScheduler::teardown_and_throw() {
         deadlock = p_->deadlock_;
         if (deadlock) {
             dump = p_->dump_parked();
+            __emule_semw_dump();  // [SEMWATCH] print recorded watched-sem events at the deadlock census
             if (std::getenv("TT_EMULE_TRACE_CENSUS")) {
                 std::fprintf(stderr, "%s", p_->dump_all().c_str());
             }
