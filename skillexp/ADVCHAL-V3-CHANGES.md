@@ -346,3 +346,29 @@ sudo chown -R ttuser:ttuser /home/mvasiljevic/tt-metal/.git
 ```
 
 It is pre-existing and unrelated to v3; nothing below depends on it except the ability to write.
+
+---
+
+## 9. Commit attribution on this host, recorded rather than rewritten
+
+**The 20 commits dated 2026-07-31 that build the v2 stage — including `db00a4404ac`, v2's shipped tree — are
+authored `Nicholas Smith <nsmith@tenstorrent.com>` and should read `mvasiljevic`.** They are
+mvasiljevic's work. The cause was `/home/ttuser/.gitconfig` on the run host carrying a global identity for a
+different person: both `tt-metal` and `tt-mlir` have the correct identity in their **local** config, but any
+fresh clone — which is what an agent session works in — inherited the global one instead. The same bug
+mis-attributed the first seven v3 commits, which have been re-authored.
+
+**The global identity has been unset** (backed up to `~/.gitconfig.bak-preadvchalv3`), so a clone with no
+local identity now fails with *"Author identity unknown"* rather than silently attributing the work. Anything
+that writes git objects should run as the right user: `docker exec -u 1000:1000` in the mvasiljevic
+container, which is where both the identity and the `gh` token live. These containers set no `User`, so a
+plain `docker exec` runs as **root** — which is also what left 546 root-owned entries in `.git`.
+
+**Not rewritten, deliberately.** Re-authoring those 20 commits changes every SHA from `0034d8a8f61` forward,
+so `db00a4404ac` would cease to exist — and it is cited by SHA in six published documents (the corpus README,
+both round READMEs, `PROVENANCE.md`, `HISTORY.md`, `02b-v2-rebuild.md`), is the target of `advchal-v3/base`,
+and has 12 local refs plus the 14 `skillexp/done/advchal-v2/*` tags downstream. It would also break this
+experiment's own premise, that v2 and v3 are diffable against one pinned tree.
+
+`.mailmap` is not the escape hatch either: it keys on identity rather than date, so it would re-attribute
+every commit by that author, and GitHub's interface ignores it regardless.
