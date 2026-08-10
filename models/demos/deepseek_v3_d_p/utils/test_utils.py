@@ -12,6 +12,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
+from models.demos.deepseek_v3.utils.hf_model_utils import convert_state_dict as _convert_state_dict
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _fp8_dequantize_state_dict
 
 # Wormhole B0 worker-L1 override for ring MLA tests. On Blackhole we use the platform default.
@@ -360,3 +361,18 @@ def dequantize_state_dict(
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
+
+
+def convert_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    hf_config: Any,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Convert an HF (sub-)state_dict for the d_p pipeline, dequantizing only if the checkpoint needs it.
+
+    Each model ships as both a quantized and a dequantized checkpoint, and the loader cannot tell them
+    apart from the path alone -- `hf_config.quantization_config` decides. When it is present the state
+    dict goes through this module's `dequantize_state_dict`, keeping Kimi's INT4 pack-quant path intact;
+    when it is absent the weights are already dequantized and are passed straight through.
+    """
+    return _convert_state_dict(state_dict, hf_config, dtype, dequantizer=dequantize_state_dict)

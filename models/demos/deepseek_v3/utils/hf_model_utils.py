@@ -174,8 +174,22 @@ def _get_weight_block_shape_from_quant_config(quantization_config: Any) -> tuple
     return tuple(int(dim) for dim in block_shape)
 
 
+def get_quantization_config(hf_config: Any) -> Any | None:
+    """Return the checkpoint's `quantization_config`, or `None` when the checkpoint is already dequantized.
+
+    Multimodal checkpoints (Kimi) nest the language-model config under `text_config`, so look there too --
+    otherwise a quantized checkpoint reads as dequantized and its weights are passed through raw.
+    """
+    quantization_config = getattr(hf_config, "quantization_config", None)
+    if quantization_config is None:
+        text_config = getattr(hf_config, "text_config", None)
+        if text_config is not None:
+            quantization_config = getattr(text_config, "quantization_config", None)
+    return quantization_config
+
+
 def get_weight_block_shape(hf_config: PretrainedConfig) -> tuple[int, ...]:
-    return _get_weight_block_shape_from_quant_config(getattr(hf_config, "quantization_config", None))
+    return _get_weight_block_shape_from_quant_config(get_quantization_config(hf_config))
 
 
 def get_weight_block_shape_from_model_path(model_path: str | Path) -> tuple[int, ...]:
@@ -241,6 +255,42 @@ def dequantize_weight_tensor(
     return out[original_slices].to(dtype).contiguous()
 
 
+def _cast_unquantized_tensor(tensor: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Materialize an already-dequantized tensor: floats are cast to `dtype`, everything else is copied."""
+    return tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+
+
+def _iter_weight_names(state_dict: Mapping[str, torch.Tensor]) -> list[str]:
+    """Weight keys of a (sub-)state_dict in a stable order, excluding the `_scale_inv` companions."""
+    return sorted(key for key in state_dict.keys() if not key.endswith("_scale_inv"))
+
+
+def passthrough_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Convert an already-dequantized (sub-)state_dict without touching quantization metadata.
+
+    This is the no-scale half of `dequantize_state_dict`, split out so a checkpoint that ships without a
+    `quantization_config` never enters the dequantization path -- that path needs
+    `quantization_config.weight_block_size` and raises when the config does not carry it.
+    """
+    converted_state_dict: dict[str, torch.Tensor] = {}
+
+    for name in _iter_weight_names(state_dict):
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        if tensor.dtype == torch.float8_e4m3fn:
+            raise ValueError(
+                f"Found float8 tensor '{name}' in a checkpoint whose config has no `quantization_config`. "
+                "The weights are quantized but the dequantization metadata is missing from config.json."
+            )
+        converted_state_dict[name] = _cast_unquantized_tensor(tensor, dtype)
+
+    return converted_state_dict
+
+
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: PretrainedConfig,
@@ -249,7 +299,7 @@ def dequantize_state_dict(
     dequantized_state_dict: dict[str, torch.Tensor] = {}
     block_shape = get_weight_block_shape(hf_config)
 
-    for name in sorted(key for key in state_dict.keys() if not key.endswith("_scale_inv")):
+    for name in _iter_weight_names(state_dict):
         tensor = state_dict[name]
         if tensor is None:
             raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
@@ -263,9 +313,56 @@ def dequantize_state_dict(
 
         if tensor.dtype == torch.float8_e4m3fn:
             raise ValueError(f"Found float8 tensor '{name}' without matching inverse scale '{scale_name}'.")
-        dequantized_state_dict[name] = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+        dequantized_state_dict[name] = _cast_unquantized_tensor(tensor, dtype)
 
     return dequantized_state_dict
+
+
+_LOGGED_CONVERSION_MODES: set[str] = set()
+
+
+def _log_conversion_mode(message: str) -> None:
+    """Log the quantized/dequantized conclusion once per process; repeats drop to debug.
+
+    `convert_state_dict` runs per module and per layer (60+ times for a full checkpoint), so logging at
+    info every time would bury the rest of the weight-load output.
+    """
+    if message in _LOGGED_CONVERSION_MODES:
+        logger.debug(message)
+        return
+    _LOGGED_CONVERSION_MODES.add(message)
+    logger.info(message)
+
+
+def convert_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    hf_config: PretrainedConfig,
+    dtype: torch.dtype = torch.bfloat16,
+    dequantizer: Callable[..., dict[str, torch.Tensor]] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Bring a (sub-)state_dict into `dtype`, dequantizing only when the checkpoint is actually quantized.
+
+    Every model ships in a quantized and a dequantized variant behind the same loading path, and only the
+    checkpoint's config tells them apart: a `quantization_config` means quantized weights, so we hand off
+    to `dequantizer` (default `dequantize_state_dict`); its absence means the checkpoint is already
+    dequantized, so the weights are passed through untouched. Callers with their own dequantizer -- e.g.
+    the d_p pipeline, which owns Kimi's INT4 pack-quant path -- inject it through `dequantizer`.
+    """
+    quantization_config = get_quantization_config(hf_config)
+
+    if quantization_config is None:
+        _log_conversion_mode(
+            "No `quantization_config` found in hf_config -> checkpoint is already dequantized; "
+            "passing weights through without dequantization."
+        )
+        return passthrough_state_dict(state_dict, dtype)
+
+    quant_method = quantization_config.get("quant_method") if isinstance(quantization_config, dict) else None
+    _log_conversion_mode(
+        f"Found `quantization_config` in hf_config (quant_method={quant_method!r}) -> checkpoint is "
+        "quantized; dequantizing weights."
+    )
+    return (dequantizer or dequantize_state_dict)(state_dict, hf_config, dtype)
 
 
 def _load_model_weight_map(model_path: Path) -> tuple[dict[str, str], dict[str, Any]]:

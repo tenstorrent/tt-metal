@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapte
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
+from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
@@ -863,7 +863,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
     Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
-    sub_state_dict() + dequantize_state_dict(), matching the format produced
+    sub_state_dict() + convert_state_dict(), matching the format produced
     by extract_tt_state_dict() in transformer_helpers.py.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
@@ -894,14 +894,14 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
 
     # Embed tokens
     embed_sd = sub_state_dict(state_dict, f"{prefix}model.embed_tokens.")
-    embed_dequant = dequantize_state_dict(embed_sd, hf_config)
+    embed_dequant = convert_state_dict(embed_sd, hf_config)
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
 
     # Final norm
     norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
-    norm_dequant = dequantize_state_dict(norm_sd, hf_config)
+    norm_dequant = convert_state_dict(norm_sd, hf_config)
     result["norm_weight"] = norm_dequant["weight"]
 
     # Per-layer weights
@@ -909,7 +909,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     for i in range(num_layers):
         logger.info(f"Loading layer {i} weights...")
         layer_sd = sub_state_dict(state_dict, f"{prefix}model.layers.{i}.")
-        layer_dequant = dequantize_state_dict(layer_sd, hf_config)
+        layer_dequant = convert_state_dict(layer_sd, hf_config)
 
         layer_dict = {
             "attn_norm_weight": layer_dequant["input_layernorm.weight"],
