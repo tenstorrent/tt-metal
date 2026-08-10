@@ -2572,10 +2572,6 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     const auto& fabric_context = this->get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
-    // Get mux and dispatcher cores
-    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
-    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
-
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
         soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
@@ -2584,12 +2580,18 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     for (const auto& tensix_core : all_tensix_cores) {
         tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
 
-        // Determine core type
+        const auto core_role = tensix_config.get_tensix_core_role(physical_chip_id, core_coord);
+
+        // Reserved descriptor dispatch positions do not run worker, mux, or dispatch firmware in this runtime mode.
+        if (core_role == FabricTensixDatamoverConfig::TensixCoreRole::RESERVED) {
+            continue;
+        }
+
         const void* data_to_write = nullptr;
-        if (fabric_mux_cores_translated.contains(core_coord)) {
+        if (core_role == FabricTensixDatamoverConfig::TensixCoreRole::FABRIC_MUX) {
             // Mux core: write fabric_mux_connections (passed in from caller)
             data_to_write = &fabric_mux_connections;
-        } else if (dispatch_mux_cores_translated.contains(core_coord)) {
+        } else if (core_role == FabricTensixDatamoverConfig::TensixCoreRole::DISPATCH_MUX) {
             // Dispatcher core: write fabric_dispatcher_connections (passed in from caller)
             data_to_write = &fabric_dispatcher_connections;
         } else {
