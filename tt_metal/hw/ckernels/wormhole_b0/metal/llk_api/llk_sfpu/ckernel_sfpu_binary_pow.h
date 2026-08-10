@@ -113,6 +113,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
+    // High-side guard, mirroring the fp32 path: z >= 128 means the result's biased
+    // exponent overflows 8 bits, so the exponent-field reconstruction above wraps
+    // instead of saturating and returns NaN for large finite results
+    // (e.g. pow(2.0f, 128.0f), pow(1000.0f, 15.0f)). z_f32 still holds z * 2**23
+    // (addexp above), so the threshold is 128 * 2**23 = 2**30.
+    v_if(z_f32 >= 0x1p30f) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
+
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
     auto pow_int = sfpi::convert<sfpi::vSMag16>(
