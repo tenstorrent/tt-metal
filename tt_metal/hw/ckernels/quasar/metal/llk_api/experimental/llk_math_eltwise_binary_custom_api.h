@@ -18,8 +18,8 @@
  * @brief Init the math (FPU) thread for the SDPA blocked bcast-col SUB path.
  *
  * Configures the ALU data-format state from the operand formats (defensively; the compute API also
- * calls state_configure) and programs the COL reuse addr-mods. There is no MOP on this path: the
- * execute call emits its ELWSUB stream directly.
+ * calls state_configure) and validates the tile shape. There is no MOP on this path: the execute call
+ * programs the COL reuse addr-mods and emits its ELWSUB stream directly.
  *
  * @tparam math_fidelity: Accepted for API parity; SUB is LoFi-only on Quasar, so the value is unused.
  * @param operandA: DFB id of srcA; its format feeds the ALU format state and its tile shape is

@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
         // SrcB is the same single tile for every block, so its L1 tile index stays 0.
-        _llk_unpack_AB_sub_bcast_col_custom_(buf_desc_id_a, buf_desc_id_b, block * ct_dim, 0, ct_dim, tensor_shape);
+        _llk_unpack_AB_sub_bcast_col_custom_(buf_desc_id_a, buf_desc_id_b, block * ct_dim, 0 /*start_l1_tile_idx_1*/, ct_dim, tensor_shape);
     }
 }
 
@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, tensor_shape, 1);
+    _llk_pack_init_(buf_desc_id, tensor_shape, 1 /*num_tiles_per_pack*/);
 
     const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);

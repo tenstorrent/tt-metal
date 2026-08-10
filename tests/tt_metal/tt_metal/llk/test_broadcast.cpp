@@ -89,6 +89,37 @@ const map<TileShape, tt_metal::Tile> tile_shape_to_tile = {
     {TileShape::TINY_TILE_16x32, tt_metal::Tile({constants::TILE_HEIGHT / 2, constants::TILE_WIDTH})},
 };
 
+// Per-element bfloat16 tolerance shared by both runners below.
+constexpr float k_broadcast_rtol = 0.0155;
+
+// Quasar drives dataflow through the Gen2 config and takes its DFB sync explicitly; Gen1 arches pin
+// the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
+experimental::DataMovementHardwareConfig make_reader_hw_config(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    }
+    return experimental::DataMovementGen1Config{
+        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+}
+
+experimental::DataMovementHardwareConfig make_writer_hw_config(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    }
+    return experimental::DataMovementGen1Config{
+        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+}
+
+experimental::ComputeHardwareConfig make_compute_hw_config(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, MathFidelity math_fidelity) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
+    }
+    return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
+}
+
 struct BroadcastConfig {
     ApiConvention api_convention;
     EltwiseOp eltwise_op;
@@ -314,13 +345,7 @@ void run_single_core_broadcast(
     experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB);
     experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB);
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-    }
+    experimental::DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -345,13 +370,7 @@ void run_single_core_broadcast(
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
-    }
+    experimental::DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -363,12 +382,8 @@ void run_single_core_broadcast(
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
-    }
+    experimental::ComputeHardwareConfig compute_hw_config =
+        make_compute_hw_config(mesh_device, test_config.math_fidelity);
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -480,7 +495,7 @@ void run_single_core_broadcast(
 
     bool result = is_close_packed_vectors<bfloat16, std::uint32_t>(
         dest_buffer_data_untilized, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b, 0.0155);
+            return is_close(a, b, k_broadcast_rtol);
         });
     ASSERT_TRUE(result);
 }
@@ -577,13 +592,7 @@ void run_sub_bcast_col_custom(
     experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, test_config.rt_dim);
     experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, tiles_per_block);
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-    }
+    experimental::DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_bcast_col_reuse.cpp",
@@ -607,13 +616,7 @@ void run_sub_bcast_col_custom(
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
-    }
+    experimental::DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
@@ -623,12 +626,8 @@ void run_sub_bcast_col_custom(
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
-    }
+    experimental::ComputeHardwareConfig compute_hw_config =
+        make_compute_hw_config(mesh_device, test_config.math_fidelity);
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -770,7 +769,7 @@ void run_sub_bcast_col_custom(
 
     bool result = is_close_packed_vectors<bfloat16, std::uint32_t>(
         dest_buffer_data_untilized, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b, 0.0155);
+            return is_close(a, b, k_broadcast_rtol);
         });
     ASSERT_TRUE(result);
 }
@@ -917,7 +916,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 //   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
 //     base, so a failure there (with the matching rt_dim=1 case green) points at the API wrappers'
 //     index arithmetic rather than the face walk.
-TEST_F(LLKMeshDeviceFixture, TensixComputeSubBcastColCustom) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {

@@ -64,7 +64,9 @@ void kernel_main() {
         // so within a block it is just the row's offset into the grid. Row `row` writes dest slots
         // [row * ct_dim, (row + 1) * ct_dim).
         for (std::uint32_t row = 0; row < rt_dim; row++) {
-            sub_tiles_bcast_cols_custom(icb0, icb1, row * ct_dim, row, row * ct_dim, ct_dim);
+            // srcA tile index and dest base are the same offset: this row's start in the block grid.
+            const std::uint32_t tile_base = row * ct_dim;
+            sub_tiles_bcast_cols_custom(icb0, icb1, tile_base /*itile0*/, row /*itile1*/, tile_base /*idst*/, ct_dim);
         }
         tile_regs_commit();
 

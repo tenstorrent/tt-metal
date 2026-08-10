@@ -56,7 +56,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
 )
-from helpers.tile_constants import FACE_C_DIM
+from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -64,10 +64,8 @@ logger = logging.getLogger(__name__)
 
 # Full 32x32 tiles only: 4 faces of 16x16 in a 2x2 grid.
 TILE_DIMENSIONS = [32, 32]
-NUM_FACES_R = 2
-NUM_FACES_C = 2
+FACE_R_DIM, NUM_FACES_R, NUM_FACES_C = get_tile_params(TILE_DIMENSIONS)
 NUM_FACES_TOTAL = NUM_FACES_R * NUM_FACES_C
-FACE_R_DIM = 16
 
 # (ct_dim, num_blocks), ascending by reuse depth so the first red variant is diagnostic.
 # ct_dim=8 fills a 16-bit half-dest exactly (MAX_TILES_IN_HALF_DEST); the 2-block case adds
@@ -94,6 +92,7 @@ def _block_shapes_fitting_dest(dest_sync: DestSync, dest_acc: DestAccumulation):
         [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
     block_shape=lambda dest_sync, dest_acc: _block_shapes_fitting_dest(
         dest_sync, dest_acc
@@ -102,6 +101,7 @@ def _block_shapes_fitting_dest(dest_sync: DestSync, dest_acc: DestAccumulation):
 def test_eltwise_sub_bcast_col_custom_quasar(
     formats,
     dest_acc,
+    implied_math_format,
     dest_sync,
     block_shape,
     boot_mode=BootMode.DEFAULT,
@@ -188,7 +188,7 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         templates=[
             MATH_OP(mathop=MathOperation.Elwsub),
             BROADCAST_TYPE(BroadcastType.Column),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
