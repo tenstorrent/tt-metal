@@ -84,6 +84,69 @@ _FFN_DOWN_PROGCFG = {
 }
 
 
+# ── TILE -> ROW_MAJOR untilize for the streaming convs (VV_POST_UNPAD_SHARD=1) ─
+# ``ttnn.to_layout(x, ROW_MAJOR)`` on a TILE [1, 1, T, C] lowers to UntilizeWithUnpadding, whose
+# INTERLEAVED program factory parallelises over TILE ROWS ONLY:
+#   num_blocks = padded_H / 32   (untilize_with_unpadding_device_operation.cpp, select_program_factory)
+# The POST tensors here are short and wide, so that count is tiny and the op runs nearly serial —
+# measured on the deployed frame: [1,1,8,1024] on 1 core (17.2 us), [1,1,40,512] on 2 (16.8 us),
+# [1,1,200,256] on 7 (13.2 us), 570 us/frame over 36 calls.  The wide-row (block-interleaved) path
+# that would spread these needs num_tiles_per_row > 32 and 1024/32 == 32 misses it by one tile, so
+# it is unreachable from the model.
+#
+# A SHARDED input takes a different factory entirely, one that parallelises over SHARDS, so
+# sharding first buys the core count the interleaved path cannot: 32 / 16 / 56 cores for the three
+# shapes above.  Untilize is pure data movement, so this is byte-identical by construction.
+_UNPAD_SHARD = os.environ.get("VV_POST_UNPAD_SHARD", "1") == "1"
+
+
+def _untilize_rm(x: ttnn.Tensor) -> ttnn.Tensor:
+    """``x`` TILE [1, 1, T, C] -> ROW_MAJOR DRAM-interleaved, sharding first when that wins.
+
+    Falls back to plain ``to_layout`` whenever the shard form does not apply (batched input, a
+    width that will not tile-divide, or a shape the interleaved path already spreads well).
+    """
+    if not _UNPAD_SHARD or x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded():
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    shp = list(x.shape)
+    if len(shp) != 4 or shp[0] != 1 or shp[1] != 1:
+        # WIDTH/BLOCK_SHARDED -> INTERLEAVED untilize is unbatched-only (TT_FATAL "Can only write
+        # unbatched output interleaved"), and [1, 1, T, C] is the only shape the streaming convs use.
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    t, c = int(shp[2]), int(shp[3])
+    padded_h = ((t + 31) // 32) * 32
+    ht, wt = padded_h // 32, c // 32
+    if c % 32 or wt < 1:
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    grid = x.device().compute_with_storage_grid_size()
+    base_cores = ht  # what the interleaved factory would use
+
+    # BLOCK_SHARDED (one tile-block per core) when the tile grid fits the worker grid, else
+    # WIDTH_SHARDED over the column tiles.  Both keep the full padded width per shard row, so the
+    # height-only unpadding stays inside a shard.
+    if wt <= grid.x and ht <= grid.y and ht > 1:
+        cores, mem_layout, shard = wt * ht, ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32]
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(wt - 1, ht - 1))})
+    else:
+        cores = wt
+        if cores > grid.x * grid.y:
+            return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        mem_layout, shard = ttnn.TensorMemoryLayout.WIDTH_SHARDED, [padded_h, 32]
+        core_grid = ttnn.num_cores_to_corerangeset(cores, grid, True)
+
+    if cores <= base_cores:
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard, ttnn.ShardOrientation.ROW_MAJOR)
+    xs = ttnn.to_memory_config(x, ttnn.MemoryConfig(mem_layout, ttnn.BufferType.L1, shard_spec))
+    out = ttnn.untilize_with_unpadding(xs, [0, 0, t - 1, c - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(xs)
+    return out
+
+
 # ──────────────────────────────────────────────────────────────
 # Host-side weight containers (torch tensors, not TTNN)
 # ──────────────────────────────────────────────────────────────
@@ -465,7 +528,7 @@ class TTConv1d:
 
         if use_cache:
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = _untilize_rm(x)
             if cp > 0:
                 if self._cache is None:
                     # Fixed, pre-allocated streaming cache: allocated once and updated in
