@@ -5,12 +5,13 @@
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 
 #include <algorithm>
-#include <array>
+#include <tuple>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_program_factory.hpp"
@@ -19,64 +20,66 @@ namespace ttnn::operations::data_movement::concat_codegen {
 
 namespace {
 
-// Phase-7 measured device regressions with no generalized predicate found
-// (concat.yaml's "Ungeneralized demotions" block). Each is a distinct
-// kernel-cost effect on the 2-tensor RM builders:
-//  - the 9 dim=-1 (width) entries: reader_concat_rm_width_interleaved.cpp's
-//    unaligned-stick scratch-staged `volatile` copy fallback, whose cost
-//    scales with sticks-per-core x bytes-per-stick; the fallback wins at
-//    smaller/larger shapes on the identical path, so the loss is a constant
-//    factor rather than a boundary condition on any normalized attribute.
-//  - the 1 dim=2 (non-width) entry: reader_concat_rm_interleaved.cpp's plain
-//    per-stick path, where analysis found native ahead but identified no
-//    condition separating this shape from passing siblings on the same path.
-// Exact-match per the manifest's explicit low-confidence enumerated floor --
-// not a mechanism, the floor for when analysis finds none.
-struct UngeneralizedDemotion {
-    std::array<uint32_t, 4> shape0;
-    std::array<uint32_t, 4> shape1;
-    uint32_t dim;
-    tt::tt_metal::DataType dtype;
-};
-
-bool shape_equals(const ttnn::Shape& shape, const std::array<uint32_t, 4>& expected) {
-    if (shape.rank() != 4) {
-        return false;
-    }
-    for (uint32_t i = 0; i < 4; ++i) {
-        if (shape[i] != expected[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-constexpr std::array<UngeneralizedDemotion, 10> kUngeneralizedDemotions = {{
-    {{1, 1, 128, 100}, {1, 1, 128, 200}, 3, tt::tt_metal::DataType::INT32},
-    {{1, 1, 128, 100}, {1, 1, 128, 200}, 3, tt::tt_metal::DataType::UINT32},
-    {{1, 1, 128, 128}, {1, 1, 128, 128}, 2, tt::tt_metal::DataType::INT32},
-    {{1, 1, 256, 100}, {1, 1, 256, 200}, 3, tt::tt_metal::DataType::BFLOAT16},
-    {{1, 1, 256, 100}, {1, 1, 256, 200}, 3, tt::tt_metal::DataType::INT32},
-    {{1, 1, 256, 100}, {1, 1, 256, 200}, 3, tt::tt_metal::DataType::UINT32},
-    {{1, 1, 256, 104}, {1, 1, 256, 208}, 3, tt::tt_metal::DataType::BFLOAT16},
-    {{1, 1, 512, 100}, {1, 1, 512, 200}, 3, tt::tt_metal::DataType::BFLOAT16},
-    {{1, 1, 512, 100}, {1, 1, 512, 200}, 3, tt::tt_metal::DataType::INT32},
-    {{1, 1, 512, 100}, {1, 1, 512, 200}, 3, tt::tt_metal::DataType::UINT32},
-}};
-
-bool matches_ungeneralized_demotion(const std::vector<Tensor>& input_tensors, uint32_t dim) {
+// concat.yaml's rm-width-2in-unaligned-staged-copy-volume predicate.
+//
+// Mechanism (concat.yaml demotion block): reader_concat_rm_width_interleaved.cpp
+// gates a batched direct-write fast path on both input rows filling their
+// physical page pitch exactly (kernel :60-68). When that fails, every stick is
+// staged through a scratch CB and copied into the assembly page two bytes at a
+// time by a volatile uint16_t RISC loop (kernel :102-145) -- no batching, no
+// read/write overlap. Native's own fallback for the same unaligned-last-dim
+// condition (concat.cpp's build_non_aligned_last_dim_concat) dispatches 4
+// programs (transpose -> concat -> transpose). So this is fallback-vs-fallback:
+// codegen wins on dispatch count while the staged-copy volume is small, and
+// loses once the byte-copy loop dominates native's extra dispatches. The
+// crossover is a volume threshold (S >= 2400 B), not the alignment condition
+// itself -- alignment only selects which regime (staged vs. fast-path) applies.
+bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_tensors, uint32_t dim) {
     if (input_tensors.size() != 2) {
         return false;
     }
     const Tensor& in0 = input_tensors[0];
     const Tensor& in1 = input_tensors[1];
-    for (const auto& entry : kUngeneralizedDemotions) {
-        if (dim == entry.dim && in0.dtype() == entry.dtype && shape_equals(in0.logical_shape(), entry.shape0) &&
-            shape_equals(in1.logical_shape(), entry.shape1)) {
-            return true;
-        }
+    const uint32_t ndim = in0.logical_shape().rank();
+    if (dim != ndim - 1) {
+        return false;
     }
-    return false;
+
+    auto row_bytes = [](const Tensor& t) {
+        return static_cast<uint32_t>(t.logical_shape()[-1]) * static_cast<uint32_t>(t.element_size());
+    };
+    auto row_bytes_aligned = [](const Tensor& t, uint32_t bytes) {
+        return bytes % static_cast<uint32_t>(t.buffer()->alignment()) == 0;
+    };
+
+    const uint32_t in0_row_bytes = row_bytes(in0);
+    const uint32_t in1_row_bytes = row_bytes(in1);
+    const bool in0_aligned = row_bytes_aligned(in0, in0_row_bytes);
+    const bool in1_aligned = row_bytes_aligned(in1, in1_row_bytes);
+    if (in0_aligned && in1_aligned) {
+        // Every input's row bytes is an alignment multiple: the reader takes
+        // the batched direct-write fast path, which wins at every measured
+        // size in this regime.
+        return false;
+    }
+
+    // in0 unaligned implies IN0_STICK_SIZE % IN1_NOC_ALIGNMENT != 0 (kernel's
+    // in1_direct condition), so input1 cannot be direct either: both inputs
+    // stage and the staged row equals the full output row. Otherwise only
+    // input1 stages.
+    const uint32_t staged_row_bytes = in0_aligned ? in1_row_bytes : (in0_row_bytes + in1_row_bytes);
+
+    tt::tt_metal::IDevice* device = in0.device();
+    uint32_t total_out_sticks = 1;
+    for (uint32_t i = 0; i + 1 < ndim; ++i) {
+        total_out_sticks *= in0.logical_shape()[i];
+    }
+    const auto grid_size = device->compute_with_storage_grid_size();
+    const auto split = tt::tt_metal::split_work_to_cores(grid_size, total_out_sticks, /*row_wise=*/false);
+    const uint32_t max_sticks_per_core = std::get<4>(split);
+
+    const uint64_t staged_volume = static_cast<uint64_t>(max_sticks_per_core) * staged_row_bytes;
+    return staged_volume >= 2400;
 }
 
 bool dtype_in_scope(tt::tt_metal::DataType dtype) {
@@ -215,7 +218,7 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
-    if (matches_ungeneralized_demotion(input_tensors, dim)) {
+    if (rm_width_2in_unaligned_staged_copy_volume(input_tensors, dim)) {
         return true;
     }
     // reader_concat_rm_width_nway.cpp now carries the same aligned direct-write
