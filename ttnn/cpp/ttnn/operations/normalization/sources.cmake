@@ -49,8 +49,6 @@ set(TTNN_OP_NORMALIZATION_SRCS
 set(TTNN_OP_NORMALIZATION_API_HEADERS
     layernorm/layernorm.hpp
     layernorm/device/layernorm_types.hpp
-    layernorm/layernorm_program_factory_for_python.hpp
-    layernorm/sharded_layernorm_factory_helpers_for_python.hpp
     layernorm_distributed/device/layernorm_distributed_types.hpp
     layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
     rmsnorm/rmsnorm.hpp

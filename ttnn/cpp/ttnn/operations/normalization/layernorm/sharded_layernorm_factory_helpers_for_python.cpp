@@ -13,7 +13,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace ttnn::prim;
 
 namespace ttnn::for_python::sharded_layernorm_helpers {
 
