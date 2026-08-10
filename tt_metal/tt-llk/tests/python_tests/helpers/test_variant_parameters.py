@@ -825,10 +825,10 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
 class SFPU_DST_ROUNDING_MODE(TemplateParameter):
     """Selects the bf16 narrowing mode for binary SFPU ADD/SUB results."""
 
-    mode: DstRoundingMode = DstRoundingMode.Default
+    dst_rounding: DstRoundingMode = DstRoundingMode.Default
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.mode.cpp_enum_value};"
+        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.dst_rounding.cpp_enum_value};"
 
 
 @dataclass
