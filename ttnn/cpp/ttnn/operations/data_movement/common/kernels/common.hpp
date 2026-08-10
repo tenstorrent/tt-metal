@@ -15,7 +15,14 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ckernel.h"  // ckernel::load_blocking (store-drain in copy_via_memmove)
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (store-drain in copy_via_memmove) — WH/BH only. On Quasar this header is
+// unusable from a data-movement (DM) build: ckernel.h -> ckernel_addrmod.h -> ckernel_trisc_id.h #errors
+// unless COMPILE_FOR_TRISC is defined, and Quasar's ckernel.h has no load_blocking. The Quasar drain
+// below uses a plain volatile load instead, so ckernel.h is not needed here on Quasar. (tt_l1_ptr comes
+// from risc_attribs.h, not ckernel.h, so guarding this include does not lose it.)
+#include "ckernel.h"
+#endif
 
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
@@ -92,16 +99,42 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
 // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). When the copy is not deferred (!copy_async), drain
 // the last written word (blocking load + memory clobber) so the copy is processed before the caller
 // publishes / NoC-reads the destination -- the counterpart of the NoC path's completion barrier.
+//
+// TODO(ARCH_QUASAR): this CPU-copy fallback is NOT fully cache-coherent on Quasar. Quasar's data path is
+// Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there (risc_common.h), so:
+//   (a) SOURCE read: if the source was just NoC-written into a reused CB, the RISC's cached line can be
+//       stale; a correct read needs invalidate_l2_cache_range(src, bytes) before the memmove.
+//   (b) DEST publish: the CPU stores land in L1 D$/L2, not TL1. The drain below only reads back the dirty
+//       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, so a
+//       later NoC / other-agent read of the destination can see stale data. A correct publish needs
+//       flush_l2_cache_range(dst, bytes) after the memmove; the copy_async=true path skips even the drain.
+// This is a PRE-EXISTING gap that was previously unreachable on Quasar (this header didn't compile for
+// Quasar DM); it is a fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned
+// fallback), it is off the resnet critical path, and it does not manifest on the emulator (flat memory,
+// no cache hierarchy modeled). Deferred to a follow-up (needs HW validation), tracked in issue #51763;
+// the flush/invalidate primitives + the ARCH_QUASAR&&COMPILE_FOR_DM pattern already exist (see the #50329
+// tilize-padding fix).
 template <bool copy_async>
 FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     invalidate_l1_cache();
-    memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+    // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
+    // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
+    // is the correct width on every arch, so this is a no-op change for WH/BH.
+    memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_l1_addr), (size_t)(bytes));
     if constexpr (!copy_async) {
         if (bytes != 0) {
             // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
             // size/alignment (dst may be sub-word-aligned on the misaligned path).
-            (void)ckernel::load_blocking(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3}));
+            volatile tt_l1_ptr uint32_t* drain_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3});
+#if defined(ARCH_QUASAR)
+            // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only
+            // (reads back the dirty L1D line); it does NOT flush L2->TL1 for cross-agent visibility -- see
+            // the TODO(ARCH_QUASAR) coherency note above.
+            (void)*drain_ptr;
+#else
+            (void)ckernel::load_blocking(drain_ptr);
+#endif
         }
     }
 }

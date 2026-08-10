@@ -1568,8 +1568,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 
@@ -1654,8 +1654,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
         .sfpu_op = sfpu_op,
         .approx_mode = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1713,8 +1713,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
         .approx_mode = false,
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 
@@ -1784,8 +1784,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
         .approx_mode = true,
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -1856,8 +1856,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(device, test_config));
     }
 }
 
@@ -1903,8 +1903,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture, TensixSfpuTern
         .sfpu_op = sfpu_op,
         .approx_mode = false};
     log_info(tt::LogTest, "Testing ternary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_ternary_three_input_buffer(devices_.at(id), test_config));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_ternary_three_input_buffer(device, test_config));
     }
 }
 
@@ -1976,8 +1976,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         "Testing typecast {} -> {}",
         unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
         unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(devices_.at(id), in_fmt, out_fmt, 1));
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(device, in_fmt, out_fmt, 1));
     }
 }
 

@@ -106,7 +106,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, FULL_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
+                buf_desc_id, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
@@ -161,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL, FULL_CT_DIM>(tensor_shape, y * FULL_CT_DIM /*l1_tile_idx*/);
+                        _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
                     }
                 }
                 else

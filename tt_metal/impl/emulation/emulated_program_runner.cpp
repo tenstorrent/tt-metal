@@ -171,6 +171,24 @@ thread_local uint8_t my_x[NUM_NOCS] = {};
 thread_local uint8_t my_y[NUM_NOCS] = {};
 thread_local uint32_t __emule_logical_x = 0;
 thread_local uint32_t __emule_logical_y = 0;
+////////////////////////////////////////////////////////////
+// Blaze-only experimental firmware-global shim
+// Removal is tracked by issue #50953
+// Silicon-named per-core LOGICAL coords (firmware globals `my_logical_x_/y_`,
+// mirroring hw/firmware/src/tt-1xx/brisc.cc; declared extern by
+// blaze/kernels/kernel_utils.hpp). Defined here so compute (TRISC) kernels that
+// reference them link; restored per fiber swap-in by the scheduler's
+// install_fiber. The dataflow (NCRISC/BRISC) senders that must read a CORRECT
+// per-fiber value instead resolve `my_logical_x_/y_` through the
+// dataflow_utils.hpp shadow's per-fiber accessor (__emule_self->core->logical_*),
+// so this definition is only a link/fallback anchor on other RISCs.
+// These MUST stay at global scope with these exact unmangled names (NOT inside a
+// namespace): under emule there is no firmware, and JIT'd kernels are x86-compiled
+// and resolve these symbols against libtt_metal via dlopen(-rdynamic) — any
+// mangling/rename breaks that lookup.
+thread_local uint8_t my_logical_x_ = 0;
+thread_local uint8_t my_logical_y_ = 0;
+////////////////////////////////////////////////////////////
 
 // NOC encoding constants (matching firmware for Blackhole/Wormhole).
 static constexpr uint32_t NOC_LOCAL_BITS = 36;
@@ -589,13 +607,15 @@ struct PendingKernelInfo {
     std::string kernel_name;  // kernel source path, for the ASAN trace
 };
 
-// DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
+// DFB allocation info for a single DFB on a core. Only device_slot and base_addr
 // are genuinely new per-core state; everything else (entry_size, num_entries,
 // risc masks, num_producers/consumers, cap) is read from the borrowed config
 // pointer, whose backing DataflowBufferImpl is owned by ProgramImpl and
 // outlives one program execution.
 struct DFBAllocInfo {
-    uint32_t dfb_id = 0;
+    // Matches the dfb::<name> accessor value the emulated kernel uses, so all per-core tables
+    // (CB sync, tile counters, interface slots) are keyed by slot rather than by program-wide id.
+    uint32_t device_slot = 0;
     uint32_t base_addr = 0;
     const tt::tt_metal::experimental::dfb::DataflowBufferConfig* cfg = nullptr;
 };
@@ -2048,12 +2068,23 @@ static void jit_compile_pending(
 static std::mutex g_core_map_mutex;
 static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
     g_core_map_cache;
+// The SWEmuleChip each cached core_map was built against. A device close+reopen mints
+// a NEW SWEmuleChip with fresh per-core L1 mmaps (single-process-galaxy L1 model), so a
+// core_map cached from the prior chip holds Core* into a now-disjoint L1 region. The NOC
+// path (this map) would then resolve a worker's semaphore to a different L1 backing than
+// that worker's own fiber (built from the CURRENT chip in setup_core_state) reads —
+// cross-core sems never observed → deadlock. Rebuild when the chip identity changes.
+static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
 
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
+    if (core_map && g_core_map_sw_emu[device_id] != sw_emu) {
+        core_map.reset();  // stale: built against a different (now-replaced) SWEmuleChip
+    }
     if (!core_map && sw_emu) {
+        g_core_map_sw_emu[device_id] = sw_emu;
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
         // Add ALL worker cores from the device grid
         auto grid = device->compute_with_storage_grid_size();
@@ -2133,6 +2164,9 @@ static int __emule_fabric_dir_neighbor(
     return -1;
 }
 
+// Chip-count backstop for a single-direction walk (loudbox = 8).
+static constexpr int kMaxFabricWalkHops = 64;
+
 // Ordered chips reachable from `src` at distance 1,2,... in `dir` (line or ring), cached.
 static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fabric::RoutingDirection dir) {
     std::lock_guard<std::mutex> lock(g_fabric_route_mutex);
@@ -2142,9 +2176,10 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
         return it->second;
     }
     std::vector<uint32_t> walk;
+    walk.reserve(kMaxFabricWalkHops);
     auto& cp = MetalContext::instance().get_control_plane();
     uint32_t cur = src;
-    for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop (loudbox = 8)
+    for (int hop = 0; hop < kMaxFabricWalkHops; ++hop) {
         int nxt = __emule_fabric_dir_neighbor(cp, cur, dir);
         if (nxt < 0 || static_cast<uint32_t>(nxt) == src) {
             break;  // line end, or ring wrapped back to the source
@@ -2285,21 +2320,28 @@ extern "C" void __emule_fabric_set_route_dir(
 // Carry a stamped route from a source header address to a destination when the header bytes are copied
 // (a worker staging a packet header into a forwarder relay slot). On silicon the routing fields ride inside
 // the header, so a byte copy carries them for free; emule keeps them in the address-keyed side-table, so the
-// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are 0-based L1 offsets
-// (the fabric shim passes bridge_l1-relative offsets); widen through emule_route_key to match the set/read
-// sides. See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
-    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
+// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are FULL host-pointer
+// values (bridge_l1 + offset) in the same key space as the set/read sides — NOT bridge_l1-relative uint32
+// offsets (see the ABI note in the body for why the widening was removed). See tt-emule
+// docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint64_t src_key, uint64_t dst_key) {
+    // src_key/dst_key are FULL host-pointer values (bridge_l1 + offset) — the same key space as
+    // emule_route_key and the set + teleport-read sides. They MUST be full 64-bit pointers, not
+    // bridge_l1-relative uint32 offsets: a forwarder's relay slot lives on a DIFFERENT core whose L1
+    // mmap can be >4 GB from the writer's bridge_l1, so (dst - writer_bridge_l1) overflows uint32 and
+    // mis-keys the copy → the forwarder's teleport lookup misses → kind UNSET → wrong-neighbor route
+    // → many-to-one converge deadlock (reduce_to_one column dimension). See tt-emule
+    // docs/fabric-ccl-emulation.md.
     if (src_key == dst_key) {
         return;
     }
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto it = g_route_meta.find(emule_route_key(src_key));
+    auto it = g_route_meta.find(src_key);
     if (it == g_route_meta.end()) {
         return;  // src carries no route — not a packet-header copy; nothing to follow.
     }
     const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
-    g_route_meta[emule_route_key(dst_key)] = r;
+    g_route_meta[dst_key] = r;
 }
 
 // Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
@@ -2548,6 +2590,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             std::vector<uint32_t> tgts;
             if (r.kind == emule_route_kind::MCAST_1D) {
                 const uint32_t start = r.a ? r.a : 1, range = r.b ? r.b : 1;
+                tgts.reserve(std::min<size_t>(range, walk.size()));
                 for (uint32_t hop = start; hop < start + range && hop - 1 < walk.size(); ++hop) {
                     tgts.push_back(walk[hop - 1]);
                 }
@@ -2815,6 +2858,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     }
 
     std::vector<DFBAllocInfo> dfb_allocs;
+    dfb_allocs.reserve(dfb_impls.size());
     // Compute bridge sharing: a compute-consumer input DFB and a compute-producer
     // output DFB with matching dimensions share L1 (real HW routes through the
     // register file). Independent compute-consumer inputs (e.g. matmul in0/in1)
@@ -2822,7 +2866,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     constexpr uint16_t TENSIX_MASK = 0xFF00u;  // bits 8-15
     std::unordered_map<uint64_t, uint32_t> bridge_consumer_alloc;
     for (auto& dfb_impl : dfb_impls) {
-        uint32_t dfb_id = dfb_impl->id;
+        uint32_t device_slot = dfb_impl->device_slot;
         auto& cfg = dfb_impl->config;
         uint32_t total = cfg.entry_size * cfg.num_entries;
         uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
@@ -2854,21 +2898,21 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
         uint32_t capacity = cfg.num_entries / M;
-        core->init_dfb_sync(dfb_id, base, cfg.entry_size, cfg.num_entries, capacity);
+        core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
-        if (dfb_id < EMULE_NUM_CBS) {
-            core->init_cb_sync(static_cast<uint8_t>(dfb_id), base, cfg.entry_size, cfg.num_entries);
+        if (device_slot < EMULE_NUM_CBS) {
+            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries);
         }
 
         // Initialize tile counters for this DFB.
         // STRIDED: M TCs. ALL DM-DM: P*C TCs. Counter IDs are spaced by
         // MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions.
-        if (dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-            throw std::out_of_range("dfb_id exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
+        if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+            throw std::out_of_range("DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
         }
-        uint8_t counter_base = static_cast<uint8_t>(dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
+        uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
         uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
         for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
             auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
@@ -2877,13 +2921,13 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             tc.acked.store(0, std::memory_order_relaxed);
         }
 
-        dfb_allocs.push_back({dfb_id, base_addr, &cfg});
+        dfb_allocs.push_back({device_slot, base_addr, &cfg});
         log_debug(
             tt::LogMetal,
             "  Core({},{}) DFB[{}]: addr=0x{:x} entry_size={} num_entries={} total={}",
             logical_core.x,
             logical_core.y,
-            dfb_id,
+            device_slot,
             base_addr,
             cfg.entry_size,
             cfg.num_entries,
@@ -2957,10 +3001,10 @@ static void populate_dfb_interface_slots(
     bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
     uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
     uint32_t stride_size = M * cfg.entry_size;
-    if (alloc.dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+    if (alloc.device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
         return;
     }
-    uint8_t counter_base = static_cast<uint8_t>(alloc.dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
+    uint8_t counter_base = static_cast<uint8_t>(alloc.device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
 
     bool is_producer = (cfg.producer_risc_mask & proc_bit) != 0;
     bool is_consumer = (cfg.consumer_risc_mask & proc_bit) != 0;
@@ -3049,11 +3093,11 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     for (size_t t = 0; t < ki_list.size(); t++) {
         per_thread_dfbs[t] = std::make_unique<tt_emule::EmuleDFBInterface[]>(tt_emule::MAX_DFBS);
         for (const auto& alloc : dfb_allocs) {
-            if (alloc.dfb_id >= tt_emule::MAX_DFBS) {
+            if (alloc.device_slot >= tt_emule::MAX_DFBS) {
                 continue;
             }
             populate_dfb_interface_slots(
-                per_thread_dfbs[t][alloc.dfb_id], alloc, ki_list[t].processor_id, ki_list[t].is_tensix);
+                per_thread_dfbs[t][alloc.device_slot], alloc, ki_list[t].processor_id, ki_list[t].is_tensix);
         }
     }
     return per_thread_dfbs;
@@ -3270,6 +3314,9 @@ static void launch_cores(
     // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
     std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
     const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
+    if (object_intent_active) {
+        intent_trackers.reserve(core_setups.size());
+    }
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         auto& cs = core_setups[core_idx];

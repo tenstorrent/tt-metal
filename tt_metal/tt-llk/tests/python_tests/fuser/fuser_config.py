@@ -22,9 +22,9 @@ from helpers.perf_schema import (
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
-from .fused_operand import OperandRegistry
-from .fused_operation import FusedOperation
-from .fuser_sentinel import FuserSentinel
+from .l1_operation import L1Operation
+from .operand import OperandRegistry
+from .sentinel import FuserSentinel
 
 
 @dataclass
@@ -65,13 +65,13 @@ class GlobalConfig:
 
 
 class FuserConfig(TestConfig):
-    pipeline: List[FusedOperation]
+    pipeline: List[L1Operation]
     global_config: GlobalConfig
     operand_registry: OperandRegistry
 
     def __init__(
         self,
-        pipeline: List[FusedOperation],
+        pipeline: List[L1Operation],
         global_config: GlobalConfig,
         operand_registry: OperandRegistry,
     ):
@@ -97,6 +97,8 @@ class FuserConfig(TestConfig):
             "pipeline",
             "global_config",
             "operand_registry",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         temp_str = [
@@ -108,7 +110,7 @@ class FuserConfig(TestConfig):
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
 
     def generate_and_build_test(self):
-        from .fused_generator import FusedKernelGenerator
+        from .kernel_generator import FusedKernelGenerator
 
         code_generator = FusedKernelGenerator(self)
         code_generator.write_kernel(self.test_name)
@@ -117,7 +119,7 @@ class FuserConfig(TestConfig):
     def run_perf_test(self, worker_id: str, run_count: int = 2):
         """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
 
-        from .fused_generator import FUSED_TESTS_DIR
+        from .kernel_generator import FUSED_TESTS_DIR
 
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes
@@ -192,8 +194,8 @@ class FuserConfig(TestConfig):
     def run_regular_test(self):
         """Run functional test: generate, build, write inputs to L1, execute kernel, read outputs and verify against golden."""
 
-        from .fused_generator import FUSED_TESTS_DIR
-        from .fused_golden import FusedGolden
+        from .golden_check import GoldenCheck
+        from .kernel_generator import FUSED_TESTS_DIR
 
         if self.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
             pytest.skip(self.SKIP_JUST_FOR_STIMULI_MARKER)
@@ -215,5 +217,5 @@ class FuserConfig(TestConfig):
         self.run_elf_files()
         self.wait_for_tensix_operations_finished()
         self.operand_registry.read_outputs_from_l1(self.TENSIX_LOCATION)
-        golden = FusedGolden()
+        golden = GoldenCheck()
         assert golden.check_pipeline(self)

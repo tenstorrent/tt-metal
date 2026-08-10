@@ -7,6 +7,7 @@
 #include "interleaved_to_sharded_partial_op_types.hpp"
 #include "interleaved_to_sharded_partial_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -27,6 +28,17 @@ struct InterleavedToShardedPartialDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
+
+    // slice_index feeds only the runtime read-offset starting_idx_h and is excluded from the program
+    // hash, so cache hits for a different slice must re-derive the per-dispatch args (otherwise the
+    // reader/writer args baked at first miss stay frozen at the first slice). Re-run create_descriptor
+    // (single source of truth) and re-apply its per-core args + tensor-backed CB addresses.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const Tensor& input_tensor,
+        tensor_return_value_t& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 Tensor interleaved_to_sharded_partial(

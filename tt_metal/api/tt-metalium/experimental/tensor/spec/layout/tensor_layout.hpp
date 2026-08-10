@@ -75,9 +75,6 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
     std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignment&> attribute_values() const;
 
-    static TensorLayout restore_from_serialized(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
-
     // Access to the implementation, which carries the internal layout-computation API.
     //
     // pre-condition: the TensorLayout must not be in a moved-from state.

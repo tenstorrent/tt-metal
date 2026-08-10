@@ -27,6 +27,14 @@ This descriptor will capture information about how to compose a "big-mesh" (intr
 
 Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.com/document/d/1291H1Wl_pSkIGHP9B_L6oikaD3MflAGXg3Lox1O8S0c/edit?usp=sharing)
 
+### Torus dimensions
+
+`device_topology.dim_types` records declared topology. A `RING` axis remains
+declared as torus even when its extent is one or two; Fabric realizes a distinct
+wrap edge only at size three or greater. Size-two links retain ordinary mesh
+directionality and boundary ports, while deadlock avoidance remains based on
+the declared torus configuration.
+
 
 ## Minimal workflow
 > This is currently TBD

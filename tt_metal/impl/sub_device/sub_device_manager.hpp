@@ -63,6 +63,7 @@ public:
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
+    DeviceAddr get_max_trace_high_water_mark() const;
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
