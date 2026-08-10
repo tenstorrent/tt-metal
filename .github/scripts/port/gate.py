@@ -159,6 +159,26 @@ def check_routing_test(manifest: str, op: str, category: str, repo: Path) -> str
     )
 
 
+def is_generator_scratch(path: str) -> bool:
+    """Whether a path is a kernel-template directory tt-dm-codegen injected into the metal tree.
+
+    Each `ops/<op>/builder.py` names a `_KB` directory under `ttnn/cpp/.../device/kernels/
+    codegen_templates` and symlinks its kernel templates there, because the JIT resolves a kernel
+    path relative to `$TT_METAL_HOME`. It leaves that directory and a `codegen_templates.ttdm.lock`
+    beside it. Instantiating the prototype leg is what creates them, so they appear on any run that
+    measures `generic_op` -- the harness dirtying the tree on its own behalf, before the agent has
+    done anything.
+
+    Which op's directory they land in is the generator's choice and need not be the op being ported:
+    `untilize`'s templates go under `untilize_with_unpadding/`, so no rule phrased in terms of the
+    port's own paths can cover them. The generator's own tooling skips these the same way.
+
+    They are excluded rather than allowed as a port path, because nothing in them ships: they are
+    symlinks into the pinned tt-dm-codegen checkout, serving the prototype comparison leg only.
+    """
+    return any(part.startswith("codegen_templates") for part in Path(path).parts)
+
+
 def check_write_paths(base_sha: str, op: str, category: str, repo: Path) -> list[str]:
     """Return the changed paths that fall outside the port's own files.
 
@@ -181,7 +201,11 @@ def check_write_paths(base_sha: str, op: str, category: str, repo: Path) -> list
     ).stdout
     changed = {p for p in (out + untracked).splitlines() if p.strip()}
     prefixes = allowed_prefixes(op, category)
-    return sorted(p for p in changed if not any(p == a or p.startswith(a) for a in prefixes))
+    return sorted(
+        p
+        for p in changed
+        if not is_generator_scratch(p) and not any(p == a or p.startswith(a) for a in prefixes)
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -319,19 +343,31 @@ def attribute_device_rows(csv_path: Path, order: list[dict]) -> tuple[dict, list
 
     samples: dict[tuple[str, str], list[float]] = {}
     codes: dict[str, set] = {}
+    per_case: dict[tuple[str, str], set] = {}
     for (code, ns), entry in zip(durations, dispatched):
         leg = entry["leg"]
         if leg.endswith(":warmup"):
             continue  # consumed positionally, but a first call measures compilation, not the op
-        samples.setdefault((entry["case_id"], leg), []).append(ns)
+        key = (entry["case_id"], leg)
+        samples.setdefault(key, []).append(ns)
         codes.setdefault(leg, set()).add(code)
+        per_case.setdefault(key, set()).add(code)
 
-    for leg, seen in codes.items():
-        if len(seen) > 1:
-            notes.append(f"device attribution inconclusive: leg {leg!r} mapped to op codes {sorted(seen)}")
-            return {}, notes
+    # Consistency is required within a case, not across the band. A leg may legitimately span
+    # several device ops across cases: `ttnn.untilize` dispatches UntilizeDeviceOperation on a
+    # tile-aligned input and UntilizeWithUnpaddingDeviceOperation otherwise, and a demoted case
+    # sends the ported leg to the native op deliberately. Within one case the shape is fixed, so a
+    # second op code there is the positional join having slipped, which is what this guards.
+    slipped = sorted(k for k, seen in per_case.items() if len(seen) > 1)
+    if slipped:
+        case_id, leg = slipped[0]
+        notes.append(
+            f"device attribution inconclusive: leg {leg!r} on {case_id} mapped to op codes "
+            f"{sorted(per_case[(case_id, leg)])}"
+        )
+        return {}, notes
     if codes:
-        notes.append("op codes: " + ", ".join(f"{leg}={sorted(s)[0]}" for leg, s in sorted(codes.items())))
+        notes.append("op codes: " + ", ".join(f"{leg}={'|'.join(sorted(s))}" for leg, s in sorted(codes.items())))
     return samples, notes
 
 

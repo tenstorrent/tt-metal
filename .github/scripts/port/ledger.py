@@ -34,6 +34,9 @@ from typing import Any
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ttnn_names  # noqa: E402
+
 SCOPE_IN, SCOPE_OUT, SCOPE_DROPPED = "in", "out", "dropped"
 
 # Block-float dtypes cannot back a ROW_MAJOR tensor at all -- ttnn TT_FATALs on construction, so
@@ -104,10 +107,10 @@ def _outside_port_scope(case: dict, port_scope: dict) -> str | None:
     shape = case.get("shape") or []
     if case["dtype"] in (port_scope.get("tile_aligned") or []) and len(shape) >= 2:
         if shape[-2] % TILE or shape[-1] % TILE:
-            return (
-                f"port_scope: {case['dtype']} is in scope only on tile-aligned shapes, "
-                f"and {shape[-2]}x{shape[-1]} is not"
-            )
+            # Deliberately without the offending dims. The reason is what the routing test groups
+            # its cases under, and one that names a shape is unique per case, which turns the
+            # grouping into a per-case comment on every line. Each case carries its own shape.
+            return f"port_scope: {case['dtype']} is in scope only on tile-aligned shapes"
     return None
 
 
@@ -168,6 +171,12 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
                 "dtype": dtype,
                 "layout": layout,
                 "kwargs": kwargs,
+                # kwargs again, named rather than repr'd, and JSON-safe. `kwargs` holds live ttnn
+                # objects for calling with; this is what anything reading the ledger *about* a case
+                # uses. `strata.py` partitions and labels from it so that measure.py, holding the
+                # live object, and gate.py, holding only what survived the JSON, name a stratum
+                # identically -- which is what lets the coverage table join to the graded results.
+                "kwargs_named": ttnn_names.readable(kwargs),
             }
             signature = _signature(case)
             if signature in seen:
