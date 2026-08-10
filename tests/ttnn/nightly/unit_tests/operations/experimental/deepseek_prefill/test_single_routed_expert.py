@@ -27,7 +27,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
 
-
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
         1,
@@ -208,6 +207,216 @@ def run_single_routed_expert(
     assert not torch.isinf(tt_output_active).any(), "Active output contains Inf"
 
     logger.debug("Test PASSED!")
+
+
+MULTI_EXPERT_PARITY_SCENARIOS = [
+    pytest.param(
+        [0, 1, 2, 3],
+        [128, 256, 64, 160],
+        [0, 256, 512, 768],
+        1024,
+        id="packed-aligned",
+    ),
+    pytest.param(
+        [2, 0, 3, 1],
+        [32, 255, 0, 160],
+        [64, 384, 704, 1024],
+        1344,
+        id="permuted-gapped-zero-tail",
+    ),
+    pytest.param(
+        [7, 0, 11, 3, 9, 1, 5, 10, 2, 8, 4, 6],
+        [1, 7, 17, 31, 33, 47, 63, 65, 95, 97, 127, 255],
+        [expert * 256 for expert in range(12)],
+        12 * 256,
+        id="twelve-experts-all-ragged",
+    ),
+]
+
+
+@pytest.mark.parametrize("input_format", ["bfp8_tile", "bf16_rm"])
+@pytest.mark.parametrize(
+    "global_ids, counts_by_local, offsets_by_local, total_rows",
+    MULTI_EXPERT_PARITY_SCENARIOS,
+)
+@pytest.mark.skipif(not is_blackhole(), reason="shared-region fused routed expert is Blackhole-only")
+def test_multi_routed_expert_silu_shared_regions(
+    device,
+    input_format,
+    global_ids,
+    counts_by_local,
+    offsets_by_local,
+    total_rows,
+):
+    """Compare unified and moe_fused over the same multi-expert dispatch buffer.
+
+    This is the bias-free, standard-SiLU counterpart of
+    ``test_gptoss_bias_multi_expert``. It exercises the fused extract/insert
+    addressing itself: non-identity local-to-global mappings, nonzero and gapped
+    offsets, a zero-token expert, and many non-tile-aligned counts. The 12-expert
+    case spans 1..255 tokens and deliberately samples both sides of several tile
+    boundaries. No standalone extract or insert op runs.
+
+    Both implementations receive independently allocated copies of the same
+    quantized input and share the same converted BFP4 weight tensors. Their
+    active output regions must each match Torch and match one another.
+    """
+    torch.manual_seed(123)
+    # DeepSeek-style target shape: K=7168 input features, N=2048 FFN features.
+    emb_dim, hidden_dim = 7168, 2048
+    max_tokens = 256
+    num_experts = len(global_ids)
+    assert len(counts_by_local) == len(offsets_by_local) == num_experts
+
+    torch_weights = []
+    torch_experts = []
+    torch_inputs = []
+    torch_buffer = torch.randn(total_rows, emb_dim, dtype=torch.float32)
+    for local_expert, (count, offset) in enumerate(zip(counts_by_local, offsets_by_local)):
+        weights = {
+            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+        }
+        active = torch.randn(count, emb_dim, dtype=torch.float32)
+        torch_buffer[offset : offset + count] = active
+        # Hostile region padding catches a reader that ignores the device-side count.
+        torch_buffer[offset + count : offset + max_tokens] = 100.0
+        torch_weights.append(weights)
+        torch_experts.append(TorchExpert(emb_dim, hidden_dim, weights))
+        torch_inputs.append(active)
+
+    with torch.no_grad():
+        expected = [
+            torch_experts[local_expert](torch_inputs[local_expert]) if count else None
+            for local_expert, count in enumerate(counts_by_local)
+        ]
+
+    def u32(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            dtype=ttnn.uint32,
+        )
+
+    counts_by_global = [0] * num_experts
+    offsets_by_global = [0] * num_experts
+    for local_expert, global_expert in enumerate(global_ids):
+        counts_by_global[global_expert] = counts_by_local[local_expert]
+        offsets_by_global[global_expert] = offsets_by_local[local_expert]
+
+    global_expert_idx = u32(global_ids)
+    expert_counts = u32(counts_by_global)
+    expert_offsets = u32(offsets_by_global)
+    input_dtype, input_layout = {
+        "bfp8_tile": (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        "bf16_rm": (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    }[input_format]
+
+    def make_input():
+        return ttnn.from_torch(
+            torch_buffer,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            layout=input_layout,
+            device=device,
+            dtype=input_dtype,
+        )
+
+    compose = ttnn.ConcatMeshToTensor(device, dim=0)
+    tt_unified_input = make_input()
+    tt_fused_input = make_input()
+    unified_input_before = ttnn.to_torch(tt_unified_input, mesh_composer=compose).clone()
+    fused_input_before = ttnn.to_torch(tt_fused_input, mesh_composer=compose).clone()
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
+
+    tt_expert = TtRoutedExpert(
+        mesh_device=device,
+        experts_per_chip=num_experts,
+        global_expert_idx_table=global_expert_idx,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_tokens,
+        torch_weights=torch_weights,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+        compute_kernel_config=compute_config,
+        activation=ttnn.RoutedExpertActivation.Silu,
+    )
+    assert tt_expert.gate_biases is None and tt_expert.up_biases is None and tt_expert.down_biases is None
+
+    tt_unified_output = tt_expert(tt_unified_input, expert_counts, expert_offsets)
+    tt_fused_output = ttnn.from_torch(
+        torch.full_like(torch_buffer, -7.5),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+    )
+    for local_expert in range(num_experts):
+        tt_fused_output = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+            tt_fused_input,
+            tt_expert.gate_projs[local_expert],
+            tt_expert.up_projs[local_expert],
+            tt_expert.down_projs[local_expert],
+            expert_counts,
+            global_expert_idx,
+            local_expert,
+            input_m_tiles=max_tokens // ttnn.TILE_SIZE,
+            core_grid=ttnn.CoreCoord(11, 8),
+            output=tt_fused_output,
+            expert_region_offsets=expert_offsets,
+            read_x_at_offset=True,
+            compute_kernel_config=compute_config,
+        )
+
+    unified_output = ttnn.to_torch(tt_unified_output, mesh_composer=compose)
+    fused_output = ttnn.to_torch(tt_fused_output, mesh_composer=compose)
+    written_tiles = torch.zeros(total_rows, dtype=torch.bool)
+    for local_expert, (count, start) in enumerate(zip(counts_by_local, offsets_by_local)):
+        if count == 0:
+            continue
+        unified_region = unified_output[start : start + count]
+        fused_region = fused_output[start : start + count]
+        unified_passing, unified_pcc = comp_pcc(expected[local_expert], unified_region, 0.97)
+        fused_passing, fused_pcc = comp_pcc(expected[local_expert], fused_region, 0.97)
+        parity_passing, parity_pcc = comp_pcc(unified_region, fused_region, 0.999)
+        logger.info(
+            f"{input_format}: local={local_expert} global={global_ids[local_expert]} "
+            f"offset={start} count={count} unified_pcc={unified_pcc} "
+            f"fused_pcc={fused_pcc} parity_pcc={parity_pcc}"
+        )
+        assert unified_passing, f"unified expert {local_expert} PCC below threshold: {unified_pcc}"
+        assert fused_passing, f"moe_fused expert {local_expert} PCC below threshold: {fused_pcc}"
+        assert parity_passing, f"expert {local_expert} unified/moe_fused parity PCC too low: {parity_pcc}"
+        assert torch.isfinite(unified_region).all(), f"unified expert {local_expert} output is not finite"
+        assert torch.isfinite(fused_region).all(), f"moe_fused expert {local_expert} output is not finite"
+        written_rows = ((count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        written_tiles[start : start + written_rows] = True
+
+    # moe_fused uses a separate sentinel-filled destination and must never mutate x.
+    fused_input_after = ttnn.to_torch(tt_fused_input, mesh_composer=compose)
+    assert torch.equal(fused_input_after, fused_input_before), "moe_fused mutated its shared input buffer"
+    assert torch.equal(
+        fused_output[~written_tiles], torch.full_like(fused_output[~written_tiles], -7.5)
+    ), "moe_fused wrote outside the active experts' tile prefixes"
+
+    # unified intentionally aliases TILE input, while its BF16 ROW_MAJOR path allocates
+    # a fresh BFP8 TILE output. Check the observable untouched-buffer contract of each.
+    if input_format == "bfp8_tile":
+        assert torch.equal(
+            unified_output[~written_tiles], unified_input_before[~written_tiles]
+        ), "unified wrote outside the active experts' tile prefixes"
+    else:
+        unified_input_after = ttnn.to_torch(tt_unified_input, mesh_composer=compose)
+        assert torch.equal(unified_input_after, unified_input_before), "unified mutated its BF16 ROW_MAJOR input"
 
 
 # Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
