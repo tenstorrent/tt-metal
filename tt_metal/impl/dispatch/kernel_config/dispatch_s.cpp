@@ -165,16 +165,18 @@ void DispatchSKernel::GenerateStaticConfigs() {
         }
     }
 
-    const bool dispatch_s_enabled = get_dispatch_query_manager_ref().dispatch_s_enabled();
-    // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE): start its CB past dispatch_d's.
-    const uint32_t cb_base_offset =
-        (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH)
-            ? (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * my_dispatch_constants.dispatch_buffer_pages()
-            : 0;
     for (const uint8_t served_cq_id : served_cq_ids_) {
         auto& channel_config = static_config_.channels[served_cq_id];
-        channel_config.cb_base =
-            dispatch_s_enabled ? my_dispatch_constants.dispatch_buffer_base(served_cq_id) + cb_base_offset : 0xff;
+        if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
+            // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE): start its CB past dispatch_d's.
+            const uint32_t cb_base_offset = (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH)
+                                                ? (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
+                                                      my_dispatch_constants.dispatch_buffer_pages()
+                                                : 0;
+            channel_config.cb_base = my_dispatch_constants.dispatch_buffer_base(served_cq_id) + cb_base_offset;
+        } else {
+            channel_config.cb_base = 0xff;
+        }
         channel_config.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         channel_config.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         // cq_dispatch.cpp derives dispatch_s_enabled from a non-zero shutdown sem id.
