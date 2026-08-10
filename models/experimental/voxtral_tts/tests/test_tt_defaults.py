@@ -151,6 +151,29 @@ def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
             f"{fn.__qualname__} is back on the unfused activation kwarg -- 6.52")
 
 
+def test_out_subblock_w_is_the_largest_legal_one():
+    """The helper's comment says "biggest that fits" and for a while the code did not do that: the
+    candidate tuple was (4, 2, 1), which skips 3. ttnn's own SUBBLOCK_HW_CHOICES lists {3,1}
+    explicitly, so wqkv's per_core_N=3 fell all the way to out_subblock_w=1 -- three passes through
+    the destination registers where one would do. It measured perf-neutral (59.3 vs 59.2 us,
+    because subblock width is compute-side and the ALUs are ~99.6% idle at batch 1, §6.53) and the
+    paired gate was clean, so it is fixed for correctness of intent rather than for speed. A future
+    shape with per_core_N of 3, 9 or 15 would otherwise silently drop to 1 with no indication.
+
+    The two rules, both enforced by ttnn as hard errors:
+      out_subblock_h * out_subblock_w <= 4   (8 normally; fp32_dest_acc_en halves the dest file)
+      per_core_N % out_subblock_w == 0
+    """
+    for name, cfg in gpt.DECODE_PRG.items():
+        w, n, h = cfg.out_subblock_w, cfg.per_core_N, cfg.out_subblock_h
+        assert h * w <= 4, f"{name}: h*w={h*w} exceeds the fp32_dest_acc_en limit of 4"
+        assert n % w == 0, f"{name}: per_core_N={n} is not divisible by out_subblock_w={w}"
+        bigger = [s for s in range(w + 1, 5) if n % s == 0 and h * s <= 4]
+        assert not bigger, (
+            f"{name}: out_subblock_w={w}, but {bigger[0]} is also legal and divides "
+            f"per_core_N={n} -- the candidate list has a hole in it again")
+
+
 def test_decode_matmul_configs_assume_one_tile_of_rows():
     """per_core_M=1 and fuse_batch=True are only valid for a single tile of rows -- Block 1's 1 and
     Block 2's 3-or-6. Prefill has many, so _mlp must reach it WITHOUT these configs. STATUS.md
