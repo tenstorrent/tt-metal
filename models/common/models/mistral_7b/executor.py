@@ -62,8 +62,20 @@ class EagerMistralExecutor:
 class TracedMistralExecutor:
     """Traced path; same surface as ``EagerMistralExecutor``."""
 
-    def __init__(self, model: Mistral7B, mesh_device: ttnn.MeshDevice):
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_mistral_executor_named_modules)
+    def __init__(
+        self,
+        model: Mistral7B,
+        mesh_device: ttnn.MeshDevice,
+        ondevice_decode_loop: bool = False,
+        fast_prefill_last_token: bool = False,
+    ):
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_mistral_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+            fast_prefill_last_token=fast_prefill_last_token,
+        )
 
     @property
     def model(self) -> Mistral7B:

@@ -472,11 +472,6 @@ TensorLayout TensorLayout::fromPaddedShape(
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
-TensorLayout TensorLayout::restore_from_serialized(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
-    return TensorLayout(dtype, page_config, memory_config, alignment);
-}
-
 Layout TensorLayout::get_layout() const { return impl().get_layout(); }
 Tile TensorLayout::get_tile() const { return impl().get_tile(); }
 PageConfig TensorLayout::get_page_config() const { return impl().get_page_config(); }

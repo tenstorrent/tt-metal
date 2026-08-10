@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <optional>
-
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
 
 // Tensor related constructs
@@ -100,6 +97,12 @@ public:
     static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec);
 
     /**
+     * Allocate a single-shard HostTensor whose contents are unspecified and meant to be overwritten.
+     * The buffer occupies the 0x0 shard of the distributed host buffer.
+     */
+    static HostTensor allocate_for_overwrite(TensorSpec spec);
+
+    /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
      * Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
      * elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
@@ -107,20 +110,18 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec);
+    static HostTensor from_span(std::span<const T> buffer, TensorSpec spec);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
      *
      * We assume buffer is laid out in row-major order.
-     * TODO(#38947): tile parameter should be removed.
      */
     template <typename T>
-    static HostTensor from_borrowed_data(
-        std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
+    static HostTensor from_borrowed_data(std::span<T> buffer, const Shape& shape, MemoryPin pin);
 
     template <typename T>
-    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec);
+    static HostTensor from_vector(const std::vector<T>& buffer, TensorSpec spec);
 
     /**
      * From original Tensor:
@@ -128,7 +129,7 @@ public:
      * physical shape matches logical shape, and no type conversion is needed.
      */
     template <typename T>
-    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec);
+    static HostTensor from_vector(std::vector<T>&& buffer, TensorSpec spec);
 
     // Getters:
 

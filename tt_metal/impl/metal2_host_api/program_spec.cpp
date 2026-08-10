@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
@@ -30,6 +31,7 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
@@ -148,8 +150,11 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 //   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
 using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
-// DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
+// DFB name -> program-wide DFB ID map (host-side identity: aliasing, borrowed bindings)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+// DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
+// what indexes the per-core config table, so it is what device-facing lowering must use.
+using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 
 // ============================================================================
@@ -1164,37 +1169,48 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DataflowBufferSpecs
     //////////////////////////////////
 
-    // Validate the total number of DFBs in the ProgramSpec:
-    //  - For Gen1, there's a hard limit (hal::get_arch_num_circular_buffers())
-    //  - For Gen2, the true DFB limit is configuration-dependent, based on the availability
-    //    of tile counters. This won't actually get checked until the Program is enqueued :(
-    //  - However, the Gen1 check actually DOES apply to Gen2 as a strict upper limit.
-    //    In practice, we'll run out of tile counters long before we hit the HAL CB limit,
-    //    but then runtime software sizes some buffers based on this.
-    //
-    // For Quasar, this is a partial validation only!
-    // The true number of available DFBs depends on the tile counters, which are consumed in
-    // a DFB configuration-dependent way.
-    // Unfortunately, those checks won't trigger until the DFB code runs... not until the
-    // Program is actually enqueued :(
+    // Device slots are allocated per core (two DFBs may share a slot iff their node sets are
+    // disjoint), so the arch limit is on how many DFBs land on any single node — not on
+    // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
+    // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
+    // Gen2 is still checked later at enqueue.
     {
-        const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
-        if (spec.dataflow_buffers.size() > max_dfbs) {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
+                                                ? static_cast<uint32_t>(::dfb::NUM_DFBS)
+                                                : tt::tt_metal::hal::get_arch_num_circular_buffers();
+
+        std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
+        for (const auto& dfb : spec.dataflow_buffers) {
+            for (const NodeCoord& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
+                dfbs_per_node[node]++;
+            }
+        }
+
+        for (const auto& [node, count] : dfbs_per_node) {
+            if (count <= max_slots_per_core) {
+                continue;
+            }
             if (is_gen1_arch()) {
                 TT_THROW(
-                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
-                    "architecture supports up to {}.",
+                    "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
+                    "supports at most {} device slots per core (disjoint cores may reuse slots).",
                     spec.name,
-                    spec.dataflow_buffers.size(),
-                    max_dfbs);
+                    count,
+                    node.x,
+                    node.y,
+                    max_slots_per_core);
             } else if (is_gen2_arch()) {
                 TT_THROW(
-                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
-                    "number of DFBs for the target architecture is configuration-dependent, "
-                    "but {} is a hard upper limit.",
+                    "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
+                    "target architecture supports at most {} device slots per core. The true "
+                    "limit is also configuration-dependent (tile counters) and is checked at "
+                    "enqueue.",
                     spec.name,
-                    spec.dataflow_buffers.size(),
-                    max_dfbs);
+                    count,
+                    node.x,
+                    node.y,
+                    max_slots_per_core);
             } else {
                 TT_FATAL(false, "Unknown architecture");
             }
@@ -1277,16 +1293,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_kernel,
                     records[i].kernel->unique_id);
                 TT_FATAL(
-                    records[i].binding->block_size == records[0].binding->block_size,
-                    "DFB '{}' has multiple {} bindings with mismatched block_size (kernel '{}' = {} vs kernel '{}' = "
-                    "{})",
-                    dfb.unique_id,
-                    role,
-                    first_kernel,
-                    records[0].binding->block_size,
-                    records[i].kernel->unique_id,
-                    records[i].binding->block_size);
-                TT_FATAL(
                     records[i].kernel->num_threads == first_threads,
                     "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                     "= {})",
@@ -1313,85 +1319,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!allow_multi) {
             check_role_uniformity(endpoints.producers, "PRODUCER");
             check_role_uniformity(endpoints.consumers, "CONSUMER");
-        }
-
-        // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
-        // BLOCKED, and 0 for STRIDED/ALL. (Divisibility of num_entries by block_size*threads
-        // is enforced device-side in the capacity switch alongside the STRIDED/ALL checks.)
-        auto check_block_size_validity = [&](const auto& records, std::string_view role) {
-            for (const auto& rec : records) {
-                const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
-                TT_FATAL(
-                    (rec.binding->block_size > 0) == is_blocked,
-                    "DFB '{}' {} binding (kernel '{}'): block_size must be > 0 iff access_pattern == BLOCKED "
-                    "(got block_size={}, access_pattern={})",
-                    dfb.unique_id,
-                    role,
-                    rec.kernel->unique_id,
-                    rec.binding->block_size,
-                    is_blocked ? "BLOCKED" : "STRIDED/ALL");
-            }
-        };
-        check_block_size_validity(endpoints.producers, "PRODUCER");
-        check_block_size_validity(endpoints.consumers, "CONSUMER");
-
-        // Cross-role BLOCKED legality:
-        //   - BLOCKED -> BLOCKED is allowed
-        //   - BLOCKED-producer -> ALL-consumer is allowed
-        //   - BLOCKED-producer -> STRIDED-consumer is allowed
-        //   - Any non-BLOCKED producer feeding a BLOCKED consumer is not allowed.
-        //
-        // BLOCKED -> BLOCKED also requires matching block_size and an integer
-        // producer/consumer thread-count ratio.
-        // BLOCKED -> ALL and BLOCKED -> STRIDED reuse the existing ALL/STRIDED paths.
-        if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
-            const auto& prod = endpoints.producers.front();
-            const auto& cons = endpoints.consumers.front();
-            const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
-            const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
-            if (prod_blocked || cons_blocked) {
-                // BLOCKED->ALL and BLOCKED->STRIDED are both allowed and reuse the existing
-                // ALL/STRIDED consumer paths.
-                const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
-                const bool blocked_to_strided =
-                    prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
-                if (!blocked_to_all && !blocked_to_strided) {
-                    TT_FATAL(
-                        prod_blocked && cons_blocked,
-                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED, "
-                        "BLOCKED-producer->ALL-consumer, or BLOCKED-producer->STRIDED-consumer (producer '{}' is "
-                        "{}, consumer '{}' is {}); other mixed-BLOCKED combinations are not yet supported.",
-                        dfb.unique_id,
-                        prod.kernel->unique_id,
-                        prod_blocked ? "BLOCKED" : "non-BLOCKED",
-                        cons.kernel->unique_id,
-                        cons_blocked ? "BLOCKED" : "non-BLOCKED");
-                    TT_FATAL(
-                        prod.binding->block_size == cons.binding->block_size,
-                        "DFB '{}': BLOCKED producer and consumer must share the same block_size "
-                        "(producer '{}' = {}, consumer '{}' = {}).",
-                        dfb.unique_id,
-                        prod.kernel->unique_id,
-                        prod.binding->block_size,
-                        cons.kernel->unique_id,
-                        cons.binding->block_size);
-                    // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
-                    // round-robin), but only at an INTEGER ratio (matches calculate_num_tile_counters).
-                    const uint32_t pt = prod.kernel->num_threads;
-                    const uint32_t ct = cons.kernel->num_threads;
-                    const uint32_t hi = std::max(pt, ct);
-                    const uint32_t lo = std::min(pt, ct);
-                    TT_FATAL(
-                        lo > 0 && hi % lo == 0,
-                        "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
-                        "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
-                        dfb.unique_id,
-                        prod.kernel->unique_id,
-                        pt,
-                        cons.kernel->unique_id,
-                        ct);
-                }
-            }
         }
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
@@ -2165,6 +2092,7 @@ std::vector<KernelCouplingGroup> BuildDMKernelCouplingGroups(
     // Iterate dm_kernels in given order to preserve a deterministic per-class member order.
     std::unordered_map<size_t, size_t> root_to_group_idx;
     std::vector<KernelCouplingGroup> groups;
+    groups.reserve(dm_kernels.size());
     for (size_t i = 0; i < dm_kernels.size(); ++i) {
         const size_t r = find(i);
         auto [it, inserted] = root_to_group_idx.try_emplace(r, groups.size());
@@ -2204,6 +2132,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     // num_threads uniformity is enforced upstream, so same-role compute kernels get identical masks
     // without any coupling-group machinery).
     std::vector<const KernelSpec*> dm_kernels;
+    dm_kernels.reserve(spec.kernels.size());
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             dm_kernels.push_back(&kernel);
@@ -2551,20 +2480,21 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-// Create map of accessor name -> logical DFB id
+// Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
+// dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            slot <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' DFB '{}' device slot {} does not fit uint16_t",
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
-            id);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(id));
+            slot);
+        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
     }
     return out;
 }
@@ -2611,7 +2541,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
+            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
@@ -2669,11 +2599,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
-        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
-        .consumer_block_size = consumer_binding->block_size,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
@@ -2762,22 +2690,24 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
+        // formats, which set_dfb_data_fmt_and_tile also keys by slot.
+        uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
         // This TT_FATAL is unreachable, provided that validation wasn't skipped.
         TT_FATAL(
-            dfb_id < max_cbs,
-            "Internal Error: DFB '{}' has id {} which exceeds the JIT data-format "
+            dfb_slot < max_cbs,
+            "Internal Error: DFB '{}' has device slot {} which exceeds the JIT data-format "
             "slot count ({}); compute kernels cannot reference DFBs past this limit",
             dfb_name,
-            dfb_id,
+            dfb_slot,
             max_cbs);
         // Public UnpackMode -> internal UnpackToDestMode. UnpackToDest keeps full FP32 by
         // unpacking straight to Dest; UnpackToSrc is the SrcA/B path (the internal "Default").
-        unpack_modes[dfb_id] =
+        unpack_modes[dfb_slot] =
             (mode == UnpackMode::UnpackToDest) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
     }
     return unpack_modes;
@@ -2787,7 +2717,7 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
@@ -2797,7 +2727,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot);
 
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
@@ -2837,7 +2767,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
@@ -2846,7 +2776,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -3023,6 +2953,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
+    DFBNameToSlotMap dfb_name_to_slot;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
@@ -3036,6 +2967,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+        dfb_name_to_slot[dfb_name] = program_impl->get_dataflow_buffer(dfb_id)->device_slot;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
@@ -3089,9 +3021,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
-        // Make the accessor name -> DFB ID map for this kernel
+        // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
-            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_id);
+            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 
@@ -3147,7 +3079,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
                 config.compile_args = ta_bindings.cta_words;
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
@@ -3179,7 +3111,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
                 config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<ComputeKernel>(
                     kernel_src,

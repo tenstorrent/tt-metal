@@ -247,6 +247,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 
     // VChannel computation with conflict avoidance
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(num_cores);
     for (uint32_t bank_id = 0; bank_id < num_cores; bank_id++) {
         uint32_t vchannel = bank_id & 0x3;
         auto it = std::find_if(

@@ -16,7 +16,7 @@ Environment Variables:
 import os
 import torch
 import ttnn
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Sequence, Tuple
 import ast
 from loguru import logger
 
@@ -331,7 +331,7 @@ def _guarded_close_mesh_device(device, *args, **kwargs):
     at job end (close_job_device) or on a config change (in create_mesh_device)."""
     if _JOB_DEVICE is not None and device is _JOB_DEVICE:
         return None
-    return _orig_close_mesh_device(device, *args, **kwargs)
+    return _close_mesh_and_parent(device, *args, **kwargs)
 
 
 # Install the deferred-close guard. No-op behavior when the job device is disabled
@@ -364,6 +364,135 @@ if _orig_set_fabric_config is not None:
 
 _orig_open_mesh_device = ttnn.open_mesh_device
 
+# Full-host mesh orientations a 2D submesh can be carved out of, per host device count.
+_FULL_HOST_MESH_CANDIDATES = {32: ((8, 4), (4, 8)), 16: ((8, 2), (2, 8), (4, 4))}
+
+# Carved submesh -> (submesh, parent full mesh). The submesh is kept referenced so its
+# id() cannot be reused by another object while the mapping is live.
+_SUBMESH_PARENTS = {}
+
+
+def _full_host_mesh_for(mesh_shape, num_devices):
+    """The full-host mesh a 2D SUBMESH must be carved from, or None to open directly.
+
+    Opening MeshShape(submesh) directly on a galaxy fails fabric router sync on the
+    submesh's BOUNDARY ethernet links -- they connect to chips outside the carved region,
+    so they never complete the handshake. Opening the full host mesh runs bring-up over the
+    whole (healthy) topology, and a submesh of an already-synced fabric works.
+
+    Returns None when mesh_shape is 1D (a line/ring is opened directly) or already spans
+    the host. Mirrors _full_galaxy_mesh_for in all_gather_async_model_traced, which has done
+    this per-vector for CCL since before the generic path existed.
+    """
+    try:
+        dims = tuple(int(d) for d in mesh_shape)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) != 2:
+        return None
+    rows, cols = dims
+    if rows <= 1 or cols <= 1:
+        return None
+    if rows * cols >= num_devices:
+        return None
+    for full_rows, full_cols in _FULL_HOST_MESH_CANDIDATES.get(num_devices, ()):
+        if full_rows >= rows and full_cols >= cols and full_rows * full_cols == num_devices:
+            return (full_rows, full_cols)
+    return None
+
+
+def _open_mesh_carving_submesh(*args, **kwargs):
+    """Open the requested mesh, carving it out of the full host mesh when it is a 2D submesh.
+
+    Every non-CCL module reaches the device through here, so a batch that declares a submesh
+    shape (MESH_DEVICE_SHAPE=4x4 on a 32-card box) no longer opens that submesh directly.
+    conv2d on a directly-opened 4x4 tripped fabric router sync in every job that contained it
+    -- lead-models runs 30696173498 and 30702184301, 2 of 2, while every 4x4 job WITHOUT
+    conv2d passed (5 of 5, one with 352 vectors) -- and on the full 4x8 mesh conv2d passes.
+
+    The requested shape is preserved: the returned device's shape IS the submesh, so traced
+    placement metadata still matches and create_tensor_on_mesh does not fall back to
+    ReplicateTensorToMesh. That fallback is the original bug device-key batching removed, so
+    declaring the full mesh instead of carving would not be a fix.
+
+    Falls back to a direct open when carving is not applicable, not possible (e.g. a degraded
+    host with fewer chips than the full mesh needs), or disabled via
+    TTNN_SWEEP_NO_SUBMESH_CARVE=1.
+    """
+    requested = kwargs.get("mesh_shape")
+    if requested is None or os.environ.get("TTNN_SWEEP_NO_SUBMESH_CARVE", "").strip() == "1":
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    try:
+        num_devices = ttnn.get_num_devices()
+    except Exception:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    full = _full_host_mesh_for(requested, num_devices)
+    if full is None:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    submesh_shape = tuple(int(d) for d in requested)
+    parent = None
+    try:
+        logger.info(f"SWEEPS: opening full host mesh {full} then carving submesh {submesh_shape}")
+        parent_kwargs = dict(kwargs)
+        parent_kwargs["mesh_shape"] = ttnn.MeshShape(*full)
+        parent = _orig_open_mesh_device(*args, **parent_kwargs)
+        submesh = parent.create_submesh(ttnn.MeshShape(submesh_shape))
+    except Exception as e:
+        # Carving failed (commonly: the host has fewer chips than `full` needs, e.g. a box
+        # whose topology downgraded). Close the parent and fall back to a direct open so the
+        # behaviour is no worse than before this path existed.
+        logger.warning(f"SWEEPS: submesh carve of {submesh_shape} from {full} failed ({e}); opening directly")
+        if parent is not None:
+            try:
+                parent.quiesce_devices()
+            except Exception:
+                logger.exception("SWEEPS: quiesce_devices before closing the parent mesh after a failed carve failed")
+            try:
+                _orig_close_mesh_device(parent)
+            except Exception as close_error:
+                # The fallback below would open a SECOND mesh alongside a parent that is still
+                # live, which is exactly the state _guarded_open_mesh_device exists to prevent
+                # (invalid context_id / "binary not found" / event-order fatals on Galaxy, and
+                # a box left wedged for every job after this one). A carve error is recoverable;
+                # two live meshes are not. Surface it instead -- sweeps_runner classifies a
+                # mesh-open failure as infra, so the vector is reported honestly and the box
+                # survives.
+                raise RuntimeError(
+                    f"submesh carve of {submesh_shape} from {full} failed ({e}) AND the parent mesh "
+                    f"could not be closed ({close_error}); refusing to open a second mesh over a live one"
+                ) from close_error
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    _SUBMESH_PARENTS[id(submesh)] = (submesh, parent)
+    return submesh
+
+
+def _close_mesh_and_parent(device, *args, **kwargs):
+    """Close `device`, or its parent when `device` is a carved submesh.
+
+    Closing a submesh does not release the parent's devices, so the parent must be closed or
+    the next open runs a second live mesh (which corrupts context state on Galaxy).
+
+    The carved submesh shares the PARENT's command queues, so the parent is quiesced first to
+    drain them -- otherwise closing it with submesh work still in flight throws, which makes
+    close_job_device() report failure and the fabric-reconfig / reopen guards then refuse
+    ("refusing to reconfigure fabric because the cached job device could not be closed").
+    That cost 30 vectors in lead-models run 30706921019 (24 conv2d + 6 group_norm), all of
+    them fabric-reconfiguring modules. Mirrors ccl_common._teardown_cached_device, which has
+    always quiesced before closing a carved parent."""
+    entry = _SUBMESH_PARENTS.pop(id(device), None)
+    if entry is None:
+        return _orig_close_mesh_device(device, *args, **kwargs)
+    parent = entry[1]
+    try:
+        parent.quiesce_devices()
+    except Exception:
+        logger.exception("SWEEPS: quiesce_devices before closing the carved parent mesh failed")
+    return _orig_close_mesh_device(parent, *args, **kwargs)
+
 
 def _guarded_open_mesh_device(*args, **kwargs):
     """Some modules (linear/matmul gather_in0 ring, batched DRAM-sharded) open their
@@ -384,7 +513,7 @@ def _guarded_open_mesh_device(*args, **kwargs):
                 "open_mesh_device: refusing to open a new mesh because the cached job "
                 "device could not be closed (would leave two live mesh devices)"
             )
-    return _orig_open_mesh_device(*args, **kwargs)
+    return _open_mesh_carving_submesh(*args, **kwargs)
 
 
 ttnn.open_mesh_device = _guarded_open_mesh_device
@@ -415,7 +544,9 @@ def close_job_device() -> bool:
     if _JOB_DEVICE is None:
         return True
     try:
-        _orig_close_mesh_device(_JOB_DEVICE)
+        # _close_mesh_and_parent, not the raw close: the cached job device may be a submesh
+        # carved from a full host mesh, and closing the submesh would leave the parent open.
+        _close_mesh_and_parent(_JOB_DEVICE)
     except Exception:
         logger.exception("close_job_device: failed to close the cached job device; keeping it cached")
         return False
@@ -1175,9 +1306,39 @@ def create_tensor_on_mesh(
                     dims.append(None)
             dims_tuple = tuple(dims)
 
-            # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
-            # them across the mesh internally.
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+            # Both mesh axes sharding the SAME tensor dim cannot go through
+            # ShardTensor2dMesh: its C++ chunk_ndim normalizes the dims and then hard-fails
+            # "dims must be unique" (partition.cpp), because it chunks each listed dim once.
+            # A traced ['PlacementShard(-1)', 'PlacementShard(3)'] on a 4D tensor is exactly
+            # that -- -1 and 3 are the same dim -- and it means dim 3 is split rows*cols ways
+            # in total. That IS expressible, as a 1D shard of that dim over the flattened
+            # mesh, so use it. Scatter and gather then use the same 1D scheme (see
+            # mesh_tensor_to_torch), which makes them inverses by construction regardless of
+            # how devices are ordered.
+            #
+            # Without this the mapper throws at distribution time, the tensor ends up
+            # distributed some other way, and the op returns a CORRECTLY SHAPED but wrong
+            # result -- no assert fires and it surfaces as an unexplained low PCC. That is the
+            # near-zero-PCC class: lead-models run 30706921019 mesh8x4_col_2d, 8 multiply
+            # vectors at PCC 0.0096-0.0152 plus 1 linear at 0.093, every one of them carrying
+            # this placement, with 6 "dims must be unique" TT_FATALs in the same log.
+            # REACHABILITY: on a mesh big enough for the traced shape this is NOT reached --
+            # the replicate_with_topology early-return above claims every PlacementShard
+            # placement first. It only runs when the device is too small for the traced mesh,
+            # which is the one case that skips that return. Kept for that case; the gather-side
+            # counterpart in mesh_tensor_to_torch is what fires on a compatible mesh.
+            _dup_dim = _same_shard_dim(dims_tuple, torch_tensor.ndim)
+            if _dup_dim is not None:
+                logger.info(
+                    f"SWEEPS: scatter -- placement shards dim {_dup_dim} on BOTH mesh axes "
+                    f"{mesh_shape_tuple}; using a 1D shard over the flattened mesh "
+                    f"({mesh_shape_tuple[0] * mesh_shape_tuple[1]} devices)"
+                )
+                mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=_dup_dim)
+            else:
+                # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
+                # them across the mesh internally.
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
             shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
             if shard_match:
@@ -1635,6 +1796,28 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
+            # Mirror the scatter side: when both mesh axes shard the SAME tensor dim,
+            # create_tensor_on_mesh used a 1D shard over the flattened mesh (ConcatMesh2d
+            # cannot express it either -- same "dims must be unique" constraint), so gather
+            # it back the same way. Using the same 1D scheme on both sides is what makes the
+            # round trip an identity.
+            _dup = _same_shard_dim((d0, d1), per_dev_ndim)
+            if _dup is not None:
+                # THIS is the half of the duplicate-dim fix that actually fires. The scatter
+                # side is short-circuited by replicate_with_topology on any mesh big enough for
+                # the traced shape, so a 2D-sharded tensor arrives here with its topology
+                # stamped and the gather is where ConcatMesh2dToTensor would be handed two
+                # entries naming the same dim -> "dims must be unique" -> caught -> wrong data
+                # -> low PCC. Logged because it went unlogged before: 19 FATALs vanished
+                # between runs 30706921019 and 30791207587 with nothing in the log to show why,
+                # which cost a long detour through the (unreachable) scatter-side branch.
+                logger.info(
+                    f"SWEEPS: gather -- placements name dim {_dup} on BOTH mesh axes "
+                    f"{tuple(dist_dims)}; composing with a 1D concat over the flattened mesh"
+                )
+                result = ttnn.to_torch(ttnn_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=_dup))
+                torch_dtype = _get_torch_dtype(ttnn_tensor)
+                return result.to(torch_dtype) if torch_dtype is not None else result
             comp = ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(dist_dims), dims=(d0, d1))
             result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
             torch_dtype = _get_torch_dtype(ttnn_tensor)
@@ -1689,6 +1872,29 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
     if device_tensors:
         return _to_torch_safe(device_tensors[0])
     return _to_torch_safe(ttnn_tensor)
+
+
+def _same_shard_dim(dims, ndim):
+    """The tensor dim both mesh axes shard, or None.
+
+    ttnn's chunk_ndim normalizes negative dims and then requires them to be unique, so a
+    placement naming the same dim twice (e.g. ['PlacementShard(-1)', 'PlacementShard(3)'] on a
+    4D tensor) cannot go through the 2D mapper/composer at all. It is still meaningful --
+    that dim is split rows*cols ways -- and is expressible as a 1D shard over the flattened
+    mesh, which is what callers substitute. Returns the normalized dim so both the scatter and
+    gather sides agree on which one it is.
+    """
+    if ndim is None or len(dims) != 2:
+        return None
+    try:
+        d0, d1 = (int(d) for d in dims)
+    except (TypeError, ValueError):
+        return None
+    d0 = d0 + ndim if d0 < 0 else d0
+    d1 = d1 + ndim if d1 < 0 else d1
+    if d0 != d1 or not (0 <= d0 < ndim):
+        return None
+    return d0
 
 
 def broadcast_torch_inputs_to_global(
@@ -1842,7 +2048,9 @@ def broadcast_torch_inputs_to_global(
     return result if result is not None else _fallback_global_broadcast()
 
 
-def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[Dict]) -> torch.Tensor:
+def tile_torch_to_global(
+    torch_tensor: torch.Tensor, tensor_placement: Optional[Dict], max_shape: Optional[Sequence[int]] = None
+) -> torch.Tensor:
     """Expand a per-chip torch tensor to its global shape based on placement.
 
     For each PlacementShard(d) entry in `placement` paired with a factor N from
@@ -1903,6 +2111,20 @@ def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[
             d = ndim - 1
         if d < 0:
             continue
+        if max_shape is not None and d < len(max_shape):
+            # Never tile past the gathered actual. `placement` records how the INPUT was
+            # distributed, but a Shard on a dim that could not actually be split -- e.g. a
+            # size-1 broadcast operand declared [Shard(1), Shard(0)] on a 4x8 mesh -- did not
+            # multiply the device output, so repeating by that factor invents data. Observed on
+            # lead-models 4x8 multiply vectors 9d1aa2d11efe / 828c7b4faac3: the golden was
+            # tiled 256x (dim0 1->64, dim1 4->16), which both mismatched the actual and, at
+            # (64,16,44544,3072) float64, asked the host for 1.02 TiB and OOMed. Capping keeps
+            # the golden bounded by the real output; the caller then finishes the match.
+            current = out.shape[d]
+            allowed = max_shape[d] // current if current else 1
+            n = min(n, max(1, allowed))
+            if n <= 1:
+                continue
         repeats = [1] * out.ndim
         repeats[d] = n
         out = out.repeat(*repeats)
@@ -1956,43 +2178,58 @@ def reconcile_golden_to_actual(
             return g
         torch_golden = g
 
-    # Strategy 2: per-dim integer-ratio tile.
-    if torch_golden.ndim == actual_global.ndim:
-        repeats = []
-        ok = True
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if g == 0 or a % g != 0:
-                ok = False
-                break
-            repeats.append(a // g)
-        if ok and any(r > 1 for r in repeats):
-            tiled = torch_golden.repeat(*repeats)
-            if tiled.shape == actual_global.shape:
-                return tiled
+    # Strategies 2 and 3: repeat up / slice down to the actual, using the actual's shape alone.
+    matched = _match_ratio_or_slice(torch_golden, actual_global)
+    if matched is not None:
+        return matched
 
-    # Strategy 3: golden LARGER than actual — slice golden to match.
-    if torch_golden.ndim == actual_global.ndim:
-        slice_ok = True
-        slices = []
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if a <= g:
-                slices.append(slice(0, a))
-            else:
-                slice_ok = False
-                break
-        if slice_ok and any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
-            sliced = torch_golden[tuple(slices)]
-            if sliced.shape == actual_global.shape:
-                return sliced
-
-    # Strategy 4: placement-driven tile (legacy path).
+    # Strategy 4: placement-driven tile (legacy path), capped at the actual's shape so a
+    # non-splittable Shard cannot inflate the golden (see tile_torch_to_global).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:
             break
-        out = tile_torch_to_global(out, plac)
+        out = tile_torch_to_global(out, plac, max_shape=actual_global.shape)
+    if out.shape != actual_global.shape:
+        # Capping can land short of the actual; finish with the shape-driven reconcilers rather
+        # than returning something that is merely closer and failing the caller's shape assert.
+        matched = _match_ratio_or_slice(out, actual_global)
+        if matched is not None:
+            return matched
     return out
+
+
+def _match_ratio_or_slice(torch_golden: torch.Tensor, actual_global: torch.Tensor) -> Optional[torch.Tensor]:
+    """Match `torch_golden` to `actual_global` by whole-dim repeat or slice, else None."""
+    if torch_golden.shape == actual_global.shape:
+        return torch_golden
+    if torch_golden.ndim != actual_global.ndim:
+        return None
+
+    # Per-dim integer-ratio tile (golden smaller than actual).
+    repeats = []
+    ok = True
+    for d in range(torch_golden.ndim):
+        g = torch_golden.shape[d]
+        a = actual_global.shape[d]
+        if g == 0 or a % g != 0:
+            ok = False
+            break
+        repeats.append(a // g)
+    if ok and any(r > 1 for r in repeats):
+        tiled = torch_golden.repeat(*repeats)
+        if tiled.shape == actual_global.shape:
+            return tiled
+
+    # Golden LARGER than actual — slice golden to match.
+    slices = []
+    for d in range(torch_golden.ndim):
+        if actual_global.shape[d] <= torch_golden.shape[d]:
+            slices.append(slice(0, actual_global.shape[d]))
+        else:
+            return None
+    if any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
+        sliced = torch_golden[tuple(slices)]
+        if sliced.shape == actual_global.shape:
+            return sliced
+    return None

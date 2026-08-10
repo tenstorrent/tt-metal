@@ -84,8 +84,9 @@ void kernel_main() {
 
     reduce_cb.wait_front(reduce_num_tiles);
 
-    binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
-    add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(reduce_cb_id, reduce_cb_id, out_cb_id);
+    add_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
 
     out_cb.reserve_back(block_num_tiles);
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {

@@ -25,10 +25,14 @@
 #endif
 
 #if DFB_IS_COMPUTE_MATH
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
+    dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+}
 #else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
+    dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
@@ -257,21 +261,29 @@ inline void DataflowBuffer::finish_impl() {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
-            // TRISC drain: finish() must not return until this TC is empty (posted == 0) -
-            // covers the consumer (UNPACK), the Tensix->DM producer (PACK), and both sides of
-            // an INTRA self-loop. The consumer also skips TCs this TRISC doesn't own via
-            // tensix_trisc_mask, which exists only in the UNPACK-side LocalDFBInterface, so the
-            // gate sits under an inner UNPACK guard (the PACK struct has no such member).
+            // TRISC drain: finish() must not return until this TC is empty (posted == 0).
+            // On TRISC, tile_counters[].f.posted/.acked are live occupancy / free-space
+            // (tiles-available / space-available), NOT the cumulative read_posted/read_acked
+            // totals used by the DM overlay path below. The consumer also skips TCs this TRISC
+            // doesn't own via tensix_trisc_mask, which exists only in the UNPACK-side
+            // LocalDFBInterface, so the gate sits under an inner UNPACK guard (the PACK struct
+            // has no such member).
 #ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
 #endif
-            all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
+            const uint32_t tiles_avail = ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu;
+            if (tiles_avail != 0) {
+                all_acked = false;
+            }
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-            all_acked &=
-                (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
+            const uint32_t read_posted = overlay::fast_llk_intf_read_posted(tensix_id, tc_id);
+            const uint32_t read_acked = overlay::fast_llk_intf_read_acked(tensix_id, tc_id);
+            if (read_acked != read_posted) {
+                all_acked = false;
+            }
 #endif
         }
     }
@@ -474,11 +486,7 @@ inline void DataflowBuffer::commit_implicit_read() {
         ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ptxn_id_loop_cnt_++;
     }
-    // BLOCKED: keep a whole block (block_size entries) in one sub-ring; only round-robin to the next
-    // sub-ring at a block boundary. block_size==1 (non-BLOCKED) advances every entry, as before.
-    if (ptiles_read_ % local_dfb_interface_.block_size == 0) {
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 }
 
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
@@ -512,11 +520,7 @@ inline void DataflowBuffer::commit_implicit_write() {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ctxn_id_loop_cnt_++;
     }
-    // BLOCKED: drain a whole block (block_size entries) from one sub-ring before round-robining to the
-    // next; only advance tc_idx at a block boundary. block_size==1 (non-BLOCKED) advances every entry.
-    if (ctiles_written_ % local_dfb_interface_.block_size == 0) {
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
-    }
+    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 }
 
 // Out-of-line definitions of Noc DFB-specific implicit-sync overloads.
