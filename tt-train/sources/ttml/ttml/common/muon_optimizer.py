@@ -14,10 +14,10 @@ import ttml
 
 # Module names whose weights should use AdamW instead of Muon.
 # Embeddings and LM head don't benefit from orthogonalization.
-# Fused KV/QKV linears concatenate multiple matrices that should be
-# orthogonalized separately.
+# Fused linears concatenate multiple matrices that should be orthogonalized
+# separately: qkv_linear ([Q|K|V]) and w_gate_up ([gate|up]) in the Python Llama.
 # Splitting, applying step and concatenating is not yet supported for these parameters.
-DEFAULT_ADAMW_MODULES = {"tok_emb", "pos_emb", "fc", "kv_linear", "qkv_linear"}
+DEFAULT_ADAMW_MODULES = {"tok_emb", "pos_emb", "fc", "kv_linear", "qkv_linear", "w_gate_up"}
 
 
 def _is_muon_param(name, adamw_modules):
@@ -32,7 +32,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
 
         optimizer:
           type: MuonWithAdamW
-          adamw_modules: [tok_emb, pos_emb, fc, kv_linear, qkv_linear]
+          adamw_modules: [tok_emb, pos_emb, fc, kv_linear, qkv_linear, w_gate_up]
           muon:
             lr: 0.02
             momentum: 0.95
