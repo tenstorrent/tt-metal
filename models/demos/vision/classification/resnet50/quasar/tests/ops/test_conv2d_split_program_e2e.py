@@ -32,6 +32,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.99
@@ -54,20 +55,24 @@ def _run(
     device = mesh_device
     torch.manual_seed(0)
 
+    # WH split-path hang guard (centralized for every _run caller: e2e_pure, e2e_bias_relu, e2e_shapes, and the
+    # gap tests). On WH the split path's Program A (conv_tilize_only) drives the regular datacopy tilize_block,
+    # whose MATH<->PACK DEST-sync deadlocks on the 4x4 stem-like geometry -- MATH frozen in
+    # _llk_math_dest_section_done_, PACK in the pack MOP, drain_out waiting (watcher CWFW/UPTD/MWDD/K).
+    # Confirmed genuine with TT_METAL_LLK_ASSERTS=1 (no assert fires). It's a WH LLK/HW tilize stall
+    # (transpose_wh_rm first-tilize family), NOT the WH model path -- Quasar takes the ARCH_QUASAR tilize
+    # branch these tests validate. Imperative xfail so the WH sweep never runs the deadlock. Scoped to 4x4
+    # (every confirmed hang); 3x3 split cases (deep_k) are left to run -- widen this if they hang too.
+    if is_wormhole_b0() and use_split and tuple(kernel_size) == (4, 4):
+        pytest.xfail(
+            "WH split-path Program A (conv_tilize_only) regular tilize_block MATH<->PACK DEST-sync deadlock on "
+            "the 4x4 stem-like geometry (LLK/HW, confirmed with llk asserts on). Not the WH model path."
+        )
+
     batch_size = 1
     # stride 1: out = in + 2*pad - kernel + 1  ->  in = out + kernel - 1 - 2*pad
     input_height = out_h + kernel_size[0] - 1 - 2 * padding[0]
     input_width = out_w + kernel_size[1] - 1 - 2 * padding[1]
-    # full im2col K in tiles (must stay <= kQuasarConvNoSpillMaxKTiles=32 for the no-spill/split path)
-    import math as _math
-
-    k_tiles = _math.ceil(in_channels * kernel_size[0] * kernel_size[1] / 32)
-    n_tiles = _math.ceil(out_channels / 32)
-    print(
-        f"  DIAG shape: in_ch={in_channels} out_ch={out_channels} k={kernel_size} out=({out_h},{out_w}) "
-        f"K_tiles={k_tiles} N_tiles={n_tiles}"
-    )
-
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
     torch_bias = torch.randn((out_channels,), dtype=torch.bfloat16).float() if with_bias_relu else None
@@ -154,138 +159,9 @@ def _run(
             else:
                 os.environ[k] = v
 
-    print("  DIAG raw out.shape        =", tuple(out.shape))
-    try:
-        print("  DIAG raw out.padded_shape =", tuple(out.padded_shape()))
-    except Exception as e:
-        print("  DIAG padded_shape n/a:", repr(e))
-    try:
-        print("  DIAG raw out.layout       =", out.layout, "| mem =", out.memory_config())
-    except Exception as e:
-        print("  DIAG mem_config n/a:", repr(e))
     tt_out = ttnn.to_torch(ttnn.from_device(out))
-    print("  DIAG to_torch raw shape   =", tuple(tt_out.shape))
     tt_out = tt_out.reshape(batch_size, oh, ow, tt_out.shape[-1])[:, :, :, :out_channels]
     tt_out = torch.permute(tt_out, (0, 3, 1, 2))
-    print(f"split conv (Program A tilize + Program B matmul) completed. out shape={tuple(tt_out.shape)}")
-
-    # -------- DIAGNOSTIC: which matmul did Program B actually compute? --------
-    # The tilize (Program A) is confirmed to produce A[M,K] with K ordered [kh,kw,c] (readback test). The conv
-    # golden = A_khkwc @ W_khkwc. Compare the DEVICE output against several host candidates to localize the fault:
-    #   * torch_golden           : correct conv (A & W both [kh,kw,c])
-    #   * W in [c,kh,kw] order    : weight K-order mismatch vs the activation
-    #   * W transposed ([N,K])    : linear used the wrong weight orientation
-    def _pcc(a, b):
-        a = a.reshape(-1).float()
-        b = b.reshape(-1).float()
-        return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
-
-    with torch.no_grad():
-        # host im2col A[M,K] with K = [kh,kw,c] (matches the confirmed tilize order)
-        inp = torch_input_nchw  # [1, C, iH, iW]
-        patches = torch.nn.functional.unfold(
-            inp, kernel_size=kernel_size, stride=stride, padding=padding
-        )  # [1, C*kh*kw, M]
-        M = patches.shape[-1]
-        # unfold gives K order [c][kh][kw]; permute to [kh][kw][c]
-        A_ckhkw = patches[0].transpose(0, 1).reshape(M, in_channels, kernel_size[0], kernel_size[1])
-        A_khkwc = A_ckhkw.permute(0, 2, 3, 1).reshape(M, -1)  # [M, kh*kw*c]
-        # weights: torch_weight [O, C, kh, kw]
-        W_khkwc = torch_weight.permute(2, 3, 1, 0).reshape(-1, out_channels)  # [kh*kw*c, O]
-        W_ckhkw = torch_weight.reshape(out_channels, -1).transpose(0, 1)  # [c*kh*kw, O]
-        dev = tt_out.permute(0, 2, 3, 1).reshape(M, out_channels).float()  # [M, O]
-        print(
-            "  DIAG PCC(device, torch_golden)          =",
-            _pcc(dev, torch_golden.permute(0, 2, 3, 1).reshape(M, out_channels)),
-        )
-        print("  DIAG PCC(device, A_khkwc @ W_khkwc)      =", _pcc(dev, A_khkwc @ W_khkwc))
-        print("  DIAG PCC(device, A_khkwc @ W_ckhkw)      =", _pcc(dev, A_khkwc @ W_ckhkw))
-
-        # value-distribution: are the output VALUES present (permuted) or totally wrong?
-        print(
-            "  DIAG sorted-flat PCC(device, golden)     =",
-            _pcc(torch.sort(dev.reshape(-1))[0], torch.sort((A_khkwc @ W_khkwc).reshape(-1))[0]),
-        )
-
-        # read back the PREPARED on-device weight and compare its K-order directly to the candidates
-        try:
-            wdev = _wb[0] if isinstance(_wb, (tuple, list)) else _wb
-            w_host = ttnn.to_torch(ttnn.from_device(wdev)).float()
-            w_host2 = w_host.reshape(w_host.shape[-2], w_host.shape[-1])  # [K_padded, N_padded]
-            K = W_khkwc.shape[0]
-            N = out_channels
-            w_kn = w_host2[:K, :N]
-            print("  DIAG prepared-weight shape               =", tuple(w_host.shape), "-> KxN used", (K, N))
-            print("  DIAG PCC(prep_weight, W_khkwc)           =", _pcc(w_kn, W_khkwc))
-            print("  DIAG PCC(prep_weight, W_ckhkw)           =", _pcc(w_kn, W_ckhkw))
-            print(
-                "  DIAG PCC(sorted prep_weight, sorted Wref)=",
-                _pcc(torch.sort(w_kn.reshape(-1))[0], torch.sort(W_khkwc.reshape(-1))[0]),
-            )
-        except Exception as e:
-            print("  DIAG weight readback failed:", repr(e))
-
-        # ---- localize the output permutation (values are correct per sorted-flat PCC) ----
-        gold_mn = A_khkwc @ W_khkwc  # [M, N]
-        # transpose check
-        if dev.shape[0] == gold_mn.shape[1] or dev.numel() == gold_mn.numel():
-            print("  DIAG PCC(device_flat, golden.T_flat)     =", _pcc(dev.reshape(-1), gold_mn.t().reshape(-1)))
-        # per-row (M) multiset preserved?  -> only N within each row permuted
-        row_ok = torch.isclose(torch.sort(dev, dim=1)[0], torch.sort(gold_mn, dim=1)[0], atol=0.1).all(dim=1)
-        # per-col (N) multiset preserved?  -> only M within each col permuted
-        col_ok = torch.isclose(torch.sort(dev, dim=0)[0], torch.sort(gold_mn, dim=0)[0], atol=0.1).all(dim=0)
-        print(f"  DIAG rows(M) with matching multiset      = {int(row_ok.sum())}/{dev.shape[0]}")
-        print(f"  DIAG cols(N) with matching multiset      = {int(col_ok.sum())}/{dev.shape[1]}")
-        # eyeball first row / first col
-        print("  DIAG device[0,:6] =", [round(float(x), 2) for x in dev[0, :6]])
-        print("  DIAG golden[0,:6] =", [round(float(x), 2) for x in gold_mn[0, :6]])
-        print("  DIAG device[:6,0] =", [round(float(x), 2) for x in dev[:6, 0]])
-        print("  DIAG golden[:6,0] =", [round(float(x), 2) for x in gold_mn[:6, 0]])
-
-        # ---- localize a partial (PCC~0.5) failure: per-M-shard (core) and per-N-tile PCC ----
-        # If one core's rows are correct and the other's are garbage -> per-core Program-B issue (mcast/weights).
-        M = dev.shape[0]
-        for frac, lbl in [(4, "quarter"), (2, "half")]:
-            step = M // frac
-            if step == 0:
-                continue
-            segs = " ".join(
-                f"[{i*step}:{(i+1)*step}]={_pcc(dev[i*step:(i+1)*step], gold_mn[i*step:(i+1)*step]):.3f}"
-                for i in range(frac)
-            )
-            print(f"  DIAG PCC by M-{lbl}: {segs}")
-        Ncols = dev.shape[1]
-        if Ncols >= 64:
-            print(
-                f"  DIAG PCC by N-tile: [0:32]={_pcc(dev[:, :32], gold_mn[:, :32]):.3f} "
-                f"[32:64]={_pcc(dev[:, 32:64], gold_mn[:, 32:64]):.3f}"
-            )
-
-    # DIAG (sliced-output scramble localizer): compare device vs torch_golden (BOTH relu+bias), per output-H
-    # row, to distinguish a row/slice PERMUTATION (rows individually correct but misplaced) from per-row garbage.
-    with torch.no_grad():
-        gk = torch_golden[0].permute(1, 2, 0).reshape(out_h * out_w, out_channels).float()  # [oh*ow, C]
-        dk = tt_out[0].permute(1, 2, 0).reshape(out_h * out_w, out_channels).float()
-
-        def _p2(a, b):
-            a = a.reshape(-1)
-            b = b.reshape(-1)
-            if float(a.std()) == 0 or float(b.std()) == 0:
-                return 0.0
-            return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
-
-        row_pccs = [_p2(dk[i * out_w : (i + 1) * out_w], gk[i * out_w : (i + 1) * out_w]) for i in range(out_h)]
-        good = sum(1 for p in row_pccs if p > 0.9)
-        print(
-            f"  DIAG scramble: {good}/{out_h} output-H rows in-place PCC>0.9; row_pcc[:10]={[round(p, 2) for p in row_pccs[:10]]}"
-        )
-        # where does device H-row 0 actually land in golden? (permutation detector)
-        j0 = max(range(out_h), key=lambda j: _p2(dk[0:out_w], gk[j * out_w : (j + 1) * out_w]))
-        j1 = max(range(out_h), key=lambda j: _p2(dk[out_w : 2 * out_w], gk[j * out_w : (j + 1) * out_w]))
-        print(
-            f"  DIAG device H-row0 best matches golden H-row {j0} (pcc={_p2(dk[0:out_w], gk[j0*out_w:(j0+1)*out_w]):.2f}); "
-            f"H-row1 -> golden H-row {j1}"
-        )
 
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
