@@ -9,15 +9,14 @@
 // Modes (via -D):
 //   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared sem; the lowest DM waits on a
 //                            'done' sem, reports value(). Expect num_threads*iters (a
-//                            non-atomic up() loses updates -> less).
+//                            non-atomic up() loses updates).
 //   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM drains them
 //                            all with down(1), reports value(). Expect 0 (a non-atomic down()
-//                            loses units -> the consumer blocks -> timeout).
+//                            loses units and the consumer blocks).
 //   MODE_MULTI_CONSUMER    : the lowest DM up(1)s (num_threads-1)*iters credits; every other DM
 //                            CONCURRENTLY down(iters)s, then bumps 'done'. The producer waits
 //                            for all consumers, reports value(). Expect 0 (a double-spent
-//                            credit overdraws and wraps unsigned -> huge nonzero; a lost credit
-//                            blocks a consumer -> 'done' never fills -> timeout).
+//                            credit wraps unsigned; a lost credit blocks a consumer).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"

@@ -10,9 +10,8 @@
 // are 32-bit, so this checks amoadd.w on a 4-byte L1 word.
 //
 // Every user DM thread increments the SAME word `increment_times` times; host
-// expects num_user_dms * increment_times. Short count => 32-bit AMO unreliable
-// (fast path needs a CAS loop or a 64-bit word); hang/fault => amoadd.w
-// unsupported on L1.
+// expects num_user_dms * increment_times. Short count => 32-bit AMO unreliable;
+// hang/fault => amoadd.w unsupported on L1.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/kernel_thread_globals.h"

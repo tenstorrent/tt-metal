@@ -12,9 +12,8 @@
 // node's TL1.
 //
 // Every user DM thread increments the SAME word `increment_times` times; the host
-// expects exactly num_user_dms * increment_times. Hang => loopback deadlock;
-// short count => lost updates. The word is only ever touched by NoC atomics
-// (which land at TL1), so no cache flush is needed.
+// expects exactly num_user_dms * increment_times. The word is only ever touched by
+// NoC atomics (which land at TL1), so no cache flush is needed.
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
@@ -35,8 +34,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < increment_times; i++) {
         noc_semaphore_inc(target_noc_addr, 1);
-        // Drain after each atomic: bounds outstanding atomics and makes completion
-        // unambiguous. Cross-core interleaving (the concurrency under test) is unaffected.
+        // Drain after each atomic: bounds outstanding atomics and makes completion unambiguous.
         noc_async_atomic_barrier();
     }
 }

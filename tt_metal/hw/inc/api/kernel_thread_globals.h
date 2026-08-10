@@ -44,12 +44,11 @@ constexpr uint32_t NUM_KERNEL_BARRIERS = 3;
 extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
 
 // Dedicated barrier for the auto-injected sem::init_dm_cached() rendezvous (see genfiles.cpp).
-// Deliberately NOT an array slot: sync_threads(idx) can then never mix a user rendezvous with
-// the seeder's -- mixed participant groups on one barrier deadlock or release early.
+// Deliberately NOT an array slot, so sync_threads(idx) can never mix a user rendezvous with it.
 extern volatile KernelBarrier g_cached_sem_init_barrier;
 
-// Generation-based barrier body, shared by wait_threads() (array slots) and the injected
-// seeder (dedicated barrier). Reusable: each pass advances the generation.
+// Generation-based barrier body shared by wait_threads() and the injected seeder; reusable
+// (each pass advances the generation).
 inline void wait_threads_on(volatile KernelBarrier& barrier, uint32_t participants) {
     if (participants <= 1) {
         return;
@@ -116,8 +115,7 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
-// barrier_idx must be < NUM_KERNEL_BARRIERS: it is unchecked, and an out-of-range index
-// RMWs whatever firmware global follows the array (e.g. the dedicated seeder barrier).
+// barrier_idx is unchecked; out of range it RMWs whatever firmware global follows the array.
 inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;

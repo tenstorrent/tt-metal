@@ -901,10 +901,9 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // Backend-capability refusals (cached scope, multi-consumer EXTERNAL) run at snapshot
-        // time in the launch path -- NOT here: this emitter runs only on a JIT-cache miss.
         // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access> (see
-        // genfiles.cpp); CTAD gives the kernel's Semaphore the host-resolved mechanism and access.
+        // genfiles.cpp). Backend-capability refusals live in collect_kernels, not here:
+        // this emitter runs only on a JIT-cache miss.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
             f << "constexpr ::SemaphoreBindingToken<" << h.id << "u, static_cast<::SemScope>("
@@ -1769,9 +1768,8 @@ static void collect_kernels(
                     "emits no pool seeder and seeds only the kernel_config ring). Force SemaphoreScope::EXTERNAL "
                     "or LOCAL_NONATOMIC for this semaphore when running under emule.",
                     sem_name);
-                // Config-time instance count is a per-binding over-approximation (cores x threads
-                // per CONSUME binding) -- deliberately conservative; the refusal is loud and the
-                // workaround (one consumer under emule) is stated.
+                // The instance count is a deliberately conservative per-binding over-approximation
+                // (cores x threads per CONSUME binding); the refusal is loud and states the workaround.
                 TT_FATAL(
                     !(h.scope == SemScope::EXTERNAL && h.external_multi_consumer),
                     "Semaphore '{}' is EXTERNAL with more than one consuming (down()) instance, but the "

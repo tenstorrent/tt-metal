@@ -9,8 +9,8 @@
 //
 // report[0] = baked SemScope of sem::counter (0=LOCAL_NONATOMIC, 1=DM_LOCAL_CACHED, 2=EXTERNAL)
 // report[1] = counter.value() after this kernel's threads have all finished incrementing.
-//             Only meaningful if no OTHER kernel writes this semaphore (their threads are not in
-//             this kernel's barrier); tests where one does assert the reported scope only.
+//             Only meaningful if no OTHER kernel writes this semaphore; tests where one does
+//             assert the reported scope only.
 // report[2] = this semaphore's RING slot (uncached alias). For a cached semaphore it must still
 //             hold the initial value: proves the count lives in the pool, not the ring.
 // report[3] = baked SemAccess value (mirrors the host AccessType; OBSERVE=3 for read-only)
@@ -32,7 +32,7 @@ void kernel_main() {
     Semaphore counter(sem::counter);  // CTAD deduces the host-baked scope AND access rights
 
     // OBSERVE makes up() a compile error -- so guard on the baked access itself. (up() is
-    // legal under every writer label: INCREMENT, CONSUME, and SET shapes all reuse this probe.)
+    // legal under every writer label, so all writer-shape tests reuse this probe.)
     if constexpr (sem::counter.access != SemAccess::OBSERVE) {
         for (uint32_t i = 0; i < increment_times; i++) {
             counter.up(1);
@@ -47,8 +47,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
         report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
-        // Read the baked access back: proves the host actually emitted it (OBSERVE tests
-        // assert SemAccess::OBSERVE == 3), so forgetting to bake it can't leave enforcement silently inert.
+        // Read the baked access back so OBSERVE tests can assert the host actually emitted it.
         report[3] = static_cast<uint32_t>(sem::counter.access);
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         // Residency check: the ring slot (uncached alias = TL1 truth) must be untouched for a

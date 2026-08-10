@@ -5,16 +5,13 @@
 // 32-bit RISC-V conditional-decrement CAS (lr.w/sc.w) on the CACHED L1 alias.
 //
 // The multi-consumer DM_LOCAL_CACHED down() commits its >=value check and the
-// subtract with ONE strong CAS on the cached alias (noc_semaphore.h): a losing
-// CAS refreshes `observed` in place and re-enters the >= check, so two consumers
-// can never both pass the check on the same credit. This kernel runs that EXACT
-// production shape (value = 1).
+// subtract with ONE strong CAS on the cached alias (see noc_semaphore.h for the
+// mechanism). This kernel runs that EXACT production shape (value = 1).
 //
 // Every user DM thread decrements the SAME word `increment_times` times; host
 // preloads num_user_dms * increment_times and expects exactly 0. The guarded CAS
 // can never take the word below 0, so: nonzero => a decrement was LOST; a hang
-// => a decrement was OVER-COMMITTED (word drained early, surplus threads spin)
-// or LR/SC is unsupported on the cached alias.
+// => over-committed, or LR/SC unsupported on the cached alias.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/kernel_thread_globals.h"
