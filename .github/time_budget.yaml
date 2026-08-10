@@ -314,8 +314,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 753
-    wh_n300: 735
+    wh_n150: 408
+    wh_n300: 390
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120

@@ -48,7 +48,6 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sentence_bert
           - sd35_large
           - flux1-dev
           - motif
@@ -67,7 +66,6 @@ on:
           - disabled
           - all
           - resnet50
-          - sentence_bert
           - stable_diffusion_35_large
           - mochi
           - flux1-dev
