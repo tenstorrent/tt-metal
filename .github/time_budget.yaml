@@ -398,6 +398,7 @@ models:
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
     bh_sc1_high_power: 143
+    bh_sc1_high_power_explicit: 35
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
