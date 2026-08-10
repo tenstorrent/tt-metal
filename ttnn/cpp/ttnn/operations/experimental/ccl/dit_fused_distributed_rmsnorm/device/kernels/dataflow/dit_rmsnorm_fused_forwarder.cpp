@@ -35,6 +35,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
@@ -81,21 +84,23 @@ void kernel_main() {
     for (uint32_t r = 0; r < max_rounds; r++) {
         present_count[r] = get_arg_val<uint32_t>(arg_idx++);
     }
-    // Grid-uniform sem addresses (same on this forwarder + its workers).
-    const uint32_t fwd_arrival_sem_addr = get_semaphore(arrival_sem_id);
-    const uint32_t group_go_sem_addr = get_semaphore(go_sem_id);
+    Noc noc;
+    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
+    CircularBuffer cb_packet(packet_cb);
+    Semaphore<> fwd_arrival_sem(arrival_sem_id);
+    Semaphore<> group_go_sem(go_sem_id);
 
     // Fabric connection (fwd+bwd) for this forwarder's link.
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
 
-    cb_reserve_back(reserved_packet_header_cb, 1);
-    auto pkt_hdr_fwd_addr = get_write_ptr(reserved_packet_header_cb);
-    cb_push_back(reserved_packet_header_cb, 1);
-    cb_reserve_back(reserved_packet_header_cb, 1);
-    auto pkt_hdr_bwd_addr = get_write_ptr(reserved_packet_header_cb);
-    cb_push_back(reserved_packet_header_cb, 1);
+    cb_pkt_hdr.reserve_back(1);
+    auto pkt_hdr_fwd_addr = cb_pkt_hdr.get_write_ptr();
+    cb_pkt_hdr.push_back(1);
+    cb_pkt_hdr.reserve_back(1);
+    auto pkt_hdr_bwd_addr = cb_pkt_hdr.get_write_ptr();
+    cb_pkt_hdr.push_back(1);
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
     pkt_hdr_fwd->to_chip_multicast(
@@ -110,13 +115,11 @@ void kernel_main() {
     }
 
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
-    const uint32_t packet_base = get_read_ptr(packet_cb);         // packet_cb is depth-2; we index by r%2 manually
-    const uint32_t packet_tile_bytes = get_tile_size(packet_cb);  // = unit_packet_bytes (one slot)
+    const uint32_t packet_base = cb_packet.get_read_ptr();         // packet_cb is depth-2; we index by r%2 manually
+    const uint32_t packet_tile_bytes = cb_packet.get_tile_size();  // = unit_packet_bytes (one slot)
 
     const uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
     volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
-    volatile tt_l1_ptr uint32_t* fwd_arrival_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_arrival_sem_addr);
 
     uint32_t cumulative_arrivals = 0;
     uint32_t cumulative_incs = 0;
@@ -137,7 +140,7 @@ void kernel_main() {
             DeviceZoneScopedN("F_COLLECT");
             // Workers write their stick into packet_addr + slot*stick_bytes and inc.
             cumulative_arrivals += pc;
-            noc_semaphore_wait_min(fwd_arrival_sem_ptr, cumulative_arrivals);
+            fwd_arrival_sem.wait_min(cumulative_arrivals);
         }
 
         // Page (my_device, forwarder, r) — same DRAM address on every chip.
@@ -158,20 +161,20 @@ void kernel_main() {
                 /*flush=*/true);
             cumulative_incs += (ring_size - 1);
             if (cumulative_incs > 0) {
+                // out_ready is a GlobalSemaphore.
                 noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
             }
-            noc_async_write_barrier();
-            noc_async_atomic_barrier();
+            noc.async_write_barrier();
+            noc.async_atomic_barrier();
         }
 
         // Release this round's POST: inc each PRESENT group worker's go-sem. The
         // present set is the contiguous slot prefix [0, pc) (earlier workers get
         // the ceil row count), so only the first pc workers loop this round.
         for (uint32_t i = 0; i < pc; i++) {
-            const uint64_t go = safe_get_noc_addr(worker_x[i], worker_y[i], group_go_sem_addr, 0);
-            noc_semaphore_inc(go, 1);
+            group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
         }
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 
     // Reset BOTH op-managed semaphores this core owns to 0 so a traced replay
@@ -179,11 +182,14 @@ void kernel_main() {
     // init that eager launches get, so any sem left non-zero accumulates across
     // replays. out_ready (peers fuse-inc it) and fwd_arrival (workers inc it) both
     // live on this forwarder core; the workers reset their own go-sem. Without the
-    // arrival reset the forwarder's wait_min(arrival, cumulative) passes instantly
-    // on replay (sem already high) -> it stops waiting for the workers' sticks ->
-    // races (fast-but-wrong) or desyncs into a hang. (go/out_ready already reset.)
+    // arrival reset the forwarder's fwd_arrival_sem.wait_min(cumulative) passes
+    // instantly on replay (sem already high) -> it stops waiting for the workers'
+    // sticks -> races (fast-but-wrong) or desyncs into a hang. (go/out_ready already
+    // reset.)
+    //
+    // out_ready is a GlobalSemaphore.
     noc_semaphore_set(out_ready_sem_ptr, 0);
-    noc_semaphore_set(fwd_arrival_sem_ptr, 0);
+    fwd_arrival_sem.set(0);
     // Guard close on is_logically_connected(), matching the canonical CCL writers.
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_start();
