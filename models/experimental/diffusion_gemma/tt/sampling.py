@@ -29,15 +29,7 @@ underflow and reducing accept-boundary flips at the 256-token canvas length.
 
 from __future__ import annotations
 
-from typing import NamedTuple
-
 import ttnn
-
-
-class ChunkedGumbelNoise(NamedTuple):
-    seed: int
-    vocab_chunk_size: int = 1024
-    dtype: object = ttnn.float32
 
 
 def argmax_last_dim(x, *, keepdim: bool = True):
@@ -112,14 +104,6 @@ def gumbel_max(logits, temperature: float, noise):
     is an explicit RUN-first shortcut for argmax sampling without allocating the
     full-vocab Gumbel buffer.
     """
-    if isinstance(noise, ChunkedGumbelNoise):
-        return gumbel_max_with_chunked_noise(
-            logits,
-            temperature,
-            seed=noise.seed,
-            vocab_chunk_size=noise.vocab_chunk_size,
-            dtype=noise.dtype,
-        )
     z = temperature_scale(logits, temperature)
     if noise is None:
         sampled = argmax_last_dim(z)
@@ -130,119 +114,6 @@ def gumbel_max(logits, temperature: float, noise):
     perturbed.deallocate(True)
     _deallocate_scaled_if_temporary(z, logits)
     return sampled
-
-
-def _offset_argmax_indices(indices, offset: int):
-    indices = ttnn.typecast(indices, ttnn.uint32)
-    if offset == 0:
-        return indices
-    out = ttnn.add(indices, offset)
-    indices.deallocate(True)
-    return out
-
-
-def _select_by_mask(mask, candidate, current):
-    mask_t = ttnn.typecast(mask, candidate.get_dtype())
-    ones = ttnn.full(
-        list(candidate.shape),
-        1,
-        dtype=candidate.get_dtype(),
-        layout=ttnn.TILE_LAYOUT,
-        device=candidate.device(),
-    )
-    keep_t = ttnn.subtract(ones, mask_t)
-    selected_candidate = ttnn.multiply(candidate, mask_t)
-    selected_current = ttnn.multiply(current, keep_t)
-    out = ttnn.add(selected_candidate, selected_current)
-    mask_t.deallocate(True)
-    ones.deallocate(True)
-    keep_t.deallocate(True)
-    selected_candidate.deallocate(True)
-    selected_current.deallocate(True)
-    return out
-
-
-def gumbel_max_with_chunked_noise(
-    logits,
-    temperature: float,
-    *,
-    seed: int | None = None,
-    vocab_chunk_size: int = 1024,
-    dtype=ttnn.float32,
-):
-    """Gumbel-max without materializing full-vocab noise or perturbed logits.
-
-    Each vocab chunk computes local ``max`` and ``argmax`` for
-    ``logits / T + Gumbel``; the per-chunk winners are reduced to the global
-    winner with elementwise masks. This is the bounded-memory fit path for large
-    canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit. The current
-    QB2 1024-wide RNG has a known distribution bias, so this path is not the
-    official-quality reference until that RNG issue is fixed.
-    """
-    seed = _validate_ttnn_rand_seed(seed)
-    if vocab_chunk_size <= 0:
-        raise ValueError("vocab_chunk_size must be positive")
-    vocab_size = logits.shape[-1]
-    best_values = None
-    best_indices = None
-
-    for offset in range(0, vocab_size, vocab_chunk_size):
-        end = min(offset + vocab_chunk_size, vocab_size)
-        starts = [0] * len(logits.shape)
-        ends = list(logits.shape)
-        starts[-1] = offset
-        ends[-1] = end
-        chunk = ttnn.slice(
-            logits,
-            starts,
-            ends,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        z = temperature_scale(chunk, temperature)
-        noise = sample_gumbel_noise(
-            z.shape,
-            device=logits.device(),
-            seed=seed + offset,
-            dtype=dtype,
-        )
-        perturbed = ttnn.add(z, noise)
-        chunk_values = ttnn.max(perturbed, dim=-1, keepdim=True)
-        chunk_indices = _offset_argmax_indices(ttnn.argmax(perturbed, dim=-1, keepdim=True), offset)
-
-        perturbed.deallocate(True)
-        noise.deallocate(True)
-        _deallocate_scaled_if_temporary(z, chunk)
-        chunk.deallocate(True)
-
-        if best_values is None:
-            best_values = chunk_values
-            best_indices = chunk_indices
-            continue
-
-        take_chunk = ttnn.gt(chunk_values, best_values)
-        next_values = _select_by_mask(
-            take_chunk,
-            chunk_values,
-            best_values,
-        )
-        take_chunk_u32 = ttnn.typecast(take_chunk, ttnn.uint32)
-        next_indices = _select_by_mask(
-            take_chunk_u32,
-            chunk_indices,
-            best_indices,
-        )
-
-        take_chunk.deallocate(True)
-        take_chunk_u32.deallocate(True)
-        best_values.deallocate(True)
-        best_indices.deallocate(True)
-        chunk_values.deallocate(True)
-        chunk_indices.deallocate(True)
-        best_values = next_values
-        best_indices = next_indices
-
-    best_values.deallocate(True)
-    return best_indices
 
 
 def canvas_sample(logits, temperature: float, gumbel_noise):
@@ -371,44 +242,6 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
     if u is not u2:
         u2.deallocate(True)
     return _gumbel_from_uniform(u)
-
-
-def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk_size: int = 1, dtype=ttnn.float32):
-    """Slow iid-by-vocab-chunk Gumbel generator for distributional validation.
-
-    QB2 currently shows last-dimension correlation when one large ``ttnn.rand``
-    call generates all vocab noise at once. Generating each vocab chunk with a
-    distinct seed removes that toy-vocab bias, but this is intentionally a
-    validation/diagnostic path rather than the full-vocab production sampler.
-    """
-    seed = _validate_ttnn_rand_seed(seed)
-    if vocab_chunk_size <= 0:
-        raise ValueError("vocab_chunk_size must be positive")
-
-    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
-    vocab_size = shape[-1]
-    parts = []
-    for offset in range(0, vocab_size, vocab_chunk_size):
-        chunk_size = min(vocab_chunk_size, vocab_size - offset)
-        chunk_shape = (*shape[:-1], chunk_size)
-        u = ttnn.rand(
-            chunk_shape,
-            device=device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            low=0.0,
-            high=1.0,
-            seed=seed + offset,
-            mesh_mapper=_rand_mesh_mapper(device),
-        )
-        parts.append(_gumbel_from_uniform(u))
-
-    if len(parts) == 1:
-        return parts[0]
-    gumbel = ttnn.concat(parts, dim=-1)
-    for part in parts:
-        part.deallocate(True)
-    return gumbel
 
 
 # ---------------------------------------------------------------------------------------------

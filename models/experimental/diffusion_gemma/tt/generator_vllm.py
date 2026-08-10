@@ -132,7 +132,7 @@ def _validate_upfront_capture_configuration(
             "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE='device'; "
             f"got {gumbel_mode!r}. 'device' is the only materialized source: the W4-validated "
             "on-device permuted-vocab RNG (no per-step host RNG or PCIe DMA). "
-            "'chunked'/'argmax' are not materialized full-tensor sources and are unsupported "
+            "'argmax' is not a materialized full-tensor source and is unsupported "
             "by the up-front controller."
         )
 
@@ -322,10 +322,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         """
         if model_owned_hybrid_kv_enabled() and max_model_len is not None:
             if int(max_num_seqs) != 1:
-                raise ValueError(
-                    "DG model-owned hybrid KV supports max_num_seqs=1; "
-                    f"got {max_num_seqs}"
-                )
+                raise ValueError("DG model-owned hybrid KV supports max_num_seqs=1; " f"got {max_num_seqs}")
             return int(max_model_len)
         return super().get_max_tokens_all_users(
             max_model_len=max_model_len,
@@ -381,13 +378,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # replay a torch run's exact noise for HF<->TT determinism, they are not a serving mode.)
         #
         # MEMORY ENVELOPE: "device" materializes a full-vocabulary (262144) tensor per step.
-        # context_contract.json records that materialization measured as an OOM in the DRAM left
-        # after a 256K-KV allocation, where only the no-materialize "chunked" descriptor fits.
-        # So at very large served contexts this default must be overridden with
-        # DG_VLLM_GUMBEL_MODE=chunked, which in turn requires DG_UPFRONT_CAPTURE=0 (the up-front
-        # controller needs a materialized source and rejects "chunked"/"argmax"). "chunked" also
-        # carries a known QB2 1024-wide RNG distribution bias; "argmax" is the fast deterministic
-        # RUN control.
+        # context_contract.json once recorded that materialization as an OOM in the DRAM left
+        # after a 256K-KV allocation; the "chunked" descriptor mode that dodged it was removed
+        # 2026-08-10 (bring-up-era workaround, known QB2 1024-wide RNG bias, ~25 s per block —
+        # a standing perf trap). If the 256K envelope resurfaces, pursue the TP-sharded denoise
+        # terminal (DG_TERMINAL_SHARDED, tt/sampling.py) instead. "argmax" remains the fast
+        # deterministic RUN control.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single model-owned hybrid cache backs
         # one active sequence today (see module docstring); the dict is keyed by
@@ -653,9 +649,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             f"{ttnn.TILE_SIZE}-token multiples, got {prompt_len}"
                         )
                     if prompt_len > self._upfront_pmax:
-                        raise RuntimeError(
-                            f"prefill warmup length {prompt_len} exceeds p_max={self._upfront_pmax}"
-                        )
+                        raise RuntimeError(f"prefill warmup length {prompt_len} exceeds p_max={self._upfront_pmax}")
                     warmup_lens.add(
                         _resolve_prefill_execution_len(
                             prompt_len,
@@ -1005,9 +999,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     else cache_len
                 )
                 session = (
-                    self._make_session(prefill_execution_len=execution_len)
-                    if coarse_buckets
-                    else self._make_session()
+                    self._make_session(prefill_execution_len=execution_len) if coarse_buckets else self._make_session()
                 )
             else:
                 cache_len = None
@@ -1037,31 +1029,31 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             "releasing the resident trace before compile and recapture"
                         )
                     else:
-                    # FAIL THIS REQUEST, NOT THE SERVER.
-                    #
-                    # This used to `raise`, and in vLLM V1 an exception out of ``execute_model`` is
-                    # unconditionally fatal: EngineCore exits, and every request already queued
-                    # behind it is answered with an empty completion and HTTP 200. On 2026-07-28 a
-                    # single out-of-band 21-token `curl` smoke test against a live server therefore
-                    # destroyed 135 of 198 answers, 56 minutes into the run, and the eval still
-                    # wrote a normal-looking 23.74% results file. One unservable request must cost
-                    # one request.
-                    #
-                    # Compiling the missing shape here instead is NOT the fallback: it is the
-                    # documented cause of a reproduced four-device AllBroadcast hang needing
-                    # `tt-smi -r` (doc/optimize_perf/upfront_earlyhalt_gpqa_20260722.md -- warming
-                    # the 160-token prefill before capture was the controlled fix). So the request
-                    # ends, loudly, with the same stop-id block the degeneracy guard's terminal path
-                    # already uses.
-                    #
-                    # WORTH REVISITING: the reason padding up to the nearest warmed length was not an
-                    # acceptable fallback was that the extra pad keys were decision-changing, and
-                    # DG_DENOISE_HIDE_PREFILL_PADS was default OFF. It is default ON since 2026-07-29,
-                    # so those keys are now masked out of the reveal -- which makes "pad up to the
-                    # nearest warmed shape" a candidate for replacing this rejection entirely. That
-                    # needs its own measurement (the mask hides the pads from the CANVAS; prefill still
-                    # writes their K/V, and the commit path is not the denoise path), so it is recorded
-                    # here rather than assumed.
+                        # FAIL THIS REQUEST, NOT THE SERVER.
+                        #
+                        # This used to `raise`, and in vLLM V1 an exception out of ``execute_model`` is
+                        # unconditionally fatal: EngineCore exits, and every request already queued
+                        # behind it is answered with an empty completion and HTTP 200. On 2026-07-28 a
+                        # single out-of-band 21-token `curl` smoke test against a live server therefore
+                        # destroyed 135 of 198 answers, 56 minutes into the run, and the eval still
+                        # wrote a normal-looking 23.74% results file. One unservable request must cost
+                        # one request.
+                        #
+                        # Compiling the missing shape here instead is NOT the fallback: it is the
+                        # documented cause of a reproduced four-device AllBroadcast hang needing
+                        # `tt-smi -r` (doc/optimize_perf/upfront_earlyhalt_gpqa_20260722.md -- warming
+                        # the 160-token prefill before capture was the controlled fix). So the request
+                        # ends, loudly, with the same stop-id block the degeneracy guard's terminal path
+                        # already uses.
+                        #
+                        # WORTH REVISITING: the reason padding up to the nearest warmed length was not an
+                        # acceptable fallback was that the extra pad keys were decision-changing, and
+                        # DG_DENOISE_HIDE_PREFILL_PADS was default OFF. It is default ON since 2026-07-29,
+                        # so those keys are now masked out of the reveal -- which makes "pad up to the
+                        # nearest warmed shape" a candidate for replacing this rejection entirely. That
+                        # needs its own measurement (the mask hides the pads from the CANVAS; prefill still
+                        # writes their K/V, and the commit path is not the denoise path), so it is recorded
+                        # here rather than assumed.
                         logger.error(
                             f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill "
                             f"execution length {execution_len} (cache_len={cache_len}) was not warmed before trace capture "
@@ -1077,8 +1069,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             warmed=sorted(warmed),
                         )
                         if _strict_prefill_lens():
-                        # Bit-exactness gates want the run to stop rather than silently lose a
-                        # sample, since an unwarmed shape invalidates the comparison.
+                            # Bit-exactness gates want the run to stop rather than silently lose a
+                            # sample, since an unwarmed shape invalidates the comparison.
                             session.reset()
                             raise RuntimeError(
                                 f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
@@ -1087,12 +1079,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                                 f"and is enabled by DG_UPFRONT_STRICT_PREFILL_LENS=1; unset it to reject "
                                 f"the request instead."
                             )
-                    # Register the row as an ALREADY-FINISHED session rather than dropping it.
-                    # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
-                    # as engine-fatal as the one being replaced here -- so a dropped row would move
-                    # the crash one step later instead of removing it. A finished session takes
-                    # decode_forward's existing stop-id branch, and release_request cleans it up and
-                    # emits the usual request_release line.
+                        # Register the row as an ALREADY-FINISHED session rather than dropping it.
+                        # ``decode_forward`` raises when ``_sessions`` is empty, and that raise is just
+                        # as engine-fatal as the one being replaced here -- so a dropped row would move
+                        # the crash one step later instead of removing it. A finished session takes
+                        # decode_forward's existing stop-id branch, and release_request cleans it up and
+                        # emits the usual request_release line.
                         session.finished = True
                         self._sessions[row] = session
                         blocks.append(self._stop_block(session))

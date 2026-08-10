@@ -381,9 +381,7 @@ def prefill_prompt_tokens(
         if not getattr(tt_model, "_dg_model_owned_hybrid_kv", False):
             raise RuntimeError("prefill buckets above 32K require DG model-owned hybrid KV")
         host_page_tables = getattr(tt_model, "_dg_hybrid_host_page_tables_per_layer", None)
-        device_page_tables = page_tables_per_layer or getattr(
-            tt_model, "_dg_hybrid_page_tables_per_layer", None
-        )
+        device_page_tables = page_tables_per_layer or getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
         if host_page_tables is None or device_page_tables is None:
             raise RuntimeError("bounded chunked prefill requires attached hybrid page tables")
 
@@ -660,33 +658,6 @@ def make_seeded_host_noise_tokens_fn(
         return noise_tokens_for_step
 
     return noise_tokens_for_block
-
-
-def make_seeded_chunked_gumbel_noise_fn(
-    *,
-    seed: int,
-    vocab_chunk_size: int = 1024,
-):
-    """Create lightweight chunked-Gumbel descriptors for ``generate_blocks``."""
-    seed = TS._validate_ttnn_rand_seed(seed)
-    if vocab_chunk_size <= 0:
-        raise ValueError("vocab_chunk_size must be positive")
-
-    def gumbel_noise_for_block(block_idx: int):
-        if isinstance(block_idx, bool) or not isinstance(block_idx, Integral):
-            raise ValueError("chunked Gumbel block index must be an integer")
-
-        def gumbel_noise_for_step(step: int):
-            if isinstance(step, bool) or not isinstance(step, Integral):
-                raise ValueError("chunked Gumbel step index must be an integer")
-            return TS.ChunkedGumbelNoise(
-                seed=seed + int(block_idx) * 1_000_003 + int(step),
-                vocab_chunk_size=vocab_chunk_size,
-            )
-
-        return gumbel_noise_for_step
-
-    return gumbel_noise_for_block
 
 
 def make_seeded_gumbel_noise_fn(
@@ -1483,8 +1454,6 @@ def generate_text_from_checkpoint_state(
     gumbel_seed: int | None = None,
     noise_seed: int | None = None,
     batch: int = 1,
-    use_chunked_gumbel_noise: bool = False,
-    gumbel_vocab_chunk_size: int = 1024,
     adapter_kwargs: dict | None = None,
     logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
     generate_text_fn=generate_text,
@@ -1539,20 +1508,14 @@ def generate_text_from_checkpoint_state(
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
         gumbel_seed_value = gumbel_seed if gumbel_seed is not None else seed + 2
-        if use_chunked_gumbel_noise:
-            generate_kwargs["gumbel_noise_fn"] = make_seeded_chunked_gumbel_noise_fn(
-                seed=TS._validate_ttnn_rand_seed(gumbel_seed_value),
-                vocab_chunk_size=gumbel_vocab_chunk_size,
-            )
-        else:
-            gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)
-            generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
-                tt_model.mesh_device,
-                batch=batch,
-                canvas_len=config.canvas_length,
-                vocab_size=vocab_size,
-                seed=gumbel_seed_value,
-            )
+        gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)
+        generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
+            tt_model.mesh_device,
+            batch=batch,
+            canvas_len=config.canvas_length,
+            vocab_size=vocab_size,
+            seed=gumbel_seed_value,
+        )
     if "eos_token_id" in generate_kwargs:
         _normalize_eos_token_ids(generate_kwargs["eos_token_id"])
     else:

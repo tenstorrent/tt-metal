@@ -231,7 +231,6 @@ class _FakeTensor:
 _GUMBEL_NOISE_HELPERS = (
     TS.sample_gumbel_noise,
     TS.sample_gumbel_noise_with_permuted_vocab,
-    TS.sample_gumbel_noise_by_vocab_chunks,
 )
 _VOCAB_AXIS_HELPERS = _GUMBEL_NOISE_HELPERS[1:]
 
@@ -331,46 +330,6 @@ def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch)
     assert reshaped.deallocated is False
 
 
-def test_chunked_gumbel_noise_deallocates_parts_after_concat(monkeypatch):
-    calls = {}
-    uniforms = [_FakeTensor("u0"), _FakeTensor("u1")]
-    parts = [_FakeTensor("part0"), _FakeTensor("part1")]
-    concat = _FakeTensor("concat")
-
-    class _FakeTtnn:
-        TILE_LAYOUT = "tile"
-
-        @staticmethod
-        def rand(shape, **kwargs):
-            calls.setdefault("rand", []).append((shape, kwargs))
-            return uniforms[len(calls["rand"]) - 1]
-
-        @staticmethod
-        def concat(tensors, *, dim):
-            calls["concat"] = (list(tensors), dim)
-            return concat
-
-    def fake_gumbel_from_uniform(tensor):
-        return parts[uniforms.index(tensor)]
-
-    monkeypatch.setattr(TS, "ttnn", _FakeTtnn)
-    monkeypatch.setattr(TS, "_gumbel_from_uniform", fake_gumbel_from_uniform)
-
-    out = TS.sample_gumbel_noise_by_vocab_chunks(
-        (1, 1, 4, 5),
-        device="mesh",
-        seed=47472,
-        vocab_chunk_size=3,
-        dtype="float32",
-    )
-
-    assert out is concat
-    assert [shape for shape, _ in calls["rand"]] == [(1, 1, 4, 3), (1, 1, 4, 2)]
-    assert [kwargs["seed"] for _, kwargs in calls["rand"]] == [47472, 47475]
-    assert calls["concat"] == (parts, -1)
-    assert [part.deallocated for part in parts] == [True, True]
-
-
 # --- vLLM sampling-params seam -------------------------------------------------
 
 
@@ -443,12 +402,6 @@ def test_canvas_sampling_params_rejects_bad_values(params, match, expect_error):
     "params,kwargs,match",
     [
         pytest.param({"temperature": 0.8}, {}, "gumbel_noise or a sampling seed", id="no-noise-and-no-seed"),
-        pytest.param(
-            {"temperature": 0.8, "seed": 47472},
-            {"use_vocab_chunked_noise": True, "use_vocab_permuted_noise": True},
-            "at most one",
-            id="two-rng-workarounds",
-        ),
     ],
 )
 def test_canvas_sample_from_params_rejects_bad_arguments(params, kwargs, match, expect_error):
@@ -563,34 +516,6 @@ def test_canvas_sample_from_params_preserves_injected_gumbel_noise(monkeypatch):
     assert out == "samples"
     assert calls["sample"] == (logits, 0.7, noise)
     assert noise.deallocated is False
-
-
-def test_canvas_sample_from_params_can_use_chunked_rng_without_disabling_default(monkeypatch):
-    calls = {}
-
-    def fake_chunked_noise(shape, *, device, seed, vocab_chunk_size):
-        calls["noise"] = (shape, device, seed, vocab_chunk_size)
-        return "chunked-gumbel"
-
-    def fake_canvas_sample(logits, temperature, gumbel_noise):
-        calls["sample"] = (logits, temperature, gumbel_noise)
-        return "samples"
-
-    monkeypatch.setattr(TS, "sample_gumbel_noise_by_vocab_chunks", fake_chunked_noise)
-    monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
-
-    logits = _FakeLogits()
-    out = canvas_sample_from_params(
-        logits,
-        {"temperature": 0.7, "seed": 47472},
-        default_temperature=0.8,
-        use_vocab_chunked_noise=True,
-        vocab_chunk_size=2,
-    )
-
-    assert out == "samples"
-    assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472, 2)
-    assert calls["sample"] == (logits, 0.7, "chunked-gumbel")
 
 
 # --- served gumbel default -----------------------------------------------------
@@ -858,38 +783,6 @@ def test_canvas_sample_matches_torch_argmax_with_readback_device_noise(device):
 
     ref = torch.argmax(logits / temperature + host_noise, dim=-1)
     assert torch.equal(sample_ids, ref)
-
-
-@requires_device
-@pytest.mark.use_module_device
-def test_canvas_sample_chunked_regenerated_noise_distribution(device):
-    # The vocab-chunked path is intentionally slow and diagnostic: it proves the
-    # sampler distribution when the regenerated noise is iid enough.
-    num_samples = DIST_NUM_SAMPLES
-    length = 32
-    vocab_size = 32
-    temperature = 0.7
-    logits = _structured_logits_repeated(num_samples, length, vocab_size)
-    expected_probs = F.softmax(logits[0] / temperature, dim=-1)
-
-    tt_logits = _to_device(device, logits)
-    device_noise = TS.sample_gumbel_noise_by_vocab_chunks(
-        logits.shape,
-        device=device,
-        seed=47472,
-        vocab_chunk_size=1,
-    )
-    samples = TS.canvas_sample(tt_logits, temperature, device_noise)
-    sample_ids = ttnn.to_torch(samples).squeeze(-1).to(torch.long)
-    _release(tt_logits, device_noise, samples)
-
-    max_top1_freq_error, mean_kl = _distribution_metrics(sample_ids, expected_probs)
-    print(
-        f"\n[canvas sampling chunked dist] N={num_samples} max_top1_freq_error={max_top1_freq_error:.4f} "
-        f"mean_kl={mean_kl:.4f}"
-    )
-    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
-    assert mean_kl < DIST_MAX_MEAN_KL
 
 
 @requires_device
@@ -1218,27 +1111,6 @@ def test_zero_noise_gumbel_is_argmax(device, dtype_name):
     agreement = float((out == golden).float().mean())
     print(f"\n[zero-noise argmax {dtype_name}] agreement={agreement:.4f}")
     assert agreement >= 0.95, f"zero-noise argmax agreement {agreement:.4f} < 0.95 ({dtype_name})"
-
-
-@requires_device_sfpi
-@pytest.mark.use_module_device
-def test_chunked_gumbel_max_matches_materialized_chunked_noise(device):
-    """Chunked Gumbel-max reduces per-chunk winners without a full noise tensor."""
-    temperature = 0.6
-    logits = _to(_varied_logits(seed=7), device, ttnn.bfloat16)
-    full_noise = TS.sample_gumbel_noise_by_vocab_chunks(logits.shape, device=device, seed=11, vocab_chunk_size=1024)
-
-    expected = TS.gumbel_max(logits, temperature, full_noise)
-    out = TS.gumbel_max(logits, temperature, TS.ChunkedGumbelNoise(seed=11, vocab_chunk_size=1024))
-
-    expected_torch = ttnn.to_torch(expected).squeeze(-1).to(torch.long)
-    out_torch = ttnn.to_torch(out).squeeze(-1).to(torch.long)
-    assert torch.equal(out_torch, expected_torch)
-
-    full_noise.deallocate(True)
-    expected.deallocate(True)
-    out.deallocate(True)
-    logits.deallocate(True)
 
 
 @requires_device_sfpi

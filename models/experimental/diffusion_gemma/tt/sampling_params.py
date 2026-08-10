@@ -87,9 +87,7 @@ def canvas_sample_from_params(
     default_temperature: float,
     default_seed: int | None = None,
     gumbel_noise=None,
-    use_vocab_chunked_noise: bool = False,
     use_vocab_permuted_noise: bool | None = None,
-    vocab_chunk_size: int = 1,
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
 
@@ -99,7 +97,6 @@ def canvas_sample_from_params(
     ``top_k``/``top_p`` remain parsed-only until the reference sampler ships those
     filters. Seed-regenerated Gumbel noise defaults to the permuted-vocab path to
     avoid the known QB2 innermost-vocab ``ttnn.rand`` correlation. Set
-    ``use_vocab_chunked_noise=True`` for the slower chunked diagnostic path, or
     ``use_vocab_permuted_noise=False`` for raw-RNG diagnostics.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
@@ -119,21 +116,11 @@ def canvas_sample_from_params(
             # positions collapse onto one token. Vocab-innermost measures at the IID control
             # (253/256 vs 154/256 distinct flat-logit winners at the production geometry).
             use_vocab_permuted_noise = False
-        if use_vocab_chunked_noise and use_vocab_permuted_noise:
-            raise ValueError("choose at most one regenerated-noise workaround")
         if use_vocab_permuted_noise:
             gumbel_noise = TS.sample_gumbel_noise_with_permuted_vocab(
                 logits.shape,
                 device=logits.device(),
                 seed=config.seed,
-            )
-            owns_gumbel_noise = True
-        elif use_vocab_chunked_noise:
-            gumbel_noise = TS.sample_gumbel_noise_by_vocab_chunks(
-                logits.shape,
-                device=logits.device(),
-                seed=config.seed,
-                vocab_chunk_size=vocab_chunk_size,
             )
             owns_gumbel_noise = True
         else:

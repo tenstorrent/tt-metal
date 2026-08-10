@@ -29,8 +29,6 @@ The 256K-allocation smoke also defaults to one layer; set
 ``DG_TEXT_DEMO_256K_NUM_LAYERS=full`` to run all layers. The full-depth
 256K variant uses ``--argmax-sampling`` because the default full-vocab device
 Gumbel allocation is a known DRAM-fragmentation OOM at that size.
-The chunked-Gumbel smoke defaults to one layer; set
-``DG_TEXT_DEMO_CHUNKED_GUMBEL_NUM_LAYERS=full`` to run all layers.
 """
 
 import os
@@ -151,20 +149,6 @@ def test_text_demo_rejects_conflicting_smoke_modes(expect_error):
         parser.parse_args(["--build-only", "--prefill-only"])
     with expect_error(SystemExit):
         parser.parse_args(["--prefill-only", "--adapter-only"])
-
-
-def test_text_demo_rejects_conflicting_sampling_modes(expect_error):
-    """argmax vs chunked is the only remaining pair; the host-gumbel flag was deleted."""
-    with expect_error(ValueError, match="choose at most one"):
-        text_demo.main(
-            [
-                "--checkpoint",
-                "/tmp/ckpt",
-                "--local-files-only",
-                "--argmax-sampling",
-                "--chunked-gumbel-sampling",
-            ]
-        )
 
 
 # --- success / failure summary lines -------------------------------------------------
@@ -370,34 +354,6 @@ def test_text_demo_argmax_sampling_threads_no_gumbel_hook(monkeypatch):
     assert kwargs["gumbel_noise_fn"](0)(0) is None
 
 
-def test_text_demo_chunked_gumbel_sampling_threads_generation_option(monkeypatch):
-    calls = {}
-    _patch_main_pipeline(monkeypatch, calls, _fake_generation(32, 1, 32, 64))
-
-    assert (
-        text_demo.main(
-            [
-                "--checkpoint",
-                "/tmp/ckpt",
-                "--local-files-only",
-                "--chunked-gumbel-sampling",
-                "--gumbel-vocab-chunk-size",
-                "512",
-                "--num-blocks",
-                "1",
-                "--max-new-tokens",
-                "32",
-            ]
-        )
-        == 0
-    )
-
-    _, _, kwargs = calls["generate"]
-    assert kwargs["use_chunked_gumbel_noise"] is True
-    assert kwargs["gumbel_vocab_chunk_size"] == 512
-    assert "gumbel_noise_fn" not in kwargs
-
-
 def test_main_logs_failure_marker_and_reraises(monkeypatch, expect_error):
     logged = {}
 
@@ -474,36 +430,6 @@ def test_short_prompt_256k_context_allocation_exits_clean(monkeypatch):
     assert summary["blocks"] == 1
     assert summary["prompt_len"] == 32
     assert summary["next_pos"] == 64
-
-
-@requires_device
-def test_short_prompt_256k_chunked_gumbel_full_canvas_exits_clean(monkeypatch):
-    """Chunked Gumbel smoke for 256K context with the canonical 256-token canvas."""
-    argv = _base_argv(_require_local_checkpoint()) + [
-        "--max-seq-len",
-        "262144",
-        "--canvas-length",
-        "256",
-        "--max-denoising-steps",
-        "1",
-        "--max-new-tokens",
-        "256",
-        "--num-blocks",
-        "1",
-        "--seed",
-        "0",
-        "--disable-eos-stop",
-        "--chunked-gumbel-sampling",
-    ]
-    num_layers = os.environ.get("DG_TEXT_DEMO_CHUNKED_GUMBEL_NUM_LAYERS", "1")
-    if num_layers.lower() != "full":
-        argv += ["--num-layers", num_layers]
-
-    summary = _demo_success_summary(monkeypatch, argv)
-    assert summary["generated_tokens"] == 256
-    assert summary["blocks"] == 1
-    assert summary["prompt_len"] == 32
-    assert summary["next_pos"] == 288
 
 
 @requires_device

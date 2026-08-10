@@ -36,7 +36,6 @@ from models.experimental.diffusion_gemma.tt.generate import (
     make_host_gumbel_noise_fn,
     make_host_noise_tokens_fn,
     make_seeded_gumbel_noise_fn,
-    make_seeded_chunked_gumbel_noise_fn,
     make_host_canvas_init_fn,
     make_seeded_host_canvas_init_fn,
     make_seeded_host_noise_tokens_fn,
@@ -1247,48 +1246,6 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
 
 
-def test_generate_text_from_checkpoint_state_can_use_seeded_chunked_gumbel(monkeypatch):
-    calls = {}
-
-    class _Model:
-        mesh_device = "mesh"
-
-    def fake_chunked_gumbel_noise_fn(*, seed, vocab_chunk_size):
-        calls["chunked"] = (seed, vocab_chunk_size)
-        return "chunked-gumbel"
-
-    def fail_device_gumbel_noise_fn(*args, **kwargs):
-        raise AssertionError("full device Gumbel noise should not be created")
-
-    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
-        calls["generate"] = kwargs
-        return "result"
-
-    monkeypatch.setattr(G, "make_seeded_chunked_gumbel_noise_fn", fake_chunked_gumbel_noise_fn)
-    monkeypatch.setattr(G, "make_seeded_gumbel_noise_fn", fail_device_gumbel_noise_fn)
-
-    out = generate_text_from_checkpoint_state(
-        _Model(),
-        "tokenizer",
-        "hello",
-        dg_state_dict={"raw": "state"},
-        config=DiffusionConfig(canvas_length=4),
-        num_blocks=1,
-        init_canvas_fn="init",
-        noise_tokens_fn="noise",
-        vocab_size=99,
-        gumbel_seed=321,
-        use_chunked_gumbel_noise=True,
-        gumbel_vocab_chunk_size=512,
-        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
-        generate_text_fn=fake_generate_text,
-    )
-
-    assert out == "result"
-    assert calls["chunked"] == (321, 512)
-    assert calls["generate"]["gumbel_noise_fn"] == "chunked-gumbel"
-
-
 @pytest.mark.parametrize(
     ("tokenizer", "model_attrs", "expected"),
     [
@@ -2218,14 +2175,6 @@ def test_make_seeded_gumbel_noise_fn_generates_block_step_seeds(monkeypatch):
     ]
 
 
-def test_make_seeded_chunked_gumbel_noise_fn_generates_block_step_descriptors():
-    noise = make_seeded_chunked_gumbel_noise_fn(seed=31, vocab_chunk_size=512)
-
-    assert noise(0)(0) == G.TS.ChunkedGumbelNoise(seed=31, vocab_chunk_size=512)
-    assert noise(0)(1) == G.TS.ChunkedGumbelNoise(seed=32, vocab_chunk_size=512)
-    assert noise(1)(0) == G.TS.ChunkedGumbelNoise(seed=1_000_034, vocab_chunk_size=512)
-
-
 @pytest.mark.parametrize(
     ("call", "error", "message"),
     [
@@ -2294,12 +2243,6 @@ def test_make_seeded_chunked_gumbel_noise_fn_generates_block_step_descriptors():
             ValueError,
             "positive nonzero",
             id="device-gumbel-zero-seed",
-        ),
-        pytest.param(
-            lambda: make_seeded_chunked_gumbel_noise_fn(seed=31, vocab_chunk_size=0),
-            ValueError,
-            "vocab_chunk_size",
-            id="chunked-gumbel-empty-chunk",
         ),
     ],
 )

@@ -57,26 +57,27 @@ from models.experimental.diffusion_gemma.tt.generate import (
     _pad_prompt_tokens_for_prefill,
     _validate_prompt_tokens,
     denoise_and_commit_block,
-    make_seeded_chunked_gumbel_noise_fn,
     make_seeded_gumbel_noise_fn,
     make_seeded_host_canvas_init_fn,
     make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
 )
 
-# Sampling modes exposed to the serving layer. "chunked" remains the bounded-memory
-# DEFAULT because it fits full-depth 256K, but QB2's current 1024-wide innermost-axis
-# RNG has a known distribution bias; do not use it as an official-quality reference.
-# "argmax" is the greedy RUN-first speed/determinism control. "device" uses the
-# permuted-vocabulary workaround but its padded full-vocabulary temporary can OOM.
-# "device" is also the only *materialized* mode, so it is the only one usable under
-# up-front capture (DG_UPFRONT_CAPTURE=1).
+# Sampling modes exposed to the serving layer. "device" is the production mode
+# (on-device permuted-vocab RNG) and the only *materialized* one, so it is the only
+# mode usable under up-front capture (DG_UPFRONT_CAPTURE=1). "argmax" is the greedy
+# RUN-first speed/determinism control.
+# A "chunked" mode (per-vocab-chunk noise descriptors) was removed 2026-08-10: it was
+# a bring-up-era bounded-memory workaround with a known QB2 1024-wide RNG distribution
+# bias, and it cost ~25 s per 256-token block in host-driven paths — a standing perf
+# trap. If full-vocab noise ever OOMs again at 256K contexts, pursue the TP-sharded
+# denoise terminal (DG_TERMINAL_SHARDED, tt/sampling.py) instead of resurrecting it.
 # A "host" mode (IID full-vocabulary torch Gumbel drawn per step) was removed: it
 # repaired 0 of the drifting prompts while costing 1.40x per request, because the
 # language drift was the canvas attending the prefill pad keys (fixed in d0936d4da4f),
 # not the RNG. Injecting a torch run's exact noise for HF<->TT parity is a different
 # thing and still lives in tt/generate.py: make_host_gumbel_noise_fn.
-GUMBEL_MODES = ("chunked", "argmax", "device")
+GUMBEL_MODES = ("argmax", "device")
 
 
 def _resolve_degeneracy_stop_ids(explicit, *, stop_token_ids, tokenizer) -> set | None:
@@ -200,8 +201,7 @@ class BlockDiffusionServingSession:
         tokenizer=None,
         vocab_size: int | None = None,
         seed: int = 0,
-        gumbel_mode: str = "chunked",
-        gumbel_vocab_chunk_size: int = 1024,
+        gumbel_mode: str = "device",
         eos_token_id=None,
         stop_token_ids=None,
         degeneracy_stop_token_ids=None,
@@ -222,7 +222,6 @@ class BlockDiffusionServingSession:
         self.page_tables_per_layer = page_tables_per_layer
         self.prefill_execution_len = None if prefill_execution_len is None else int(prefill_execution_len)
         self.gumbel_mode = gumbel_mode
-        self.gumbel_vocab_chunk_size = gumbel_vocab_chunk_size
         # ``None`` selects ordinary eager denoise. The vLLM wrapper passes only the
         # up-front model-lifetime denoise function when DG_UPFRONT_CAPTURE is enabled.
         self._denoise_block_fn = denoise_block_fn
@@ -283,11 +282,6 @@ class BlockDiffusionServingSession:
     def _build_gumbel_noise_fn(self, mesh_device, gumbel_seed: int):
         if self.gumbel_mode == "argmax":
             return _argmax_gumbel_noise_fn
-        if self.gumbel_mode == "chunked":
-            return make_seeded_chunked_gumbel_noise_fn(
-                seed=TS._validate_ttnn_rand_seed(gumbel_seed),
-                vocab_chunk_size=self.gumbel_vocab_chunk_size,
-            )
         return make_seeded_gumbel_noise_fn(
             mesh_device,
             batch=1,
