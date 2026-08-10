@@ -436,6 +436,31 @@ def _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg):
         return ttnn.Topology.Ring
 
 
+def _ring_over_one_or_two_chips(fabric_cfg, mesh) -> bool:
+    if (
+        fabric_cfg
+        in [
+            ttnn.FabricConfig.FABRIC_1D_RING,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ]
+        and mesh[0] <= 2
+    ):
+        return True
+
+    if (
+        fabric_cfg
+        in [
+            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ]
+        and mesh[1] <= 2
+    ):
+        return True
+
+    return False
+
+
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for fabric_cfg, fabric_cfg_id in DSP_CMB_FABRIC_CFGS:
@@ -443,6 +468,13 @@ def _cross_product_conflated_cmb_test_dimensions():
         fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
         for model_name, model_config, is_extended_model, test_meshes in COMBINE_MODELS:
             for target_mesh, reference_mesh in test_meshes.target_reference_pairs():
+                # Skip fabric configurations which don't make sense on some grids.
+                # In particular, what makes no sense here is ring over anything with 1 or 2 chips.
+                # (Although in general, ring-2 can theoretically make sense in general.)
+                #
+                if _ring_over_one_or_two_chips(fabric_cfg, target_mesh):
+                    continue
+
                 topo_marker = _topo_marker(target_mesh, fabric_cfg)
                 mesh_requirements_marker = pytest.mark.requires_mesh_topology(
                     mesh_shape=target_mesh, topology=topo_marker
