@@ -288,6 +288,7 @@ def _run_high_bw_all_gather_accuracy(
     _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype)
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device, expect_error):
@@ -641,6 +642,7 @@ def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
     )
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -682,6 +684,7 @@ def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
     )
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize(
     "device_params,axis_0_min_bandwidth_gbps,axis_1_min_bandwidth_gbps",
     _LINE_PERF_DEVICE_PARAMS,
@@ -717,6 +720,7 @@ def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_
         )
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
 def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
     # QuietBox uses its physical 4x1 line directly. LoudBox uses a physical
@@ -725,6 +729,7 @@ def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
     _run_high_bw_all_gather_test_cases(rank_line, min_bandwidth_gbps=45.0, cluster_axis=cluster_axis)
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 def test_high_bw_all_gather_ragged_accuracy(mesh_device):
     if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_RAGGED_ACCURACY") != "1":
@@ -847,6 +852,7 @@ def _run_high_bw_all_gather_token_sweep(
             gc.collect()
 
 
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize(
     "device_params,axis_0_min_bandwidth_gbps,axis_1_min_bandwidth_gbps",
     _LINE_PERF_DEVICE_PARAMS,

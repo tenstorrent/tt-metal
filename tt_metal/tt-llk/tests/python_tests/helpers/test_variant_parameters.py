@@ -530,6 +530,82 @@ class TOPK(TemplateParameter):
 
 
 @dataclass
+class GENERALIZED_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the generalized_moe_gate test.
+
+    ``read_base``/``from_*``/``to_*`` are SFPU column offsets; a run occupies the pair ``{lo, hi}``.
+    ``row_src``/``row_dst``/``srcb`` name copy4rows' 4-row DEST blocks and its SrcB scratch window.
+    ``eps`` and ``scale`` are float bit patterns, as the LLK takes them.
+    ``sections`` is how many DEST sections the kernel runs; 2 puts the second in the upper
+    half under DstSync::Half and packs it to buffer_Res[4..7].
+    ``sigmoid`` selects the op's enable_sigmoid front-end: transpose, sigmoid, then a RELOAD
+    binary reading SrcA back out of DEST.
+    """
+
+    mode: int = 0
+    sub_op: int = 0
+    grouped: bool = False
+    topk: int = 8
+    softmax: bool = False
+    produce_run: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+    read_base: int = 0
+    from_lo: int = 0
+    from_hi: int = 2
+    to_lo: int = 0
+    to_hi: int = 2
+    field: int = 0
+    idx_offset: int = 0
+    row_src: int = 0
+    row_dst: int = 4
+    srcb: int = 16
+    second_copy: bool = False
+    pre_copy4rows: bool = False
+    row_src_2: int = 0
+    row_dst_2: int = 8
+    srcb_2: int = 20
+    d2b_dst: int = 0
+    b2d_base: int = 0
+    sections: int = 1
+    sigmoid: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int GMG_MODE = {self.mode};",
+            f"constexpr int GMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool GMG_GROUPED = {str(self.grouped).lower()};",
+            f"constexpr std::uint32_t GMG_TOPK = {self.topk};",
+            f"constexpr bool GMG_SOFTMAX = {str(self.softmax).lower()};",
+            f"constexpr bool GMG_PRODUCE_RUN = {str(self.produce_run).lower()};",
+            f"constexpr bool GMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t GMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t GMG_SCALE = {self.scale};",
+            f"constexpr std::uint32_t GMG_READ_BASE = {self.read_base};",
+            f"constexpr std::uint32_t GMG_FROM_LO = {self.from_lo};",
+            f"constexpr std::uint32_t GMG_FROM_HI = {self.from_hi};",
+            f"constexpr std::uint32_t GMG_TO_LO = {self.to_lo};",
+            f"constexpr std::uint32_t GMG_TO_HI = {self.to_hi};",
+            f"constexpr std::uint32_t GMG_FIELD = {self.field};",
+            f"constexpr std::uint32_t GMG_IDX_OFFSET = {self.idx_offset};",
+            f"constexpr std::uint32_t GMG_ROW_SRC = {self.row_src};",
+            f"constexpr std::uint32_t GMG_ROW_DST = {self.row_dst};",
+            f"constexpr std::uint32_t GMG_SRCB = {self.srcb};",
+            f"constexpr bool GMG_SECOND_COPY = {str(self.second_copy).lower()};",
+            f"constexpr bool GMG_PRE_COPY4ROWS = {str(self.pre_copy4rows).lower()};",
+            f"constexpr std::uint32_t GMG_ROW_SRC_2 = {self.row_src_2};",
+            f"constexpr std::uint32_t GMG_ROW_DST_2 = {self.row_dst_2};",
+            f"constexpr std::uint32_t GMG_SRCB_2 = {self.srcb_2};",
+            f"constexpr std::uint32_t GMG_D2B_DST = {self.d2b_dst};",
+            f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
+            f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
+            f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
@@ -586,6 +662,111 @@ class IS_MAX_OP(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
+
+
+@dataclass
+class SFPU_SCALE_EN(TemplateParameter):
+    """Compile-time SCALE_EN flag for SFPU kernels that optionally pre-scale their input.
+
+    Pairs with ``SFPU_UNARY_SCALAR``, which carries the scale itself. Kernels in the
+    exp family take the scale as a *bfloat16* bit pattern (e.g. 0x3F80 for 1.0f,
+    ``p_sfpu::kCONST_1_FP16B``), not an fp32 one.
+    """
+
+    scale_en: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SCALE_EN = {str(self.scale_en).lower()};"
+
+
+@dataclass
+class SOFTMAX_K(TemplateParameter):
+    """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
+
+    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
+    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    """
+
+    softmax_k: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SOFTMAX_K = {self.softmax_k};"
+
+
+@dataclass
+class SAMPLING_OP(TemplateParameter):
+    """Select which ckernel_sfpu_sampling.h entry point the sampling test drives.
+
+    Emits ``#define SAMPLING_OP_<NAME>`` consumed by ``sfpu_sampling_test.cpp``.
+    """
+
+    sampling_op: str = "recip_scalar"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
+
+
+@dataclass
+class SAMPLING_LEGACY_COMPAT(TemplateParameter):
+    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
+
+    legacy_compat: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
+
+
+@dataclass
+class MOE_GATE_TOPK(TemplateParameter):
+    """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
+
+    Mirrors the first five template parameters of
+    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
+    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
+    dataclass defaults are the compute-API wrapper's
+    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
+    template parameter carrying a C++ default is the sixth, ``generate_indices``.
+
+    ``generate_indices`` is deliberately not modelled: the driver instantiates with
+    five arguments, so it is pinned to true and the kernel always numbers the experts
+    itself. The caller-supplied index-mapping path (generate_indices = false) is
+    therefore untested.
+    """
+
+    num_selected_experts: int = 8
+    num_total_experts: int = 256
+    normalize: bool = False
+    zero_tail: bool = False
+    full_sort: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int MOE_GATE_NUM_SELECTED_EXPERTS = {self.num_selected_experts};",
+            f"constexpr int MOE_GATE_NUM_TOTAL_EXPERTS = {self.num_total_experts};",
+            f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
+            f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
+            f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
+    """``eps`` / ``scale`` for the MoE-gate normalize step, as raw fp32 bit patterns.
+
+    Both are decoded on device via ``Converter::as_float``, so emitting the bit
+    patterns keeps the kernel and the torch golden exactly aligned.
+    """
+
+    eps_bits: int = 0x00000000  # 0.0f
+    scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+        ]
+        return "\n".join(lines)
 
 
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
