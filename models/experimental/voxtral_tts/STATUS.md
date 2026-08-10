@@ -4040,14 +4040,38 @@ with dispatch fully overlapped; the real loop has drains that can absorb a devic
 §6.52's −4.24 ms did reach the frame (~44 → 37.5); §6.62's −1.9 did not. **Every timing claim on
 this branch made only from a block A/B is now provisional.**
 
-**AND §6.50 IS PROBABLY STALE, for the §6.47 reason.** It rejected moving the semantic argmax on
-device because the op measured 321 µs there against 10.9 µs on host — but that priced the OP in
-isolation and ignored the **D2H drain the host path forces every frame**. Same error class as
-§6.47's residual-as-bias: a correct isolated number, a premise that does not hold in the loop.
+**THE WORK THIS POINTED AT WAS TRIED AND IT DOES NOT WORK. Retracted.** The proposal above was to
+keep `h` on device between the blocks and build the CFG pair there, removing three crossings.
+Prototyped and measured end to end, arms interleaved, warm-up generations discarded:
 
-**THE WORK THIS POINTS AT**, and it is larger than anything §6.52 or §6.62 won: keep `h` on device
-between Block 1 and Block 2, and do the semantic argmax on device, removing most of the 10
-crossings. Untested — see §7.
+| arm | ms/frame |
+|---|---|
+| shipped | 37.825 |
+| `h` + CFG pair on device | **37.744** |
+| | **+0.081 — nothing** |
+
+**0.081 ms against a 0.390 ms repeatability.** An intermediate prototype that removed only the H2D
+read −0.52 and looked promising; the fuller version shows that was session variation, not the
+change.
+
+**SO THE 2.796 ms SPENT INSIDE `to_torch`/`from_torch` IS NOT RECOVERABLE DRAIN — it is work the
+device genuinely has to do.** The loop is inherently serial: Block 2 needs `h` from Block 1 and
+Block 1 needs the codes from Block 2, so there is no in-flight work for a sync to wait on and
+nothing to overlap away. A control confirms it: injecting four *extra* dummy D2H syncs per frame
+costs nothing measurable (37.39 → 38.13, non-monotonic), because they land where the device is
+already drained.
+
+**AND §6.50 STANDS — my "probably stale" call above was wrong and is retracted.** Moving the
+semantic argmax on device would not remove a sync at all: the codes must reach the host regardless
+for the `[END_AUDIO]` test and `embed_frame`. It only relocates where the argmax runs, so §6.50's
++310 µs is the whole story. I reached for the §6.47 pattern because it had just paid off, and
+applied it where the mechanism does not fit.
+
+**WHAT REMAINS TRUE, AND UNEXPLAINED.** The blocks really are 3.77 ms slower inside the real loop
+than in a tight loop, and it is **not** host crossings. The likely candidate is program switching —
+a tight loop re-runs one program while the real loop alternates Block 1's ~470 ops with Block 2's
+~450 — but that is untested. **The methodological conclusion is unaffected and is the durable part
+of this section: a block A/B is a screen, `--tier audio`'s `ms_per_frame` decides.**
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
