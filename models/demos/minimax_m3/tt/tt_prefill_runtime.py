@@ -304,11 +304,13 @@ class TtPrefillRuntime:
                 pipelined layer-completion sink needs it (to build a globally-dense
                 seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
                 channel carries no payload, so it is accepted and ignored.
-            d2h_service / record_dev: the device-side per-layer ack transport. This runtime emits acks
-                only through the host callback (set_layer_ack_channel), so a caller asking for the D2H
-                path gets a loud error rather than silently missing acks.
+            d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
+                the host callback (set_layer_ack_channel), so a caller asking for the D2H path gets a
+                loud error rather than silently missing acks.
+            record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
+                record the D2H ack would carry).
         """
-        if d2h_service is not None or record_dev is not None:
+        if d2h_service is not None:
             raise NotImplementedError(
                 "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
                 "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."

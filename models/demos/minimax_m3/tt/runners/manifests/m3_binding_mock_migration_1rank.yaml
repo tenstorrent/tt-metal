@@ -34,5 +34,8 @@ global_env:
   # The producer's only barrier before it reads the KV back; without it the read races the device.
   # Defaults on only when PREFILL_ENABLE_MIGRATION=1, which the mock path does not set.
   PREFILL_ENABLE_LAYER_ACK: "1"
+  # Selects the host-callback ack transport, the only one this runtime implements — it enables no
+  # tracing, since the runtime has no capture_trace.
+  PREFILL_USE_TRACE: "1"
 
   LOGURU_LEVEL: "INFO"
