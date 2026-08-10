@@ -135,6 +135,20 @@ Cost: a new `Conv2dCb` enum value and its CB entry (2 files), the define in the 
 (1 file), one read in the weights reader outside the block loop (1 file), the kernel change (small),
 and host-side tiles. No op-signature change, no stride math, no arg re-indexing.
 
+**Checked against the codebase's own conventions (Glean), which confirmed the shape and added one
+risk.** The pattern is exactly as assumed -- `Conv2dCb` is an enum ending `OUT, COUNT` in
+`conv2d_op_program_factory_common.hpp`, and a CB is added by appending an enum value and one
+`cb_info.emplace_back(CBInfo{.name = ..., .num_pages = ..., .page_size = ..., .data_format = ...})`
+in `get_cb_info`, exactly like `Conv2dCb::WEIGHTS`. Nothing bespoke is required.
+
+The risk is `post_conv2d_op_memory_checks()` (conv2d_op_program_factory_common.cpp, ~line 749), which
+validates the summed CB footprint against L1 and **is a known source of hard failures when a CB size
+changes** -- see tt-metal issue #35207, where a 64->132 byte page-size bump on READER_INDICES tripped
+it with a 16512-vs-16580 mismatch. Two extra tiles is small, but the audio tail already runs close
+enough to L1 that `conv1d_l1_full_mode` measured only 1 of 42 shapes fitting L1_FULL, so this check is
+a live failure mode here rather than a theoretical one. Budget a run against it, and if it trips, the
+CB should be sized from the actual channel count rather than the block width.
+
 **The two earlier commits on this (00553d225e3, 7aa264d7b53, b0b7c2ec862) reached the wrong carrier.**
 The stride analysis in b0b7c2ec862 is still correct and still useful -- appending to the weight matrix
 genuinely is safe -- it just is not the right place to put data with this lifetime.
