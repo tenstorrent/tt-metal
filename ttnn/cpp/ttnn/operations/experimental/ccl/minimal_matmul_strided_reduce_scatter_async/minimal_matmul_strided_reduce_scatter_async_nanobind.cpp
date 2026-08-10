@@ -69,6 +69,11 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
               slots >= the device compute grid area. Share one such tensor across every MMRS call (see
               CCLManager.get_mm_progress_counters_buffer); otherwise each compiled program allocates its
               own and permanently lowers the device's L1 floor.
+            * :attr:`mm_window_blocks` (Optional[int]): Keep only this many M blocks of the matmul output
+              resident in L1 per core, recycling slot ``m % mm_window_blocks``, instead of the whole
+              output. Lets M grow past the point where the resident shard crowds out the circular
+              buffers. The returned matmul output is then smaller than [M, N] and does NOT hold the
+              full matmul result, so leave this unset if you need to read it.
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
@@ -99,7 +104,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("addcmul_input_tensor1") = nb::none(),
         nb::arg("addcmul_input_tensor2") = nb::none(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("mm_progress_counters") = nb::none());
+        nb::arg("mm_progress_counters") = nb::none(),
+        nb::arg("mm_window_blocks") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

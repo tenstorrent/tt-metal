@@ -35,6 +35,7 @@ class MinimalMatmulStridedReduceScatterTestConfig:
     layout: object = None  # ttnn.Layout, set in __post_init__
     input_dtype: object = None  # ttnn.DataType, set in __post_init__
     num_workers_per_link: object = None  # Optional[int]
+    mm_window_blocks: object = None  # Optional[int]: rolling L1 window over the MM output, in M blocks
 
     def __post_init__(self):
         if self.layout is None:
@@ -83,6 +84,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     addcmul_scalar=None,
     broadcast_gate=True,
     check_correctness=True,
+    mm_window_blocks=None,
 ):
     torch.manual_seed(0)
 
@@ -260,6 +262,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 fused_ternary_scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=mm_window_blocks,
             )
             return tt_mm_out, tt_rs_out
         else:
@@ -370,7 +373,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         )
         mm_goldens = torch_mm_output_per_device_list[golden_idx]
 
-        for device_id in range(num_devices):
+        # With a rolling window the MM output tensor holds only the last mm_window_blocks M blocks
+        # per core, not the full [M, N] result, so there is nothing to compare it against. The RS
+        # output below is the real correctness signal — it is only right if every windowed block was
+        # produced and consumed correctly.
+        for device_id in range(0 if mm_window_blocks is None else num_devices, num_devices):
             tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
             eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
             logger.info(f"MM output device {device_id}, iter {i}: {output}")

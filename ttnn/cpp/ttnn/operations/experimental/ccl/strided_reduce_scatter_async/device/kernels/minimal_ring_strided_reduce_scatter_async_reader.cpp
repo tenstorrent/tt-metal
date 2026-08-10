@@ -71,6 +71,10 @@ constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
 // [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
+// Rolling L1 window over the matmul output, in M blocks; 0 = no window (the whole output is
+// resident, so a row's address is its row). With a window the matmul recycles slot m % this, and a
+// row's address is remapped into the window — see windowed_slice_row below.
+constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(24);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -91,8 +95,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 24;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
-                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht
+    constexpr uint32_t ct_idx = 25;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht, [24]=mm_window_blocks
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -140,6 +144,17 @@ void kernel_main() {
     // mm_cores_x = number of MM cores along N
     const uint32_t mm_cores_x = (input_tensor_Wt + mm_N_full_block_wt - 1) / mm_N_full_block_wt;
     uint32_t mm_sem_target = 0;
+    // Rolling-window return path: this reader's credit slot on every MM core, published by
+    // multicast SET once per M block so the matmul knows when a window slot is free to recycle.
+    uint32_t rs_credit_counters = 0;
+    uint32_t num_mm_cores = 0;
+    uint32_t rs_credit_mm_coords_arg_base = 0;
+    if constexpr (mm_window_blocks > 0) {
+        rs_credit_counters = get_arg_val<uint32_t>(arg_idx++);
+        num_mm_cores = get_arg_val<uint32_t>(arg_idx++);
+        rs_credit_mm_coords_arg_base = arg_idx;  // num_mm_cores (x, y) pairs follow
+        arg_idx += 2 * num_mm_cores;
+    }
     {
         // Zero the counters before any MM increment can arrive
         volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_progress_counters);
@@ -191,6 +206,10 @@ void kernel_main() {
     // Each worker handles every 'effective_advance_by_tiles'-th tile, starting from offset 'effective_worker_id'.
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
+
+    // This reader owns credit slot effective_worker_id on every MM core — the same index that
+    // identifies its tile stripe, so slots and stripes cannot disagree.
+    const uint32_t rs_credit_slot_addr = rs_credit_counters + effective_worker_id * sizeof(uint32_t);
 
     // Snapshot the semaphore's value at startup
     uint32_t out_ready_sem_target = 0;
@@ -313,9 +332,26 @@ void kernel_main() {
                                 if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
                                     slice_col < cols_before_actual_slice + slice_Wt) {
                                     const uint32_t col_in_slice = slice_col - cols_before_actual_slice;
+                                    // The intermediate tensor is always full height, so it is indexed by the
+                                    // true row. The input (matmul output) may be a rolling window, in which
+                                    // case its row folds into slot m_block_iter % mm_window_blocks. slice_row
+                                    // itself stays unwindowed above so the ghost-row bound still refers to the
+                                    // real data.
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                    const uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    if constexpr (mm_window_blocks > 0) {
+                                        const uint32_t windowed_slice_row =
+                                            mm_core_idx * (mm_window_blocks * mm_block_ht) +
+                                            (m_block_iter % mm_window_blocks) * mm_block_ht +
+                                            tile_row_in_mm_M_unit_block;
+                                        input_tile_id = slice_coordinates_to_global_tile_index(
+                                            windowed_slice_row,
+                                            col_in_slice,
+                                            actual_slice_idx,
+                                            slice_Wt,
+                                            input_tensor_Wt);
+                                    }
 #ifdef FUSE_MM_OP_SIGNALER
                                     // Per-tile gate: block until the MM core (row-major id) that produced this tile
                                     const uint32_t mm_core_id = mm_core_idx * mm_cores_x + mm_core_x;
@@ -401,6 +437,21 @@ void kernel_main() {
                     }
                     // Move to the next slice
                     slice_idx += direction ? -1 : 1;
+                }
+            }
+            if constexpr (mm_window_blocks > 0) {
+                // Every tile of this M block is now read: the ring loop above covered all ring_size
+                // slices, i.e. the block's full width. Bump this reader's counter on every matmul
+                // core so it can recycle slot m_block_iter % mm_window_blocks once EVERY reader has
+                // reached at least this block. One increment per M block, so the counter is the
+                // number of blocks this reader has released. Walking the cores individually mirrors
+                // OpSignaler::signal_op_per_core, the signalling path in the other direction.
+                for (uint32_t i = 0; i < num_mm_cores; i++) {
+                    const uint64_t dst = get_noc_addr(
+                        get_arg_val<uint32_t>(rs_credit_mm_coords_arg_base + i * 2),
+                        get_arg_val<uint32_t>(rs_credit_mm_coords_arg_base + i * 2 + 1),
+                        rs_credit_slot_addr);
+                    noc_semaphore_inc(dst, 1);
                 }
             }
         }
