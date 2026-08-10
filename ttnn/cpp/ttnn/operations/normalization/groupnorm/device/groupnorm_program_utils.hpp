@@ -7,9 +7,11 @@
 #include <array>
 #include <vector>
 #include <cstdint>
+#include <initializer_list>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace ttnn::prim {
 
@@ -50,6 +52,10 @@ void append_group_norm_pad_correction_cbs(
     tt::DataFormat data_format,
     uint32_t single_tile_size);
 
+// True when any reconfig-relevant CB format is fp32, so the compute kernel must run its
+// reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
+bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 
 bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords);
@@ -61,5 +67,46 @@ void split_and_form_rectangle_grids(
     std::vector<tt::tt_metal::CoreCoord>& mcast_group_last);
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
+
+// Tiles the row-major path keeps resident in c_17 for one per-core group.
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
+
+// Auto-select num_out_blocks from tensor volume / virtual core count: next power of two,
+// capped at 256. Shared by the program factories and the L1-fit estimate.
+// `volume` is H * W * C (padded), `num_virtual_cores` is num_virtual_cols * num_virtual_rows.
+uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores);
+
+// Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
+inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
+
+// Flat tile budget covering the small 1-tile CBs (eps, ex/ex2 partials, etc.)
+inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
+
+// At or below this many active cores, prefer composite over fused RM.
+inline constexpr uint32_t kGroupnormLegacyRmMinCoresForOnChip = 32;
+
+// Estimates whether a legacy (non-Welford) group_norm fits in L1; if not, group_norm()
+// tilizes/untilizes as separate ops. Over-estimates on purpose so "fits" is always safe.
+// `tilize_in` adds the resident group; `untilize_out` adds the RM output scratch.
+bool groupnorm_legacy_rm_input_fits_l1(
+    uint32_t Ht,
+    uint32_t W,
+    uint32_t per_batch_hw,
+    uint32_t num_batches,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t num_groups,
+    int num_out_blocks_arg,
+    uint32_t tile_width,
+    uint32_t single_tile_size,
+    bool has_gamma,
+    bool has_beta,
+    bool tilize_in,
+    bool untilize_out,
+    uint64_t available_l1);
+
+// Prefer composite (host tilize + TILE GN) over fused RM for small grids or uneven batch mapping.
+// num_cores = num_virtual_cols * num_virtual_rows.
+bool groupnorm_legacy_rm_prefer_composite_for_perf(uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches);
 
 }  // namespace ttnn::prim

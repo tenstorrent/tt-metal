@@ -14,6 +14,7 @@ set(SCALEOUT_TOOLS_API_HEADERS
     cabling_generator/cabling_generator.hpp
     cabling_generator/regen_descriptors.hpp
     connector/connector.hpp
+    factory_system_descriptor/query.hpp
     factory_system_descriptor/utils.hpp
     node/node_types.hpp
 )
@@ -25,6 +26,7 @@ set(SCALEOUT_TOOLS_SRCS
     cabling_generator/cabling_generator.cpp
     cabling_generator/regen_descriptors.cpp
     connector/connector.cpp
+    factory_system_descriptor/query.cpp
     factory_system_descriptor/utils.cpp
 )
 

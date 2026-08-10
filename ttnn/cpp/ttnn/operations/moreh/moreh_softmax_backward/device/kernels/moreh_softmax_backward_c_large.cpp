@@ -27,7 +27,7 @@ void kernel_main() {
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t dim_size = get_compile_time_arg_val(1);
 
-    binary_op_init_common(cb_dy, cb_y, cb_dx);
+    compute_kernel_hw_startup(cb_dy, cb_y, cb_dx);
 
     constexpr int dst0 = 0;
     for (uint32_t n = 0; n < N; ++n) {
