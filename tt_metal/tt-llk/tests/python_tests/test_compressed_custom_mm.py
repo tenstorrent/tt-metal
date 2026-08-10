@@ -46,6 +46,28 @@ from helpers.utils import passed_test
 # MOP config supports. unpack_A == in0, unpack_B == in1 (same operand->buffer mapping as custom_mm_test.cpp).
 IN1_COMPRESSED_FORMATS = [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b]
 
+# Kernel per-tile format codes (helpers.compressed_utils.FMT_CODE). 0 == "zero tile" == skip.
+_FMT_CODE = {DataFormat.Bfp8_b: 3, DataFormat.Bfp4_b: 2, DataFormat.Bfp2_b: 1}
+
+
+def _encode_meta(fmt_code, ct_dim, kt_dim):
+    # Same packing as test_matmul_custom_compressed.encode_meta: 10 tiles per u32, tile i at
+    # bits [3i+3 : 3i+4] (format) and bit 3i+2 (use_b), with bits [1:0] of each word carrying the
+    # previous tile's format so the unpacker's 5-bit sliding window sees (prev, use_b, curr).
+    total = kt_dim * ct_dim
+    meta = [0] * ((total + 9) // 10)
+    prev_fmt = 0
+    for i in range(total):
+        u, j = divmod(i, 10)
+        if j == 0:
+            meta[u] |= prev_fmt & 0b11
+        use_b = 1 if (i % ct_dim) == 0 else 0
+        meta[u] |= use_b << (3 * j + 2)
+        meta[u] |= fmt_code << (3 * j + 3)
+        prev_fmt = fmt_code
+    return meta
+
+
 # generate_combination tuple layout (len 7, same_src_format=False):
 #   (unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, pack_src, pack_dst, math)
 COMPRESSED_MM_FORMATS = generate_combination(
@@ -53,7 +75,7 @@ COMPRESSED_MM_FORMATS = generate_combination(
         (
             DataFormat.Float16_b,  # in0 (SrcB) L1 format
             DataFormat.Float16_b,  # in0 unpack dst
-            in1_fmt,               # in1 (SrcA) L1 format -- BFP-compressed
+            in1_fmt,  # in1 (SrcA) L1 format -- BFP-compressed
             DataFormat.Float16_b,  # in1 unpack dst (decompressed to bf16 in SrcA)
             DataFormat.Float16_b,  # pack src
             DataFormat.Float16_b,  # pack dst (output)
@@ -127,14 +149,20 @@ def test_compressed_custom_mm(
         input_B_format=in1_format,
     )
 
-    tilized_A = tilize_block(src_A, dimensions=input_A_dimensions, stimuli_format=in0_format)
-    tilized_B = tilize_block(src_B, dimensions=input_B_dimensions, stimuli_format=in1_format)
+    tilized_A = tilize_block(
+        src_A, dimensions=input_A_dimensions, stimuli_format=in0_format
+    )
+    tilized_B = tilize_block(
+        src_B, dimensions=input_B_dimensions, stimuli_format=in1_format
+    )
 
-    # Per-tile compression metadata buffer read by both primitives as base_address_meta. The primitive dereferences
-    # meta_ptr[0 .. ceil(kt*ct/10)] to select per-tile BFP format codes. For this compile-green advance test the
-    # content is a zero placeholder (a full bf16 tile is far larger than the metadata footprint any grid point needs);
-    # the exact codes matter only for on-device numerics, which are pending BH hardware/CI.
-    meta_buffer = torch.zeros(1024, dtype=torch.float32)
+    # Per-tile compression metadata buffer read by both primitives as base_address_meta. The codes are CONTROL FLOW,
+    # not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math takes the
+    # STALLWAIT(SRCB_VLD) branch. An all-zero buffer therefore hangs Math/Packer forever. Every tile here is the one
+    # BFP format under test.
+    meta_words = _encode_meta(_FMT_CODE[in1_format], ct_dim, kt_dim)
+    meta_buffer = torch.zeros(1024, dtype=torch.int64)
+    meta_buffer[: len(meta_words)] = torch.tensor(meta_words, dtype=torch.int64)
 
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",
@@ -155,7 +183,7 @@ def test_compressed_custom_mm(
             tile_count_B=tile_cnt_B,
             tile_count_res=output_tile_cnt,
             buffer_C=meta_buffer,
-            stimuli_C_format=DataFormat.Float16_b,
+            stimuli_C_format=DataFormat.UInt32,
             tile_count_C=1,
         ),
         dest_acc=DestAccumulation.No,

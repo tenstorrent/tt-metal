@@ -46,24 +46,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SrcA/SrcB arguments are crossed relative to the buffer names below (matches custom_mm_test.cpp).
     // buffer_C carries the per-tile compression metadata (packed 3-bit format codes) read by the primitive.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_B_src,  // SrcA <- in1 (full tile, BFP-compressed)
-        formats.unpack_A_src,  // SrcB <- in0 (partial tile, bf16)
+        formats.unpack_B_src, // SrcA <- in1 (full tile, BFP-compressed)
+        formats.unpack_A_src, // SrcB <- in0 (partial tile, bf16)
         formats.unpack_B_dst,
         formats.unpack_A_dst,
         FACE_R_DIM,
-        params.IN0_FACE_R_DIM,  // in0 partial-tile face row dim (rows in {1, 2, 4, 8})
+        params.IN0_FACE_R_DIM, // in0 partial-tile face row dim (rows in {1, 2, 4, 8})
         params.num_faces_A /* unpA_num_faces (in1, full tile) */,
         params.num_faces_B /* in0 active faces */,
-        params.TILE_SIZE_UNPACK_B,   // SrcA tile size (in1)
-        params.TILE_SIZE_UNPACK_A);  // SrcB tile size (in0)
+        params.TILE_SIZE_UNPACK_B,  // SrcA tile size (in1)
+        params.TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 
     // compressed_custom_mm unpack init takes only unpB_face_r_dim (no CT_DIM, unlike custom_mm).
     _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */>(params.IN0_FACE_R_DIM);
 
     _llk_unpack_AB_compressed_custom_mm_<true /* clear_src */>(
-        L1_ADDRESS(params.buffer_B[0]),  // base_address_a -> SrcA (in1, BFP-compressed full tile)
-        L1_ADDRESS(params.buffer_A[0]),  // base_address_b -> SrcB (in0, partial tile)
-        L1_ADDRESS(params.buffer_C[0]),  // base_address_meta -> per-tile compression metadata
+        L1_ADDRESS(params.buffer_B[0]), // base_address_a -> SrcA (in1, BFP-compressed full tile)
+        L1_ADDRESS(params.buffer_A[0]), // base_address_b -> SrcB (in0, partial tile)
+        params.buffer_C[0],             // base_address_meta -> per-tile compression metadata. NOT L1_ADDRESS(): the primitive
+                                        // dereferences this on the RISC-V core (meta_ptr[i]), so it needs the raw byte address,
+                                        // not the /16 Tensix unpacker encoding.
         params.KT_DIM,
         params.CT_DIM);
 }
@@ -90,15 +92,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
-    _llk_math_compressed_custom_mm_init_<false /* transpose */, false /* split_acc */, false /* dense_packing */>(
-        params.IN0_FACE_R_DIM);
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, false /* split_acc */, false /* dense_packing */>(params.IN0_FACE_R_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
     // finalize == false because split_acc == false (see compressed_custom_mm.h contract: finalize must be false if
     // split_acc is false). The math primitive reads the same metadata buffer as the unpacker.
     _llk_math_compressed_custom_mm_<false /* finalize */>(
-        L1_ADDRESS(params.buffer_C[0]),  // base_address_meta
+        params.buffer_C[0], // base_address_meta -- raw byte address, see the unpack-side note above
         params.IN0_FACE_R_DIM,
         0 /* dst_index */,
         params.KT_DIM,
