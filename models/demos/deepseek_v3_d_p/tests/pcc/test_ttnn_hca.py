@@ -284,20 +284,25 @@ _CHUNK_SIZE = 4096
 # into its own program hash, so a moving append offset costs a program every chunk; update_cache keeps
 # update_index and batch_offset out of the hash (update_cache_device_operation.cpp:160).
 _WRITE_COMPILES_PER_CHUNK = {"fill_cache": 0, "slice_write": 1, "token_at_a_time": 0}[COMPRESSED_WRITE]
+# (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard,
+# so 5120 is as legal as 4096 -- it is the runner's default and the one the append offset does not land
+# tile-aligned on, which is why it belongs here.
 _CHUNKED_SCENARIOS = [
-    ("2chunk-full", [_CHUNK_SIZE, _CHUNK_SIZE]),
-    ("2chunk-ragged", [_CHUNK_SIZE, 3000]),
-    ("3chunk-ragged", [_CHUNK_SIZE, _CHUNK_SIZE, 3000]),
+    ("2chunk-full", 4096, [4096, 4096]),
+    ("2chunk-ragged", 4096, [4096, 3000]),
+    ("3chunk-ragged", 4096, [4096, 4096, 3000]),
+    ("chunk5120-full", 5120, [5120, 5120]),
+    ("chunk5120-ragged", 5120, [5120, 5120, 3000]),
 ]
 
 
-@pytest.mark.parametrize("name, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _ in _CHUNKED_SCENARIOS])
+@pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, iters_valid):
+def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, chunk_size, iters_valid):
     """Chunked prefill with TtHCAState carried across chunks.
 
     The reference is deliberately NOT chunked: it runs once over the whole prompt and each chunk is
@@ -336,14 +341,14 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
     state = tt_model.alloc_state(total)
     ms = tuple(mesh_device.shape)
-    logger.debug(f"mesh={ms} scenario={name} iters={iters_valid} total={total}")
+    logger.debug(f"mesh={ms} scenario={name} chunk_size={chunk_size} iters={iters_valid} total={total}")
 
     signpost("HCA_START")
     kv_actual = 0
     programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
-        chunk = torch.zeros(batch, _CHUNK_SIZE, config.hidden_size)
+        chunk = torch.zeros(batch, chunk_size, config.hidden_size)
         chunk[:, :valid] = hidden[:, kv_actual : kv_actual + valid]
         chunk_pos = torch.arange(kv_actual, kv_actual + valid).unsqueeze(0).expand(batch, -1)
 
