@@ -10,6 +10,7 @@ sources/sfpu_sdpa_test.cpp declares the same one ttnn's SDPA uses and this file 
 
 import struct
 from enum import Enum
+from typing import NamedTuple
 
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -46,12 +47,36 @@ RECIP_OPS = (SdpaOp.RecipLegacy, SdpaOp.RecipIter)
 EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
 
 # The exp bodies take their scale as a uint16_t bf16 pattern, so only bf16-exact values
-# keep the golden aligned with the kernel. 0xBF80 is -1.0, which ttnn's sigmoid_sub passes.
-# 0x3F80 is +1.0, the unscaled case.
-EXP_SCALE_BF16_VALUES = (0xBF80, 0x3F80)  # (-1.0, +1.0)
+# keep the golden aligned with the kernel. 0xBF80 is -1.0, which ttnn's sigmoid_sub passes;
+# 0x3F80 is +1.0, the unscaled case; 0x3E80 is 0.25, which catches a squared or dropped
+# scale that is invisible at |scale| == 1.
+EXP_SCALE_BF16_VALUES = (0xBF80, 0x3F80, 0x3E80)  # (-1.0, +1.0, +0.25)
 
-SOFTPLUS_BETA = 1.0
-SOFTPLUS_THRESHOLD = 20.0
+APPROX_MODES = (ApproximationMode.No, ApproximationMode.Yes)
+
+
+class SoftplusParams(NamedTuple):
+    beta: float
+    threshold: float
+
+    def __str__(self):
+        return f"beta{self.beta:g}_thr{self.threshold:g}"
+
+
+# At beta 1.0 both beta and its reciprocal are 1.0, so a dropped or swapped multiply is
+# invisible; the beta 2.0 case pins them. The threshold is unreachable from the stimulus at
+# 20.0, so the last case lowers it to take the body's pass-through arm.
+#
+# That low threshold is half a ramp step off the grid on purpose. The kernel computes while
+# t < threshold, whereas torch's softplus computes unless beta*x > threshold, so the two
+# disagree by the full pass-through step for any element landing exactly on it.
+SOFTPLUS_LOW_THRESHOLD = 2.0 + 4.0 / ELEMENTS_PER_TILE
+
+SOFTPLUS_CONFIGS = (
+    SoftplusParams(1.0, 20.0),
+    SoftplusParams(2.0, 20.0),
+    SoftplusParams(1.0, SOFTPLUS_LOW_THRESHOLD),
+)
 
 
 class Precision(Enum):
@@ -121,7 +146,31 @@ def _footprint_violations(src_2d, res_2d):
     return [c for c in untouched if bool(changed[:, c].any())]
 
 
-def _stimulus(op, exp_scale_bf16: int) -> torch.Tensor:
+class Variant(NamedTuple):
+    """One build of the single-tile bodies. Each axis defaults for the bodies that ignore it."""
+
+    op: SdpaOp
+    exp_scale_bf16: int = EXP_SCALE_BF16_VALUES[1]
+    approx_mode: ApproximationMode = ApproximationMode.No
+    softplus: SoftplusParams = SOFTPLUS_CONFIGS[0]
+    dest_sync: DestSync = DestSync.Half
+
+    def __str__(self):
+        parts = [self.op.name]
+        if self.op in EXP_OPS:
+            parts.append(f"scale{_bf16_to_float(self.exp_scale_bf16):g}")
+        elif self.op == SdpaOp.Softplus:
+            parts.append(str(self.softplus))
+        elif self.op in RECIP_OPS:
+            parts.append(f"apx{self.approx_mode.name}")
+        if self.dest_sync != DestSync.Half:
+            parts.append(self.dest_sync.name)
+        return "_".join(parts)
+
+
+def _stimulus(variant: Variant) -> torch.Tensor:
+    op = variant.op
+
     if op in RECIP_OPS:
         # Magnitudes in [1.25, 5.0). Kept away from zero because these bodies run 1 to 3 Newton
         # iterations off a setexp seed rather than a correctly rounded divide, and 1/x near zero
@@ -141,67 +190,82 @@ def _stimulus(op, exp_scale_bf16: int) -> torch.Tensor:
         return magnitudes * signs
 
     if op in EXP_OPS:
-        # Take the input range from the sign of the scale so scale*x lands in [-8, 0]
-        # either way. That is the post-max-subtraction regime SDPA feeds these bodies, and
-        # it keeps exp in [3.4e-4, 1] rather than overflowing.
-        scale = _bf16_to_float(exp_scale_bf16)
-        return _ramp(0.0, 8.0) if scale < 0.0 else _ramp(-8.0, 0.0)
+        # Size the input range from the scale so scale*x spans [-8, 0] whichever way the scale
+        # points. That is the post-max-subtraction regime SDPA feeds these bodies, and it keeps
+        # exp in [3.4e-4, 1] rather than overflowing. Deriving the range from the scale also
+        # means a dropped or squared multiply moves the whole output range, not just individual
+        # elements.
+        scale = _bf16_to_float(variant.exp_scale_bf16)
+        span = 8.0 / abs(scale)
+        return _ramp(0.0, span) if scale < 0.0 else _ramp(-span, 0.0)
 
-    # Softplus. Stay inside the degree-6 residual polynomial's [0, 5] fit domain,
-    # so the test measures the polynomial rather than the clamp to zero beyond it.
-    return _ramp(-4.0, 4.0)
+    # Softplus. The bound keeps |beta*x| inside the residual polynomial's [0, 5] fit domain, so
+    # the test measures the polynomial rather than the clamp beyond it. Where beta*x clears the
+    # threshold the body writes nothing and the golden returns x, so a low threshold covers the
+    # pass-through arm without needing its own stimulus.
+    bound = 4.0 / variant.softplus.beta
+    return _ramp(-bound, bound)
 
 
-def _templates(op, exp_scale_bf16: int, approx_mode, dest_sync=DestSync.Half):
+def _templates(variant: Variant):
     """Return all the C++ template parameters."""
     return [
-        SDPA_OP(op),
-        APPROX_MODE(approx_mode),
-        DEST_SYNC(dest_sync),
-        SDPA_EXP_SCALE(scale_bf16=exp_scale_bf16),
+        SDPA_OP(variant.op),
+        APPROX_MODE(variant.approx_mode),
+        DEST_SYNC(variant.dest_sync),
+        SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
         SDPA_SOFTPLUS_PARAMS(
-            beta_bits=_f32_bits(SOFTPLUS_BETA),
-            beta_reciprocal_bits=_f32_bits(1.0 / SOFTPLUS_BETA),
-            threshold_bits=_f32_bits(SOFTPLUS_THRESHOLD),
+            beta_bits=_f32_bits(variant.softplus.beta),
+            beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
+            threshold_bits=_f32_bits(variant.softplus.threshold),
         ),
     ]
 
 
 def _variants():
-    """(op, exp_scale_bf16) pairs for the single-tile bodies."""
-    variants = []
-    for op in SdpaOp:
-        if op == SdpaOp.Correction:
-            continue
-        if op in EXP_OPS:
-            variants.extend((op, scale) for scale in EXP_SCALE_BF16_VALUES)
-        else:
-            variants.append((op, EXP_SCALE_BF16_VALUES[0]))
+    """Variants for the single-tile bodies, listed per body rather than crossed.
+
+    approx_mode is live only for the reciprocal bodies: the exp bodies read their own
+    SDPA_EXP_APPROX_MODE template argument, and calculate_softplus_body takes an
+    APPROXIMATION_MODE parameter it never uses. Likewise only the exp bodies vary with the
+    scale and only softplus with beta/threshold, so crossing every axis over every body would
+    just rebuild identical kernels. dest_sync moves the Dest base the params wrapper hands the
+    body, so each body gets one DestSync.Full variant to catch a base that only works for Half.
+    """
+    variants = [
+        Variant(op, approx_mode=approx) for op in RECIP_OPS for approx in APPROX_MODES
+    ]
+    variants += [
+        Variant(op, exp_scale_bf16=scale)
+        for op in EXP_OPS
+        for scale in EXP_SCALE_BF16_VALUES
+    ]
+    variants += [Variant(SdpaOp.Softplus, softplus=cfg) for cfg in SOFTPLUS_CONFIGS]
+    variants += [
+        Variant(op, dest_sync=DestSync.Full) for op in SdpaOp if op != SdpaOp.Correction
+    ]
     return variants
 
 
 @parametrize(
-    op_and_scale=_variants(),
+    variant=_variants(),
     precision=list(Precision),
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
 )
-def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
-    op, exp_scale_bf16 = op_and_scale
-    dest_acc = precision.dest_acc
-    torch.manual_seed(0)
+def test_sfpu_sdpa(variant, precision):
+    op = variant.op
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
     torch_format = format_dict[formats.input_format]
 
-    src_A = _stimulus(op, exp_scale_bf16).to(torch_format)
+    src_A = _stimulus(variant).to(torch_format)
     src_B = torch.zeros_like(src_A)
 
     golden_tensor = get_golden_generator(SdpaSfpuGolden)(
         src_A.view(TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
         op,
-        exp_scale=_bf16_to_float(exp_scale_bf16),
-        softplus_beta=SOFTPLUS_BETA,
-        softplus_threshold=SOFTPLUS_THRESHOLD,
+        exp_scale=_bf16_to_float(variant.exp_scale_bf16),
+        softplus_beta=variant.softplus.beta,
+        softplus_threshold=variant.softplus.threshold,
     )
 
     src_A_tilized = tilize_block(
@@ -211,7 +275,7 @@ def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
     configuration = TestConfig(
         "sources/sfpu_sdpa_test.cpp",
         formats,
-        templates=_templates(op, exp_scale_bf16, approx_mode),
+        templates=_templates(variant),
         variant_stimuli=StimuliConfig(
             src_A_tilized,
             formats.input_format,
@@ -222,7 +286,7 @@ def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
             tile_count_B=1,
             tile_count_res=1,
         ),
-        dest_acc=dest_acc,
+        dest_acc=precision.dest_acc,
         unpack_to_dest=precision.unpack_to_dest,
         disable_format_inference=True,
         compile_time_formats=True,
@@ -238,7 +302,7 @@ def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
         f"but only {list(SdpaSfpuGolden.TRANSFORMED_COLS)} should be written"
     )
 
-    atol, rtol = _tolerance(op, precision, approx_mode)
+    atol, rtol = _tolerance(op, precision, variant.approx_mode)
     assert passed_test(
         golden_tensor,
         res_tensor,
@@ -247,8 +311,7 @@ def test_sfpu_sdpa(op_and_scale, precision, approx_mode):
         custom_rtol=rtol,
     ), (
         f"column-vector SFPU result does not match golden "
-        f"(atol={atol:g}, rtol={rtol:g} for {op.name}/{precision.label}/"
-        f"apx={approx_mode.name})"
+        f"(atol={atol:g}, rtol={rtol:g} for {variant}/{precision.label})"
     )
 
 
@@ -287,15 +350,13 @@ def _dest_configurations():
     ]
 
 
+# The correction body reads no APPROX, so it takes the Variant default rather than sweeping.
 @parametrize(
     dest_config=_dest_configurations(),
     scale_bf16=list(CORRECTION_SCALE_BF16_VALUES),
-    approx_mode=[ApproximationMode.No],
 )
-def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
+def test_sfpu_sdpa_correction(dest_config, scale_bf16):
     precision, dest_sync = dest_config
-    dest_acc = precision.dest_acc
-    torch.manual_seed(0)
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
     torch_format = format_dict[formats.input_format]
@@ -321,7 +382,7 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
         "sources/sfpu_sdpa_test.cpp",
         formats,
         templates=_templates(
-            SdpaOp.Correction, scale_bf16, approx_mode, dest_sync=dest_sync
+            Variant(SdpaOp.Correction, exp_scale_bf16=scale_bf16, dest_sync=dest_sync)
         ),
         variant_stimuli=StimuliConfig(
             src_A_tilized,
@@ -333,7 +394,7 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
             tile_count_B=1,
             tile_count_res=CORRECTION_NUM_TILES,
         ),
-        dest_acc=dest_acc,
+        dest_acc=precision.dest_acc,
         unpack_to_dest=precision.unpack_to_dest,
         disable_format_inference=True,
         compile_time_formats=True,
@@ -371,7 +432,7 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16, approx_mode):
             ), "correction cur_max must be an exact elementwise max"
             continue
 
-        atol, rtol = _tolerance(SdpaOp.Correction, precision, approx_mode)
+        atol, rtol = _tolerance(SdpaOp.Correction, precision, ApproximationMode.No)
         assert passed_test(
             golden,
             res,

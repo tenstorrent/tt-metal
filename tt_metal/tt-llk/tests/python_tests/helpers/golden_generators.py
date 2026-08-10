@@ -19,6 +19,7 @@ from helpers.llk_params import (
     PackerReluType,
     ReduceDimension,
     ReducePool,
+    SdpaOp,
     TopKSortDirection,
     format_dict,
     pack_relu_config,
@@ -4570,8 +4571,6 @@ class SdpaSfpuGolden:
         softplus_beta: float = 1.0,
         softplus_threshold: float = 20.0,
     ):
-        from .llk_params import SdpaOp
-
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 

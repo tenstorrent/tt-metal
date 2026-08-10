@@ -90,9 +90,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
-// ckernel_sfpu_sdpa.h needs these.
+// ckernel_sfpu_sdpa.h needs these. ALWI normally comes from the Compute API
+// (api/compute/common_globals.h), which cannot be included here because it pulls in metal's
+// generated chlkc_list.h.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 static constexpr bool APPROX         = APPROX_MODE;
+#ifndef ALWI
 #define ALWI inline __attribute__((always_inline))
 #endif
 
@@ -104,9 +107,8 @@ using namespace ckernel;
 
 // The two reciprocal paths need different inits. legacy_compat=true routes to _reciprocal_compat_,
 // which materialises its constants inline, so recip_init only has to set up the general SFPU
-// state. legacy_compat=false routes to sfpu_reciprocal_iter, whose Newton step reads constants
-// that come from sfpu_reciprocal_init rather than recip_init: recip_init's !legacy_compat branch
-// primes the _calculate_reciprocal_fast_* kernels, which this body never calls.
+// state. legacy_compat=false routes to sfpu_reciprocal_iter, whose Newton step reads the constant
+// sfpu_reciprocal_init programs.
 //
 // exp_init's own scale argument is left at its default throughout, since each body carries its own
 // scale as a bf16 pattern rather than exp_init's fp32 one.
