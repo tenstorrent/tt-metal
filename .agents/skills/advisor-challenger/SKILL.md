@@ -1,5 +1,8 @@
 # `$advisor-challenger` — measure how much `$shard-advise` adds to a decoder already optimized without it
 
+*v3. What changed from v2 and why, with the measurement behind each change:
+`skillexp/ADVCHAL-V3-CHANGES.md`.*
+
 **Input:** a finished, tagged `optimized_decoder.py` from an arm or snapshot that never ran the advisor.
 **Output:** the best *measured* decoder, plus a complete accounting of what the advisor said and what it was
 worth. A **no-change outcome is a measured contribution of zero** — a result, not a failure.
@@ -31,33 +34,85 @@ selecting file carries a cost or runtime term and the chain-level quantity compu
 | the **op set** that is placed differently from the shipped graph | the **geometry** |
 | the **direction** — into L1, out to DRAM, different grid | the chain extent, and every measurement |
 
-**Treat an advised core count as one candidate, not as a recommendation.** Two independent reasons:
+**The advised core count is a *detection* signal, not a *selection* one.** Two independent reasons:
 
-- *It is not ranked.* Selection has no latency term, so a small grid that fits the chain in L1 wins over a
-  larger one that computes faster. A 4096-wide (128-tile) norm was advised 11 and 22 cores where 32 gives
-  exactly 4 tiles per core and 64 is also legal — and both 32 and 64 are in the advisor's own candidate set.
-  Nothing in it distinguishes an exactly-dividing grid from a padded one.
+- *It is not ranked.* Selection has no latency term at any level, so a small grid that fits the chain in L1
+  wins over a larger one that computes faster. For normalization ops the core-count term is worse than
+  unranked: the rulebook overwrites it with the *input* operand's grid volume, which on a decode shape
+  cannot vary with the candidate at all. Scored on the three ladders anyone has measured, the advised grid
+  reached **82 %** of the achievable win while a fixed rule that never consults the advisor reached 99 %.
 - *It is only legal inside the advisor's own plan.* The advisor re-derives the whole graph from
   DRAM-interleaved inputs; it never sees your shipped layouts. So a single advised placement dropped onto an
   otherwise-unmodified graph can violate a constraint of the shipped neighbour it never modelled —
   `per_core_K=9 is illegal` on a K=96-tile matmul came from exactly this. A rejection of that kind is a
   partial-application failure, not evidence the direction was wrong.
 
-So: take the op **set** and the **direction**, derive your own geometry from tile divisibility, and always
-measure at least one exactly-dividing grid. Test the advised value if you like, but never only at or below
-it — a sweep bounded above by the advised value cannot distinguish "advisor was right" from "we never looked
-higher".
+So: trust it for **which op** and **which direction**, and get the geometry from the ladder —
+`reconcile.py --legal-grids <tensor width in tiles>`, swept on **both sides** of the advised value. The
+response curve is not monotonic: on one decoder the advised value sat at a local *maximum* with the optimum
+below it, and the two cells that swept only at and above the advice both shipped the wrong rung.
+
+**And the win in this class is a threshold, not a gradient.** Measured on three decoders, a reduction's
+response to core count is flat over a wide middle and falls off a cliff at one core: 8→44 cores varied by
+0.2 % where 1 core cost 13.7 %. Almost all the value is the **first step off one core**. You do not need the
+optimum — you need to notice the op is on the cliff (which `reconcile.py` now tells you before you spend any
+device time) and land anywhere on the ladder. Which middle rung you pick is worth about 1 pp.
+
+⚠ **Before calling a low core count starved, ask what the op's sharding semantics are.**
+`nlp_create_qkv_heads_decode` height-shards over *batch*, so its core count **is** the batch size —
+exactly, in all 23 rows of the reference corpus. One core at batch 1 is the op's own semantics and the
+advisor advising 1 is correct. This was flagged as an opportunity in that corpus and disproved.
 
 `compute_config` / `math_fidelity` in the advised IR mirror the captured graph. They are not advice;
 override them with your own fidelity decision.
 
-## The advice is a whole-graph plan; you apply parts of it
+## The advice is a whole-graph plan. Apply it whole, then ablate.
 
-This mismatch is the single most common source of confusion in this stage. The advisor re-derives the entire
-graph from DRAM-interleaved inputs — it never sees your shipped layouts — so its output is **one plan whose
-parts are only jointly valid**. You apply one chain at a time onto an otherwise-unmodified decoder.
+**This is the rule that changed most in v3, and it is the one with the largest measured effect.** The advisor
+re-derives the entire graph from DRAM-interleaved inputs — it never sees your shipped layouts — so its output
+is **one plan whose parts are only jointly valid**. v2 screened it one chain at a time, building up from the
+incumbent, and never applied the plan as written. On the one reference cell where that counterfactual could
+be measured afterwards:
 
-Consequences:
+| configuration | median ms | Δ | differential PCC |
+|---|---|---|---|
+| frozen incumbent | 0.807535 | — | — |
+| what the cell shipped, after 14 measurements | 0.768104 | −4.88 % | 1.0 |
+| **the advisor's plan, implemented from its IR** | 0.723320 | **−10.43 %** | **1.0** |
+| that plan plus its advised 11-core norm | **0.663507** | **−17.84 %** | 0.99999107 |
+
+**3.7× what building up produced, and the −10.43 % is bit-identical**, so no correctness rule blocked it.
+Nobody tried it. Across the corpus the three best outcomes were the three cells whose *first* candidate was
+the advisor's placement, and the four worst never applied it.
+
+**So the procedure is:**
+
+```
+1. apply_all -- every advised placement at once, built from `advised_plan.ops` in the reconciliation,
+   which reads final_ir.mlir. NOT from report.json: it has no shard shape, and a plan rebuilt with a
+   guessed shard width is a different plan (a guessed (32,48) for a specified (32,64) cost one analysis
+   a week and produced a retracted "the advice is illegal" finding)
+2. first drop every op in `unfixable_ops` -- the advisor has already declared those impossible, with the
+   exact runtime error it got from tt-metal's own constraint machinery
+3. if what remains will not run, remove ONLY the failing item, and record the isolated single-op test that
+   names it. A TT_FATAL while implementing advice is evidence about your reconstruction until an
+   isolated single-op test in the exact advised config says otherwise
+4. measure. apply_all is the FLOOR, not the ceiling
+5. ablate one advised item at a time. An item whose REMOVAL is faster is a finding about the advisor that
+   no build-up order can generate; an item that changes nothing gets dropped with a measurement behind it
+6. build up from the incumbent only for what apply_all could not reach
+7. re-advise after any change that adds, removes or reorders ops -- `ttnn-advise` costs ~18 s end to end,
+   less than one harness measurement. Pure memory-config changes leave the advice byte-identical, because
+   the advisor discards input memory configs and re-places everything; that is a property of the change,
+   not a rule
+```
+
+Two mechanisms make build-up lose, and both are worth knowing. **Sub-floor chains never get tested** — 60 %
+of the disagreed-on cost in the reference corpus sat in `below_threshold` chains, individually unmeasurable
+and collectively obvious. And **"not tried" becomes indistinguishable from "tried and lost"**: four cells'
+unproven deviations look identical in the artefacts to a measured rejection. Step 5 is what fixes that.
+
+Consequences of the plan being jointly valid:
 
 - A placement that is legal in the plan can be **illegal in your graph**, because it violates a constraint of
   a shipped neighbour the advisor never modelled. `per_core_K=9 is illegal` on a K=96-tile matmul is this.
@@ -194,6 +249,13 @@ What the template enforces, and why:
 5. **Never time a candidate after the incumbent in the same process.** With any residual ramp the later run
    is simply warmer, which hands the candidate a free win under a non-overlap rule that assumes exchangeable
    samples.
+6. **The first process of a session is not comparable to the rest, so throw one away.** Measured: the first
+   harness process of a session recorded a floor of **11.838 µs** where the identical configuration in a
+   later process recorded **0.196 µs** — a **60×** difference from JIT-cache warmth *between* processes, which
+   no amount of per-process warm-up can remove. Since the floor decides `feasibility.verdict`, a cell whose
+   control happened to be the first thing it ran silently changed what it was allowed to screen. So: run the
+   harness once with `--label warmup_discard` and delete the output, before the incumbent. The template
+   records `process_ordinal` and the gate warns if the incumbent's is 1.
 
 `incumbent.json` — the template writes all of these except `layer_counts` (step 0): `decode_batch`,
 `requested_decode_batch`,
@@ -219,9 +281,31 @@ Copy `scripts/capture_template.py`; construct the decoder with the **shipped pol
 Pass `--pipeline-options allow-bf16-dram-sharded-matmul=true` if any traced weight is bf16. `captured_at`
 must be after `measured_at`.
 
-Record the **layer share** of any kind you cannot capture. `sparse_matmul` and the SSM / gated-delta ops
-are terminal in the tracer; if such a kind dominates, *"the advisor cannot reach N of M layers"* is the
-correct result and must be stated, not discovered later.
+Record the **layer share** of any kind you cannot capture, as `reachable_by_advisor` in `final.json`: the
+layer kinds captured, the untraced window share, and what fraction of model decode time that leaves unadvised.
+A contribution of zero must be readable as *"nothing to find"* or *"could not look"*, and in the reference
+corpus 4 of 7 zeros were the second kind with nothing in the artefacts saying so.
+
+**Check whether the op is really terminal before recording it as such.** `uncapturable.ops` means *the tracer
+cannot trace this*; `report.json`'s `unfixable_ops` means *the advisor will not place this*. Two different
+questions, and copying entries from the second into the first is how four ops that already had handlers got
+recorded as blockers. Validate an entry with an actual trace attempt, and validate the op exists at all with
+`getattr(ttnn, name)` — one corpus cell recorded a blocker on an op that does not exist.
+
+**Record the capture's own scope**, as `capture_scope` in `report.json`: ops attempted, any model method you
+substituted before tracing, and every private env knob with its value. Fifteen cells wrote fifteen capture
+scripts of 54 to 290 lines and nothing compared them; five stopped at the same terminal op in four different
+places, from 30 ops captured down to 5. Without the field, cross-cell coverage numbers silently mix captures
+that attempted very different amounts of the layer. **Substitutions matter most:** where the template patches
+`_decode_rope` because the tracer cannot resolve `memory_config()` before layout assignment, the advice for
+that region is advice for a stand-in — and a rope-side change cannot reach the capture at all. Say so.
+
+**Re-advise after a topology change.** `ttnn-advise` costs ~18 s end to end (measured: 18.4 / 18.4 / 18.1 /
+18.6 s, device open through artefact write) — less than one harness measurement — so there is no cost argument
+for screening every candidate against one start-of-run capture. The advisor discards the input's memory configs
+and re-places everything, so it responds to **topology**: adding, removing or reordering ops changes the advice,
+while a pure memory-config or program-config change leaves it byte-identical (verified four times over). Record
+which capture each candidate was screened against.
 
 ### 2a. Consider capturing more than one consecutive layer
 
@@ -237,22 +321,45 @@ L1. That is the one place it can see the inter-layer handoff at all. Declare it 
 `reconcile.py --layers-in-window N`, or the replay guard will correctly reject the repeating op sequence.
 
 The cost is L1 capacity: `spill.ran` is true in every corpus cell at **one** layer, with up to 4 spills, so
-2–3 layers will spill more and a spilled plan applies piecemeal less well. Start at N=2 on a kind that
-currently spills 0–1 times, and check the one question that settles it: does the advisor keep the interior
-layer boundary in L1? If it does, that is a directly attributable win worth `(N-1)/N` of the handoff cost
-(§`model_estimate.layer_handoff`), and it justifies a larger N.
+2–3 layers will spill more and a spilled plan applies piecemeal less well.
+
+**Do it once per cell, on one kind, and record the choice.** `layers_in_window` was 1 in 23 of 23 reference
+reconciliations while `spill.ran` was true in 8 of 8 — the exact condition v2 cited for going to N=2, so that
+recommendation was dead text. Pick the kind that spills least (0–1) and run N=2 there; if no kind qualifies,
+record `layers_in_window_reason` saying so. It answers one question: does the advisor keep the interior layer
+boundary in L1? If it does, that is a directly attributable win worth `(N-1)/N` of the handoff cost
+(§`model_estimate.layer_handoff`) and justifies a larger N; if not, the DRAM hardcoding is not the binding
+constraint and the idea is closed cheaply. Requiring N≥2 everywhere is *not* the rule — it would cost every
+cell a re-capture to answer a question one cell can answer.
 
 ### 3. Reconcile — `scripts/reconcile.py`, once per layer kind
 
-Always pass **`--incumbent incumbent.json`**. Its `repeats_ms` give the harness noise floor, and without that
-number nothing below decides whether a measurement can mean anything.
+Always pass **`--incumbent incumbent.json`** *and* **`--ir shard_advise/<kind>/final_ir.mlir`**. The first
+gives the harness noise floor, without which nothing below decides whether a measurement can mean anything.
+The second is the advice itself: `report.json` is a summary that carries **no shard shape at all** and prints
+a multi-range `CoreRangeSet` as its first range only, so 58 % of its advised core counts are understated and a
+plan rebuilt from it cannot be implemented. Both files come out of the same capture.
 
 It partitions the measured window so that every device op lands in exactly one bucket and the buckets sum
-to 100 %: `chain`, `boundary`, `dram_resident`, `agrees_with_shipped`, `untraced`. It fails loudly rather
-than emitting a gap.
+to 100 %: `chain`, `boundary`, `dram_resident`, `advisor_unfixable`, `agrees_with_shipped`, `untraced`. It
+fails loudly rather than emitting a gap.
 
-Read four things out of it:
+**Record verdicts with `--evidence`, and never edit its output.** Write a small JSON keyed by chain id, cliff
+candidate or `<device>#<n>`, carrying the fields you measured, and regenerate the reconciliation with it. An
+unknown identifier is fatal, so a stale evidence file cannot annotate the wrong row. v2 had no such path —
+the tool wrote `verdict: pending`, the gate demanded it filled, and the skill forbade hand-editing — and the
+four cells that escaped that in four different ways were graded on *which* violation they chose.
 
+Read these out of it:
+
+- **`advised_plan`** — the advice as the advisor wrote it, with shard shapes, from the IR. This is what
+  candidate #1 is built from, and `advised_plan.unfixable_ops` is what to drop from it first.
+- **`cliff_candidates`** — material ops left on ≤2 cores where the advisor wants strictly more, ranked by
+  per-model µs, each with its legal ladder. **Screen these first.** Over the reference corpus this rule flags
+  5 of 14 cells, contains all three double-digit wins, and no unflagged cell produced one; it was then used to
+  *predict* an unscreened −12.44 %/layer win before measuring it. Ranking by it instead of by boundary value
+  moves the winning candidate to rank 1 in all four cells whose win was of this class, from 2nd/2nd/2nd and
+  4th-of-27. It costs no device time.
 - **the ranked chain list** — ordered by `advisor_removes_us` (the µs of shipped conversions the advice does
   *not* place on that edge), then by total conversion value; *never* by the advised ops' window share. A
   chain whose ops total under 1 % of the window can be worth several per cent once its DRAM round trips are
@@ -303,36 +410,86 @@ repeats. Non-overlap cannot resolve an effect smaller than that spread, however 
 |---|---|---|
 | `measurable` | some chains clear the floor | screen those individually, group the rest |
 | `aggregate_only` | the total clears the floor, no single chain does | **apply the top chains together as one candidate first.** Screening them one at a time returns zero regardless of the advice — record `combined_with` |
-| `not_measurable` | even the total is below the floor | **do not screen.** Tighten the harness (more replays per timed block) or report a contribution of zero *with this arithmetic as the reason*, marking chains `not_measurable` |
+| `regrid_only` | the **boundary** ceiling is under the floor, but an op is on the cliff | **screen `cliff_candidates`.** This is not a zero — see below |
+| `not_measurable` | the ceiling is under the floor **and** no op is on the cliff | **do not screen.** Report a contribution of zero *with this arithmetic as the reason*, marking chains `not_measurable` |
 | `unknown` | no `repeats_ms` | fix the incumbent first |
 
-This is the difference between a real zero and an unmeasurable one, and the gate fails a cell that keeps a
-chain while sitting below its own floor. In the reference corpus one cell had a ceiling of 0.65× its floor and
-shipped a win anyway; another had 4.31× with no single chain above 1×, screened one at a time, and reported no
-change.
+**The ceiling has two channels and only prices one of them.** It counts boundary conversions the advice does
+not place, so re-gridding an op that stays inside its own L1 chain removes no boundary and prices at exactly
+`0.000 µs` — while measuring up to 236.8 µs/layer on hardware. In the reference corpus **two of the three
+biggest wins came from cells whose ceiling said zero and whose every chain read `below_threshold`**, and a
+third cell trusted such a ceiling and published a zero over a −12.44 % win it had already written and shipped
+disabled. So a zero ceiling is a statement about one channel, never a stopping condition: if `cliff_ops` is
+non-zero you owe at least one screening before publishing anything.
 
-### 4. Screen, in the order the reconciliation gives
+⚠ **`below_threshold` is a dismissal, not a measurement.** 70 of the 134 chains dismissed that way in the
+reference corpus were ≥5× their own cell's noise floor. And note what a chain's µs is: its ops' *incumbent
+cost*, not the saving on offer — "57× the floor" means "a 1.7 % saving there would be measurable", not that a
+57× win exists.
 
-Each chain as one unit, one variable per measurement, against the frozen incumbent. Every chain ends with
-`repeats_ms` and a verdict, or `below_threshold` with its conversion value. Screen `dram_resident` rows
-too — *"leave this in DRAM"* is advice, and de-sharding an op has won here.
+⚠ **Do not try to rescue an overlap with more replays per block.** Measured: 250 → 1,800 replays per
+measurement made the noise floor **3–4× worse** (0.4–0.7 → 1.3–3.0 µs) and still did not separate the
+candidate. The `sqrt(ITERS)` argument assumes i.i.d. noise within a run; a longer window picks up slow drift,
+and drift does not average down. ~50 replays per block is near the sweet spot and 200 is past it. The term
+worth attacking is the **cross-process** one (step 1): re-measure in more independent processes at the same
+block size, and otherwise record `not_measurable` with its arithmetic rather than spending device time on it.
 
-Every kept candidate: its own op-level CSV as `perf_report`, **and its own correctness result** — the
-incumbent's oracle at the incumbent's own PCC bar, recorded per chain as `oracle_passed` / `oracle_pcc`, not
-inherited from the final winner. **A faster decoder that fails its oracle is a regression with a good number.**
+### 4. Screen, in the order `screening_order` gives
 
-**Why the oracle is load-bearing in a placement stage.** A resharding is arithmetically a no-op, so it is
-tempting to treat correctness as the previous stage's problem. It is not: **some ops compute the wrong answer
-under particular shard specs**, and changing placement is exactly what triggers such a bug. The failure is
-often partial — wrong on edge tiles or on some cores — so it shows up as a PCC that drops materially rather
-than as a crash. If a placement-only candidate moves PCC at all, do not tune the threshold: reject the
-candidate however fast it is, and report the op and the shard spec as a tt-metal bug. That is a real result
-of this stage, not a nuisance.
+The reconciliation emits it: the advised plan whole, then `cliff_candidates`, then `chains`, then the
+ablations. One variable per measurement, against the frozen incumbent, and everything measured records
+`repeats_ms`. A chain ends with a verdict or `below_threshold` with its conversion value. Screen
+`dram_resident` rows too — *"leave this in DRAM"* is advice, and de-sharding an op has won here.
 
-A **differential** oracle catches this well and cheaply: same weights on both sides, candidate against the
-frozen incumbent. Synthetic weights are adequate — a kernel that computes the wrong answer does so whatever
-the weight distribution — which is why this stage does not need real weights for placement work (step 4's
-`oracle_weights`).
+**Do not screen `advisor_unfixable` rows.** The advisor has already declared those ops unplaceable and given
+you the exact runtime error it got from tt-metal's own constraint machinery. In the reference corpus 41 of 54
+such declarations were screened anyway and cells recorded the identical error string back. If you believe a
+declaration is wrong, disprove it with an **isolated single-op test in the exact advised config** — not with
+a whole-decoder measurement.
+
+**DS-matmul advice: screen the buffer type, not the grid.** A `ds_family` agreement carries no grid
+information by design, and widening a DRAM-sharded matmul is a measured dead end — turning DS off on one
+decoder's projections, exactly the advisor's 12→77-core direction, was **+65.2 % slower**, and matmul
+widening won 1 of 7 measured attempts. DS matmuls are DRAM-bandwidth-bound, so core count is not the limiting
+resource. What *is* screenable is a change of buffer type or program config; one cell kept a `linear`
+12→55-core change worth 129 µs, so this is a default, not a prohibition.
+
+Every kept candidate: its own op-level CSV as `perf_report`, and its own correctness result.
+
+#### The correctness rule
+
+A resharding is arithmetically a no-op, so it is tempting to treat correctness as the previous stage's
+problem. It is not: **some ops compute the wrong answer under particular shard specs**, and changing
+placement is exactly what triggers such a bug. But the rule has to tell that failure apart from one thing it
+resembles and is not:
+
+| | signature | correct response |
+|---|---|---|
+| a kernel bug under a shard spec | PCC drops **materially**, in one direction | reject however fast it is, and file a tt-metal bug — that is a result |
+| floating-point **reassociation** | PCC moves in the last few decimals | benign, and **guaranteed** whenever a reduction's core count changes |
+
+v2 said "if a placement-only candidate moves PCC at all, reject it", which cannot make that distinction and
+made the highest-yield transformation in this stage permanently unshippable. **So:**
+
+> Build an **absolute** oracle: the candidate against a reference the change cannot move — the HuggingFace
+> layer, or the model's own functional decoder — at **the model's own PCC bar**, read out of the model's own
+> test. Do not invent a bar. Measure the **incumbent** against the same reference too. **Ship if the
+> candidate is within the bar and no worse than the incumbent.**
+>
+> A **differential** oracle against the frozen incumbent is a useful observation and must be recorded, but
+> it is **not a veto**. A differential delta that is large is the kernel-bug signal — and "large" means a
+> departure the absolute comparison also sees.
+
+Record `oracle_kind` (`absolute` | `differential`), `oracle_pcc_bar`, `oracle_bar_source` (the file:line the
+bar came from) and `incumbent_pcc_vs_reference`. The gate fails a bar tighter than the model's own test bar
+without a recorded justification.
+
+**Why this is a correctness change and not just a permissive one.** In the reference corpus one cell's
+shipped norm change moved a differential PCC by 0.0177 and shipped; another's moved it by 0.0000089 and was
+rejected — the rule punished the *less* perturbing change. And a differential oracle cannot tell which side
+moved: built absolutely for one discarded candidate, the candidate scored **0.99931** against the model's own
+bfloat16 reference and the **shipped incumbent 0.98347**, failing the model's 0.995 bar. The old rule can
+ship the less accurate configuration and reject the better one. It happened twice.
 
 Record **`oracle_weights`: `real` or `synthetic`**, and prefer real for anything you ship. Two traps the
 corpus fell into:
@@ -346,11 +503,10 @@ corpus fell into:
   tracing working — one cell reported PCC exactly 1.0 this way, and another shipped with
   `absolute_pcc_current_environment_passed: False`. Compare against a reference the change cannot move.
 
-In this corpus the oracle was exercised against an actual change in only three of nine cells; in the six
-no-change cells it was trivially satisfied. Treat it as unproven and be explicit about what yours covers.
-
-Screen DS-matmul advice **last**. It has not won a measurement in this corpus, and where it agrees with a
-shipped DS config there is nothing to screen.
+Note the second bullet is about the **veto**, not about recording: a differential comparison is still worth
+having, it just cannot be the thing that decides. And a per-layer PCC oracle is not a substitute for the
+model's own regression suite — in one cell a narrow oracle passed a candidate that violated the per-head norm
+contract, and only the broader optimized-decoder run caught it.
 
 ### 5. Decide by non-overlap
 
@@ -358,6 +514,31 @@ Ship a change iff **every candidate repeat beats every incumbent repeat**. No no
 This is only comparable across cells if n is fixed — the false-positive rate is `1/C(2n,n)`, so 5 % at
 n=3 against 0.40 % at n=5. **Confirm the winner in a fresh process** before shipping: cross-process
 variance is otherwise unmeasured, and per-process work happens once per process.
+
+**Prove the candidate is control-plus-one-knob.** Record the diff of the executed policy against the frozen
+policy and check it has **exactly one changed field**. Build the candidate policy with
+`dataclasses.replace` on the frozen one, never from a fresh constructor: the one cell that checked found its
+candidate policies had inherited constructor defaults and silently changed several dormant fields, and it had
+to remeasure six candidates and two confirmations. Fourteen cells never checked.
+
+**Record what the knob actually moves**, as `op_under_test: {name, incumbent_grid, candidate_grid,
+legal_ladder}` per screened candidate. Two arms of one reference model use the **same env knob name with
+different defaults** (88 in one, 8 in the other), so "the 88-core candidate" is a 1→88 change in one arm and an
+8→88 change in the other — and the two deltas look comparable while measuring different things. This field is
+what makes cross-arm comparison mean anything, and it makes the cliff check mechanical.
+
+**And record what the candidate assumes about shape**, as `candidate_shape_assumptions` per shipped knob: tile
+rows, divisibility, grid shape. The largest wins in the reference corpus are **batch-pinned by construction** —
+one norm memory config hardcodes a one-tile-row shard height, so at batch 64 it fails with
+`Shard height 32 must match physical height 64` and at batch 8 it fails at build — and nothing in `final.json`
+said so. A reader saw "−13.4 %/layer" with no hint that it evaporates off batch 32.
+
+⚠ **Do not "simplify" the protocol to eager timing.** Traced decode replay is not just what production does:
+for the highest-yield candidate class host and device costs move in **opposite** directions. A sharded norm
+adds ~46 µs of host dispatch and saves ~65 µs of device time, so it reads as a **+45.6 µs regression** eagerly
+and a **−65.2 µs win** under traced replay. Measured on two independent models — **an eager harness would have
+rejected every norm win in the reference corpus.** It is also why `*_profile` runs come out 1–3 % slower than
+their timed counterparts, and why mixing measurement modes produces contradictory rankings.
 
 ### 6. Combine across layer kinds — and decide on the full-model estimate
 
@@ -386,6 +567,13 @@ winners, not the union of one-kind-varied sets. The composite is arithmetic over
 series, so these cost no extra device time. Record every measured set with its `chains` (or `set`),
 `measured_ms`, `repeats_ms` and `oracle_passed`; ship the set that minimises the full-model estimate.
 
+**And products are required *within* a kind too, not only across kinds.** Once two or more candidates in the
+same kind each pass non-overlap and touch disjoint ops, **their product is a required candidate** — additivity
+is not predictable, the reference corpus has one super-additive and one sub-additive case, and in both the
+product beat every isolate (−13.24 % against a best isolate of −7.60 % on one cell; −2.82 % against −1.86 % on
+another). Only 2 of 15 cells built one, and both gained. This is the same measurement the apply-all-first order
+produces from the other direction; where both exist they should agree.
+
 **One thing the model estimate can expose that is not yours to fix.** `model_estimate.layer_handoff` reports
 whether the layer takes its input from DRAM while leaving its output in L1. If it does, consecutive layers do
 not hand off in L1 and that conversion is paid once per layer — 33.6 µs and 48.0 µs across the model in two
@@ -396,8 +584,22 @@ this is out of scope here: **report it upstream, do not screen it, and never boo
 ### 7. Ship
 
 Write the winner into `tt/optimized_decoder.py` and **keep every losing knob, default-off**, so rejected
-candidates stay re-measurable. `final.json`: `outcome`, `changed`, `final_ms`, `incumbent_ms`, `repeats_ms`, the winning config, the oracle,
-`iterations[]`, and the stage's **headline metric**, which nothing else computes for you:
+candidates stay re-measurable.
+
+**Keep the profile you already ran.** Save the op-level report for the frozen incumbent *and* for the shipped
+winner, with the full invocation — `--group-by category --summary-file … --stacked-csv …`, not just the plain
+CSV. It costs nothing extra: `tt-perf-report` already computes `Total %`, `Bound`, `Cores`, `DRAM %`, `FLOPs %`,
+an op-category split and per-op advice, and v2 read three columns of it. Only 1 of 15 cells kept a before/after
+pair, which is why op-level verification is impossible for the other 14 — and why the largest coverage win in
+that corpus still has no number attached. Report the category split (`Compute` / `TM` / `DM` / `Other`) for
+both, and split the non-compute share into **layout-induced** (tilize/untilize/typecast/fill-pad/
+interleaved↔sharded/reshard/copy) and **graph-structural** (permute/transpose/reshape/slice/concat/head-ops):
+only the first is reachable by a layout advisor, and the second belongs to `$optimize`. A high non-compute
+share is a hypothesis worth recording, not a threshold to fail on — and treat the tool's own per-op advice the
+same way: it says "increase grid size" for DS matmuls where widening measured +65 % slower.
+
+`final.json`: `outcome`, `changed`, `final_ms`, `incumbent_ms`, `repeats_ms`, the winning config, the oracle
+fields from step 4, `iterations[]`, and the stage's **headline metric**, which nothing else computes for you:
 
 ```json
 "model_estimate": {
@@ -417,8 +619,20 @@ the conservative sum is the honest one. If `after_us - before_us` is smaller tha
 breath — that is a result inside its own error bar. If nothing won, `after_us == before_us` and the stage ships
 the incumbent unchanged.
 
+Also required in `final.json`: **`advised_plan_verbatim`** — the apply-all candidate of step 4, with its own
+verdict and `measured_ms`, or `hard_error` naming the item that would not run and the single-op test that
+isolated it. "Not tried" and "tried and lost" must not look the same in the artefacts; in the reference corpus
+four cells never applied the advice and recorded no reason, and their output is indistinguishable from a
+measured rejection. And **`reachable_by_advisor`** (step 2), so a zero says which kind of zero it is.
+
 `README.md`: the accounting from step 3, what was screened with its number, what was not and why, and the
-unreachable share.
+unreachable share. **Say what you could not do**, in a field of its own: one reference cell's only knob drove
+the norm *and* the residual chain together, so a norm-only effect was not screenable in principle — a different
+result from "screened and found nothing", and nothing distinguished them.
+
+Artefact hygiene: **gzip the decision trace** and keep it — it is the only artefact that answers "why this
+grid", and one cell committed it uncompressed at 51 MB while another gzipped 118 MB to 7 MB. `.gitignore` the
+raw profiler dumps; two cells had to delete them by hand after a 1.2 GB push was rejected.
 
 ## Iterating
 
@@ -452,9 +666,18 @@ involved.
 
 ## What this stage cannot reach
 
-`ttnn.sparse_matmul` and the SSM / gated-delta ops are terminal in the tracer, so a model whose time is in
-its experts or its linear attention is largely invisible here — state the share rather than implying
-coverage.
+**Less than v2 thought — check before you record a blocker.** Coverage, not placement, was the largest single
+limiter in the reference corpus: on **nine cell/kinds the advisor was never shown the layer**, discarding 58 to
+77 % of the window before it got a look, and one of those cells published a flat zero that two tracer handlers
+later turned into 11 candidates worth 632 µs/model. All five real gaps are now closed, in the tracer pin this
+stage runs (`sparse_matmul`, mutable-state `ttnn.copy`, `paged_fused_update_cache`, `ones_like`, `pow`, plus
+`TracedTensor.__getitem__` and `repeat_interleave`). Of the ten ops cells recorded as blockers, **four already
+had handlers and one did not exist at all**. So: attempt the trace, read the traceback, and only then record a
+kind as unreachable — with its layer share.
+
+What genuinely remains: `rotary_embedding_hf` cannot be traced by the `interception` tracer at all (TTIR has
+only `rotary_embedding_llama`, which needs a `trans_mat` operand the HF op has no equivalent for), and
+`rearrange` needs its einops pattern parsed. Neither blocks a decoder this stage has met.
 
 **Conversion time this stage must leave alone.** DRAM round trips are the thing worth minimising, and
 `reconcile.py` splits them by who wants them. Only `us_advisor_drops` is yours to screen. Two other pots are
@@ -473,5 +696,18 @@ And one pot that is **unresolved, not out of scope**:
 
 Report `us_advisor_agrees` with its µs and hand it to `$optimize` — eliminating conversions the advisor does
 not propose is a better-paying activity than this stage, just a different experiment. Resolve `us_unresolved`
-rather than skipping it: the stage's bias rule says a suppressed candidate understates the contribution. Sweeping expert and norm grids **directly**, without the advisor, is a separate and often
-better-paying activity.
+rather than skipping it: the stage's bias rule says a suppressed candidate understates the contribution.
+
+**And rank the profile's own conversion ops independently of the advisor.** The worklist above is derived from
+the advice, so it inherits the advice's blind spots. The single largest number in the reference corpus was
+found this way and no advisor-derived list could have surfaced it: one decoder pays **3,983 µs/layer — 25 % of
+its layer — in tile↔row-major conversions**, 191 ms across the model, on ops *already spread over 109 of 110
+cores* and running at about **1 % of the memory roofline**. The advisor's ceiling for it is 0.000 µs and that
+is **correct** — the advice places those conversions too, because they are legally required — so the stage
+filed a quarter of a 27B model's decode time under `boundary`: reported, out of scope, uncredited. Both
+behaved correctly.
+
+So: list every conversion op in the profile by cost with its effective bandwidth, and report the top ones
+whatever the advisor thinks. A conversion moving 80 KB in 819 µs is a finding. **It is not yours to fix** — the
+cause there was a graph-shape choice, a 4-element convolution window sitting on the 32-wide tile axis, so the
+tiled form was 8× padded — but naming it is free and it goes to whoever owns the decoder.
