@@ -11,7 +11,10 @@ set_target_properties(
             api
 )
 
-set(api_headers neighbor_pad_halo.hpp halo_scatter.hpp)
+set(api_headers
+    neighbor_pad_halo.hpp
+    halo_scatter.hpp
+)
 file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
