@@ -88,9 +88,15 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    # Use dummy (random) 1-layer weights so we don't materialize the full 70B checkpoint twice
+    # (once in load_state_dict and once in reference_transformer). The tokenizer is created
+    # explicitly since TtModelArgs skips tokenizer creation when dummy_weights=True.
+    model_args = TtModelArgs(
+        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=True
+    )
     model_args.use_prefetcher = False
     model_args.n_layers = 1
+    model_args.tokenizer = model_args.create_tokenizer()
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     state_dict = model_args.load_state_dict()

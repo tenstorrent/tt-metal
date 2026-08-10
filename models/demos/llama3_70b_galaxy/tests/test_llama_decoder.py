@@ -55,6 +55,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
+    "generation_start_pos",
+    (0, 127),  # 127 exercises decode across the 127->128 KV-cache tile boundary
+    ids=("start_pos_0", "start_pos_127"),
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -70,6 +75,7 @@ def test_llama_decoder_inference(
     batch_size,
     paged_attention,
     page_params,
+    generation_start_pos,
     mesh_device,
     reset_seeds,
     ensure_gc,
@@ -101,7 +107,6 @@ def test_llama_decoder_inference(
     # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
     reference_model.decoder.to(torch.float32)
 
-    generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
 

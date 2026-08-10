@@ -61,11 +61,17 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize(
+    "generation_start_pos",
+    (0, 127),  # 127 exercises decode at the 127->128 KV-cache tile boundary
+    ids=("start_pos_0", "start_pos_127"),
+)
 def test_llama_attention_inference(
     max_seq_len,
     batch_size,
     paged_attention,
     page_params,
+    generation_start_pos,
     mesh_device,
     reset_seeds,
 ):
@@ -90,7 +96,6 @@ def test_llama_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
@@ -322,9 +327,13 @@ def test_llama_attention_inference(
                 ]
 
             for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length)
-                cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+                # The HF reference DynamicCache only stores the positions actually written by this
+                # test (appended order 0..generation_length-1), whereas the TT cache is a fixed
+                # buffer indexed by absolute position. Compare the written window in each so we can
+                # exercise a non-zero start position (e.g. the 127->128 tile boundary).
+                num_written = min(generation_length, model_args.max_seq_len - generation_start_pos)
+                cache_pt = cache_pt[:, :, 0:num_written, :]
+                cache_tt = cache_tt[:, :, generation_start_pos : generation_start_pos + num_written, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
                 if i == 0:
                     logger.info(f"K cache output: {output_pcc}")

@@ -560,8 +560,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     try:
         param = request.param
     except (ValueError, AttributeError):
-        # Get number of devices from the system mesh descriptor.
-        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        # No explicit parametrization; fall back to the system mesh size resolved below.
+        param = None
 
     # The mesh that open_mesh_device can actually allocate is bounded by the system mesh exposed
     # by the control plane, which may be smaller than the number of physical chips. For example,
@@ -570,7 +570,17 @@ def mesh_device(request, silicon_arch_name, device_params):
     # Comparing only against get_num_devices() would let the test proceed and then crash inside
     # open_mesh_device with a TT_FATAL; also accounting for the system mesh size lets us skip
     # gracefully on such machines instead.
-    system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    #
+    # Query the system mesh once, guarded: on hosts where control-plane / mesh-graph discovery
+    # itself throws (missing descriptor, untrained eth links, ...) we skip gracefully at setup
+    # instead of erroring out every parametrized test.
+    try:
+        system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    except Exception as e:
+        pytest.skip(f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}")
+
+    if param is None:
+        param = system_mesh_size
 
     if isinstance(param, tuple):
         grid_dims = param

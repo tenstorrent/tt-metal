@@ -580,6 +580,9 @@
 - name: Llama 3.3-70B unit tests (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    # Fail fast (runner-health) if the system mesh degraded below 32 chips: otherwise the mesh_device
+    # fixture skips every test and the job reports a false-green with no HF/device path exercised.
+    python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Galaxy system mesh degraded to {s} chips (expected 32); failing instead of skipping every test'"
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
