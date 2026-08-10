@@ -35,6 +35,11 @@ instead of assuming.
 
 from __future__ import annotations
 
+import glob
+import json
+import struct
+from pathlib import Path
+
 # ttnn dtype -> bytes per element. bfloat8_b and bfloat4_b are BLOCK formats: a shared exponent per
 # 16-element tile adds 1/16 of a byte to each element, which is why they are 1.0625 and 0.5625 rather
 # than 1 and 0.5. Getting that wrong understates a bf8 model's bytes by 6%.
@@ -85,9 +90,44 @@ def bytes_per_elem(dt) -> float:
     return _DTYPE_BYTES.get(dtype_name(dt), 0.0)
 
 
+def _on_device(t) -> bool:
+    """Is this tensor resident on the CHIP, or a host copy that merely looks like one?
+
+    THE CEILING DIVIDES BY WHAT THE CHIP READS. A torch tensor has .shape and .dtype exactly as a
+    ttnn one does, so "anything with a shape is a tensor" counted host memory as device memory.
+    voxtral loads its weights with dtype=torch.float32 and keeps that copy alive on the HOST while
+    the device holds bf16 -- so the census reported 29.96 GB for a model whose device footprint is
+    about 11.3, and a width of 2.9076 B/param that no device tensor has. The fp32 half is real
+    waste, but it is host RAM: the chip never streams it and it cannot slow a token down.
+
+    Asked of the tensor rather than inferred from its dtype: a device tensor answers storage_type()
+    or device(), a torch one does not. Inferring from dtype would be the same class of mistake --
+    fp32 is legal on device, and bf16 is legal on the host.
+    """
+    # storage_type() FIRST, and its VALUE, not its existence. torch.Tensor carries a `.device`
+    # attribute too -- it just says `cpu` -- so "has a device attribute" passed every host tensor and
+    # the filter changed nothing: voxtral still reported 29.96 GB with 18.7 GB of host fp32 in it.
+    # Presence of a name is not residency; the answer has to be read.
+    st = getattr(t, "storage_type", None)
+    if st is not None:
+        try:
+            return "DEVICE" in str(st() if callable(st) else st).upper()
+        except Exception:  # noqa: BLE001
+            return False
+    dev = getattr(t, "device", None)
+    if dev is not None:
+        try:
+            return "CPU" not in str(dev() if callable(dev) else dev).upper()
+        except Exception:  # noqa: BLE001 -- a host tensor may define the name and raise
+            return False
+    return False
+
+
 def _tensor_entry(t):
     """(numel, dtype_name) for one device tensor, or None if it is not one."""
     try:
+        if not _on_device(t):
+            return None
         shape = getattr(t, "shape", None) or getattr(t, "padded_shape", None)
         dt = getattr(t, "dtype", None) or getattr(t, "get_dtype", lambda: None)()
         if shape is None or dt is None:
@@ -136,7 +176,65 @@ def _walkable(obj) -> bool:
     return not isinstance(obj, _NEVER_WALK)
 
 
-def census(root, scope: str = "model", max_nodes: int = 2_000_000) -> dict:
+_FAILED_CHECKPOINT: list = []
+
+
+def checkpoint_numels(model_id_or_dir) -> set:
+    """Element counts of every tensor in the model's checkpoint. Empty when it cannot be read.
+
+    THE ARCHITECTURE-INDEPENDENT WAY TO TELL A WEIGHT FROM SCRATCH. A weight was loaded from the
+    file on disk; a KV cache, an accumulator, a staging buffer is allocated at runtime and exists
+    nowhere in it. That distinction needs no knowledge of attention, Mamba state or paged blocks --
+    it is true of every model, including ones not written yet.
+
+    The alternatives were tried and are worse. Matching by SHAPE encodes what a KV cache looks like,
+    which is an assumption: paged KV has different dimensions and Mamba has no KV at all. Skipping by
+    ATTRIBUTE NAME failed outright -- the caches are reachable from the layers as well as from
+    `generator.tt_kv_cache`, so cutting one attribute left them in the walk.
+
+    Matched on element COUNT rather than name or shape, because a tensor is transposed, tile-padded
+    and sharded on its way to the chip -- its name and shape need not survive, but its size usually
+    does. gemma-3's checkpoint has 1065 tensors in only 13 distinct sizes, and its KV cache size
+    (67,108,864) appears in none of them.
+    """
+    out: set = set()
+    try:
+        pats = [str(model_id_or_dir)]
+        if not str(model_id_or_dir).endswith(".safetensors"):
+            pats = [
+                str(Path(model_id_or_dir) / "*.safetensors"),
+                str(Path(model_id_or_dir) / "snapshots" / "*" / "*.safetensors"),
+            ]
+        files = sorted({f for p in pats for f in glob.glob(p)})
+        for f in files:
+            with open(f, "rb") as fh:
+                n = struct.unpack("<Q", fh.read(8))[0]
+                if n <= 0 or n > 200_000_000:
+                    continue
+                hdr = json.loads(fh.read(n))
+            for name, meta in hdr.items():
+                if name == "__metadata__" or not isinstance(meta, dict):
+                    continue
+                shape = meta.get("shape") or []
+                if not shape:
+                    continue
+                numel = 1
+                for d in shape:
+                    numel *= int(d)
+                if numel > 0:
+                    out.add(numel)
+    except Exception as exc:  # noqa: BLE001
+        # LOUD, NOT EMPTY. Returning set() here means "no checkpoint", which the caller reads as
+        # "cannot split" and every tensor is then counted as a weight -- the exact answer a crash
+        # should not be able to produce. This swallowed a NameError (Path had been stripped as an
+        # unused import) and reported a clean split of 0 scratch tensors on a model with 764 fp32
+        # buffers.
+        _FAILED_CHECKPOINT.append("%s: %s" % (type(exc).__name__, str(exc)[:100]))
+        return set()
+    return out
+
+
+def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=None) -> dict:
     """Walk `root` and record every device tensor reachable from it.
 
     Returns {"weight_tensors": [{numel, dtype}], "weight_bytes": int, "scope": str,
@@ -151,8 +249,13 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000) -> dict:
     set: models share tensors (tied embeddings, a weight referenced from two modules) and counting
     one twice inflates the byte total exactly as much as missing one deflates it.
     """
+    # A tensor whose element count matches nothing in the checkpoint was made at runtime: KV cache,
+    # accumulator, staging copy. Only weights belong in the width the ceiling multiplies by a PARAM
+    # count -- mixing the two is averaging apples and oranges then multiplying by the apples.
+    ckpt = checkpoint_numels(checkpoint) if checkpoint else set()
     seen: set = set()
     tensors: list = []
+    scratch: list = []
     unknown = 0
     queue = [root]
     nodes = 0
@@ -167,7 +270,8 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000) -> dict:
         if entry is not None:
             n, name = entry
             if bytes_per_elem(name) > 0:
-                tensors.append({"numel": int(n), "dtype": name})
+                entry = {"numel": int(n), "dtype": name}
+                (tensors if (not ckpt or int(n) in ckpt) else scratch).append(entry)
             else:
                 unknown += 1
             continue
@@ -201,6 +305,7 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000) -> dict:
     # by a param count the tool already trusts it gives the real byte figure for a mixed-precision
     # model: a checkpoint served part bf8 and part bf4 comes out at neither, but at what it is.
     elems = sum(t["numel"] for t in tensors)
+    scratch_bytes = sum(t["numel"] * bytes_per_elem(t["dtype"]) for t in scratch)
     per_param = (total / elems) if elems else 0.0
     return {
         "weight_tensors": tensors,
@@ -208,6 +313,9 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000) -> dict:
         "scope": scope,
         "bytes_per_param": round(per_param, 6),
         "resident_elems": int(elems),
+        "scratch_tensors": len(scratch),
+        "scratch_bytes": int(round(scratch_bytes)),
+        "checkpoint_matched": bool(ckpt),
         "unknown_dtype_tensors": unknown,
         "complete": unknown == 0 and bool(tensors),
         "source": "device census (built model)",

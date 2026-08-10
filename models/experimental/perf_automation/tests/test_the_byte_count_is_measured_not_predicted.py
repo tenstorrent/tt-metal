@@ -46,8 +46,15 @@ class _DT:
 
 
 class _T:
+    """A DEVICE-resident tensor. storage_type() is what tells the census this is on the chip -- a
+    torch tensor carries .shape and .dtype identically, and counting those reported voxtral at
+    29.96 GB against a real device footprint of ~11.3, at a width no device tensor has."""
+
     def __init__(self, shape, dt):
         self.shape, self.dtype = shape, dt
+
+    def storage_type(self):
+        return "DEVICE"
 
 
 # ---------------------------------------------------------------- r1 THE CENSUS
@@ -216,6 +223,9 @@ def test_the_mix_is_reported_so_the_average_can_be_checked():
         def __init__(self, sh, dt):
             self.shape, self.dtype = sh, dt
 
+        def storage_type(self):
+            return "DEVICE"
+
     class _M:
         def __init__(self):
             self.a = [_T((64, 64), _DT("BFLOAT8_B")) for _ in range(3)]
@@ -223,3 +233,61 @@ def test_the_mix_is_reported_so_the_average_can_be_checked():
 
     m = marker(census(_M()))
     assert "bytes_per_param=" in m and "bfloat8_b:3" in m and "bfloat4_b:1" in m
+
+
+# --- resident on the CHIP, not merely shaped like a tensor --------------------------------------
+
+
+class _HostT:
+    """A torch-style HOST tensor: identical duck type, no device."""
+
+    def __init__(self, shape, dt):
+        self.shape, self.dtype = shape, dt
+
+
+def test_a_host_copy_is_not_counted_as_device_bytes():
+    """THE VOXTRAL CASE. Its pipeline loads weights with dtype=torch.float32 and keeps that copy
+    alive on the HOST while the device holds bf16. `anything with .shape and .dtype is a tensor`
+    counted both, reporting 29.96 GB for a model whose device footprint is ~11.3 GB and a width of
+    2.9076 B/param that no device tensor has.
+
+    The fp32 half is real waste -- 18.7 GB of host RAM held for nothing -- but the chip never
+    streams it, so it cannot slow a token down and must not enter the ceiling."""
+    from agent.weight_census import census
+
+    class _M:
+        def __init__(self):
+            self.dev = [_T((4096, 4096), _DT("BFLOAT16")) for _ in range(10)]
+            self.hf = [_HostT((4096, 4096), "torch.float32") for _ in range(10)]
+
+    c = census(_M())
+    assert len(c["weight_tensors"]) == 10, "host copies were counted"
+    assert abs(c["bytes_per_param"] - 2.0) < 1e-9, c["bytes_per_param"]
+    assert abs(c["weight_bytes"] - 10 * 4096 * 4096 * 2) < 1
+
+
+def test_residency_is_asked_of_the_tensor_not_inferred_from_dtype():
+    """fp32 is legal on device and bf16 is legal on the host, so dtype says nothing about where a
+    tensor lives. Inferring from it would be the same class of mistake one level along."""
+    from agent.weight_census import census
+
+    class _M:
+        def __init__(self):
+            self.on_dev_fp32 = _T((1024, 1024), _DT("FLOAT32"))
+            self.on_host_bf16 = _HostT((1024, 1024), "torch.bfloat16")
+
+    c = census(_M())
+    assert [t["dtype"] for t in c["weight_tensors"]] == ["float32"], c["weight_tensors"]
+
+
+def test_a_tensor_whose_device_probe_raises_is_treated_as_host():
+    """Failing closed: an object that defines the name and raises has not shown it is on device."""
+    from agent.weight_census import census
+
+    class _Angry:
+        shape, dtype = (8, 8), "torch.float32"
+
+        def storage_type(self):
+            raise RuntimeError("no device")
+
+    assert census(_Angry())["weight_tensors"] == []
