@@ -41,22 +41,20 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
-            ckl::OptionalChainElement<
+            ckl::IterationShape::tiles(onetile),
+            ckl::Optional<
                 has_bcast,
                 ckl::BinaryFpu<
-                    ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::input(dfb_in0_id),
                     ckl::BinaryFpuOp::Add,
-                    bcast_dim>>{},
-            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<ckl::input(dfb_in0_id)>>{},
+                    ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(dfb_in0_id, bcast_dim)>>{},
+            ckl::Optional<!has_bcast, ckl::CopyTile<ckl::input(dfb_in0_id)>>{},
             ckl::PackTile<ckl::output(dfb_intermed0_id)>{});
 
         ckl::mul<
             ckl::input(dfb_intermed0_id),
-            ckl::input(dfb_scalar_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(dfb_out0_id),
-            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(dfb_scalar_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_out0_id)>(ckl::IterationShape::tiles(onetile));
     }
     dfb_in1_obj.pop_front(onetile);
 }

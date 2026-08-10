@@ -9,8 +9,8 @@
  *
  * Every element-wise compute pattern (FPU binary, SFPU unary/binary/ternary, dest-reuse, copy,
  * pack, fill, rand, unary broadcast) is expressed as a sequence of chain elements passed to
- * `eltwise_chain(shape, elem0, elem1, ...)` (shape is an `EltwiseShape`, e.g.
- * `EltwiseShape::tiles(num_tiles)`).
+ * `eltwise_chain(shape, elem0, elem1, ...)` (shape is an `IterationShape`, e.g.
+ * `IterationShape::tiles(num_tiles)`).
  *
  * The chain owns, per call:
  *   - the dst-sync window (`tile_regs_acquire/commit/wait/release`);
@@ -48,14 +48,14 @@
  * Examples
  * --------
  *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
- *   eltwise_chain(EltwiseShape::tiles(num_tiles),
+ *   eltwise_chain(IterationShape::tiles(num_tiles),
  *       CopyTile<input(dfb_in)>{},
  *       Exp<>{},
  *       PackTile<output(dfb_out)>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
- *   eltwise_chain(EltwiseShape::tiles(num_tiles),
- *       BinaryFpu<input(dfb_a), input(dfb_b), BinaryFpuOp::Add>{},
+ *   eltwise_chain(IterationShape::tiles(num_tiles),
+ *       BinaryFpu<BinaryFpuOp::Add, input(dfb_a), input(dfb_b)>{},
  *       PackTile<output(dfb_out)>{});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
@@ -100,70 +100,71 @@ enum class BlockTailSync : uint8_t {
 ///
 /// The tag is carried by the factory return type rather than stored in the runtime shape, so
 /// APIs can reject dimensionally meaningless combinations without adding a device-side field.
-enum class EltwiseShapeKind : uint8_t {
+enum class IterationShapeKind : uint8_t {
     Tiles,  // one contiguous 1D tile sequence
     Grid,   // a 2D row/column walk, including grid(1, W)
 };
 
-template <EltwiseShapeKind Kind>
-struct TypedEltwiseShape;
+template <IterationShapeKind Kind>
+struct TypedIterationShape;
 
-/// Iteration shape for `eltwise_chain`. Carries the tile grid (Ht × Wt, both in tiles), the
-/// per-outer-iter `block_size`, and the tail synchronization policy. Ht=1 expresses the 1D case
-/// (no row axis, plain linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but
-/// remain well-defined.
+/// Looping shape for `eltwise_chain`. `Ht`, `Wt`, and `block_size` describe how the chain driver
+/// iterates and groups its work; they do not necessarily equal the number of tiles present on any
+/// input or output. Operand indexing and lifecycle policies may pin, reuse, accumulate, or defer
+/// tiles independently of this iteration space. Ht=1 expresses the 1D case (no row axis, plain
+/// linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but remain well-defined.
 ///
 /// Factories cover the common construction paths:
-///   - `EltwiseShape::tiles(n)`           — 1D, block_size = 1
-///   - `EltwiseShape::tiles(n, blk)`      — 1D + block
-///   - `EltwiseShape::tiles(n, blk, BlockTailSync::FullBlock)`
+///   - `IterationShape::tiles(n)`           — 1D, block_size = 1
+///   - `IterationShape::tiles(n, blk)`      — 1D + block
+///   - `IterationShape::tiles(n, blk, BlockTailSync::FullBlock)`
 ///                                       — 1D fixed-size physical blocks
-///   - `EltwiseShape::grid(H, W)`         — 2D, block_size = 1
-///   - `EltwiseShape::grid(H, W, blk)`    — 2D + block
-///   - `EltwiseShape::grid(H, W, blk, BlockTailSync::FullBlock)`
+///   - `IterationShape::grid(H, W)`         — 2D, block_size = 1
+///   - `IterationShape::grid(H, W, blk)`    — 2D + block
+///   - `IterationShape::grid(H, W, blk, BlockTailSync::FullBlock)`
 ///                                       — 2D row-blocked fixed-size physical blocks
 ///
 /// Construction from a tile count is `explicit`: a bare number is NOT accepted as a
-/// shape — call sites must spell the iteration shape out as `EltwiseShape::tiles(n)`
-/// (or `EltwiseShape::single()` for one tile). This keeps `eltwise_chain(...)` and the
+/// shape — call sites must spell the iteration shape out as `IterationShape::tiles(n)`
+/// (or `IterationShape::one_tile()` for one tile). This keeps `eltwise_chain(...)` and the
 /// convenience wrappers from silently treating a stray integer as a tile count.
 ///
-/// `of/row/col/single` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
-struct EltwiseShape {
+/// `of/row/col/one_tile` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
+struct IterationShape {
     uint32_t Ht;
     uint32_t Wt;
     uint32_t block_size;
     BlockTailSync tail_sync;
 
-    constexpr EltwiseShape(
+    constexpr IterationShape(
         uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
 
-    // Explicit: bare numbers are forbidden at call sites. Use EltwiseShape::tiles(n) or
-    // EltwiseShape::single() so the iteration shape is always written out.
-    explicit constexpr EltwiseShape(uint32_t n_tiles);
+    // Explicit: bare numbers are forbidden at call sites. Use IterationShape::tiles(n) or
+    // IterationShape::one_tile() so the iteration shape is always written out.
+    explicit constexpr IterationShape(uint32_t n_tiles);
 
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> tiles(
+    static constexpr TypedIterationShape<IterationShapeKind::Tiles> tiles(
         uint32_t n, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> grid(
+    static constexpr TypedIterationShape<IterationShapeKind::Grid> grid(
         uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
 
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> of(uint32_t r, uint32_t c);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> row(uint32_t c);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> col(uint32_t r);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> single();
+    static constexpr TypedIterationShape<IterationShapeKind::Grid> of(uint32_t r, uint32_t c);
+    static constexpr TypedIterationShape<IterationShapeKind::Grid> row(uint32_t c);
+    static constexpr TypedIterationShape<IterationShapeKind::Grid> col(uint32_t r);
+    static constexpr TypedIterationShape<IterationShapeKind::Tiles> one_tile();
 };
 
 /// Zero-overhead factory tag around the common runtime shape payload.
 ///
 /// `eltwise_chain_impl` still accepts the untyped base, so Kind affects only the thin public
 /// validation wrapper and does not multiply the core walk implementation.
-template <EltwiseShapeKind Kind>
-struct TypedEltwiseShape : EltwiseShape {
-    static constexpr EltwiseShapeKind kind = Kind;
+template <IterationShapeKind Kind>
+struct TypedIterationShape : IterationShape {
+    static constexpr IterationShapeKind kind = Kind;
 
-    constexpr TypedEltwiseShape(
+    constexpr TypedIterationShape(
         uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles) :
-        EltwiseShape(H, W, blk, tail_sync) {}
+        IterationShape(H, W, blk, tail_sync) {}
 };
 
 /// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
@@ -174,7 +175,7 @@ struct TypedEltwiseShape : EltwiseShape {
 ///   // To hoist the setup out of your own loop: emit it ONCE before the loop yourself (e.g. the
 ///   // original raw *_init call), then hand ownership to the caller so the chain skips it:
 ///   <emit the chain's one-time setup once, before the loop>
-///   for (...) eltwise_chain<InitReconfigOwner::Caller>(EltwiseShape::single(), elts...);
+///   for (...) eltwise_chain<InitReconfigOwner::Caller>(IterationShape::one_tile(), elts...);
 ///
 /// InitReconfigOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
 /// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
@@ -212,7 +213,7 @@ enum class InitReconfigOwner {
 // 1b. Input and output CB synchronization policies
 // =============================================================================
 
-/// `PerBlockSize` synchronizes a CB once per `EltwiseShape::block_size` group. It is unrelated to
+/// `PerBlockSize` synchronizes a CB once per `IterationShape::block_size` group. It is unrelated to
 /// `OperandKind::Block`, which controls how an input tile index maps onto the output shape. On a
 /// partial final group, `BlockTailSync` selects whether the synchronized count is the valid
 /// remainder or the full `block_size`.
@@ -301,6 +302,19 @@ enum class DestAccumulation : uint8_t {
 /// ReLU applied by the packer before writing an output tile.
 enum class PackRelu : bool { Disabled = false, Zero = true };
 
+/// Intra-tile broadcast applied to an FPU binary's srcB operand. Mirrors
+/// `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
+///
+/// The dim names the axis being broadcast, not the axis that was reduced. A REDUCE_ROW result is
+/// column-shaped (N,1) and broadcasts back across columns via `BroadcastDim::Col`; a REDUCE_COL
+/// result (1,M) uses `BroadcastDim::Row`.
+enum class BroadcastDim : uint8_t {
+    None = 0,
+    Col = 1,
+    Row = 2,
+    Scalar = 3,
+};
+
 // =============================================================================
 // 1d. Grouped operand configuration
 // =============================================================================
@@ -314,6 +328,13 @@ struct InputSpec {
     OperandKind index;
     DataFormatReconfig reconfig;
     TileOffset offset;
+};
+
+/// Binary-FPU srcB configuration. Broadcast is kept out of `InputSpec` because ordinary inputs
+/// (CopyTile, SFPU operands, unary broadcast, and srcA) cannot consume this FPU-specific state.
+struct BinaryFpuInputSpec {
+    InputSpec input_spec;
+    BroadcastDim broadcast;
 };
 
 struct OutputSpec {
@@ -339,6 +360,27 @@ constexpr InputSpec input(
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
 constexpr InputSpec input(
     uint32_t cb_id, WaitPolicy wait, PopPolicy pop, OperandKind index, TileOffset offset) noexcept;
+
+/// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
+/// an existing InputSpec makes compile-time helper-produced input configurations composable.
+constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept;
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id,
+    BroadcastDim broadcast,
+    WaitPolicy wait = WaitPolicy::PerTile,
+    PopPolicy pop = PopPolicy::PerTile,
+    OperandKind index = OperandKind::Scalar,
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileOffset offset = TileOffset::Unset) noexcept;
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    OperandKind index,
+    TileOffset offset) noexcept;
 
 /// Bind one output buffer id to its configuration.
 /// Defaults: reserve/push per tile, reconfig enabled, no accumulation, no pack ReLU,
@@ -383,13 +425,13 @@ enum class Dst : uint32_t {
 constexpr uint32_t to_u32(Dst s) noexcept;
 
 // =============================================================================
-// 3. Block size — `EltwiseShape::block_size` semantics
+// 3. Block size — `IterationShape::block_size` semantics
 // =============================================================================
 //
 // Op-struct template-param enums (Approx / Legacy) live in op_params.hpp — they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
-/// Block size. Carried by `EltwiseShape` (the `blk` arg of `EltwiseShape::tiles(n, blk)` /
+/// Block size. Carried by `IterationShape` (the `blk` arg of `IterationShape::tiles(n, blk)` /
 /// `grid(H, W, blk)`), passed as the shape to `eltwise_chain(shape, ...)`. Each full outer iter
 /// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
 /// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape. A partial final
@@ -410,23 +452,6 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
-/// FPU broadcast dimension. Caller MUST pass explicitly — no inference. Mirrors
-/// `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
-///
-/// `BinaryFpu<input(CbA), input(CbB), ...>` always applies this intra-tile broadcast to operand B (`CbB`);
-/// operand A is never the broadcast source. This is independent of each operand's `OperandKind`,
-/// which only selects the tile index read during the (Ht x Wt) walk.
-///
-/// The dim names which axis is BROADCAST, not which was reduced. A REDUCE_ROW result is
-/// column-shaped (N,1) and broadcasts back across columns via `BroadcastDim::Col`; a
-/// REDUCE_COL result (1,M) uses `BroadcastDim::Row`.
-enum class BroadcastDim : uint8_t {
-    None = 0,
-    Col = 1,
-    Row = 2,
-    Scalar = 3,
-};
-
 /// DestReuseBinary side selector.
 enum class DestReuseType : uint8_t {
     DEST_TO_SRCA,  // CB → srcb, DEST → srca
@@ -438,6 +463,11 @@ enum class DestReuseType : uint8_t {
 // =============================================================================
 
 namespace detail {
+
+constexpr InputSpec binary_fpu_input_spec(InputSpec input_spec) noexcept;
+constexpr InputSpec binary_fpu_input_spec(BinaryFpuInputSpec input_spec) noexcept;
+constexpr BroadcastDim binary_fpu_broadcast(InputSpec input_spec) noexcept;
+constexpr BroadcastDim binary_fpu_broadcast(BinaryFpuInputSpec input_spec) noexcept;
 
 constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept;
 
@@ -464,16 +494,21 @@ template <InputSpec Input, Dst DstSlot = Dst::D0>
 using CopyTile = detail::CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits(DstSlot, Input)>;
 
 template <
+    BinaryFpuOp Op,
     InputSpec AInput,
-    InputSpec BInput,
-    BinaryFpuOp Op = BinaryFpuOp::Add,
-    BroadcastDim Bcast = BroadcastDim::None,
+    auto BInput,
     Dst DstSlot = Dst::D0,
     DestAccumulation Accumulation = DestAccumulation::Disabled>
 using BinaryFpu = detail::BinaryFpuImpl<
     AInput.cb_id,
-    BInput.cb_id,
-    detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot, Accumulation)>;
+    detail::binary_fpu_input_spec(BInput).cb_id,
+    detail::binary_fpu_config_bits(
+        Op,
+        detail::binary_fpu_broadcast(BInput),
+        AInput,
+        detail::binary_fpu_input_spec(BInput),
+        DstSlot,
+        Accumulation)>;
 
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
@@ -496,11 +531,11 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 // one boot per stage for multi-stage kernels); the chain owns only per-element init.
 
 /// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
-/// `EltwiseShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1),
+/// `IterationShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1),
 /// `tiles(n, blk, BlockTailSync::FullBlock)` for a fixed-block 1D CB contract, or
 /// `grid(H, W, blk, BlockTailSync::FullBlock)` for a row-blocked 2D contract.
-/// A bare number is not accepted — write `EltwiseShape::tiles(n)` (or
-/// `EltwiseShape::single()` for one tile) so the iteration shape is always explicit.
+/// A bare number is not accepted — write `IterationShape::tiles(n)` (or
+/// `IterationShape::one_tile()` for one tile) so the iteration shape is always explicit.
 ///
 /// Compile-time validation static_asserts on: illegal (Policy × IndexMode) cells,
 /// duplicate upfront CBs across CB-readers, colliding pack writes, and hoist requested on
@@ -510,8 +545,8 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; Streaming chains clamp block_size to 1.
 /// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.
-template <InitReconfigOwner Owner = InitReconfigOwner::Chain, EltwiseShapeKind Kind, class... Es>
-ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts);
+template <InitReconfigOwner Owner = InitReconfigOwner::Chain, IterationShapeKind Kind, class... Es>
+ALWI void eltwise_chain(TypedIterationShape<Kind> shape, Es... elts);
 
 }  // namespace compute_kernel_lib
 

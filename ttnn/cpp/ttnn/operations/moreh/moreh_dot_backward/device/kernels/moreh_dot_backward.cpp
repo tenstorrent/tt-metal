@@ -24,26 +24,34 @@ void kernel_main() {
             ckl::mul<
                 ckl::input(
                     dfb::in2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    dfb::in0,
+                    ckl::BroadcastDim::Scalar,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb::out0,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile));
         }
 
         if (has_other_grad) {
             ckl::mul<
                 ckl::input(
                     dfb::in1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    dfb::in0,
+                    ckl::BroadcastDim::Scalar,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb::out1,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile));
         }
     }
 }

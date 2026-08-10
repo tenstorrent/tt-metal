@@ -26,29 +26,29 @@
 
 namespace compute_kernel_lib {
 
-constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) :
+constexpr IterationShape::IterationShape(uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) :
     Ht(H), Wt(W), block_size(blk), tail_sync(tail_sync) {}
 
-constexpr EltwiseShape::EltwiseShape(uint32_t n_tiles) :
+constexpr IterationShape::IterationShape(uint32_t n_tiles) :
     Ht(1), Wt(n_tiles), block_size(1), tail_sync(BlockTailSync::ValidTiles) {}
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(
+constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::tiles(
     uint32_t n, uint32_t blk, BlockTailSync tail_sync) {
     return {1, n, blk, tail_sync};
 }
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::grid(
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::grid(
     uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) {
     return {H, W, blk, tail_sync};
 }
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::row(uint32_t c) { return {1, c, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::row(uint32_t c) { return {1, c, 1}; }
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::col(uint32_t r) { return {r, 1, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::col(uint32_t r) { return {r, 1, 1}; }
 
-constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::single() { return {1, 1, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::one_tile() { return {1, 1, 1}; }
 
 constexpr bool is_legal_input_policy(WaitPolicy wait, PopPolicy pop) noexcept {
     switch (wait) {
@@ -247,6 +247,36 @@ constexpr InputSpec input(
     return input(cb_id, wait, pop, index, DataFormatReconfig::Enabled, offset);
 }
 
+constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept {
+    return {input_spec, broadcast};
+}
+
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    OperandKind index,
+    DataFormatReconfig reconfig,
+    TileOffset offset) noexcept {
+    return {input(cb_id, wait, pop, index, reconfig, offset), broadcast};
+}
+
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept {
+    return input(input(cb_id, wait, pop, reconfig), broadcast);
+}
+
+constexpr BinaryFpuInputSpec input(
+    uint32_t cb_id,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    OperandKind index,
+    TileOffset offset) noexcept {
+    return input(input(cb_id, wait, pop, index, offset), broadcast);
+}
+
 constexpr OutputSpec output(
     uint32_t cb_id,
     ReservePolicy reserve,
@@ -272,6 +302,14 @@ constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy pu
 }
 
 namespace detail {
+
+constexpr InputSpec binary_fpu_input_spec(InputSpec input_spec) noexcept { return input_spec; }
+
+constexpr InputSpec binary_fpu_input_spec(BinaryFpuInputSpec input_spec) noexcept { return input_spec.input_spec; }
+
+constexpr BroadcastDim binary_fpu_broadcast(InputSpec /*input_spec*/) noexcept { return BroadcastDim::None; }
+
+constexpr BroadcastDim binary_fpu_broadcast(BinaryFpuInputSpec input_spec) noexcept { return input_spec.broadcast; }
 
 struct CopyTileConfig {
     using DstField = ConfigField<Dst, first_config_bit, Dst::D15>;
@@ -1357,7 +1395,7 @@ struct EltwiseChain {
 
 // chain_lane_width — N-element fold. Max of per-element `lane_width`. The chain clamps block_size
 // at runtime so `block_size * chain_lane_width <= DEST_AUTO_LIMIT` (block_size is a runtime
-// EltwiseShape field, so this is a clamp, not a static_assert). Each element writes to
+// IterationShape field, so this is a clamp, not a static_assert). Each element writes to
 // DEST[dst_slot + j * chain_lane_width] for lane j in [0, block_size).
 //
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
@@ -2869,7 +2907,7 @@ ALWI void emit_push_per_row(uint32_t cb) {
 // once, before its own loop, so this call is pure per-tile compute. InitReconfigOwner is about WHO emits
 // the hoistable setup — it never changes which init is hoistable (that's deduced from uniformity).
 template <InitReconfigOwner Owner = InitReconfigOwner::Chain, std::size_t... Is, class... Es>
-ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, EltwiseShape shape, Es... elts) {
+ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, IterationShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     static_assert(
         detail::ChainTraits<Es...>::any_dest_accumulation ==
@@ -3169,13 +3207,13 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
 // InitReconfigOwner enum doc). It never changes which init is hoistable. (default lives on the
 // declaration in chain.hpp.)
-template <InitReconfigOwner Owner, EltwiseShapeKind Kind, class... Es>
-ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts) {
+template <InitReconfigOwner Owner, IterationShapeKind Kind, class... Es>
+ALWI void eltwise_chain(TypedIterationShape<Kind> shape, Es... elts) {
     static_assert(
-        Kind != EltwiseShapeKind::Tiles ||
+        Kind != IterationShapeKind::Tiles ||
             detail::ChainTraits<Es...>::dest_accumulation_mode != DestAccumulation::PerRow,
-        "eltwise_chain: DestAccumulation::PerRow requires EltwiseShape::grid(...); "
-        "use DestAccumulation::WholeShape with EltwiseShape::tiles(...)");
+        "eltwise_chain: DestAccumulation::PerRow requires IterationShape::grid(...); "
+        "use DestAccumulation::WholeShape with IterationShape::tiles(...)");
     eltwise_chain_impl<Owner>(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 

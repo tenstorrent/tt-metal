@@ -33,7 +33,7 @@ void kernel_main() {
     compute_kernel_hw_startup(output_dfb_id, output_dfb_id);
 
     eltwise_chain(
-        EltwiseShape::tiles(num_tiles),
+        IterationShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_lower_bound.u, f2u_scale.u, seed, start_id},
         PackTile<output(output_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 }

@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"       // Negative
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // Optional
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
@@ -40,10 +40,10 @@ void kernel_main() {
         ckl::unary<
             ckl::Recip<D::D0>,
             ckl::input(dfb_divisor_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(dfb_divisor_recip_id)>(ckl::EltwiseShape::single());
+            ckl::output(dfb_divisor_recip_id)>(ckl::IterationShape::one_tile());
     }
 
-    constexpr auto weight_mul = ckl::OptionalChainElement<
+    constexpr auto weight_mul = ckl::Optional<
         has_weight,
         ckl::DestReuseBinary<ckl::input(dfb_tmp_weight_id), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
 
@@ -52,18 +52,21 @@ void kernel_main() {
 
     if constexpr (has_divisor) {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(per_core_tile_cnt),
+            ckl::IterationShape::tiles(per_core_tile_cnt),
             ckl::BinaryFpu<
-                ckl::input(dfb_tmp_input_id),
-                ckl::input(dfb_divisor_recip_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar>{},
+                ckl::input(dfb_tmp_input_id),
+                ckl::input(
+                    dfb_divisor_recip_id,
+                    ckl::BroadcastDim::Scalar,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd)>{},
             negate,
             weight_mul,
             pack_out);
     } else {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(per_core_tile_cnt),
+            ckl::IterationShape::tiles(per_core_tile_cnt),
             ckl::CopyTile<ckl::input(dfb_tmp_input_id)>{},
             negate,
             weight_mul,

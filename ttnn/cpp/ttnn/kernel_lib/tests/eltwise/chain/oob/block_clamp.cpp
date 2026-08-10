@@ -4,7 +4,7 @@
 
 // Out-of-bounds block_size probe: block-capable identity copy (Bulk + Block reader).
 //
-// block_size is a RUNTIME EltwiseShape field, so it can't be static_asserted; the chain clamps it
+// block_size is a RUNTIME IterationShape field, so it can't be static_asserted; the chain clamps it
 // to chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width. An oversized block_size can't overflow
 // DEST — it only changes loop iteration count, not coverage. So {1, 4, 1000} must all reproduce the
 // input exactly (the driving pytest feeds those).
@@ -23,7 +23,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        EltwiseShape::tiles(n, blk),
+        IterationShape::tiles(n, blk),
         CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

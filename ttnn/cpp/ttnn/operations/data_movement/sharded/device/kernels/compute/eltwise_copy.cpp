@@ -27,5 +27,5 @@ void kernel_main() {
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt));
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt));
 }

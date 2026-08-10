@@ -20,5 +20,5 @@ void kernel_main() {
         ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::output(
             dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-        ckl::EltwiseShape::tiles(total_tiles));
+        ckl::IterationShape::tiles(total_tiles));
 }

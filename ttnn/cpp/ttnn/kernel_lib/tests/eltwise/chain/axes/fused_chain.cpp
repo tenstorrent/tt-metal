@@ -36,12 +36,11 @@ void kernel_main() {
     if constexpr (life == 0) {  // Bulk, batched over the whole N with a bounded `batch` window
         for (uint32_t off = 0; off < n; off += batch) {
             eltwise_chain(
-                EltwiseShape::tiles(batch, blk),
+                IterationShape::tiles(batch, blk),
                 BinaryFpu<
-                    input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
                     BinaryFpuOp::Add,
-                    BroadcastDim::None>{},
+                    input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block)>{},
                 Exp<>{},
                 DestReuseBinary<
                     input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
@@ -51,12 +50,11 @@ void kernel_main() {
         }
     } else {  // PerBlockSize: single call over all N, bounded CB via per-block-size wait/pop
         eltwise_chain(
-            EltwiseShape::tiles(n, blk),
+            IterationShape::tiles(n, blk),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
-                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
+                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block)>{},
             Exp<>{},
             DestReuseBinary<
                 input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),

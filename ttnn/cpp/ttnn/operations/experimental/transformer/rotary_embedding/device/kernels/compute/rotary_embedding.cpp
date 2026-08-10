@@ -25,25 +25,25 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
         eltwise_chain(
-            EltwiseShape::single(),
+            IterationShape::one_tile(),
             BinaryFpu<
+                BinaryFpuOp::Mul,
                 input(in0_dfb_id, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 input(
                     in1_dfb_id,
+                    BroadcastDim::Row,
                     WaitPolicy::Upfront,
                     PopPolicy::None,
                     OperandKind::Scalar,
                     DataFormatReconfig::Disabled,
-                    compute_kernel_lib::TileOffset::Set),
-                BinaryFpuOp::Mul,
-                BroadcastDim::Row>{0u, in1_idx},
+                    compute_kernel_lib::TileOffset::Set)>{0u, in1_idx},
             PackTile<output(out_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else {
         (void)in1_idx;
         mul<input(in0_dfb_id, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
             input(in1_dfb_id, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-            output(out_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled),
-            BroadcastDim::None>(EltwiseShape::single());
+            output(out_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>(
+            IterationShape::one_tile());
     }
 }
 
@@ -119,9 +119,12 @@ void kernel_main() {
                 compute_kernel_lib::mul<
                     compute_kernel_lib::input(rotated_in_dfb_id),
                     compute_kernel_lib::input(
-                        scalar_dfb_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
-                    compute_kernel_lib::output(rotated_in_interm_dfb_id),
-                    compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                        scalar_dfb_id,
+                        compute_kernel_lib::BroadcastDim::Scalar,
+                        compute_kernel_lib::WaitPolicy::None,
+                        compute_kernel_lib::PopPolicy::None),
+                    compute_kernel_lib::output(rotated_in_interm_dfb_id)>(
+                    compute_kernel_lib::IterationShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_dfb_id, updated_sin_dfb_id);
                 pack_reconfig_data_format(rotated_in_interm_dfb_id, sin_interm_dfb_id);
                 mul_tiles_chain<rotated_in_interm_dfb_id, updated_sin_dfb_id, sin_interm_dfb_id>(in1_idx);
@@ -136,7 +139,7 @@ void kernel_main() {
             compute_kernel_lib::add<
                 compute_kernel_lib::input(cos_interm_dfb_id),
                 compute_kernel_lib::input(sin_interm_dfb_id),
-                compute_kernel_lib::output(out_dfb_id)>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                compute_kernel_lib::output(out_dfb_id)>(compute_kernel_lib::IterationShape::tiles(onetile));
         }
     }
 }

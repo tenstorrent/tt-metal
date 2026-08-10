@@ -112,17 +112,15 @@ void kernel_main() {
 
         // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_dfb_id; sin held/streamed per mode)
         mul<input(rotated_in_interm_dfb_id),
-            input(updated_sin_dfb_id, WaitPolicy::PerTile, trig_pop),
-            output(sin_interm_dfb_id),
-            trig_bcast>(EltwiseShape::tiles(onetile));
+            input(updated_sin_dfb_id, trig_bcast, WaitPolicy::PerTile, trig_pop),
+            output(sin_interm_dfb_id)>(IterationShape::tiles(onetile));
 
         // cos_interim = in * cos
         mul<input(in_dfb_id, WaitPolicy::None, PopPolicy::PerTile),
-            input(updated_cos_dfb_id, WaitPolicy::PerTile, trig_pop),
-            output(cos_interm_dfb_id),
-            trig_bcast>(EltwiseShape::tiles(onetile));
+            input(updated_cos_dfb_id, trig_bcast, WaitPolicy::PerTile, trig_pop),
+            output(cos_interm_dfb_id)>(IterationShape::tiles(onetile));
 
         // out = cos_interim + sin_interim
-        add<input(cos_interm_dfb_id), input(sin_interm_dfb_id), output(out_dfb_id)>(EltwiseShape::tiles(onetile));
+        add<input(cos_interm_dfb_id), input(sin_interm_dfb_id), output(out_dfb_id)>(IterationShape::tiles(onetile));
     }
 }

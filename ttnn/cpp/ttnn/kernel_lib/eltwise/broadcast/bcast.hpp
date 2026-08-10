@@ -24,8 +24,8 @@ struct UnaryBcastImpl;
 template <BroadcastDim Dim, InputSpec Input, Dst DstSlot = Dst::D0>
 using UnaryBcast = detail::UnaryBcastImpl<Input.cb_id, detail::unary_bcast_config_bits(Dim, Input, DstSlot)>;
 
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, EltwiseShapeKind Kind>
-ALWI void unary_bcast(TypedEltwiseShape<Kind> shape);
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
+ALWI void unary_bcast(TypedIterationShape<Kind> shape);
 
 }  // namespace compute_kernel_lib
 

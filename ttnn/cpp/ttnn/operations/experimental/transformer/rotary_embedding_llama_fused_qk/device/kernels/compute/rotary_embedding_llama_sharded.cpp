@@ -91,9 +91,14 @@ void kernel_main() {
         ckl::mul<
             ckl::input(
                 rotated_in_interm_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(sin_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
-            ckl::output(sin_interm_dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd),
-            ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::input(
+                sin_dfb_id,
+                ckl::BroadcastDim::Row,
+                ckl::WaitPolicy::None,
+                ckl::PopPolicy::None,
+                ckl::OperandKind::Block),
+            ckl::output(sin_interm_dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(Wt, /*block_size=*/Wt));
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

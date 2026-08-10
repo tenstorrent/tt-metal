@@ -83,7 +83,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
     // Start from the state at the end of each iteration so same-format reconfigurations compile out.
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call,
+    // but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cos_interm_dfb, sin_interm_dfb, out_dfb);
 
     // Get the trans_mat
@@ -131,37 +132,32 @@ void kernel_main() {
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
-                        bulk_block_input(rotated_in_interm_dfb),
-                        sin_cos_input(sin_dfb),
                         ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                        bulk_block_input(rotated_in_interm_dfb),
+                        sin_cos_input(sin_dfb)>{0u, sin_cos_row_cnt * Wt},
                     ckl::PackTile<bulk_output(sin_interm_dfb)>{});
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
                         ckl::input(
                             in_dfb,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::AtEnd,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Disabled),
-                        sin_cos_input(cos_dfb),
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                        sin_cos_input(cos_dfb)>{0u, sin_cos_row_cnt * Wt},
                     ckl::PackTile<bulk_output(cos_interm_dfb)>{});
 
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
-                ckl::add<
-                    bulk_block_input(cos_interm_dfb),
-                    bulk_block_input(sin_interm_dfb),
-                    bulk_output(out_dfb),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
+                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

@@ -50,7 +50,7 @@ void kernel_main() {
                     ckl::input(dfb_max_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::output(
                         dfb_max_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
-                    ckl::EltwiseShape::tiles(onetile));
+                    ckl::IterationShape::tiles(onetile));
             }
         }
 

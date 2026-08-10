@@ -25,16 +25,16 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     if constexpr (mode == 0) {
-        eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
+        eltwise_chain(IterationShape::tiles(n), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
     } else if constexpr (mode == 1) {
         for (uint32_t i = 0; i < n; ++i) {
-            eltwise_chain(EltwiseShape::single(), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
+            eltwise_chain(IterationShape::one_tile(), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
         }
     } else {
         copy_tile_init(cb_in);
         exp_tile_init();
         eltwise_chain<InitReconfigOwner::Caller>(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});

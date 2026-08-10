@@ -6,7 +6,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -25,12 +25,11 @@ ALWI void update_running_stat() {
     using ckl::BinaryFpuOp;
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::single(),
+        ckl::IterationShape::one_tile(),
         ckl::BinaryFpu<
-            ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             BinaryFpuOp::Sub,
-            ckl::BroadcastDim::None>{},  // D0 = 1 - momentum
+            ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},  // D0 = 1 - momentum
         ckl::
             DestReuseBinary<ckl::input(dfb_old_id), BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1
                                                                                                             // -
@@ -38,14 +37,13 @@ ALWI void update_running_stat() {
                                                                                                             // *
                                                                                                             // old_stat
         ckl::BinaryFpu<
+            BinaryFpuOp::Mul,
             ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            BinaryFpuOp::Mul,
-            ckl::BroadcastDim::None,
             D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
         ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
-        ckl::OptionalChainElement<
+        ckl::Optional<
             AlsoOut0,
             ckl::PackTile<ckl::output(dfb_out0_id, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
 }

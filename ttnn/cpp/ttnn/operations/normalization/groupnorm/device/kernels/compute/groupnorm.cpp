@@ -370,17 +370,16 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
 #ifdef TILIZE_IN
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w),
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w),
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
                         strided_block_input(dfb_input_id),
                         ckl::input(
                             dfb_input_mask_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Row,
-                            ckl::DataFormatReconfig::Disabled),
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None>{ckl::StridedTileRange{out_block_base, block_w}},
+                            ckl::DataFormatReconfig::Disabled)>{ckl::StridedTileRange{out_block_base, block_w}},
                     ckl::PackTile<ckl::output(
                         dfb_x_id,
                         ckl::ReservePolicy::Upfront,
@@ -404,8 +403,8 @@ void kernel_main() {
                         dfb_x_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
 #endif
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -475,16 +474,16 @@ void kernel_main() {
                 }
 #ifdef TILIZE_IN
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w),
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w),
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
                         strided_block_input(dfb_input_id),
                         ckl::input(
                             dfb_ex_global_id,
+                            ckl::BroadcastDim::Scalar,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::DataFormatReconfig::Disabled),
-                        ckl::BinaryFpuOp::Sub,
-                        ckl::BroadcastDim::Scalar>{
+                            ckl::DataFormatReconfig::Disabled)>{
                         ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}},
                     ckl::PackTile<ckl::output(
                         dfb_xmm_id,
@@ -500,6 +499,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
                         dfb_ex_global_id,
+                        ckl::BroadcastDim::Scalar,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
                         ckl::DataFormatReconfig::Disabled),
@@ -507,8 +507,8 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
 #endif
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -538,8 +538,8 @@ void kernel_main() {
                         dfb_x_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -561,7 +561,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -656,17 +656,16 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_eps_id);
             }
             ckl::eltwise_chain(
-                ckl::EltwiseShape::single(),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
                     ckl::input(
                         dfb_var_src_id,
                         ckl::WaitPolicy::PerTile,
                         ckl::PopPolicy::PerTile,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
-                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                    ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::None>{},
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
@@ -703,16 +702,16 @@ void kernel_main() {
                 }
 #ifdef TILIZE_IN
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w),
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w),
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
                         strided_block_input(dfb_input_id),
                         ckl::input(
                             dfb_ex_global_id,
+                            ckl::BroadcastDim::Scalar,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::DataFormatReconfig::Disabled),
-                        ckl::BinaryFpuOp::Sub,
-                        ckl::BroadcastDim::Scalar>{
+                            ckl::DataFormatReconfig::Disabled)>{
                         ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}},
                     ckl::PackTile<ckl::output(
                         dfb_xmm_id,
@@ -728,6 +727,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
                         dfb_ex_global_id,
+                        ckl::BroadcastDim::Scalar,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
                         ckl::DataFormatReconfig::Disabled),
@@ -735,8 +735,8 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
 #endif
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -766,8 +766,8 @@ void kernel_main() {
                         dfb_x_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -791,13 +791,17 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
-                        dfb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                        dfb_ex2pe_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         dfb_xmm_id,
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
-                        ckl::DataFormatReconfig::Disabled),
-                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -833,17 +837,16 @@ void kernel_main() {
                     const ckl::StridedTileRange output_range{w, block_w_curr};
                     if (copy_or_add) {
                         ckl::eltwise_chain(
-                            ckl::EltwiseShape::col(out_block_h_actual),
+                            ckl::IterationShape::col(out_block_h_actual),
                             ckl::CopyTile<strided_col_input(dfb_xmm_id)>{input_range},
                             ckl::PackTile<strided_output(dfb_reread_write_out_id)>{output_range});
                     } else {
                         ckl::eltwise_chain(
-                            ckl::EltwiseShape::col(out_block_h_actual),
+                            ckl::IterationShape::col(out_block_h_actual),
                             ckl::BinaryFpu<
-                                strided_col_input(dfb_reread_out_id),
-                                strided_col_input(dfb_xmm_id),
                                 ckl::BinaryFpuOp::Add,
-                                ckl::BroadcastDim::None>{output_range, input_range},
+                                strided_col_input(dfb_reread_out_id),
+                                strided_col_input(dfb_xmm_id)>{output_range, input_range},
                             ckl::PackTile<strided_output(dfb_reread_write_out_id)>{output_range});
                     }
 
@@ -886,16 +889,16 @@ void kernel_main() {
                                 reconfig_data_format_srcb(dfb_gamma_id);
                             }
                             ckl::eltwise_chain(
-                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::IterationShape::col(out_block_h_actual),
                                 ckl::BinaryFpu<
-                                    strided_col_input(dfb_reread_write_out_id),
-                                    offset_scalar_input(dfb_gamma_id),
                                     ckl::BinaryFpuOp::Mul,
-                                    ckl::BroadcastDim::Row>{ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                    strided_col_input(dfb_reread_write_out_id),
+                                    ckl::input(offset_scalar_input(dfb_gamma_id), ckl::BroadcastDim::Row)>{
+                                    ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
                                 ckl::PackTile<strided_output(dfb_outgamma_id)>{ckl::StridedTileRange{j, block_w_curr}});
                         } else {
                             ckl::eltwise_chain(
-                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::IterationShape::col(out_block_h_actual),
                                 ckl::CopyTile<strided_col_input(dfb_reread_write_out_id)>{
                                     ckl::StridedTileRange{j, block_w_curr}},
                                 ckl::PackTile<strided_output(dfb_outgamma_id)>{ckl::StridedTileRange{j, block_w_curr}});
@@ -919,16 +922,16 @@ void kernel_main() {
                                 reconfig_data_format_srcb(dfb_beta_id);
                             }
                             ckl::eltwise_chain(
-                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::IterationShape::col(out_block_h_actual),
                                 ckl::BinaryFpu<
-                                    strided_col_input(dfb_inbeta_id),
-                                    offset_scalar_input(dfb_beta_id),
                                     ckl::BinaryFpuOp::Add,
-                                    ckl::BroadcastDim::Row>{ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                    strided_col_input(dfb_inbeta_id),
+                                    ckl::input(offset_scalar_input(dfb_beta_id), ckl::BroadcastDim::Row)>{
+                                    ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
                                 ckl::PackTile<strided_output(dfb_outbeta_id)>{ckl::StridedTileRange{j, block_w_curr}});
                         } else {
                             ckl::eltwise_chain(
-                                ckl::EltwiseShape::col(out_block_h_actual),
+                                ckl::IterationShape::col(out_block_h_actual),
                                 ckl::CopyTile<strided_col_input(dfb_inbeta_id)>{ckl::StridedTileRange{j, block_w_curr}},
                                 ckl::PackTile<strided_output(dfb_outbeta_id)>{ckl::StridedTileRange{j, block_w_curr}});
                         }

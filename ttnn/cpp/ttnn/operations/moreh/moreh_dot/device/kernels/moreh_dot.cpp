@@ -24,8 +24,8 @@ void kernel_main() {
             ckl::input(dfb::in0),
             ckl::input(dfb::in1),
             ckl::output(
-                dfb::im0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+                dfb::im0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+            ckl::IterationShape::tiles(onetile));
 
         // reduce-w
         if (last_out) {

@@ -27,7 +27,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(
                 dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),

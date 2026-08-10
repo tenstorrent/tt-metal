@@ -30,13 +30,13 @@ void kernel_main() {
 #endif
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(B * Ht * Wt),
+        ckl::IterationShape::tiles(B * Ht * Wt),
         ckl::BinaryFpu<
+            CHAIN_BCAST_OP,
             ckl::input(
                 dfb_lhs_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(dfb_rhs_id, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled),
-            CHAIN_BCAST_OP,
-            CHAIN_BCAST_DIM>{},
+            ckl::input(
+                dfb_rhs_id, CHAIN_BCAST_DIM, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(
             dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

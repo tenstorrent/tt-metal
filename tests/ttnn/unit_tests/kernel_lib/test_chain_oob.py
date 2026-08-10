@@ -89,7 +89,7 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
 
 
 # =============================================================================
-# Runtime block_size clamp. block_size is a runtime EltwiseShape field, so it
+# Runtime block_size clamp. block_size is a runtime IterationShape field, so it
 # can't be static_asserted; the chain clamps it down to chain_max_block_v at runtime
 # so it can NEVER overflow DEST. An over-large block_size
 # must therefore still produce the exact identity copy (clamp only changes loop structure).

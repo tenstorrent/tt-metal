@@ -42,53 +42,48 @@ void kernel_main() {
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{},
             pack);
     } else if constexpr (life == 1) {  // HeldBulk — chain waits upfront, caller pops after
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 2) {  // HeldStream — chain waits per-iter, caller pops after
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::PerTile, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::None, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 3) {  // CallerManaged — chain emits nothing for B
         cb_b_obj.wait_front(1);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::None, PopPolicy::None, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::None, PopPolicy::None, DataFormatReconfig::Disabled)>{},
             pack);
         cb_b_obj.pop_front(1);
     } else {  // life == 4: DeferredPop — caller waits before, chain pops at end
         cb_b_obj.wait_front(1);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             BinaryFpu<
-                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::None, PopPolicy::AtEnd, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                input(cb_b, WaitPolicy::None, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{},
             pack);
     }
 }

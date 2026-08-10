@@ -33,28 +33,30 @@ void kernel_main() {
     ckl::unary<
         ckl::Recip<D::D0>,
         ckl::input(dfb_divisor_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-        ckl::output(dfb_tmp1_id)>(ckl::EltwiseShape::single());
+        ckl::output(dfb_tmp1_id)>(ckl::IterationShape::one_tile());
 
     dfb_tmp1_obj.wait_front(1);
     dfb_output_grad_obj.wait_front(1);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::single(),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
-                ckl::input(dfb_tmp_weight_id),
-                ckl::input(dfb_output_grad_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar>{},
+                ckl::input(dfb_tmp_weight_id),
+                ckl::input(
+                    dfb_output_grad_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Negative<D::D0>{},
             ckl::PackTile<ckl::output(dfb_tmp2_id)>{});
 
         compute_kernel_lib::mul<
             compute_kernel_lib::input(dfb_tmp2_id),
             compute_kernel_lib::input(
-                dfb_tmp1_id, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
-            compute_kernel_lib::output(dfb_input_grad_id),
-            compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::single());
+                dfb_tmp1_id,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::WaitPolicy::None,
+                compute_kernel_lib::PopPolicy::None),
+            compute_kernel_lib::output(dfb_input_grad_id)>(compute_kernel_lib::IterationShape::one_tile());
     }
 
     dfb_output_grad_obj.pop_front(1);
@@ -66,12 +68,12 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::single(),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
-                ckl::input(dfb_tmp_weight_id),
-                ckl::input(dfb_output_grad_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar>{},
+                ckl::input(dfb_tmp_weight_id),
+                ckl::input(
+                    dfb_output_grad_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Negative<D::D0>{},
             ckl::PackTile<ckl::output(dfb_input_grad_id)>{});
     }

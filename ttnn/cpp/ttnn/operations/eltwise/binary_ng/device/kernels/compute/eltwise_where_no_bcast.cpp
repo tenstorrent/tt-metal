@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"    // Where
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillBitcast / FillInt
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // Optional
 
 namespace ckl = compute_kernel_lib;
 
@@ -43,7 +43,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_cond_id, dfb_tensor_id, dfb_out_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
+        ckl::IterationShape::tiles(num_tiles, num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for dfb_cond_id).
         ckl::CopyTile<
             ckl::input(
@@ -55,8 +55,8 @@ void kernel_main() {
                 dfb_tensor_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             kTensorSlot>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
-        ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
-        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
+        ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
+        ckl::Optional<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(

@@ -74,16 +74,14 @@ void kernel_main() {
 
             ckl::mul<
                 ckl::input(rotated_in_interm_dfb_id),
-                ckl::input(sin_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-                pre_reserved_output(sin_interm_dfb_id),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
+                ckl::input(sin_dfb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                pre_reserved_output(sin_interm_dfb_id)>(ckl::IterationShape::one_tile());
             ckl::mul<
                 ckl::input(in_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
-                ckl::input(cos_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-                pre_reserved_output(cos_interm_dfb_id),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
+                ckl::input(cos_dfb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                pre_reserved_output(cos_interm_dfb_id)>(ckl::IterationShape::one_tile());
             ckl::add<ckl::input(cos_interm_dfb_id), ckl::input(sin_interm_dfb_id), pre_reserved_output(out_dfb_id)>(
-                ckl::EltwiseShape::single());
+                ckl::IterationShape::one_tile());
         }
 
         sin_dfb_id.pop_front(onetile);

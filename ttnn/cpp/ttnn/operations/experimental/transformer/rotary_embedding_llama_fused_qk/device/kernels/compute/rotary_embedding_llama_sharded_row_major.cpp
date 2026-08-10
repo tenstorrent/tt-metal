@@ -91,8 +91,8 @@ void kernel_main() {
         ckl::mul<
             ckl::input(rotated_in_interm_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::input(sin_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(sin_interm_dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd),
-            ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
+            ckl::output(sin_interm_dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::one_tile());
 
         mul_init(in_dfb_id, cos_dfb_id);
         ACQ();

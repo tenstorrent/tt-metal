@@ -30,7 +30,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_linear1_id, dfb_dL_dlinear1_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(num_rows_per_core, padded_Wt, block_size),
+        ckl::IterationShape::grid(num_rows_per_core, padded_Wt, block_size),
         // D0 = U, D1 = sigmoid(U), D2 = dL/dprod.
         ckl::CopyTile<
             ckl::input(

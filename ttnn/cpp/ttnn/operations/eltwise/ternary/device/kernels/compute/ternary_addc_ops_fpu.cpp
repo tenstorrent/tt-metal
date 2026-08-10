@@ -19,14 +19,13 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
     constexpr auto dfb_out_id = tt::CBIndex::c_3;
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Mul,
             ckl::input(
                 dfb_in1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::input(
-                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::BinaryFpuOp::Mul,
-            ckl::BroadcastDim::None>{},
+                dfb_in2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{},
         ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),
         ckl::DestReuseBinary<ckl::input(dfb_in0_id), ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
         ckl::PackTile<ckl::output(

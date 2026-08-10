@@ -27,11 +27,10 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(Ht, Wt),
+        ckl::IterationShape::grid(Ht, Wt),
         ckl::BinaryFpu<
-            ckl::input(cb_a, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_b, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled),
             ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None>{},
+            ckl::input(cb_a, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_b, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(cb_out)>{});
 }

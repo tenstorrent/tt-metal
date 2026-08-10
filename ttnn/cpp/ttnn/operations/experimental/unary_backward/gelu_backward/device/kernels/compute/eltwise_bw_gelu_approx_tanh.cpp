@@ -26,7 +26,7 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
 
     using D = ckl::Dst;
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
         ckl::CopyTile<
             ckl::input(

@@ -31,9 +31,9 @@ void kernel_main() {
     if constexpr (mode == 0) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles),
-            BinaryFpu<input(cb_a), input(cb_b)>{},
-            BinaryFpu<input(cb_c), input(cb_d)>{},
+            IterationShape::tiles(num_tiles),
+            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
+            BinaryFpu<BinaryFpuOp::Add, input(cb_c), input(cb_d)>{},
             PackTile<output(cb_out)>{});
     } else if constexpr (mode == 1) {
         constexpr InputSpec default_input = input(cb_a);
@@ -54,33 +54,33 @@ void kernel_main() {
         static_assert(default_output.offset == TileOffset::Unset);
 
         using SrcAOnly = BinaryFpu<
+            BinaryFpuOp::Add,
             input(cb_a),
-            input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-            BinaryFpuOp::Add,
-            BroadcastDim::None>;
+            input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>;
         using SrcBOnly = BinaryFpu<
-            input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-            input(cb_b),
             BinaryFpuOp::Add,
-            BroadcastDim::None>;
+            input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+            input(cb_b)>;
         static_assert(SrcAOnly::reconfig_srca_dfb == cb_a && SrcAOnly::reconfig_srcb_dfb == NO_PREV_DFB);
         static_assert(SrcBOnly::reconfig_srca_dfb == NO_PREV_DFB && SrcBOnly::reconfig_srcb_dfb == cb_b);
 
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles), BinaryFpu<input(cb_a), input(cb_b)>{}, PackTile<output(cb_out)>{});
+            IterationShape::tiles(num_tiles),
+            BinaryFpu<BinaryFpuOp::Add, input(cb_a), input(cb_b)>{},
+            PackTile<output(cb_out)>{});
     } else if constexpr (mode == 2) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles),
+            IterationShape::tiles(num_tiles),
             CopyTile<input(cb_a)>{},
-            BinaryFpu<input(cb_b), input(cb_c), BinaryFpuOp::Add, BroadcastDim::None, Dst::D1>{},
+            BinaryFpu<BinaryFpuOp::Add, input(cb_b), input(cb_c), Dst::D1>{},
             AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
             PackTile<output(cb_out)>{});
     } else if constexpr (mode == 3) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles),
+            IterationShape::tiles(num_tiles),
             CopyTile<input(cb_a)>{},
             CopyTile<input(cb_b)>{},
             PackTile<output(cb_out)>{});
@@ -88,14 +88,14 @@ void kernel_main() {
         constexpr uint32_t cb_out_2 = tt::CBIndex::c_17;
         compute_kernel_hw_startup(cb_a, cb_a, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles),
+            IterationShape::tiles(num_tiles),
             CopyTile<input(cb_a)>{},
             PackTile<output(cb_out)>{},
             PackTile<output(cb_out_2)>{});
     } else {
         compute_kernel_hw_startup(cb_a, cb_a, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(num_tiles),
+            IterationShape::tiles(num_tiles),
             CopyTile<input(cb_a)>{},
             CopyTile<input(cb_a)>{},
             CopyTile<input(cb_a)>{},

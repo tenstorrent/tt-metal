@@ -27,7 +27,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_input_idx_id, dfb_dL_da_idx_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(num_rows_per_core, padded_Wt, block_size),
+        ckl::IterationShape::grid(num_rows_per_core, padded_Wt, block_size),
         ckl::CopyTile<
             ckl::input(
                 dfb_input_idx_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),

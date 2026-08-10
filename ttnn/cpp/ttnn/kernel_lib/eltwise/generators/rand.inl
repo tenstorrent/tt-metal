@@ -21,7 +21,7 @@ namespace compute_kernel_lib {
 /// passed at construction (same pattern as `Dropout<Slot>`).
 ///
 /// @code
-///   eltwise_chain(EltwiseShape::tiles(num_tiles),
+///   eltwise_chain(IterationShape::tiles(num_tiles),
 ///       RandTile<Dst::D0>{from, scale, get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1)},
 ///       PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 /// @endcode

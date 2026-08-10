@@ -18,8 +18,8 @@ ALWI void mul_tiles_chain() {
         ckl::input(in0_dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::input(in1_dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::output(
-            out_dfb_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-        ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
+            out_dfb_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::IterationShape::one_tile());
 }
 
 void kernel_main() {
@@ -48,9 +48,8 @@ void kernel_main() {
             if (j < half_Wt) {
                 ckl::mul<
                     ckl::input(rotated_in_dfb_id),
-                    ckl::input(scalar_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::output(rotated_in_interm_dfb_id),
-                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::input(scalar_dfb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(rotated_in_interm_dfb_id)>(ckl::IterationShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_dfb_id, sin_dfb_id);
                 pack_reconfig_data_format(rotated_in_interm_dfb_id, sin_interm_dfb_id);
                 mul_tiles_chain<rotated_in_interm_dfb_id, sin_dfb_id, sin_interm_dfb_id>();
@@ -63,7 +62,7 @@ void kernel_main() {
             mul_tiles_chain<in_dfb_id, cos_dfb_id, cos_interm_dfb_id>();
 
             ckl::add<ckl::input(cos_interm_dfb_id), ckl::input(sin_interm_dfb_id), ckl::output(out_dfb_id)>(
-                ckl::EltwiseShape::tiles(onetile));
+                ckl::IterationShape::tiles(onetile));
         }
     }
 }

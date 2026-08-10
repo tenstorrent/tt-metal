@@ -36,7 +36,7 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                    ckl::EltwiseShape::single(),
+                    ckl::IterationShape::one_tile(),
                     // The caller owns setup, so the chain must not reconfigure formats.
                     ckl::UnaryBcast<
                         ckl::BroadcastDim::Col,

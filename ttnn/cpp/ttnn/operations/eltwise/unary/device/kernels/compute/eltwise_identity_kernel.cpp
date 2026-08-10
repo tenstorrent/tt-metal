@@ -25,5 +25,5 @@ void kernel_main() {
             dfb_output_id,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
 }

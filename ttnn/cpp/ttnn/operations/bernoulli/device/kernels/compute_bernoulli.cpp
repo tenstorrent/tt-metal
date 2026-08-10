@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr std::uint32_t rand_scale = 0x3F7FFFFFU;
 
     eltwise_chain(
-        EltwiseShape::tiles(num_tiles),
+        IterationShape::tiles(num_tiles),
         RandTile<Dst::D0>{rand_from, rand_scale, seed, start_id},
         PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 }

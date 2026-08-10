@@ -95,14 +95,14 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     for (auto block : generic::blocks(Wt, blk)) {
         const auto block_shape =
-            ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
         // Keep pre-add in a separate DFB to avoid the transpose_dest aliasing issue.
         ckl::add<
             ckl::input(dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(
                 dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-            ckl::output(dfb_interm_pre_add_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-            ckl::BroadcastDim::None>(block_shape);
+            ckl::output(dfb_interm_pre_add_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            block_shape);
 
         // Now run Welfords in these blk number of tiles
         dfb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -457,12 +457,11 @@ void kernel_main() {
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
+            ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(dfb_ex2_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None>{},
+                ckl::input(dfb_ex2_id),
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_ex2pe_id,
@@ -471,7 +470,7 @@ void kernel_main() {
                 ckl::DataFormatReconfig::Disabled)>{});
 
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
-            ckl::EltwiseShape::tiles(onetile));
+            ckl::IterationShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.
@@ -492,7 +491,7 @@ void kernel_main() {
 
         for (auto block : generic::blocks(Wt, blk)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
@@ -559,11 +558,12 @@ void kernel_main() {
                         ckl::OperandKind::Block),
                     ckl::input(
                         dfb_gamma_id,
+                        ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
                         ckl::OperandKind::Block),
-                    ckl::output(dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-                    ckl::BroadcastDim::Row>(block_shape);
+                    ckl::output(dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    block_shape);
             }
 
             if constexpr (do_beta == 1) {
@@ -576,11 +576,12 @@ void kernel_main() {
                         ckl::OperandKind::Block),
                     ckl::input(
                         dfb_beta_id,
+                        ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
                         ckl::OperandKind::Block),
-                    ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-                    ckl::BroadcastDim::Row>(block_shape);
+                    ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    block_shape);
             }
         }
 
