@@ -14,6 +14,10 @@
 #include <utility>
 #include "api/tensor/noc_traits.h"
 
+#ifdef DEBUG_PRINT_ENABLED
+#include "api/debug/dprint.h"
+#endif
+
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 
@@ -307,6 +311,10 @@ void kernel_main() {
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
 
+#ifdef DEBUG_PRINT_ENABLED
+    DPRINT("RSAUDIT_START chip={} dir={}\n", (uint32_t)my_chip_id, (uint32_t)direction);
+#endif
+
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
@@ -413,10 +421,43 @@ void kernel_main() {
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {
                             if (chunk_count == 0) {
+                                // Credit audit for the P300X2 prefill-trace hang: log what this
+                                // reader is about to require and what the semaphore already holds,
+                                // BEFORE the wait. On a hang the last line printed per core is the
+                                // wait that never completed, so have-vs-want is visible per
+                                // direction. 0xA1 = forward credit, 0xA2 = reverse credit
+                                // (out2_ready_sem, the one CI blocks on at this line).
+                                // Print ONLY a wait that is not already satisfied. In a healthy run
+                                // the sender is several credits ahead (have > want) and every wait
+                                // passes on entry, so this stays silent. Printing every wait costs
+                                // ~800 lines per reduce-scatter, which is millions of lines over a
+                                // prefill wave; printing only the stalls costs nothing until the
+                                // stall we are hunting actually happens.
+#ifdef DEBUG_PRINT_ENABLED
+                                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) < sem_target + 1) {
+                                    DPRINT(
+                                        "RSAUDIT_STALL1 chip={} dir={} want={} have={}\n",
+                                        (uint32_t)my_chip_id,
+                                        (uint32_t)direction,
+                                        sem_target + 1,
+                                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem));
+                                }
+#endif
                                 noc_semaphore_wait_min(
                                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                                 ++sem_target;
                                 if (reduce_output) {
+#ifdef DEBUG_PRINT_ENABLED
+                                    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem) <
+                                        sem2_target + 1) {
+                                        DPRINT(
+                                            "RSAUDIT_STALL2 chip={} dir={} want={} have={}\n",
+                                            (uint32_t)my_chip_id,
+                                            (uint32_t)direction,
+                                            sem2_target + 1,
+                                            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem));
+                                    }
+#endif
                                     noc_semaphore_wait_min(
                                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem),
                                         sem2_target + 1);
@@ -476,6 +517,38 @@ void kernel_main() {
             // Next slice idx
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
+
+#ifdef DEBUG_PRINT_ENABLED
+        // Credit audit for the P300X2 prefill-trace hang investigation.
+        // sem must equal tgt: the reader consumed every credit the upstream writer sent.
+        // late must equal sem: no credit for this batch is still in flight when the reset runs.
+        {
+            volatile tt_l1_ptr uint32_t* sem1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
+            volatile tt_l1_ptr uint32_t* sem2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem);
+            uint32_t sem1_now = *sem1_ptr;
+            uint32_t sem2_now = *sem2_ptr;
+            for (volatile uint32_t spin = 0; spin < 2000; ++spin) {
+            }
+            uint32_t sem1_late = *sem1_ptr;
+            uint32_t sem2_late = *sem2_ptr;
+            const bool audit_broken = (sem1_now != sem_target) || (sem2_now != sem2_target) ||
+                                      (sem1_late != sem1_now) || (sem2_late != sem2_now);
+            // Under trace stress every invocation would print, so only a broken invariant speaks.
+            if (audit_broken) {
+                DPRINT(
+                    "RSAUDIT_BREAK chip={} dir={} b={} sem1={} late1={} tgt1={} sem2={} late2={} tgt2={}\n",
+                    (uint32_t)my_chip_id,
+                    (uint32_t)direction,
+                    b,
+                    sem1_now,
+                    sem1_late,
+                    sem_target,
+                    sem2_now,
+                    sem2_late,
+                    sem2_target);
+            }
+        }
+#endif
 
         // Reset the semaphore before the next batch
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);

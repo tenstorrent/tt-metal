@@ -23,6 +23,10 @@
 #include <utility>
 #include "api/tensor/noc_traits.h"
 
+#ifdef DEBUG_PRINT_ENABLED
+#include "api/debug/dprint.h"
+#endif
+
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
@@ -646,8 +650,25 @@ void kernel_main() {
     uint64_t even_core_sem_noc_addr = direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
     uint64_t odd_core_sem_noc_addr = !direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
 
+#ifdef DEBUG_PRINT_ENABLED
+    // Credit audit for the P300X2 prefill-trace hang investigation: counts the credits this writer
+    // emits to its own core position on the downstream chip, and to the opposite core position.
+    uint32_t audit_sent_this = 0;
+    uint32_t audit_sent_opposite = 0;
+    auto audit_count = [&](uint64_t sem_noc_addr) {
+        if (sem_noc_addr == this_core_sem_noc_addr) {
+            ++audit_sent_this;
+        } else {
+            ++audit_sent_opposite;
+        }
+    };
+#else
+    auto audit_count = [](uint64_t) {};
+#endif
+
     // Emit a standalone atomic increment to a remote worker's out_ready_sem.
     auto send_seminc = [&](uint64_t sem_noc_addr) {
+        audit_count(sem_noc_addr);
         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,
             pkt_hdr_seminc,
@@ -770,6 +791,9 @@ void kernel_main() {
                                     send_seminc(sem_noc_addr);
                                 }
                             }
+                            if (seminc_fused) {
+                                audit_count(sem_noc_addr);
+                            }
                         } else {
                             // Write tiles to local tensor
                             cb_out.wait_front(tile_granularity);
@@ -802,6 +826,18 @@ void kernel_main() {
             // Next slice idx
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
+
+#if defined(DEBUG_PRINT_ENABLED) && defined(RS_AUDIT_VERBOSE)
+        DPRINT(
+            "RSAUDIT_W chip={} dir={} b={} sent_this={} sent_opp={}\n",
+            (uint32_t)my_chip_id,
+            (uint32_t)direction,
+            b,
+            audit_sent_this,
+            audit_sent_opposite);
+        audit_sent_this = 0;
+        audit_sent_opposite = 0;
+#endif
 
         // Batch-ready barrier: a global all-workers sync so the next batch cannot clobber the reused
         // intermediate scratch or out_ready_sem while this batch is still being consumed. Skipped on the
