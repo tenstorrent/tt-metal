@@ -211,6 +211,15 @@ steps:
         echo "no /dev/hugepages-1G on this runner, so portdev starts without it"
       fi
 
+      # PYTHONPATH carries /work/tests/sweep_framework because that is what makes `sweeps.<op>`
+      # importable. A codegen sweep module is a drop-in for its upstream counterpart and may reuse
+      # that suite verbatim instead of restating the grid -- `untilize`'s does, and the manifest
+      # schema has an `upstream_sweep_module` field for saying so. tt-metal's own runner imports
+      # `sweeps.<module>` and gets the directory onto `sys.path` for free by living in it; nothing
+      # puts it there for us. `pad`'s sweep is self-contained, which is why this stayed invisible
+      # until the second op. Keep comments out of the continuation below: the backslashes join the
+      # lines before `#` is interpreted, so a comment inside would swallow the rest of the command.
+
       docker run -d --name portdev \
         --device /dev/tenstorrent \
         --group-add 1457 \
@@ -219,7 +228,7 @@ steps:
         -v "${{ github.workspace }}/.codegen:/codegen" \
         "${HUGEPAGES[@]}" \
         -e TT_METAL_HOME=/work \
-        -e PYTHONPATH=/work:/work/ttnn:/work/tools:/codegen \
+        -e PYTHONPATH=/work:/work/ttnn:/work/tools:/work/tests/sweep_framework:/codegen \
         -e LD_LIBRARY_PATH=/work/build/lib \
         -e ARCH_NAME=wormhole_b0 \
         -e TRACY_NO_INVARIANT_CHECK=1 \

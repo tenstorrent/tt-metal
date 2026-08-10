@@ -22,20 +22,27 @@ of the hardened harness.
 
 ## `pad` was load-bearing in ways nobody intended
 
-Three separate defects were found by reading the `untilize` manifest before pushing, all of them
-things `pad` happens not to do. They are fixed, but the pattern is the point: **the harness was
-implicitly specialised to one op's manifest shape**, and each new op is likely to find more of this.
-Expect the third op to find its own.
+Five separate defects have turned up in moving from `pad` to `untilize`, all of them things `pad`
+happens not to do. They are fixed, but the pattern is the point: **the harness was implicitly
+specialised to one op's shape**, in the manifest, in the CMake files it edits, and in the imports its
+sweep module needs. Expect the third op to find its own; when it does, prefer widening the mechanism
+to what the field or the file actually permits over special-casing the op.
 
 | What `untilize` does that `pad` does not | What broke |
 | --- | --- |
 | `sweep_suite` names two suites, not one | `module.parameters[suite]` with a list: `TypeError: unhashable type: 'list'`, before any step ran |
 | Declares `port_scope` | Nothing read it. A large slice of cases the manifest puts *outside* the ported builder would have been graded as in-scope |
 | A kwarg holds a live `ttnn` object (`memory_config`) | The ledger's `json.dumps(..., default=str)` flattened it to `"MemoryConfig(...)"`, and every `ttnn.untilize(x, memory_config=...)` built from it would raise |
+| Has explicit `untilize/device/kernels/...` entries in `target_sources`, as well as a glob | `register_kernel_globs` anchored on the last match anywhere in the file and wrote `untilize/codegen/kernels/*.cpp` into the FILES list, where CMake resolves literal paths. Configure failed; `verify()` reported no errors because the string was present *somewhere* |
+| Its sweep module reuses the upstream suite (`from sweeps.untilize import ...`) | `tests/sweep_framework` was not on `PYTHONPATH`, so the module cannot import. `pad`'s sweep is self-contained |
 
-`selftest.py` now covers all three against a stubbed `ttnn` and a stubbed sweep module. It runs on a
-laptop in under a second and needs no device; run it after touching `ledger.py`, `scaffold.py`, or
-`strata.py`. It is the only test the harness has.
+Two of those five were found only by a real run, and one of them (the CMake glob) had a green
+scaffold step in front of it. When adding a check, prefer asserting *where* something landed over
+asserting that it exists.
+
+`selftest.py` covers all of the above that can be checked without a device -- against a stubbed `ttnn`
+and a stubbed sweep module -- and runs on a laptop in under a second. Run it after touching
+`ledger.py`, `scaffold.py`, or `strata.py`. It is the only test the harness has.
 
 ## What is *not* verified about this run
 
@@ -92,4 +99,6 @@ Triage order, cheapest first:
 3. Did `Emit the routing test` succeed? A `TypeError: cannot render ...` there means a kwarg holds a
    `ttnn` object that is not reachable as a module-level constant, and `_ttnn_constant_name` needs to
    learn it.
-4. Download the port artifact before re-running anything.
+4. Download the port artifact before re-running anything. `tracked.diff` in it is the fastest way to
+   see what the scaffold did to the tree -- it is how the CMake glob misplacement was diagnosed, from
+   a run that never reached the agent.

@@ -183,6 +183,82 @@ try:
 except SyntaxError as exc:
     check("empty out-of-scope set still emits valid Python", False, str(exc))
 
+# ============== 6. kernel globs land in the glob call, not in target_sources
+# Mirrors data_movement/CMakeLists.txt: the op appears both as a glob and as explicit FILES entries.
+CMAKE = """include(sources.cmake)
+
+file(
+    GLOB_RECURSE kernels
+    pad/device/kernels/*.cpp
+    tilize/device/kernels/*.cpp
+    untilize/device/kernels/*.cpp
+    untilize_with_unpadding/device/kernels/*.cpp
+)
+target_sources(
+    ttnn_op_data_movement
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    PRIVATE
+        ${TTNN_OP_DATA_MOVEMENT_SRCS}
+)
+"""
+
+import tempfile  # noqa: E402
+
+for op, expect_beside in (("untilize", True), ("permute", False)):
+    with tempfile.TemporaryDirectory() as tmp:
+        category = Path(tmp)
+        (category / "CMakeLists.txt").write_text(CMAKE)
+        (category / "sources.cmake").write_text(f"    {op}/{op}.cpp\n")
+        kernels = category / op / "codegen" / "kernels"
+        kernels.mkdir(parents=True)
+        (kernels / "k.cpp").write_text("")
+        (kernels / "k.h").write_text("")
+
+        added = scaffold.register_kernel_globs(category, op, kernels)
+        out = (category / "CMakeLists.txt").read_text()
+        lines = out.splitlines()
+        start, close = scaffold.glob_block(out)
+        placed = [i for i, ln in enumerate(lines) if ln.strip().startswith(f"{op}/codegen/kernels/")]
+
+        check(f"[{op}] both extensions added", added == [f"{op}/codegen/kernels/*.cpp", f"{op}/codegen/kernels/*.h"])
+        check(f"[{op}] globs land inside the glob call", placed and all(start < i < close for i in placed),
+              f"placed={[i + 1 for i in placed]} block={start + 1}..{close + 1}")
+        check(f"[{op}] target_sources FILES list untouched",
+              out.split("target_sources")[1] == CMAKE.split("target_sources")[1])
+        check(f"[{op}] indentation matches its neighbours",
+              all(lines[i].startswith("    ") and not lines[i].startswith("     ") for i in placed))
+        if expect_beside:
+            check(f"[{op}] sits beside the op's own native glob",
+                  lines[placed[0] - 1].strip() == f"{op}/device/kernels/*.cpp")
+        else:
+            check(f"[{op}] with no native glob, goes in last", placed[-1] == close - 1)
+
+        # The check that would have caught the bug: it must object when a glob sits outside the call.
+        broken = CMAKE.replace(
+            "            untilize/device/kernels/dataflow/reader_unary_start_id.cpp\n",
+            f"            untilize/device/kernels/dataflow/reader_unary_start_id.cpp\n    {op}/codegen/kernels/*.cpp\n",
+        )
+        (category / "CMakeLists.txt").write_text(broken)
+        op_dir = category / op
+        (op_dir / "codegen").mkdir(parents=True, exist_ok=True)
+        for c in scaffold.COMPONENTS:
+            for ext in ("hpp", "cpp"):
+                (op_dir / "codegen" / f"{op}_codegen_{c}.{ext}").write_text("x")
+        (category / "sources.cmake").write_text(
+            "".join(f"    {op}/codegen/{op}_codegen_{c}.cpp\n" for c in scaffold.COMPONENTS)
+        )
+        errors = scaffold.verify(op_dir, op, [])
+        check(f"[{op}] verify rejects a glob outside the call",
+              any("outside file(GLOB_RECURSE" in e for e in errors), str(errors))
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)
