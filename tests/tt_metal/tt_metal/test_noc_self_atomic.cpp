@@ -34,19 +34,7 @@ namespace tt::tt_metal {
 // serialize at one NIU atomicity point. RISC-V AMOs hang on the uncached alias
 // (dev_mem_map.h), so the self-targeted NoC atomic has NO software fallback.
 // The DM-local fast path relies on a 32-bit RISC-V AMO on the cached alias.
-//
-//   1. TestSelfTargetedNocAtomicIncrement -- loopback NoC atomic does not
-//      deadlock and serializes across same-node DM cores.
-//   2. TestSelfVsRemoteNodeNocAtomic      -- a loopback atomic and a remote
-//      atomic to the same word are mutually atomic.
-//   3. TestDmCachedAmo32                  -- 32-bit RISC-V AMO (amoadd.w) on the
-//      cached L1 alias is correct (DM_LOCAL_CACHED keystone).
-//   4. TestDmCachedCas32                  -- lr.w/sc.w conditional decrement on the
-//      cached alias (multi-consumer DM_LOCAL_CACHED down() keystone).
-//   5. TestDmCacheLineWidth               -- measures the DM write-back cache
-//      line width the cached-pool segregation must enforce.
-//   6. TestSelfCasLockDrain / TestSelfCasLockVsIncr -- NoC 4-bit CAS lock around
-//      the INCR_GET decrement (multi-consumer EXTERNAL down() keystone).
+// Tests (1)-(6) below each pin one of these hardware assumptions.
 // ============================================================================
 class NocSelfAtomicFixture : public MeshDispatchFixture {
 protected:
@@ -68,9 +56,8 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // No fixture-wide Wormhole skip: the two pure-NoC keystones (self-targeted increment,
-        // self-vs-remote) use zero RISC-V AMOs and forced EXTERNAL is ungated on Wormhole, so
-        // they must run there too. The AMO/cacheline/CAS tests carry per-test skips.
+        // No fixture-wide Wormhole skip: the two pure-NoC keystones use no RISC-V AMOs
+        // and must run there too. The AMO/cacheline/CAS tests carry per-test skips.
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
@@ -283,10 +270,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfTargetedNocAtomicIncrement) {
 }
 
 // (2) A self-targeted (loopback) atomic on node_0 and a genuinely-remote atomic
-// from node_1 both increment the SAME word on node_0. Exact final count ==
-// 2 * iterations proves the two arrive as independent atomic requests that
-// serialize at node_0's NIU -- i.e. the local (loopback) and external (remote)
-// paths converge on one atomicity point, which the EXTERNAL mode requires.
+// from node_1 both increment the SAME word on node_0. Exact 2 * iterations proves
+// the loopback and remote paths serialize at one NIU atomicity point, which the
+// EXTERNAL mode requires.
 TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     const auto grid = mesh_device_->compute_with_storage_grid_size();
     log_info(LogTest, "compute-with-storage grid: {} x {}", grid.x, grid.y);
@@ -398,10 +384,9 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
 }
 
 // (4) All user DM cores conditionally DECREMENT one shared cached word using the
-// EXACT production down() shape: relaxed >=1 spin + lr.w/sc.w strong CAS committing
-// observed-1 (noc_semaphore.h, DM_LOCAL_CACHED). Host preloads num_dms * iterations;
-// exact 0 proves no decrement was lost and no credit was consumed twice -- the
-// multi-consumer DM_LOCAL_CACHED down() keystone.
+// production down() shape (relaxed >=1 spin + lr.w/sc.w CAS; noc_semaphore.h,
+// DM_LOCAL_CACHED). Exact 0 proves no decrement was lost and no credit was
+// consumed twice -- the multi-consumer DM_LOCAL_CACHED down() keystone.
 TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Wormhole lacks RISC-V AMOs (lr.w/sc.w)";
@@ -429,18 +414,12 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
 }
 
 // (5) DM write-back cache line width: the minimum separation at which a cached-AMO
-// word and a NoC-atomic word stop sharing a cache line (the dirty-line write-back
-// stops clobbering the NoC word). This is the separation the DM_LOCAL_CACHED pool
-// segregation must enforce between a cached semaphore and any NoC-touched word.
-//
-// Validity controls turn a platform that does not model the hazard (which would read
-// "safe" at every separation and yield a bogus small width) into a HARD FAILURE:
-//   - Control A (residency): a cached write must be invisible via the uncached alias
-//     until flushed (write-back cache exists; uncached alias bypasses it).
-//   - Control B (landed): each NoC atomic must be observed at TL1 pre-flush (so a
-//     post-flush 0 is a genuine clobber, not "never landed").
-//   - Positive control: sep=4B (guaranteed same line) MUST clobber, else the hazard
-//     is not live here -> width INVALID -> verify on silicon.
+// word's dirty-line write-back stops clobbering a NoC-atomic word -- the separation
+// the DM_LOCAL_CACHED pool segregation must enforce.
+// Controls make a platform that does not model the hazard FAIL instead of yielding
+// a bogus small width: A) a cached write must be invisible via the uncached alias
+// until flushed; B) each NoC atomic must be observed at TL1 pre-flush; positive
+// control: sep=4B (same line) MUST clobber, else the width is INVALID -> silicon.
 // Ceiling: FLUSH64 triggers the write-back, so a width > 64B is not detectable here;
 // 64B matches the documented L1 D$/L2 line.
 TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
@@ -547,10 +526,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
 }
 
 // (6a) All user DM threads drain one word through the NoC-CAS-lock-protected
-// check-then-decrement (the production multi-consumer EXTERNAL down() body:
-// acquire CAS 0->1, re-check >=1, INCR_GET(-1), release CAS 1->0). Host preloads
-// num_dms * iterations; exact 0 proves the 4-bit CAS lock grants exclusively
-// under full contention (kernel poisons the count on a bad release pre-op).
+// check-then-decrement (the production multi-consumer EXTERNAL down() body).
+// Exact 0 proves the 4-bit CAS lock grants exclusively under full contention.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -566,9 +543,8 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
            "down() cannot be enabled.";
 }
 
-// (6b) Same drain, lock word at 16B-row offsets 4 and 12 (CAS lanes 1 and 3). Production lock
-// words are 16B-SPACED (one per row, always lane 0 -- see MEM_NOC_SEM_LOCK_SIZE), so these lanes
-// are not production paths; they pin the 4-bit CAS primitive's lane encoding, which is public.
+// (6b) Same drain, lock word at CAS lanes 1 and 3 (see run_cas_lock). Not production paths
+// (locks are 16B-spaced, lane 0 -- see MEM_NOC_SEM_LOCK_SIZE); pins the lane encoding.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes13) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -582,13 +558,11 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes13) {
     }
 }
 
-// (6c) LANE 2 ANOMALY, characterization only (DISABLED_): the same drain with the lock at
-// 16B-row offset 8 (CAS lane 2) fails on the emulator RTL -- the drain makes no progress and
-// the INCR_GET target word comes back as 0x80000000 | initial_count, i.e. the CAS return path
-// misbehaves for lane 2 specifically (lanes 0/1/3 are clean). THIS IS WHY production lock words
-// are 16B-spaced (always lane 0). Run manually (--gtest_also_run_disabled_tests) to
-// re-characterize on silicon; if all lanes prove clean there, the lock region can shrink back
-// to 4B packing.
+// (6c) LANE 2 ANOMALY, characterization only (DISABLED_): with the lock at CAS lane 2 the
+// drain makes no progress and the target word reads 0x80000000 | initial_count on emu RTL
+// (lanes 0/1/3 are clean). THIS IS WHY production lock words are 16B-spaced (always lane 0).
+// Run manually (--gtest_also_run_disabled_tests) to re-characterize on silicon; if all lanes
+// prove clean there, the lock region can shrink back to 4B packing.
 TEST_F(NocSelfAtomicFixture, DISABLED_TestSelfCasLockLane2Anomaly) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -599,11 +573,10 @@ TEST_F(NocSelfAtomicFixture, DISABLED_TestSelfCasLockLane2Anomaly) {
     EXPECT_EQ(observed, 0u) << "lane-2 CAS anomaly reproduced (observed " << observed << ")";
 }
 
-// (6d) Producer/consumer hart pairs on one word starting at 0: even user harts do
-// PLAIN up()-style INCR_GET(+1)s (no lock); odd user harts do lock-protected
-// decrements, blocking on >=1. Exact 0 proves the CAS lock traffic and plain
-// INCR_GET traffic serialize mutually at the NIU -- the real up()/down() mix, since
-// producers never take the lock.
+// (6d) Producer/consumer hart pairs on one word: even harts do PLAIN INCR_GET(+1)
+// up()s (no lock); odd harts do lock-protected decrements. Exact 0 proves CAS-lock
+// traffic and plain INCR_GET traffic serialize mutually at the NIU -- the real
+// up()/down() mix, since producers never take the lock.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockVsIncr) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";

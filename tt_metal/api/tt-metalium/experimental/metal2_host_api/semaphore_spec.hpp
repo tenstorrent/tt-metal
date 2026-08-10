@@ -19,15 +19,13 @@
 namespace tt::tt_metal::experimental {
 
 /**
- * @brief Host-side per-semaphore scope INTENT, baked into a SemScope by the host.
+ * @brief Host-side per-semaphore scope INTENT, resolved to a device SemScope by the host.
  *
- * AUTO = the host derives the effective SemScope from the semaphore's reach (who
- * binds it, on how many nodes). An off-node CONSUME binder is rejected under EVERY
- * scope (a guaranteed hang: down() spins on the consumer's local word). Beyond that:
- * forcing DM_LOCAL_CACHED is validated at build time (a contradiction is a host
+ * AUTO derives the SemScope from the semaphore's reach (who binds it, on how many
+ * nodes). Forcing DM_LOCAL_CACHED is validated at build time (contradiction = host
  * FATAL); forcing EXTERNAL or LOCAL_NONATOMIC skips AUTO's SET-race FATAL -- the
- * escape for phase-separated init-then-write, which the census cannot see.
- * Host-only; not used on the device.
+ * escape for phase-separated init-then-write. An off-node CONSUME binder is
+ * rejected under EVERY scope (guaranteed hang). Host-only; not used on the device.
  */
 // NOTE: a DM_LOCAL_CACHED semaphore's live count is in the device-side cached pool; the
 // host must never poke its word at runtime (WriteToDeviceL1 reaches only the ring slot,
@@ -74,11 +72,8 @@ struct SemaphoreSpec {
     //////////////////////////////////////////////////////////////////////////////
     SemaphoreAdvancedOptions advanced_options;
 
-    // Physical-path INTENT for this semaphore. AUTO lets the host derive it. An off-node
-    // CONSUME binder is rejected under every scope (guaranteed hang). Forcing
-    // DM_LOCAL_CACHED is additionally validated at build time (e.g. multi-node is a
-    // FATAL). The host resolves this to a device SemScope that the kernel picks up via
-    // CTAD (see noc_semaphore.h).
+    // Physical-path INTENT for this semaphore (see SemaphoreScope above). The resolved
+    // SemScope reaches the kernel via CTAD (see noc_semaphore.h).
     SemaphoreScope scope = SemaphoreScope::AUTO;
 };
 
