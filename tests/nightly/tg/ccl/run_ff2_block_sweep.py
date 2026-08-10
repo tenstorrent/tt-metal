@@ -30,8 +30,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
-import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 TEST_FILE = "tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py"
@@ -79,12 +77,6 @@ def _k_expr(packet):
     return f"block_sweep and axis_0 and " + ("8kib" if packet == "8k" else "not 8kib")
 
 
-# A batch that stops producing output for this long is wedged, not slow: kill it and move on rather
-# than blocking the rest of the sweep. Seen with the profiler aborting after the tests themselves
-# passed -- the child stays alive holding the pipe open, so there is nothing to wait for.
-STALL_TIMEOUT_S = 900
-
-
 def run_batch(m_block, k_half, n_half, packet):
     """Run one tracy-profiled batch; return list of (device_time_us, M_block, K_block, N_block)."""
     env = dict(os.environ)
@@ -105,28 +97,11 @@ def run_batch(m_block, k_half, n_half, packet):
         cmd, cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )
     captured = []
-    last_output = [time.time()]
-    stalled = [False]
-
-    def watchdog():
-        while proc.poll() is None:
-            if time.time() - last_output[0] > STALL_TIMEOUT_S:
-                stalled[0] = True
-                print(f"  !! no output for {STALL_TIMEOUT_S}s, killing wedged batch", flush=True)
-                proc.kill()
-                return
-            time.sleep(15)
-
-    t = threading.Thread(target=watchdog, daemon=True)
-    t.start()
     for line in proc.stdout:
-        last_output[0] = time.time()
         sys.stdout.write(line)
         captured.append(line)
     sys.stdout.flush()
     proc.wait()
-    if stalled[0]:
-        print("  !! batch killed after stalling; continuing with the next one", flush=True)
     out = "".join(captured)
     m = _CSV_RE.search(out)
     if not m:
