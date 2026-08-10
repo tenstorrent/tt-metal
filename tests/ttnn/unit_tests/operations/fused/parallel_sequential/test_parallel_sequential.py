@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -2679,6 +2679,11 @@ class TestMatmulFactories:
       - MatmulMultiCoreReuseMcast2DProgramFactory (via MatmulMultiCoreReuseMultiCastProgramConfig)
       - MatmulMultiCoreReuseMcast1DProgramFactory, mcast_in0=True (in0 broadcast, N split)
       - MatmulMultiCoreReuseMcast1DProgramFactory, mcast_in0=False (in1 broadcast, M split)
+      - MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory (in1 sharded across DRAM banks)
+
+    Not reachable from here: MatmulMultiCoreProgramFactory (its MatmulMultiCoreProgramConfig has no
+    Python binding) and MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory (requires a worker set
+    matching the DRAM bank count and ordering).
       - Batched matmul (batch > 1) via reuse_optimized and fuse_batch=True mcast_1d
       - Complex topologies mixing different factories with normalization ops
     """
@@ -2723,6 +2728,89 @@ class TestMatmulFactories:
         )
         mm.launch()
         check_pcc(torch_a @ torch_b, mm.output_tensors[0], pcc=0.99, label="reuse_optimized")
+
+    def _dram_sharded_inputs(self, device, B, M, K, N, grid_x):
+        """in0 width-sharded in L1, in1 width-sharded across DRAM banks — what the
+        DRAM-sharded factories require. Returns (torch_a, torch_b, tt_a, tt_b, in0_block_w)."""
+        num_banks = device.dram_grid_size().x if is_blackhole() else 12
+        assert N % (grid_x * 32) == 0, "N must tile-divide across the worker row"
+        assert N % (num_banks * 32) == 0, "N must tile-divide across the DRAM banks"
+        assert K % (grid_x * 32) == 0, "K must tile-divide across the worker row"
+        in0_block_w = K // grid_x // 32
+
+        torch_a = torch.randn(B, 1, M, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+        in0_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, 0))})
+        in0_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(in0_grid, [B * M, in0_block_w * 32], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+        in1_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [K, N // num_banks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_cfg
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_cfg
+        )
+        out_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(in0_grid, [B * M, N // grid_x], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return torch_a, torch_b, tt_a, tt_b, in0_block_w, out_cfg
+
+    def _assert_selects(self, tt_a, tt_b, program_config, out_cfg, expected_factory):
+        """The frozen selector routes purely on program_config type; pin that mapping so a
+        config change cannot silently re-route a frozen factory."""
+        params = ttnn.MatmulParams()
+        params.program_config = program_config
+        params.output_mem_config = out_cfg
+        attrs = ttnn.create_matmul_attributes(tt_a, tt_b, params, [])
+        inputs = ttnn.MatmulInputs()
+        inputs.input_tensors = [tt_a, tt_b]
+        inputs.optional_input_tensors = [None]
+        factory = ttnn.matmul_select_program_factory_for_python(attrs, inputs)
+        assert isinstance(factory, expected_factory), f"selector returned {type(factory).__name__}"
+
+    @stress_test_program_cache
+    def test_dram_sharded_factory(self, device):
+        """MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory via the DRAM-sharded config."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        M, K, N, grid_x = 32, 1024, 768, 8
+        torch_a, torch_b, tt_a, tt_b, in0_block_w, out_cfg = self._dram_sharded_inputs(device, 1, M, K, N, grid_x)
+
+        cr = cores(0, 0, grid_x - 1, 0)
+        config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w // 4,
+            per_core_M=M // 32,
+            per_core_N=N // grid_x // 32,
+        )
+        self._assert_selects(
+            tt_a,
+            tt_b,
+            config,
+            out_cfg,
+            ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactoryForPython,
+        )
+        mm = matmul_desc(
+            tt_a,
+            tt_b,
+            core_range_set=cr,
+            program_config=config,
+            compute_kernel_config=self._compute(),
+            output_mem_config=out_cfg,
+        )
+        mm.launch()
+        check_pcc(torch_a @ torch_b, mm.output_tensors[0], pcc=0.99, label="dram_sharded")
 
     @stress_test_program_cache
     def test_mcast_2d_factory(self, device):
