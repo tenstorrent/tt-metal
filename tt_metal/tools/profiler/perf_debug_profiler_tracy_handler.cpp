@@ -122,6 +122,11 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     marker.core_y = zone.core_noc0_y;
     // per-hart lane labels; Tensix RISCs map the 0..4 index through kRisc.
     marker.risc = kRisc[zone.risc % 5];
+    // MUST be set: PushStartMarker/PushEndMarker derive the zone's gpuTime from this field alone
+    // (round(marker.timestamp / m_frequency)). Leaving it default (INVALID_NUM) gave every zone on every
+    // core the same constant gpuTime, so all durations came out 0 or negative and the GUI nested them
+    // arbitrarily -- the "wrong parent/child, inconsistent durations" symptom.
+    marker.timestamp = zone.timestamp;
     marker.runtime_host_id = zone.timer_id;
     marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
     marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
