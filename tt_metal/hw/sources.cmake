@@ -100,8 +100,11 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/typecast.h
     inc/api/compute/eltwise_unary/where.h
     inc/api/compute/ema.h
+    inc/api/compute/experimental/add_rsqrt.h
+    inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/sum_reduce_scalar.h
     inc/api/compute/binary_fmod.h

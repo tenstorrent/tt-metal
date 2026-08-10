@@ -4,7 +4,7 @@
 
 #pragma once
 #include "llk_math_common_api.h"
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
+#include "experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY

@@ -7,7 +7,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
