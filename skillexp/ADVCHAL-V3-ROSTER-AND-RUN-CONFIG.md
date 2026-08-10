@@ -106,13 +106,61 @@ Residual, recorded rather than closed: two refs stay named because live worktree
 by raw SHA, which is acceptable only because the prediction documents are off the skill branch and there is
 no in-tree source of a SHA.
 
-## 4. What is still not done
+## 4. The last three items — closed, and what they found
 
-- **The dry run.** `multigoal --dry-run` exercises every step but the model call. Three of four harness bugs
-  in the v2 prototype were caught that way in seconds, including a swallowed exit code in the script written
-  to prevent swallowed exit codes.
-- **A2 in full.** The v2 corpus found five false claims about the advisor in a dependent skill, all biasing
-  the agent away from the capability under test. v3's SKILL.md makes new claims — that the five real tracer
-  gaps are closed — which are true only for the pinned toolchain; the two-pin check now enforces the
-  toolchain, but the prose has not been re-read line by line against it.
-- **Exclusivity sampling** is specified in SKILL.md but nothing collects it yet; it belongs in the harness.
+### A2 — the tracer that runs is not the tracer in the checkout
+
+`ttnn_jit` is installed into the toolchain venv as a **plain directory, not an editable install**, so
+`ttnn-advise` imports site-packages. A `git checkout` of another tt-mlir branch changes the recorded
+`advisor_commit` while the module that traces stays exactly as it was — and there is a `build/lib.../ttnn_jit`
+copy inside the checkout dated **Jul 27**, predating the tracer fixes. Right now the installed copy is
+**byte-identical** to the checkout (verified), but that is the result of a reinstall rather than a property of
+the setup.
+
+The tracer decides whether a layer is visible to the advisor at all — the difference between a real zero and
+a coverage zero — so `capture_template.py` now fingerprints the **imported** module against the checkout's
+and the gate fails a mismatch. `advisor_commit` alone could not have caught this. It is the corpus's own B1:
+*toolchain provenance is a separate axis from git provenance.*
+
+### A2 — and one of v3's own claims did not verify
+
+`SKILL.md` listed `TracedTensor.__getitem__` among the handlers closed in the **direct-TTNN** tracer. It is
+in the **interception** tracer — the one the same document says is not a general fallback. Every entry was
+then checked by hand against the pinned checkout, and the list is split per tracer: emit has `sparse_matmul`,
+mutable-state `copy`, `paged_fused_update_cache`, `ones_like`, `pow`/`pow_tensor`, `softplus` and
+`repeat_interleave`; `__getitem__` is interception-only.
+
+That is precisely the failure A2 exists to catch, committed by me in the document that describes it.
+
+### A5 — exclusivity is sampled, not assumed
+
+`harness_template.py` reads `/proc` for processes holding a Tenstorrent device open, at the **start and end**
+of every measurement, records both, and the gate surfaces any hit. A shared host leaves no retrospective
+evidence — `tt-smi` reports board presence, not utilisation — and two reference cells can never be shown
+clean. The container running `ttnn-advise` maps the same device, so a capture during a timed run appears here.
+
+### The dry run — half done, and the other half is a readiness blocker
+
+**Static half passes:** every prompt substitution resolves, no placeholder is left dangling, and the gate and
+skill the prompt names both exist. *(Noted, unchanged: the drivers pass `--replace HF_MODEL=…`, which neither
+the v2 nor the v3 prompt consumes. Pre-existing and harmless.)*
+
+**The runner half cannot run.** `openai_codex` is absent from every interpreter in both containers — the
+tt-metal `python_env`, the toolchain venv and system python — so `multigoal` exits **1** with *"openai-codex
+is required for multigoal's app-server runner"*. v2 ran 15 cells through this same script, so **the
+environment has drifted since**.
+
+Deliberately **not** installed: adding a dependency to the measurement venv immediately before a perf run is
+how the v2 corpus ended up with *"a toolchain whose provenance was an accident"* (B1/P30 — a package
+installed mid-run by an agent, recorded nowhere, and every subsequent run inherited it). This needs
+`pip install -r .agents/requirements.txt` as a deliberate, recorded step, followed by a re-run of the dry
+run and a toolchain fingerprint.
+
+## 5. Readiness
+
+| | |
+|---|---|
+| **Blocking** | `openai_codex` missing → `pip install -r .agents/requirements.txt`, then re-run the dry run |
+| ready | the stage, its gate, step 0, the roster, the run config, the isolation state, the agent pin |
+| first device work | `phiFN` at batch 32 — must reach −10.43 % or the rebuild is wrong |
+| run the control early | `llama-3.1-8B exp17` must still report 0.0 % |
