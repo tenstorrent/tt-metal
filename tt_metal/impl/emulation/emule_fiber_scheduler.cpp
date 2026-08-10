@@ -285,21 +285,55 @@ struct FiberSchedulerImpl {
         f->in_ready = true;
         ready_[f->home].push_back(f);
     }
-    // Wake EVERY parked fiber to re-check its predicate and empty parked_; spurious-wake-safe. Clears
-    // wait_is_socket since the fiber leaves parked_; park_current re-sets it. pre: mu_ held.
+    // Wake EVERY parked fiber to re-check its predicate; spurious-wake-safe. Use this only when the
+    // wake can actually make progress — i.e. pump(), after the host has raw-stored a socket credit
+    // word and now wants the device to re-check (host-fed socket waits included). The engine's own
+    // recovery paths (re-poll / spin-release) run while the host is NOT executing, so they must use
+    // release_all_parked_except_socket() instead — see the note there. pre: mu_ held.
     void release_all_parked() {
-        for (auto& kv : parked_) {
-            Fiber* f = kv.second;
+        for (auto& [key, head] : parked_) {
+            Fiber* f = head;
             while (f) {
                 Fiber* nx = f->park_link;
                 f->park_link = nullptr;
                 f->park_key = nullptr;
-                f->wait_is_socket = false;
                 enqueue_ready(f);  // sets Ready; idempotent if already queued
                 f = nx;
             }
         }
         parked_.clear();
+    }
+    // Wake every parked fiber EXCEPT host-fed socket waits (wait_is_socket): only the host feeding the
+    // socket can satisfy those, and the host is not running during a re-poll/spin-release — so waking
+    // them can never make progress, and it drops their host-fed tag (park_current re-sets it only on a
+    // fresh park), which erases the HostWait the run must return (any_waiting_on_host()→false) and
+    // churns the run to the watchdog. Leave them parked so the caller sees them and hands control back
+    // to the host, which then pump()s and calls release_all_parked() to wake them. pre: mu_ held.
+    void release_all_parked_except_socket() {
+        for (auto it = parked_.begin(); it != parked_.end();) {
+            Fiber* keep_head = nullptr;   // host-fed socket waits stay parked on this key
+            Fiber** keep_tail = &keep_head;
+            Fiber* f = it->second;
+            while (f) {
+                Fiber* nx = f->park_link;
+                if (f->wait_is_socket) {
+                    f->park_link = nullptr;
+                    *keep_tail = f;
+                    keep_tail = &f->park_link;
+                } else {
+                    f->park_link = nullptr;
+                    f->park_key = nullptr;
+                    enqueue_ready(f);  // sets Ready; idempotent if already queued
+                }
+                f = nx;
+            }
+            if (keep_head) {
+                it->second = keep_head;
+                ++it;
+            } else {
+                it = parked_.erase(it);
+            }
+        }
     }
     // Release the quiescence-deferred set back to ready. Both callers are the same operation at
     // different trigger points (the spin release, and reaching quiescence proper). pre: mu_ held.
@@ -433,7 +467,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     break;
                 }
                 release_quiescence_deferred();
-                release_all_parked();
+                release_all_parked_except_socket();
                 cv_.notify_all();
                 ++barren_releases_;         // provisional; cleared next round if anything moved
                 last_progress_resump_ = r;  // re-arm; don't re-fire until more churn
@@ -472,7 +506,7 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     uint64_t p = progress_.load(std::memory_order_relaxed);
                     if (p != last_deadlock_repoll_progress_) {
                         last_deadlock_repoll_progress_ = p;
-                        release_all_parked();
+                        release_all_parked_except_socket();
                         cv_.notify_all();
                         --idle_;
                         continue;
