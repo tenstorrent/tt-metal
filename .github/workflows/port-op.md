@@ -77,17 +77,17 @@ runs-on: [N150, in-service, cloud-virtual-machine]
 # These run before the checkout, which is the whole point: a runner that cannot host the agent
 # should cost seconds to reject, not the half hour it takes to reach the step that finds out.
 pre-steps:
-  # gh-aw pins its MCP gateway to 127.0.0.1:8080 and starts it by removing any leftover
-  # `awmg-mcpg` container and immediately rebinding the port -- 1.3 ms apart in run
-  # 31218783110, which failed with `address already in use` because the dying container still
-  # held the binding. These are persistent VMs, so leftovers are normal and the port is not
-  # configurable from frontmatter. Clearing them here gives the old binding minutes to drop, and
-  # a port held by something else becomes a fast failure that names the holder. Removing another
-  # job's gateway is not a new hazard -- gh-aw removes that container by name unconditionally
-  # itself -- and a card runner only ever hosts one job, since the card is exclusive.
+  # These runners are persistent, so a previous job's debris is normal: run 31218783110 found a
+  # leftover `awmg-mcpg` container, and this workflow leaked `portdev` on every failure until
+  # post-steps existed. A surviving `portdev` makes `docker run --name portdev` fail outright, and
+  # a surviving gateway container holds the port gh-aw needs.
   #
-  # `portdev` is removed for a different reason: this workflow leaks it (see post-steps), and a
-  # surviving one would make `docker run --name portdev` fail outright.
+  # The port check is a precondition, not the fix for either run that failed on 8080 -- that was
+  # the profiler, see the toolchain container below. It stays because the gateway's port is fixed
+  # at 8080 with no frontmatter knob, so anything already holding it makes the runner unusable, and
+  # learning that in seconds beats learning it after a 25-minute build. Removing another job's
+  # gateway container is not a new hazard: gh-aw removes it by name unconditionally itself, and a
+  # card runner hosts one job at a time because the card is exclusive.
   - name: Clear leftover state from earlier runs on this runner
     run: |
       docker rm -f awmg-mcpg portdev 2>/dev/null || true
@@ -165,7 +165,14 @@ steps:
   # alive across steps is what makes the agent's rebuilds incremental: the build tree, the local
   # ccache and the CMake configure all persist between tool calls.
   #
-  # `--network host` is load-bearing, not tidiness. The remote ccache lives at a Kubernetes service
+  # `TRACY_WASM_HTTP_PORT` is not cosmetic. `python3 -m tracy` unconditionally launches the Tracy WASM
+# web UI as a **daemon** on port 8080 after every capture (`tools/tracy/__main__.py` ->
+# `serve_wasm.launch_server_subprocess`, whose default is 8080 with the WebSocket on port+1). With
+# the host network namespace shared, that is the *host's* 8080 -- the port gh-aw's MCP gateway binds
+# a dozen steps later, and there is no frontmatter knob to move the gateway. This one variable is
+# what killed runs 31218783110 and 31398278036; the port it moves to only needs to be free in pairs.
+#
+# `--network host` is load-bearing, not tidiness. The remote ccache lives at a Kubernetes service
   # name (`garage.garage.svc.cluster.local`) that resolves on the runner host; a container on the
   # default bridge network does not reliably inherit that resolution, every object misses, and the
   # build goes from minutes to over an hour. Sharing the host network namespace gives the container
@@ -186,6 +193,7 @@ steps:
         -e ARCH_NAME=wormhole_b0 \
         -e TRACY_NO_INVARIANT_CHECK=1 \
         -e TRACY_NO_ISA_EXTENSIONS=1 \
+        -e TRACY_WASM_HTTP_PORT=18080 \
         -e CCACHE_TEMPDIR=/tmp/ccache \
         -e CCACHE_BASEDIR=/work \
         -w /work \
@@ -312,6 +320,26 @@ steps:
           sys.exit("no device attribution for the native leg; " + "; ".join(report.get("notes", [])))
       print(f"baseline harness OK -- {codes}, verdict {verdict!r} (a failing verdict is expected here)")
       PY
+
+  # The baseline is the first thing in the job to run the profiler, so it is the first thing that
+  # could take port 8080 out from under the MCP gateway (see the container comment). Checking here
+  # keeps that failure attributable: the alternative is what happened twice already, an
+  # `address already in use` from a gh-aw step 16 steps later with nothing pointing back at tracy.
+  # A stray web UI is only a debug server, so clearing it is safe and saves re-paying for the build.
+  - name: Assert the profiler left the gateway port alone
+    run: |
+      if ss -ltnH 'sport = :8080' | grep -q .; then
+        echo "::warning::Something began listening on 8080 while the profiler ran; clearing it."
+        docker exec portdev bash -c 'pkill -f serve_wasm.py' || true
+        sleep 3
+      fi
+      if ss -ltnH 'sport = :8080' | grep -q .; then
+        echo "::error::Port 8080 is occupied after the profiler ran, and the MCP gateway needs it."
+        sudo -n ss -ltnp 2>/dev/null || ss -ltn || true
+        docker exec portdev bash -c 'pgrep -af serve_wasm.py' || true
+        exit 1
+      fi
+      echo "gateway port 8080 is still free after the profiler ran"
 
 # Nothing removed `portdev` before this, so every failed run left a container holding
 # /dev/tenstorrent and the host network namespace on a shared VM -- four of them by run

@@ -810,7 +810,11 @@ up`, which is the correct pre-agent state: the stubs are empty, so the codegen l
 
 The deterministic half of the design is now proven end to end in CI, not just locally.
 
-### 14.2 The failure: gh-aw's gateway lost a race for port 8080
+### 14.2 The failure: something else already had port 8080 — **cause identified in 14.7**
+
+The first diagnosis in this section was wrong, and run #11 disproved it. Read 14.7 for the actual
+cause: **our own profiler**. What follows is still accurate about the symptom and about gh-aw's
+behaviour, and the leftover container it describes was real — just not what broke the run.
 
 The job died at gh-aw's own `Start MCP Gateway`:
 
@@ -828,15 +832,12 @@ container' || true`). It printed, so a leftover really existed. Then:
 | `21:41:06.8243633` | `Removed stale awmg-mcpg container` |
 | `21:41:06.8256909` | `Starting gateway with container: docker run … -p 127.0.0.1:8080:8080` |
 
-1.3 ms apart. The removed container's port binding had not been released, so the new one could not
-bind. The port is hardcoded by the compiler (`export MCP_GATEWAY_PORT="8080"`) and is not settable
-from frontmatter, so this cannot be dodged by moving ports.
-
-Why there was a leftover at all: **these are persistent VMs.** The run landed on
-`tt-metal-ci-vm-71`, which had also hosted run #8 that afternoon. `port-op` is the only gh-aw
-workflow in the repo with a self-hosted `runs-on`; the other four default to `ubuntu-slim`, so
-nothing else was competing — the runner simply carries state between jobs. Worth reporting
-upstream: remove-then-immediately-rebind with no wait and no retry.
+1.3 ms apart — which looked like a lost race for the binding, and was not. The two facts that
+matter and survive are: **the port is hardcoded by the compiler** (`export MCP_GATEWAY_PORT="8080"`)
+with no frontmatter knob, so nothing can move the gateway; and **these runners are persistent**, so
+a previous job's containers are still there when the next one starts. `port-op` is the only gh-aw
+workflow in the repo with a self-hosted `runs-on` — the other four default to `ubuntu-slim` — so
+nothing else was competing for the port; the runner simply carries state between jobs.
 
 ### 14.3 The ccache remote is *erroring*, not missing — 12.9 corrected
 
@@ -876,7 +877,7 @@ that broke 14.2.
 
 | Change | Why |
 |---|---|
-| `pre-steps:` guard clearing `awmg-mcpg`/`portdev`, then waiting up to 30 s for 8080 | Runs ~500 lock-file lines before the gateway, so the stale binding has minutes to drop instead of 1.3 ms. Fails fast and names the holder, distinguishing leftover state from a host service on that port. |
+| `pre-steps:` guard clearing `awmg-mcpg`/`portdev`, then waiting up to 30 s for 8080 | A precondition check, not the fix — see 14.7. It clears real leftover containers and makes an occupied port a five-second failure that names the holder. |
 | `post-steps:` `tt-smi -r` then `docker rm -f portdev`, `if: always()` | Stops the leak; implements H8. |
 | `Native baseline` is no longer `continue-on-error` | It now asserts the verdict is not `blocked`, the ledger has in-scope cases, and the native leg was attributed an op code. Tested against this run's real report (passes) and against blocked / empty / attribution-inconclusive reports (all fail). |
 | Non-fatal `getent`+`curl` probe of the Garage endpoint; `CCACHE_LOGFILE` | Turns 14.3 from inference into evidence. |
@@ -885,18 +886,70 @@ that broke 14.2.
 Compiles clean under strict mode with gh-aw v0.85.4. The extension was pinned locally at v0.84.2
 while the committed lock was built by v0.85.4 — repin before recompiling, or the lock regresses.
 
-### 14.6 Next
+### 14.6 Superseded by 14.7 — the pool decision still stands
 
-1. Push to `ebanerjee/port-op-dryrun` and watch two things: the guard reports 8080 free, and
-   `Native baseline` passes its new assertion.
-2. Read the ccache probe output. If DNS does not resolve, 14.3 is confirmed and the decision below
-   becomes the real fix rather than an optimisation.
-3. Then the agent's first real attempt (section 13's item 3, still the interesting one).
+The steps below were written before run #11; 14.7 records what it found and what to do instead.
+Item 1 and 2 are answered. The pool decision is unchanged and still worth taking on its own merits.
 
-**Open decision: the runner pool.** `wh_n150_civ2` (`tt-ubuntu-2204-N150-viommu-stable`) would fix
-both problem classes at once — ephemeral runners carry no leftover containers, and being in-cluster
-they reach Garage. The catch is that they are ARC pods, so Docker is likely DinD, and gh-aw has an
-open issue ([#34896](https://github.com/github/gh-aw/issues/34896)) documenting that ARC/DinD still
-needs workflow-level workarounds — which is exactly the nesting problem 12.2 avoided by keeping the
-job on the host. Also drop the hugepages mount on `viommu` labels (section 6). Not a free win;
-worth a spike before committing to it.
+**Open decision: the runner pool.** `wh_n150_civ2` (`tt-ubuntu-2204-N150-viommu-stable`) removes the
+leftover-container class of problem, since ephemeral runners carry no state, and — if 14.3's DNS
+theory holds — recovers the 2.6-minute warm build by being in-cluster. The catch is that they are
+ARC pods, so Docker is likely DinD, and gh-aw has an open issue
+([#34896](https://github.com/github/gh-aw/issues/34896)) documenting that ARC/DinD still needs
+workflow-level workarounds — exactly the nesting problem 12.2 avoided by keeping the job on the
+host. Also drop the hugepages mount on `viommu` labels (section 6). Not a free win; worth a spike
+before committing to it.
+
+---
+
+### 14.7 Run #11: the port thief is our own profiler
+
+Run [31398278036](https://github.com/tenstorrent/tt-metal/actions/runs/31398278036), first run with
+the 14.5 changes, on `tt-metal-ci-vm-109`. Two of the three fixes did exactly what they were built
+to do, and the third proved its own premise wrong:
+
+| Step | Result |
+|---|---|
+| `Clear leftover state from earlier runs on this runner` | `gateway port 8080 is free` at 14:29 |
+| `Probe the remote ccache endpoint` | **success** — DNS resolved and the endpoint answered |
+| `Build tt-metal` | success |
+| `Native baseline` | **success** — the new assertion held on real hardware |
+| `Start MCP Gateway` | **failed at 14:52, `address already in use` on 127.0.0.1:8080 again** |
+| `Release the card and remove the toolchain container` | success |
+
+So: the port was verifiably free at 14:29 on a machine that had never run this workflow, and
+occupied by 14:52. Nothing leftover can explain that. Something *inside the job* takes 8080 between
+those two points, and the only thing between them that opens a port is the profiler.
+
+`tools/tracy/__main__.py`, after every capture:
+
+```python
+launch_server_subprocess(port=options.web_app_port)
+# Start the WASM server as a daemon with defaults
+```
+
+`web_app_port` defaults to `None`, and `serve_wasm.py` resolves that to `DEFAULT_HTTP_PORT = 8080`
+(WebSocket on port+1), launched as a **daemon** that outlives the tracy invocation. There is no flag
+to skip it. And because `portdev` shares the host network namespace — which it must, for the ccache
+DNS — that daemon binds the **host's** 8080. The device band runs it, so every `verify` call would
+too.
+
+This explains both failures and every detail that did not fit the race story: why it recurred on a
+different VM, why the guard could truthfully report the port free, why it is always the gateway that
+notices, and why the other four gh-aw workflows in the repo are fine — none of them profile.
+
+The fix is one variable, `TRACY_WASM_HTTP_PORT=18080` on the container, plus a tripwire step
+straight after the baseline that fails there (after clearing a stray server, which is only a debug
+UI) rather than letting a gh-aw step 16 steps later take the blame. The pre-step guard stays as a
+precondition check; it was never the fix.
+
+**Corollary for 14.3, and it is a real one:** the ccache probe *succeeded*, so the DNS theory is
+wrong too, or at least incomplete — `garage.garage.svc.cluster.local` resolves from this pool and
+the endpoint answers. Whatever produces `Errors: 1395` is therefore above the transport: most likely
+credentials rejected, or a ccache S3 configuration mismatch with what `build-artifact.yaml` uses.
+The `CCACHE_LOGFILE` grep in the ccache summary step is the next place to look, and it now runs.
+
+**Lesson worth keeping.** Two diagnoses in one day (12.9 and 14.2) were confident, mechanically
+plausible, and wrong, and both were built on evidence that was consistent with the story but did not
+establish it — an error count read as a miss count, and a 1.3 ms interval read as a race. Both were
+cheap to disprove with one deliberate probe. Prefer the probe.
