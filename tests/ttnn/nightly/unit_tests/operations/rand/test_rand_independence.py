@@ -9,24 +9,15 @@ independent:
 
 * ~~within every 32-wide tile, columns 24..31 are byte-identical to columns 0..7~~ -- FIXED: the
   kernel now consumes several PRNG values per element, so the sliding window advances past its own
-  width and no two columns are byte-identical. That test is no longer xfail;
-* the remaining correlation is NOT fixed. The PRNG is a sliding window over one stream -- element
-  (read t, lane i) carries stream[t + i] -- so columns stay correlated in value and the argmax over
-  a wide row still coincides far more often than IID allows (cross-position max |r| 0.618 against
-  0.035 for a host control). Any combination of extra reads is still a function of t + i; removing
-  it needs a counter-based RNG keyed on the element's own position.
+  width and no two columns are byte-identical;
+* ~~columns stay correlated in value (sliding window over one stream: element (read t, lane i)
+  carries stream[t + i]; cross-position max |r| 0.618 against 0.035 for a host control)~~ --
+  FIXED by the lane-salted counter RNG (tt-metal#52024, tracked as #52014): each lane's stream is
+  keyed on its own position, and the argmax-collision gate below passes on P150x4.
 
-Both are properties of the op (they are present in the raw ``ttnn.rand`` output, independent of
-the other axis extent and of the seed), so they belong in the rand suite rather than in a
-consumer's tests. Measured 2026-07-25 on P150x4, at width 256 and at width 262144 alike.
-
-The per-core seed was ruled out as the cause: cores are seeded ``seed + i``, and replacing that
-with an avalanche mix left both metrics unchanged (cross-core rows already measure clean --
-max |r| 5.7 vs 6.5 sigma before/after, both against a 3.6 sigma host control). The defect is
-inside a single core's tile, in the SFPU PRNG path used by ``compute_uniform.cpp``.
-
-Marked xfail(strict) rather than deleted so the suite records the defect and flips to a failure
-the moment it is fixed.
+Both were properties of the op (present in the raw ``ttnn.rand`` output, independent of the other
+axis extent and of the seed), so they live in the rand suite rather than in a consumer's tests.
+The tests stay as regression gates: they flip back to failures if cross-lane correlation returns.
 """
 
 import pytest
@@ -74,15 +65,6 @@ def test_rand_columns_are_distinct(device, width):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Tracked by https://github.com/tenstorrent/tt-metal/issues/52014. "
-    "The PRNG is a sliding window over one stream, so columns stay correlated in value even "
-    "now that none are byte-identical: cross-position max |r| is 0.618 against 0.035 for host IID, "
-    "and argmax coincides far more often than IID allows. Removing this needs a counter-based RNG "
-    "keyed on each element's position; consuming more PRNG values only dilutes it",
-)
 def test_rand_columns_do_not_share_an_argmax(device):
     """Independent columns almost never pick the same row as their maximum.
 
