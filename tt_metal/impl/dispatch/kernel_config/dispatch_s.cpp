@@ -137,19 +137,25 @@ void DispatchSKernel::GenerateStaticConfigs() {
     }
     TT_FATAL(
         upstream_cq_ids.size() == upstream_kernels_.size() && downstream_cq_ids.size() == downstream_kernels_.size(),
-        "DISPATCH_S requires one peer of each type per CQ");
-    TT_FATAL(upstream_cq_ids == downstream_cq_ids, "DISPATCH_S must have matching PREFETCH and DISPATCH peers by CQ");
+        "DISPATCH_S requires exactly one upstream PREFETCH and one downstream DISPATCH per CQ");
+    TT_FATAL(
+        upstream_cq_ids == downstream_cq_ids,
+        "DISPATCH_S upstream PREFETCH and downstream DISPATCH kernels must cover the same set of CQs");
     served_cq_ids_.assign(upstream_cq_ids.begin(), upstream_cq_ids.end());
 
     const bool serves_one_cq = served_cq_ids_.size() == 1;
     const bool serves_cq0_and_cq1 = served_cq_ids_.size() == 2 && served_cq_ids_[0] == 0 && served_cq_ids_[1] == 1;
     TT_FATAL(serves_one_cq || serves_cq0_and_cq1, "DISPATCH_S must serve exactly one CQ, or CQ0 and CQ1 when shared");
-    if (!serves_one_cq) {
+    if (serves_cq0_and_cq1) {
         for (const auto* kernel : upstream_kernels_) {
-            TT_FATAL(kernel->GetLogicalCore() == logical_core_, "Shared DISPATCH_S peers must be colocated");
+            TT_FATAL(
+                kernel->GetLogicalCore() == logical_core_,
+                "Shared DISPATCH_S requires its upstream PREFETCH kernels to be on the same core");
         }
         for (const auto* kernel : downstream_kernels_) {
-            TT_FATAL(kernel->GetLogicalCore() == logical_core_, "Shared DISPATCH_S peers must be colocated");
+            TT_FATAL(
+                kernel->GetLogicalCore() == logical_core_,
+                "Shared DISPATCH_S requires its downstream DISPATCH kernels to be on the same core");
         }
         const uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_id_);
         for (const uint8_t served_cq_id : served_cq_ids_) {
