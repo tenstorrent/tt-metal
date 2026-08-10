@@ -7,10 +7,12 @@
 #include <vector>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/tensor.hpp"  // ttnn::Tensor, tt::tt_metal::DataType
 
 namespace ttnn::prim {
 
@@ -102,5 +104,54 @@ bool groupnorm_legacy_rm_input_fits_l1(
 // Prefer composite (host tilize + TILE GN) over fused RM for small grids or uneven batch mapping.
 // num_cores = num_virtual_cols * num_virtual_rows.
 bool groupnorm_legacy_rm_prefer_composite_for_perf(uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches);
+
+// Which of the optional static CBs the sharded factory will emit.
+struct GroupNormShardedCbFlags {
+    // Selects the negative-mask CB (c_14) in place of the untilize-out copy (c_30) -- the
+    // overlap trick the negative mask exists for. True whenever the factory sees either a
+    // caller-supplied negative_mask or synthesize_negative_mask.
+    bool with_negative_mask = false;
+    bool untilize_out = false;
+    bool has_gamma = false;
+    bool has_beta = false;
+    bool reader_repack_output = false;
+    bool use_welford = false;
+    bool pad_correction_active = false;
+};
+
+// Per-core byte sizes of the statically-allocated circular buffers used by the sharded
+// group-norm program factory.
+struct GroupNormShardedStaticCbSizes {
+    uint32_t in_CB_size = 0;                // c_1  tilized input (and the c_30 untilize-out copy)
+    uint32_t in2_CB_size = 0;               // c_2  scaler (and c_4 scaler-c when !welford)
+    uint32_t in3_CB_size = 0;               // c_3  eps
+    uint32_t in5_CB_size = 0;               // c_5  gamma
+    uint32_t in6_CB_size = 0;               // c_6  beta
+    uint32_t in_mask_CB_size = 0;           // c_7  input mask
+    uint32_t in_negative_mask_CB_size = 0;  // c_14 negative mask
+    uint32_t repack_CB_size = 0;            // c_11/c_12 repack
+    uint32_t x_CB_size = 0;                 // c_13 x
+    uint32_t ex_partial_CB_size = 0;        // c_8  ex_partial
+    uint32_t ex_global_CB_size = 0;         // c_9/c_15 ex_global
+    uint32_t ex2pe_CB_size = 0;             // c_17 ex2pe
+    uint32_t single_tile_size = 0;          // c_10 ex_external, c_18..c_20 pad correction
+    uint32_t scalar_tile_size = 0;          // c_26 ones -- bf16 even on the legacy fp32 path
+
+    // Total per-core L1 occupied by the static CB region.
+    uint32_t total(const GroupNormShardedCbFlags& flags) const;
+};
+
+GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
+    const ttnn::Tensor& input,
+    tt::tt_metal::DataType im_data_format,
+    std::optional<tt::tt_metal::DataType> gamma_dtype,
+    std::optional<tt::tt_metal::DataType> beta_dtype,
+    std::optional<tt::tt_metal::DataType> input_mask_dtype,
+    std::optional<tt::tt_metal::DataType> negative_mask_dtype,
+    bool use_welford,
+    uint32_t num_groups,
+    // 2 when a row-masked second mask set is streamed for non-tile-aligned H*W (#52685), which
+    // doubles c_7. Must match the factory's `mask_sets`, or this estimate under-counts L1.
+    uint32_t mask_sets = 1);
 
 }  // namespace ttnn::prim

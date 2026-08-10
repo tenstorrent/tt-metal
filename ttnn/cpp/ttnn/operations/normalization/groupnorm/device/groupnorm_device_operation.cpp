@@ -266,33 +266,26 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             output_layout);
     }
 
-    // synthesize_negative_mask=True makes the sharded writer kernel build the inverted per-group
-    // selector directly in L1 instead of reading a negative_mask tensor, so it inherits the same
-    // constraints as a caller-supplied negative mask. Checked here rather than only in the ttnn
-    // wrapper so that direct ttnn::prim::group_norm callers are covered too.
+    // synthesize_negative_mask makes the sharded writer kernel build the per-group
+    // selector directly in L1 instead of reading a tensor.
+    // This attribute is determined by ttnn::group_norm itself (see needs_negative_mask_overlap)
     if (args.synthesize_negative_mask) {
         TT_FATAL(
             a.is_sharded(),
-            "group_norm: synthesize_negative_mask=True is only supported for sharded inputs (the interleaved factories "
+            "group_norm: synthesize_negative_mask is only supported for sharded inputs (the interleaved factories "
             "have no negative-mask code path).");
-        // The negative mask only exists so the legacy sharded kernel can accumulate output in place
-        // into the tilized-input CB. The Welford kernels never overlap those CBs, so they have no
-        // negative-mask path at all -- and the sharded factory skips allocating the untilize-output
-        // CB (c_30) whenever a negative mask is in play, which the Welford kernel still reads under
-        // UNTILIZE_OUT. Accepting the combination would hang rather than ignore the flag.
-        TT_FATAL(
-            !args.use_welford, "group_norm: synthesize_negative_mask=True is not supported with use_welford=True.");
+        // The Welford kernels have no negative-mask path at all.
+        TT_FATAL(!args.use_welford, "group_norm: synthesize_negative_mask is not supported with use_welford=True.");
         // Mirrors the layout requirements enforced above for a caller-supplied negative_mask tensor.
-        // Without these the flag reaches kernels whose input or output CB is never written.
         TT_FATAL(
             a.layout() == Layout::ROW_MAJOR,
-            "group_norm: synthesize_negative_mask=True requires a ROW_MAJOR input tensor, but layout is {}",
+            "group_norm: synthesize_negative_mask requires a ROW_MAJOR input tensor, but layout is {}",
             a.layout());
         Layout output_layout =
             std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
         TT_FATAL(
             output_layout == Layout::ROW_MAJOR,
-            "group_norm: synthesize_negative_mask=True requires a ROW_MAJOR output layout, but layout is {}",
+            "group_norm: synthesize_negative_mask requires a ROW_MAJOR output layout, but layout is {}",
             output_layout);
     }
 

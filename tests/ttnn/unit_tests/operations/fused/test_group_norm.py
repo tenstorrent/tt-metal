@@ -1584,14 +1584,12 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
-def test_group_norm_synthesize_negative_mask(device, N, C, H, W, num_groups):
+def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
     """
-    Exercises NEGATIVE_MASK_SYNTHESIZE on the sharded factory. No mask tensors
-    are passed; instead, synthesize_negative_mask=True opts into the writer-
-    kernel negative-mask synthesis path, and the positive mask is synthesized
-    automatically because input_mask is omitted. Compares against the same
-    computation with a caller-supplied bf16 negative_mask to confirm bit-
-    equivalence.
+    Exercises NEGATIVE_MASK_SYNTHESIZE with no mask tensors passed at all. The L1 ballast
+    below leaves the overlap as the only layout that fits, so the call completing is the
+    proof that the op enabled it by itself. Compared against the caller-supplied bf16
+    mask path for bit-equivalence.
     """
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=8, x=8)
@@ -1641,6 +1639,24 @@ def test_group_norm_synthesize_negative_mask(device, N, C, H, W, num_groups):
     # second run already-normalized data.
     tt_input_synth = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
 
+    # 64 KB/core: more than the margin by which the non-overlapping layout fits, less
+    # than the ~385 KB the overlap frees. Held live across the call below.
+    ballast_rows_per_core, ballast_cols_per_core = 64, 512
+    ballast_shard = ttnn.ShardSpec(
+        shard_grid, (ballast_rows_per_core, ballast_cols_per_core), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    ballast = ttnn.from_torch(
+        torch.zeros(
+            (1, 1, ballast_rows_per_core * grid_size.y, ballast_cols_per_core * grid_size.x), dtype=torch.bfloat16
+        ),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, ballast_shard
+        ),
+    )
+
     tt_output_tensor = ttnn.group_norm(
         tt_input_synth,
         num_groups=num_groups,
@@ -1648,9 +1664,9 @@ def test_group_norm_synthesize_negative_mask(device, N, C, H, W, num_groups):
         core_grid=grid_size,
         weight=gamma_t,
         bias=beta_t,
-        synthesize_negative_mask=True,
     )
     ttnn.synchronize_device(device)
+    ttnn.deallocate(ballast)
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -1857,11 +1873,14 @@ def test_group_norm_rejects_host_negative_mask(device, expect_error):
         )
 
 
-def _block_sharded_320ch_input(device, grid_size, layout):
-    torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)
-    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, 32 * 32, 320)
+def _block_sharded_320ch_input(device, grid_size, layout, spatial=32):
+    # Single core, so `spatial` sets how much L1 the program needs. The default is too big
+    # to fit; pass a smaller one when the op is expected to run to completion.
+    hw = spatial * spatial
+    torch_input_tensor = torch.rand((1, 320, spatial, spatial), dtype=torch.bfloat16)
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, hw, 320)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    shard_spec = ttnn.ShardSpec(shard_grid, (32 * 32, 320), ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, (hw, 320), ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -1872,22 +1891,14 @@ def _block_sharded_320ch_input(device, grid_size, layout):
         device=device,
         memory_config=sharded_mem_config,
     )
-    return input_tensor, sharded_mem_config
+    return torch_input_tensor, input_tensor, sharded_mem_config
 
 
 def test_group_norm_rejects_negative_mask_with_welford(device, expect_error):
+    # Only a caller-supplied negative mask can reach the Welford kernels; the op's own
+    # decision declines for use_welford=True.
     grid_size = ttnn.CoreGrid(y=1, x=1)
-    input_tensor, sharded_mem_config = _block_sharded_320ch_input(device, grid_size, ttnn.ROW_MAJOR_LAYOUT)
-
-    with expect_error(RuntimeError, "synthesize_negative_mask=True is not supported with use_welford=True"):
-        ttnn.group_norm(
-            input_tensor,
-            num_groups=32,
-            memory_config=sharded_mem_config,
-            core_grid=grid_size,
-            use_welford=True,
-            synthesize_negative_mask=True,
-        )
+    _, input_tensor, sharded_mem_config = _block_sharded_320ch_input(device, grid_size, ttnn.ROW_MAJOR_LAYOUT)
 
     input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(320, 32, grid_size.x, ttnn.DataType.BFLOAT16), device)
     negative_mask = ttnn.to_device(
@@ -1905,19 +1916,35 @@ def test_group_norm_rejects_negative_mask_with_welford(device, expect_error):
         )
 
 
-def test_group_norm_rejects_synthesize_negative_mask_with_tile_layout(device, expect_error):
+def test_group_norm_tile_layout_declines_negative_mask(device):
+    # A TILE input has no negative-mask code path, so the op must decline the overlap.
+    # Guards the layout check in needs_negative_mask_overlap.
     grid_size = ttnn.CoreGrid(y=1, x=1)
-    input_tensor, sharded_mem_config = _block_sharded_320ch_input(device, grid_size, ttnn.TILE_LAYOUT)
+    torch.manual_seed(0)
+    torch_input, input_tensor, sharded_mem_config = _block_sharded_320ch_input(
+        device, grid_size, ttnn.TILE_LAYOUT, spatial=8
+    )
 
-    with expect_error(RuntimeError, "synthesize_negative_mask=True requires a ROW_MAJOR input tensor"):
-        ttnn.group_norm(
-            input_tensor,
-            num_groups=32,
-            memory_config=sharded_mem_config,
-            core_grid=grid_size,
-            inplace=False,
-            synthesize_negative_mask=True,
-        )
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=32,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        inplace=False,
+    )
+    ttnn.synchronize_device(device)
+    assert output.layout == ttnn.TILE_LAYOUT
+
+    torch_output = torch.nn.functional.group_norm(torch_input, 32)
+    torch_output = torch_output.permute(0, 2, 3, 1).view(1, 1, 8 * 8, 320)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(output)),
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups", DRAM_GRID_SIZE_SHAPES)
