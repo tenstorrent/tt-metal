@@ -231,6 +231,18 @@ class TtQwenModelArgs(TtModelArgs):
         self.use_unfused_ccl = (
             self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
         )
+        # Fused distributed-norm (fused_rms_minimal / RMSAllGather) on the BH prefetcher path. The
+        # writer's stats all-gather was ported to fabric-topology-aware routing (ccl_routing_utils),
+        # so it no longer no-ops on the 2D torus. This gates ONLY the decode norm chain; the other
+        # collectives stay on the unfused path (use_unfused_ccl above). On BH the fused norm runs on
+        # the LN grid at column 7 (see DistributedNorm), with the LAYERNORM stats buffer and a
+        # dedicated semaphore pool moved there to match.
+        self.use_bh_fused_rms = (
+            self.use_prefetcher
+            and self.is_blackhole
+            and self.use_unfused_ccl
+            and os.environ.get("QWEN_BH_FUSED_RMS", "1") == "1"
+        )
         # Repro harness for bringing up the FUSED matmul+reduce-scatter (llama_rs_matmul) on the
         # Blackhole prefetcher path, isolated to the MLP FF1/FF3 reduce-scatter. Enabling it routes the
         # FF matmul through the WH fused double_matmul_line_reduce_scatter unchanged. Unlike the fused
@@ -258,6 +270,20 @@ class TtQwenModelArgs(TtModelArgs):
         # Enable with QWEN_BH_FUSED_ASYNC_RS_MATMUL=1 (requires QWEN_BH_UNFUSED_CCL=1 for the semaphore pool).
         self.use_bh_fused_async_rs_matmul = (
             self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_FUSED_ASYNC_RS_MATMUL", "0") == "1"
+        )
+        # Fused QKV reduce-scatter + create-heads (llama_rs_create_heads) on the BH prefetcher path.
+        # Replaces the unfused column all-reduce + off-receiver reshard + nlp_create_qkv_heads_decode.
+        # Requires the 2D-fabric routing port of llama_reduce_scatter_create_heads (done) and the
+        # RS_CREATE_HEADS packet workers off the global-CB receiver cols (handled below).
+        self.use_bh_fused_qkv_rs = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_FUSED_QKV_RS", "0") == "1"
+        )
+        # Fused SDPA-output all-gather + concat-heads (all_gather_concat) on the BH prefetcher path.
+        # Replaces all_gather_async + nlp_concat_heads_decode + the WO ring reshard; writes the WO ring
+        # input layout directly. Requires the 2D-fabric multicast routing port of
+        # all_gather_concat_heads_fused (done).
+        self.use_bh_fused_ag_concat = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_FUSED_AG_CONCAT", "0") == "1"
         )
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
@@ -485,6 +511,14 @@ class TtQwenModelArgs(TtModelArgs):
             # Wormhole keeps main's fixed height (32); only the Blackhole bring-up path uses the
             # tile-padded batch rows.
             decode_shard_height = self.tile_padded_batch_rows if self.is_blackhole else 32
+            # On the BH fused-norm path the fused RMSAllGather runs on the LN grid at cols 7-8
+            # (clear of the prefetcher GCB receiver cols 1-3). Keeping the residual stream on the
+            # same grid makes the per-norm reshard-in a no-op (129 reshards/token saved); all other
+            # consumers (residual adds, attn/MLP output reshards, embedding) are grid-agnostic.
+            if self.use_bh_fused_rms:
+                residual_core_range = ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(8, 4))
+            else:
+                residual_core_range = core_range
             # Always use Galaxy configuration
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(
@@ -495,7 +529,7 @@ class TtQwenModelArgs(TtModelArgs):
                 ),
                 core_grid=ttnn.CoreRangeSet(
                     [
-                        core_range,
+                        residual_core_range,
                         # ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
                         # ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
                     ]
@@ -1028,11 +1062,16 @@ class TtQwenModelArgs(TtModelArgs):
             # the resident global CB during full-model trace capture. With dynamic chunking (k_chunk=0)
             # the K/V CBs are sized for max_dynamic_chunk_size (dst_size = 8 tiles) -> ~256 KB, which
             # overflows the ~423 KB of L1 left free below the global CB on the receiver cores by ~25 KB
-            # ("static circular buffers clash with L1 buffers on [1-0 - 3-7]"). Pin k_chunk_size to the
-            # paged KV block_size (64 tokens = 2 tiles): page-aligned so each chunk is exactly one page,
-            # and Sk_chunk_t=2 shrinks the K/V CBs to ~64 KB, clearing the clash. Flash-decode's online
-            # softmax makes the fixed smaller chunk numerically identical, just a few more K iterations.
-            paged_sdpa_k_chunk = 64 if (self.is_blackhole and self.use_prefetcher and self.use_unfused_ccl) else 0
+            # ("static circular buffers clash with L1 buffers on [1-0 - 3-7]"). Pin k_chunk_size to a
+            # fixed 128 tokens (2 paged KV blocks = 4 tiles): page-aligned, and Sk_chunk_t=4 keeps the
+            # K/V CBs at ~128 KB, ~100 KB under the clash threshold, while halving the flash-decode
+            # K-iteration count vs the earlier 64-token chunk (SDPA was 17.8 us/layer vs WH's 12.9 us).
+            # Flash-decode's online softmax makes the fixed smaller chunk numerically identical.
+            paged_sdpa_k_chunk = (
+                int(os.environ.get("QWEN_BH_SDPA_K_CHUNK", "128"))
+                if (self.is_blackhole and self.use_prefetcher and self.use_unfused_ccl)
+                else 0
+            )
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=paged_sdpa_grid,
                 sub_core_grids=paged_sdpa_sub_core_grids,
@@ -1232,12 +1271,23 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["SHARDED_QKV_OUT_PER_DEVICE_MEMCFG"] = self.create_dram_sharded_mem_config(
                 self.tile_padded_batch_rows, self.qkv_n_local
             )
-            RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
-                ]
-            )
+            if self.use_prefetcher:
+                # Prefetcher resident: cols 1-3 are live global-CB receiver cores (and the QKV ring),
+                # so the RS packet workers must stay off them (same conflict as PACKET_WORKER_CRS for
+                # the fused MLP reduce-scatter). 5 cores on cols 5-6, off the CCL sender row 3.
+                RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 1)),
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ]
+                )
+            else:
+                RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+                    ]
+                )
             # Match main width (512). The Blackhole no-prefetch path re-widens this to 1280 in TT_CCL
             # (interim-shard guard) where the all_reduce_create_qkv_heads buffer minimum requires it.
             self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -1611,12 +1661,25 @@ class TtQwenModelArgs(TtModelArgs):
             # {1,0}-{2,0}, {1,4}-{2,5}, {1,9}-{2,9}, {5,0}-{6,2}, {5,4}-{6,7}, {5,9}-{6,9} (Matmul)
             # {0,0}-{0,9}, {4,0}-{4,9} (Prefetcher)
             # {3,6} (Matmul hop core)
-            PACKET_WORKER_CRS = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
-                ]
-            )
+            if self.is_blackhole:
+                # BH ring matmul occupies cols 1-3 rows 0-7 + hop (3,8). The fused llama_rs_matmul
+                # subtracts the RS cores from the matmul worker set (restricted_cores), so any
+                # packet-worker core inside the ring silently drops that ring core's matmul kernel
+                # and the in0 ring gather deadlocks. Keep packet workers on cols 5-6, off the CCL
+                # sender row 3 ((5,3),(6,3)).
+                PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 2)),
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(6, 4)),
+                    ]
+                )
+            else:
+                PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
+                    ]
+                )
 
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 512),

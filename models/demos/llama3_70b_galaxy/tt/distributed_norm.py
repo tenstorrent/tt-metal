@@ -94,14 +94,17 @@ class DistributedNorm(LightweightModule):
         # the residual, so force it to bf8 to keep activation/CB footprint small (avoids L1 clashes
         # at long prefill sequence lengths). Other paths keep their input-derived dtype (None).
         norm_output_dtype = ttnn.bfloat8_b if self.args.blackhole_no_prefetcher else None
-        # BH prefetcher path: use_sharded_decode is True but the fused RMSAllGather hangs on the 2D-torus
-        # fabric, so fall through to the unfused distributed rmsnorm (stable all_gather) and reshard to
+        # BH prefetcher path: use_sharded_decode is True but the fused RMSAllGather originally hung on
+        # the 2D-torus fabric (1D-multicast writer). With the writer ported to fabric-topology-aware
+        # routing (use_bh_fused_rms), decode goes back through the fused tt_sharded_distributed_rmsnorm;
+        # otherwise fall through to the unfused distributed rmsnorm (stable all_gather) and reshard to
         # the sharded output the downstream matmul expects. Only triggers on BH + sharded-decode.
         bh_unfused_norm = (
             mode == "decode"
             and self.use_sharded_decode
             and getattr(self.args, "is_blackhole", False)
             and BH_UNFUSED_CCL
+            and not getattr(self.args, "use_bh_fused_rms", False)
         )
         if mode == "decode":
             if (not self.use_sharded_decode) or bh_unfused_norm:

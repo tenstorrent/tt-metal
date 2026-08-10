@@ -533,3 +533,151 @@ Full accuracy run (512-token teacher-forced, batch 32) with the distributed argm
 distributed path typecasts the logits shard to bf16 before both max and argmax (so reduce and
 argmax see identical values) and reconstructs indices with exact int32 arithmetic, which appears
 to have removed a residual quantization artifact of the old path as a side effect.
+
+## Fused distributed norm (fused_rms_minimal) PORTED to BH 2D torus (2026-08-08)
+
+The RMSAllGather writer (`rms_allgather/device/kernels/dataflow/rms_writer.cpp`) built raw 1D
+`MulticastRoutingCommandHeader`s for its stats all-gather, which no-op on the BH 2D-torus fabric
+(PACKET_HEADER_TYPE = HybridMeshPacketHeader needs dst mesh/chip ids + per-direction hop counts).
+Port = the same kernel co-design pattern as the fused RS matmul:
+
+- Host (`rms_allgather_program_factory.cpp`): compute neighbor coords
+  (`get_physical_neighbor_from_physical_coord`) and emit 6+6 multicast route CT args via
+  `get_forward_backward_line_mcast_configuration` (exactly what the BH-proven
+  all_gather_async llama-sharded writer does).
+- Kernel: `ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_fwd/bwd, route_info)`
+  replaces the raw 1D headers. The fused write+atomic-inc packet works fine over the 2D
+  multicast route (all_reduce_async uses the same combination).
+- On 1D fabrics the route helper reproduces the old behavior bit-for-bit -> WH unaffected.
+
+Model wiring (BH prefetcher only, gated `QWEN_BH_FUSED_RMS`, default ON, requires unfused-CCL path):
+- `use_bh_fused_rms` in qwen_model_config; DistributedNorm decode routes back through
+  `tt_sharded_distributed_rmsnorm` (fused op) instead of the unfused pre/AG/post chain.
+- Fused norm runs on the LN grid at col 7 ((7,0)-(8,4)) to stay clear of the prefetcher GCB
+  receiver cols; input is resharded there first (`ln_sharded_input_memcfg`).
+- LAYERNORM persistent stats buffer moved to (7,0) (must live on the op's sender core).
+- Dedicated global-semaphore pool on the full worker grid (cols 1-10) since `sub_device_crs`
+  excludes col 7.
+
+Unit test `models/demos/llama3_70b_galaxy/tests/unit_tests/test_bh_fused_rms_allgather.py`
+(exact model geometry: 5120 hidden / 4-way row fracture / Ring / 10-core grid at (7,0), stats on
+sender core): eager + 3x trace replay all pass PCC 0.999 on all 8 mesh rows.
+
+### E2E result: 18.51 ms @ 54.03 t/s/u (from 18.93 @ 52.82)
+
+Demo (batch-32, 64 tokens): early iterations 18.44-18.51 ms, drifting to ~18.8-19.0 by iter 11+
+(same drift pattern existed before; average 18.51). Only ~0.4 ms of the predicted 1.5-1.8 ms
+materialized. Follow-ups queued: accuracy run + fresh tracy profile to see where the fused chain
+actually lands (suspects: the added reshard-in to col 7, fused-op stats-gather serialization,
+or the norm chain simply overlapping less than the old profile suggested).
+
+### Residual grid moved to LN cols 7-8: 18.4 ms @ 54.36 t/s/u (2026-08-08)
+
+Post-fused-norm tracy showed ReshardDeviceOperation at 0.836 ms critical; the biggest slice was
+the per-norm reshard of the residual (cols 1-2) onto the fused-norm LN grid (cols 7-8),
+129 instances/token. Fix: when `use_bh_fused_rms`, DECODE_RESIDUAL_MEMCFG now lives on
+(7,0)-(8,4) directly (qwen_model_config), making the norm's reshard-in a no-op — all other
+residual consumers (adds, attn/MLP output all-reduces, embedding) are grid-agnostic.
+
+One trap: `all_reduce_async` requires every *output* core to hold a shard of the persistent
+interim buffer (the buffer doubles as per-output-core reduction scratch;
+`buffer.grid.contains(output.grid)` is validated). The axis-0 CCL buffer was sharded on
+sub_core_grids (cols 1-3, 5-6) only, so the dense-out/FF2 all-reduce writing to the relocated
+residual grid failed validation. Fixed in llama_ccl.get_persistent_buffers: merge the residual
+grid into the axis-0 buffer CRS (50 -> 60 cores, ~35 KB extra L1 on each of the 10 LN cores).
+
+Accuracy with the relocated residual grid is unchanged: Top-1 93%, Top-5 100% (511 tokens).
+
+Net: 18.4 ms @ 54.36 t/s/u (was 18.51 @ 54.03) — only ~0.1 ms, so the norm-input reshard was
+NOT the dominant reshard cost; the remaining Reshard critical time is spread across norm-out
+-> ring grid and attention-side reshards. Remaining gap to 58 t/s/u is ~1.35 ms, with the top
+critical-path items being MatmulReduceScatterAsync (5.45 ms), AllReduceAsync (3.19 ms) and
+Matmul (3.11 ms).
+
+### llama_rs_matmul BH hang ROOT-CAUSED + FIXED (2026-08-09)
+
+Two independent bugs, both now fixed:
+
+1. **RS writer fabric routing (fixed earlier today)**: writer_llama_reduce_scatter used
+   hop-count-only unicast routes (fabric_set_unicast_route(num_hops)) which the BH 2D-torus
+   HybridMesh routers cannot resolve. Ported to host-computed {mesh_id, chip_id} routes via
+   ccl_routing_utils (same mechanism as the fused-RMS/all_gather_async ports). Standalone
+   test_bh_llama_reduce_scatter passes (PCC 0.9998, eager+trace).
+
+2. **Packet-worker / matmul-ring core overlap (the actual model hang)**: the fused
+   llama_rs_matmul builds ONE program with the ring matmul + RS. The matmul factory subtracts
+   the RS cores from its worker set (restricted_cores, matmul_multicore_reuse_mcast_1d
+   factory line ~1998) and silently drops any ring core inside the RS grid. On WH the ring
+   (PREFETCHER_NOC1_GRID) and PACKET_WORKER_CRS are disjoint by design (the comment in
+   qwen_model_config even documents the constraint); on BH the ring is cols 1-3 rows 0-7,
+   which fully covers the old PACKET_WORKER_CRS ((1,1)-(3,2),(1,3)-(2,3)). Result: 8 of 25
+   ring cores got no matmul kernel and the in0 ring gather deadlocked at
+   noc_semaphore_wait_min (confirmed by tt-triage on the hung unit test: only 17 ring cores
+   running, no RS kernels, readers parked in signal_sem.wait_min).
+
+   Fix: BH PACKET_WORKER_CRS moved off-ring to (5,0)-(6,2) + (5,4)-(6,4) (8 cores, avoiding
+   the RS sender row (5,3),(6,3) and hop core (3,8)). qwen_model_config.py.
+
+Unit test: models/demos/llama3_70b_galaxy/tests/unit_tests/test_bh_llama_rs_matmul.py —
+fused ring-matmul + RS + signaler geometry (single-weight rs_tensor variant; the two-weight
+variant requires the prefetcher global CB and DRAM-sharded weights, rejected standalone by
+matmul validation). PASSES: RS PCC 0.9998, matmul PCC 0.9997, eager + trace.
+
+Demo run with QWEN_BH_FUSED_RS_MATMUL=1 QWEN_BH_FUSED_ASYNC_RS_MATMUL=0 in flight.
+Result: 56.38 tok/s/u, accuracy 93% top-1 / 100% top-5.
+
+### llama_rs_create_heads BH hang ROOT-CAUSED + FIXED (2026-08-09)
+
+Despite carrying the same {mesh_id, chip_id} routing port as the (working) plain
+llama_reduce_scatter, the create-heads variant still deadlocked: tt-triage on the hung unit
+test showed all packet-worker readers parked in noc_semaphore_wait (reader line 158, waiting
+for 3 fabric increments) with every sender kernel already finished - packets entered the
+fabric and vanished, wedging eth cores (board needed glx_reset afterwards).
+
+Root cause: **fabric injection direction vs. source-computed 2D route mismatch**. On the 2D
+torus, fabric_set_unicast_route(HybridMeshPacketHeader, dst_chip, dst_mesh) encodes the FULL
+hop-by-hop route into header->route_buffer from the *sender's* routing table
+(decode_route_to_buffer), so the packet must be injected into the EDM connection matching the
+table's first hop. The create-heads writer load-balances ring 2-hop targets by chip parity
+(odd chips inject them into the BACKWARD connection) while the routing table resolves 2-hop
+ties FORWARD (the plain-RS writer always picks forward on ties, which is why it worked).
+Backward-injected packets carried a forward route program and were never delivered.
+
+Fix (kernel-only, llama_reduce_scatter_create_heads writer): on 2D fabrics choose the
+injection direction from shortest-path-forward-on-ties (matching the routing table); 1D
+fabrics keep the parity load-balancing so WH 6U is unchanged.
+
+Unit tests (all PASS): test_bh_llama_rs_create_heads (eager+trace, q/k/v PCC 0.99996),
+test_bh_all_gather_concat (eager+trace x wh_order/bh_ring_order after the factory fixes:
+dynamic concat_arg_cores, sender-worker exclusion by actual cores, runtime-arg NOC coords,
+dynamic semaphore mcast ranges/dest counts).
+
+Demo run with all three fused CCL ops (QWEN_BH_FUSED_RS_MATMUL=1 QWEN_BH_FUSED_QKV_RS=1
+QWEN_BH_FUSED_AG_CONCAT=1): 56.71 tok/s/u, accuracy 93% top-1 / 99% top-5 (accuracy test
+needed its hardcoded _IS_BLACKHOLE rot-table gates switched to tt_model.use_fused_rope,
+since the BH fused-QKV path now uses the fused-qk rope tables).
+
+### Traced-decode device profile with all fused ops (2026-08-09)
+
+Tracy capture (qwen_prof_allfused): per decode token on device 0, worker sub-device is ~94%
+busy (op sum ~16.5 ms of ~17.6 ms token). Per-layer big rocks (us/call):
+Matmul_RS 70.9 | plain Matmuls 3x ~9.2 | w3 ReduceScatterMinimalAsync 20.8 |
+RMSAllGather 2x 10.1 | AllReduceAsync 2x 9.9 | SDPA 17.8 | AllGatherConcat 16.7 |
+w2-in AllGatherAsync 12.6 | qk-norm chain (2 LayerNorm + 8 reshard + tilize/untilize) ~17.
+Sampling tail ~0.5 ms (2x ArgMax 125 us + 3x Reduce 87 us).
+
+Follow-up experiments:
+- w3 RS via the ported llama_reduce_scatter instead of reduce_scatter_minimal_async:
+  ~1 ms/token SLOWER in the full model (54.2 vs 56.7) despite the standalone op being
+  faster - it serializes against the fused Matmul_RS packet workers / interim buffers.
+  REVERTED (note left in llama_ccl.line_reduce_scatter).
+- Paged SDPA k_chunk 64 -> 128 (QWEN_BH_SDPA_K_CHUNK, default now 128): K/V CBs ~128 KB
+  still clear the resident-global-CB L1 clash, halves flash-decode K iterations.
+  56.92 tok/s/u (17.57 ms). KEPT.
+
+Remaining gap analysis (why not faster yet): Matmul_RS at 70.9 us is ~9x its pure-compute
+cost (~8 us); FF1+FF3 weights are 8.7 MB/device/layer, so the ring matmuls are paced by the
+prefetcher stream rate (~134 GB/s effective vs >500 GB/s DRAM). All ring matmuls together
+are ~6.3 ms/token of the 17.6 ms budget. The single biggest future lever is the BH
+dram_prefetcher streaming rate (readers x receivers geometry, global-CB churn, mcast
+cadence), not another CCL fusion; the CCLs are at or near their 2-link fabric floors.

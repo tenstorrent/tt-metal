@@ -276,13 +276,14 @@ def test_qwen_model_acc(
         ]
     )
 
-    # Get the first input tensors. No-prefetcher (BH) decode uses the non-fused rotary op, which
-    # needs the simple get_rot_* tables (get_rm_rot_* is the fused-qk expanded layout and yields a
-    # wrong rotary at pos>0 on the non-fused op). Wormhole keeps main's fused get_rm_rot_* tables.
-    if _IS_BLACKHOLE:
-        _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
-    else:
+    # Get the first input tensors. The non-fused rotary op needs the simple get_rot_* tables
+    # (get_rm_rot_* is the fused-qk expanded layout and yields a wrong rotary at pos>0 on the
+    # non-fused op); the fused-qk rotary op needs get_rm_rot_*. Follow the model's gating so the
+    # table layout always matches the rotary op it will run (BH fused-QKV uses fused rope too).
+    if tt_model.use_fused_rope:
         _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+    else:
+        _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -294,10 +295,10 @@ def test_qwen_model_acc(
     )
 
     def run_model():
-        if _IS_BLACKHOLE:
-            rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
-        else:
+        if tt_model.use_fused_rope:
             rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        else:
+            rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -354,10 +355,10 @@ def test_qwen_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    if _IS_BLACKHOLE:
-        rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
-    else:
+    if tt_model.use_fused_rope:
         rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+    else:
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)

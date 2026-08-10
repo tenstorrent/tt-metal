@@ -63,6 +63,10 @@ class TT_CCL:
         # reduce_scatter_minimal_async via ttnn.experimental.matmul_reduce_scatter_async. See
         # qwen_model_config.py and matmul_reduce_scatter_async wrapper below.
         self.use_bh_fused_async_rs_matmul = getattr(model_args, "use_bh_fused_async_rs_matmul", False)
+        # BH 2D-fabric routing port of llama_reduce_scatter/llama_rs_matmul: when active, decode
+        # reduce-scatters can use the fused packet-worker llama_reduce_scatter (~7 us) instead of
+        # the generic reduce_scatter_minimal_async fallback (~21 us).
+        self.use_bh_fused_rs_matmul = getattr(model_args, "use_bh_fused_rs_matmul", False)
         # Blackhole galaxy exposes only 2 ethernet links between column neighbours (Wormhole has 4). The
         # prefill ring CCLs below historically forced 4 links whenever use_prefetcher was set (previously
         # WH-only); with the prefetcher now enabled on BH that request goes out of bounds, so cap to the
@@ -159,6 +163,19 @@ class TT_CCL:
                     self.rs_min_semaphore_handles[i].append(
                         [ttnn.create_global_semaphore(self.mesh_device, rs_worker_crs, 0) for _ in range(3)]
                     )
+
+        # BH prefetcher fused distributed-norm (fused_rms_minimal): the norm runs on the LN grid at
+        # column 7 (outside sub_device_crs, which only covers cols 1-3/5-6), and the op's out-ready
+        # global semaphore lives on the sender core (7,0). Allocate a dedicated double-buffered pool
+        # on the full worker grid so the semaphore address is valid on those cores.
+        self.fused_norm_semaphore_handles = None
+        self.fused_norm_idx = 0
+        self.use_bh_fused_norm = mode == "decode" and getattr(model_args, "use_bh_fused_rms", False)
+        if self.use_bh_fused_norm:
+            fused_norm_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(10, 9))])
+            self.fused_norm_semaphore_handles = [
+                ttnn.create_global_semaphore(self.mesh_device, fused_norm_crs, 0) for _ in range(self.num_cbs)
+            ]
 
         # Dedicated semaphores for the sampling force-argmax all-gather (Blackhole). The op maps
         # its two global semaphores to the forward/backward ring directions, so the shared gather
@@ -340,7 +357,14 @@ class TT_CCL:
         persistent_buffers["SDPA"] = tt_buffer
 
         # Layernorm
-        grid_offset = ttnn.CoreCoord(1, 0)
+        # The fused RMSAllGather requires the stats shard to live on the first core of the norm's
+        # input shard grid (the op aliases the stats buffer as a CB on its sender core). On the BH
+        # prefetcher fused-norm path the LN grid starts at (7,0) (see DistributedNorm), so the
+        # persistent stats buffer must move there too. WH keeps (1,0).
+        if getattr(self.model_args, "use_bh_fused_rms", False):
+            grid_offset = ttnn.CoreCoord(7, 0)
+        else:
+            grid_offset = ttnn.CoreCoord(1, 0)
         tt_stats_sharded_config = ttnn.create_sharded_memory_config(
             shape=(32, 128),
             core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
@@ -475,6 +499,8 @@ class TT_CCL:
             2048 // 16 * cluster_shape[cluster_axis] if not self.is_qwen else 1280 // 10 * cluster_shape[cluster_axis]
         )  # FF2/DO
         M_axis0 = default_M
+        axis0_buffer_crs = self.sub_device_crs
+        axis0_num_cores = num_cores
         if self.is_qwen:
             # all_reduce_async validates: buffer_shard_volume >= output_shard_volume * ring_size.
             # For decode residual all-reduce on axis 0 this requires width >= output_width * mesh_rows.
@@ -487,17 +513,24 @@ class TT_CCL:
                 required_width = decode_residual_memcfg.shard_spec.shape[1] * cluster_shape[cluster_axis]
                 N_per_shard = max(N_per_shard, required_width)
                 M_axis0 = max(M_axis0, decode_residual_memcfg.shard_spec.shape[0])
+                # all_reduce_async also requires every output core to hold a buffer shard (the
+                # buffer doubles as per-output-core reduction scratch). On the BH fused-norm path
+                # the residual grid moves to cols 7-8, outside sub_core_grids, so extend the
+                # buffer grid to cover it.
+                if not axis0_buffer_crs.contains(decode_residual_memcfg.shard_spec.grid):
+                    axis0_buffer_crs = axis0_buffer_crs.merge(decode_residual_memcfg.shard_spec.grid)
+                    axis0_num_cores = axis0_buffer_crs.num_cores()
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                self.sub_device_crs,
+                axis0_buffer_crs,
                 [M_axis0, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
         tt_buffer = ttnn.from_torch(
-            torch.zeros((*cluster_shape, M_axis0, N_per_shard * num_cores)),
+            torch.zeros((*cluster_shape, M_axis0, N_per_shard * axis0_num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -1352,6 +1385,10 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
+            # NOTE: routing this through llama_reduce_scatter instead (use_bh_fused_rs_matmul-gated)
+            # was tried and measured ~1 ms/token SLOWER than reduce_scatter_minimal_async in the full
+            # model (54.2 vs 56.7 tok/s/u), despite the standalone op being faster - it serializes
+            # against the fused Matmul_RS's packet workers/interim buffers. Keep rs_minimal here.
             if self.use_prefetcher and self.use_unfused_ccl:
                 # BH prefetcher unfused-CCL bring-up. The public ttnn.reduce_scatter passes the worker
                 # sub-device's bounding-box start (here (1,0), since col 0 is the prefetcher sender column)
@@ -1972,11 +2009,20 @@ def tt_sharded_distributed_rmsnorm(
     use_noc1_only=False,
     ccl_topology=None,
 ):
-    # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
-
     # Run distributed rmsnorm part 1
     cluster_axis = 1
-    semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
+    bh_fused_norm = getattr(tt_ccl, "use_bh_fused_norm", False)
+    if bh_fused_norm:
+        # BH prefetcher: the residual stream lives on cols 1-2 (prefetcher GCB receiver cores), where
+        # the fused op's static CBs would clash with the resident global CB under trace capture.
+        # Reshard onto the LN grid at column 7 (same confinement as the proven unfused path) and use
+        # the dedicated worker-grid semaphore pool (the shared gather pool's CRS excludes col 7).
+        inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+        semaphore = tt_ccl.fused_norm_semaphore_handles[tt_ccl.fused_norm_idx]
+        tt_ccl.fused_norm_idx = (tt_ccl.fused_norm_idx + 1) % tt_ccl.num_cbs
+    else:
+        semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
+        tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
     tt_out = ttnn.fused_rms_minimal(
         inp,
@@ -1993,5 +2039,4 @@ def tt_sharded_distributed_rmsnorm(
         memory_config=output_mem_config,
         use_noc1_only=use_noc1_only,
     )
-    tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res

@@ -51,7 +51,12 @@ class TtTransformer(LightweightModule):
         # path, which needs the simple (non-fused-qk) rotary tables. Select the fused-qk rope tables
         # only when the fused collectives are actually in use.
         self.use_unfused_ccl = getattr(args, "use_unfused_ccl", False)
-        self.use_fused_rope = self.use_prefetcher and not self.use_unfused_ccl
+        # use_bh_fused_qkv_rs re-fuses the QKV segment (llama_rs_create_heads + fused-qk rotary)
+        # on BH even while use_unfused_ccl keeps the other collectives unfused, so it needs the
+        # fused-qk rope tables too.
+        self.use_fused_rope = self.use_prefetcher and (
+            not self.use_unfused_ccl or getattr(args, "use_bh_fused_qkv_rs", False)
+        )
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config

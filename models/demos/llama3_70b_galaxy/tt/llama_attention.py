@@ -130,6 +130,10 @@ class TtLlamaAttention(LightweightModule):
         # BH-prefetcher bring-up: keep the ring matmuls (gated by use_prefetcher) but route the
         # post-matmul collectives through the stable/no-prefetcher branches (gated by use_unfused_ccl).
         self.use_unfused_ccl = getattr(configuration, "use_unfused_ccl", False)
+        # BH selective re-fusion on top of the unfused-CCL path: the underlying fused ops were ported
+        # to 2D-fabric-aware routing, so they can be enabled one CCL site at a time.
+        self.use_bh_fused_qkv_rs = getattr(configuration, "use_bh_fused_qkv_rs", False)
+        self.use_bh_fused_ag_concat = getattr(configuration, "use_bh_fused_ag_concat", False)
         self.sdpa_decode_compute_kernel_config = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
@@ -293,12 +297,26 @@ class TtLlamaAttention(LightweightModule):
         if f"{q_norm_str}.weight" in self.state_dict:
             self.qk_norm = True
 
-            # Memory configurations for QK norm
+            # Memory configurations for QK norm. Default (WH TG) grids live on cols 1-3; on the BH
+            # prefetcher path those columns are the dram_prefetcher's global-CB receiver cores (and
+            # the ring matmul), so static CBs there clash with the resident global CB during trace
+            # capture. Relocate to cols 7-10 (inside the worker sub-device, free of prefetcher/CCL
+            # persistent L1) when the BH fused-QKV path routes through the sharded norm.
+            if self.use_bh_fused_qkv_rs:
+                _qkn_q_int_core = ttnn.CoreCoord(7, 0)
+                _qkn_k_int_core = ttnn.CoreCoord(9, 0)
+                _qkn_q_out_range = ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(8, 1))
+                _qkn_k_out_range = ttnn.CoreRange(ttnn.CoreCoord(9, 0), ttnn.CoreCoord(10, 1))
+            else:
+                _qkn_q_int_core = ttnn.CoreCoord(1, 0)
+                _qkn_k_int_core = ttnn.CoreCoord(3, 0)
+                _qkn_q_out_range = ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))
+                _qkn_k_out_range = ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))
             self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
                 core_grid=ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
+                        ttnn.CoreRange(_qkn_q_int_core, _qkn_q_int_core)
                     ]  # This captures the fact that we are using 1 core (height sharded)
                 ),  # resharding tensor to 1 core
                 strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
@@ -309,7 +327,7 @@ class TtLlamaAttention(LightweightModule):
                 shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
                 core_grid=ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
+                        ttnn.CoreRange(_qkn_k_int_core, _qkn_k_int_core)
                     ]  # This captures the fact that we are using 1 core (height sharded)
                 ),  # resharding tensor to 1 core
                 strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
@@ -319,9 +337,7 @@ class TtLlamaAttention(LightweightModule):
 
             self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
-                ),  # resharding tensor to cores
+                core_grid=ttnn.CoreRangeSet([_qkn_q_out_range]),  # resharding tensor to cores
                 strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -329,9 +345,7 @@ class TtLlamaAttention(LightweightModule):
 
             self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
-                ),  # resharding tensor to cores
+                core_grid=ttnn.CoreRangeSet([_qkn_k_out_range]),  # resharding tensor to cores
                 strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -466,7 +480,9 @@ class TtLlamaAttention(LightweightModule):
         # tensor (user-parallel), which neither the fused sharded reshard (expects the head-parallel
         # single-core layout) nor the flat path (DRAM round-trip violates single-sub-device with the
         # resident prefetcher) can consume. Normalize in place on the worker cores instead.
-        if self.use_prefetcher and self.use_unfused_ccl:
+        # With use_bh_fused_qkv_rs, llama_rs_create_heads produces the head-parallel ROW_MAJOR layout
+        # the sharded variant was written for, so route there (its grids are BH-relocated in __init__).
+        if self.use_prefetcher and self.use_unfused_ccl and not self.use_bh_fused_qkv_rs:
             return self._apply_decode_qk_norm_unfused(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
         if self.use_prefetcher:
             return self._apply_decode_qk_norm_sharded(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
@@ -689,6 +705,11 @@ class TtLlamaAttention(LightweightModule):
         # On the BH prefetcher path (use_unfused_ccl) we keep the ring matmuls but run the stable,
         # worker-pinned no-prefetcher collective/head/rotary path instead, gluing layouts as needed.
         fused_ccl = self.use_prefetcher and not self.use_unfused_ccl
+        # BH selective re-fusion (2D-fabric routing ports): flip individual CCL sites back to the
+        # fused ops while the rest of the path (rotary, qk-norm, KV update) stays on the unfused
+        # branches. fused_ccl itself stays False on BH so those branches are unaffected.
+        qkv_fused = fused_ccl or self.use_bh_fused_qkv_rs
+        ag_concat_fused = fused_ccl or self.use_bh_fused_ag_concat
 
         _ap_on = os.environ.get("QWEN_BH_PROBE", "0") == "1"
 
@@ -715,13 +736,13 @@ class TtLlamaAttention(LightweightModule):
                 # llama_rs_create_heads.
                 program_config=(
                     self.model_config["XQKV_DECODE_RING_PROGCFG_TILE"]
-                    if self.use_unfused_ccl
+                    if (self.use_unfused_ccl and not qkv_fused)
                     else self.model_config["XQKV_DECODE_RING_PROGCFG"]
                 ),
                 memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
-                dtype=ttnn.bfloat8_b if self.use_unfused_ccl else ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b if (self.use_unfused_ccl and not qkv_fused) else ttnn.bfloat16,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
             )
         else:
@@ -750,7 +771,7 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
-        if not fused_ccl:
+        if not qkv_fused:
             if self.use_unfused_ccl:
                 # Prefetcher resident: the ring QKV matmul already emitted a width-sharded L1 tensor on
                 # the worker cores (SHARDED_QKV_OUT_RING_MEMCFG: padded N = 12288//8 over RING_SIZE
@@ -872,7 +893,12 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused_sharded)
 
         # Q, K Rotary Embeddings
-        if fused_ccl:
+        # The fused-qk rotary is a per-core compute op (no collective), so it follows the
+        # create-heads choice: llama_rs_create_heads emits the ROW_MAJOR head layout the fused
+        # rotary consumes, while the unfused nlp_create_qkv_heads_decode path feeds the TILE
+        # non-fused rotary below. llama_model gates the rot_mats format (use_fused_rope) the
+        # same way.
+        if qkv_fused:
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )  # [1, 8, 8, 128], [1, 8, 8, 128]
@@ -957,7 +983,7 @@ class TtLlamaAttention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        if not fused_ccl:
+        if not qkv_fused:
             v_update_mem_cfg = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -1013,7 +1039,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(q_heads_1BQD)
         _aprobe("sdpa")
 
-        if not fused_ccl:
+        if not ag_concat_fused:
             # Device SDPA output is batch-first [1, B_local, H_local, D] (8 users/col). Order matters:
             # nlp_concat_heads_decode pads batch to 32, so gather users across cols FIRST (8 -> 32),
             # then concat heads. Mimic tt_transformers.tt_all_gather: all_gather_async with
@@ -1067,7 +1093,7 @@ class TtLlamaAttention(LightweightModule):
         use_replicated_full_wo = (
             self.is_qwen and not self.use_prefetcher and attn_output_cat.shape[-1] == self.n_heads * self.head_dim
         )
-        if self.use_unfused_ccl:
+        if self.use_unfused_ccl and not ag_concat_fused:
             # The ring WO matmul (below) expects its input in the ring layout, but the unfused concat
             # produced the no-prefetcher layout; reshard into the ring WO input config first.
             attn_output_cat = ttnn.to_memory_config(
