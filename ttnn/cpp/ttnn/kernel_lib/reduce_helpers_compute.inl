@@ -335,9 +335,12 @@ ALWI void reduce(
     ASSERT(input_dfb_id != output_dfb_id);
     ASSERT(input_dfb_id != scaler_dfb_id);
     ASSERT(output_dfb_id != scaler_dfb_id);
+#ifndef ARCH_QUASAR
+    // is_valid_dfb_tile_page_size() is a debug validator only defined on WH/BH
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
+#endif
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
@@ -548,8 +551,17 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+#else
+                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
+                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
+                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
+                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
+                    // rather than silently drop the finalize.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -678,12 +690,18 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
+#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
+#else
+                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
+                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
+                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
+#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk
