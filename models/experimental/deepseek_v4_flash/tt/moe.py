@@ -103,12 +103,13 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             device,
             cache_file_name=cache.file("gate.e_score_correction_bias"),
         )
-        # Persistent scatter operands for the trace-safe decode path (T == 1).
-        # ``ttnn.zeros`` / ``ttnn.ones`` host-init their buffers (a host->device
-        # write that is illegal mid-capture), so the static router reuses these
-        # pre-built constants instead of allocating + writing them each call.
-        self._scatter_zeros = ttnn.zeros([1, 1, 1, self.num_experts], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
-        self._scatter_ones = ttnn.ones([1, 1, 1, self.top_k], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+        # Persistent scatter operands for the trace-safe decode path, keyed by token
+        # count (the decode batch). ``ttnn.zeros`` / ``ttnn.ones`` host-init their
+        # buffers (a host->device write that is illegal mid-capture), so the static
+        # router reuses pre-built constants instead of allocating + writing them each
+        # call. Scatter allocates its own output, so the zeros stay zero and a width is
+        # built at most once.
+        self._scatter_operands: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
         """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]`` (shared head of both
@@ -139,20 +140,36 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         # dense [1,1,T,E] tensor equal the reference's gathered/normalised one.
         return _normalize_routing(scores, mask, self.routed_scaling_factor)
 
-    def forward_static(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe single-token (``T == 1``) top-k routing -> ``[1,1,1,E]``.
+    def _scatter_constants(self, t: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The ``[1,1,T,E]`` zeros and ``[1,1,T,k]`` ones the static scatter needs.
 
-        Identical math to :meth:`forward`, but the scatter's zeros / ones operands
-        are the persistent constants built at init rather than freshly
-        ``ttnn.zeros`` / ``ttnn.ones`` tensors (whose host-init write is rejected
-        during trace capture). Scatter allocates its own output, which is allowed.
+        Built on first use for a given width and kept: the first call is a compile
+        run, which precedes every trace capture, so the host-init write happens while
+        it is still legal and the capture then just re-reads the same buffers.
         """
-        scores = self._scores(x_flat)  # [1, 1, 1, E]
+        if t not in self._scatter_operands:
+            self._scatter_operands[t] = (
+                ttnn.zeros([1, 1, t, self.num_experts], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device),
+                ttnn.ones([1, 1, t, self.top_k], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device),
+            )
+        return self._scatter_operands[t]
+
+    def forward_static(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe top-k routing over ``T`` tokens (the decode batch, one token per
+        user) -> ``[1,1,T,E]``.
+
+        Identical math to :meth:`forward`, but the scatter's zeros / ones operands are
+        persistent constants rather than freshly ``ttnn.zeros`` / ``ttnn.ones`` tensors
+        (whose host-init write is rejected during trace capture). Scatter allocates its
+        own output, which is allowed.
+        """
+        scores = self._scores(x_flat)  # [1, 1, T, E]
         biased = ttnn.add(scores, self.e_score_correction_bias)
 
-        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)  # [1, 1, 1, k]
+        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)  # [1, 1, T, k]
         top_idx = ttnn.to_layout(top_idx, ttnn.ROW_MAJOR_LAYOUT)
-        mask = ttnn.scatter(self._scatter_zeros, -1, top_idx, self._scatter_ones)
+        zeros, ones = self._scatter_constants(x_flat.shape[2])
+        mask = ttnn.scatter(zeros, -1, top_idx, ones)
         mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
 
         return _normalize_routing(scores, mask, self.routed_scaling_factor)
@@ -226,13 +243,14 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         return _normalize_routing(scores, mask_tt, self.routed_scaling_factor)
 
     def forward_static(self, x_flat: ttnn.Tensor, token_in: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe, fully on-device hash routing: ``token_in`` ``[1,1]`` is the
-        (persistent, on-device) decode token id. The per-token expert-selection
-        mask is gathered from the on-device ``mask_table`` with :func:`ttnn.embedding`
-        and the gate score path stays on device. Returns dense routing weights
-        ``[1,1,1,E]``."""
-        mask_tt = ttnn.embedding(token_in, self.mask_table, layout=ttnn.TILE_LAYOUT)  # [1, 1, E]
-        mask_tt = ttnn.reshape(mask_tt, [1, 1, 1, self.num_experts])
+        """Trace-safe, fully on-device hash routing: ``token_in`` ``[1,T]`` are the
+        (persistent, on-device) decode token ids, one per user of a batched step. The
+        per-token expert-selection mask is gathered from the on-device ``mask_table``
+        with :func:`ttnn.embedding` and the gate score path stays on device. Returns
+        dense routing weights ``[1,1,T,E]``."""
+        t = x_flat.shape[2]
+        mask_tt = ttnn.embedding(token_in, self.mask_table, layout=ttnn.TILE_LAYOUT)  # [1, T, E]
+        mask_tt = ttnn.reshape(mask_tt, [1, 1, t, self.num_experts])
         scores = self._scores(x_flat)
         return _normalize_routing(scores, mask_tt, self.routed_scaling_factor)
 
@@ -464,17 +482,42 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         return ttnn.concat(per_token, dim=2)
 
     def decode_static(self, x_tok: ttnn.Tensor, routing_weights: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe single-token routed FFN. ``x_tok`` ``[1,1,1,H]`` and
-        ``routing_weights`` ``[1,1,1,E]`` (a device tensor); returns ``[1,1,1,H]``.
+        """Trace-safe routed FFN over ``T`` tokens. ``x_tok`` ``[1,1,T,H]`` and
+        ``routing_weights`` ``[1,1,T,E]`` (a device tensor); returns ``[1,1,T,H]``.
 
         Unlike :meth:`forward`, the active experts are *not* read back to host:
         ``fused_experts`` finds the non-zero experts from the routing row on device
         and ``num_experts`` is fixed to ``num_experts_per_tok`` (the router always
         selects exactly ``top_k``), so the op's program — and hence the trace — is
         invariant across steps.
+
+        ``T`` is the batched decode's user count. The op is natively one token, so the
+        users run as ``T`` ops rather than one wider one: they route to different
+        experts, so there is no weight to share between them and nothing to gain from
+        fusing them anyway. ``T`` is fixed at capture time, so the trace stays a flat
+        op sequence.
         """
         routing_row = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
-        return self._run_fused(x_tok, routing_row, self.top_k)
+        t = x_tok.shape[2]
+        if t == 1:
+            return self._run_fused(x_tok, routing_row, self.top_k)
+        h, e = x_tok.shape[3], routing_weights.shape[3]
+        # One row is not a tile, so it cannot be cut out of a width-sharded tensor, and
+        # a batched step arrives sharded from the post-attention norm. Drop to
+        # interleaved first; ``fused_experts`` reads an interleaved token either way.
+        if x_tok.is_sharded():
+            x_tok = ttnn.to_memory_config(x_tok, ttnn.DRAM_MEMORY_CONFIG)
+        if routing_row.is_sharded():
+            routing_row = ttnn.to_memory_config(routing_row, ttnn.DRAM_MEMORY_CONFIG)
+        per_token = [
+            self._run_fused(
+                ttnn.slice(x_tok, [0, 0, i, 0], [1, 1, i + 1, h]),
+                ttnn.slice(routing_row, [0, 0, i, 0], [1, 1, i + 1, e]),
+                self.top_k,
+            )
+            for i in range(t)
+        ]
+        return ttnn.concat(per_token, dim=2)
 
 
 class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
@@ -532,21 +575,26 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         return ttnn.add(routed, shared)
 
     def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        """Trace-safe single-token MoE. ``hidden`` ``[1, 1, 1, H]`` -> ``[1, 1, 1, H]``.
+        """Trace-safe single-token-per-user MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
 
         Routing stays entirely on device: the learned top-k router is already
         host-sync-free, and hash layers gather their expert-selection mask on device
-        from the persistent ``hash_token`` ``[1,1]`` device token id (see
+        from the persistent ``hash_token`` ``[1,B]`` device token ids (see
         :meth:`DeepSeekV4HashRouter.forward_static`). The routed FFN runs through the
         no-host-readback fused-experts decode path.
+
+        The batch's users are flattened onto the token axis, which is the layout the
+        router and the expert compute already work in -- so the shared expert and the
+        gate see one wider matmul while the routed experts, which each user sends
+        somewhere different, stay one op per user.
         """
-        h = hidden.shape[-1]
-        x_flat = ttnn.reshape(hidden, [1, 1, 1, h])
+        b, h = hidden.shape[0], hidden.shape[-1]
+        x_flat = ttnn.reshape(hidden, [1, 1, b, h])
         if self.is_hash:
             routing_weights = self.gate.forward_static(x_flat, hash_token)
         else:
             routing_weights = self.gate.forward_static(x_flat)
-        routed = self.experts.decode_static(x_flat, routing_weights)  # [1, 1, 1, H]
-        routed = ttnn.reshape(routed, [1, 1, 1, h])
+        routed = self.experts.decode_static(x_flat, routing_weights)  # [1, 1, B, H]
+        routed = ttnn.reshape(routed, [b, 1, 1, h])
         shared = self.shared_experts(hidden)
         return ttnn.add(routed, shared)
