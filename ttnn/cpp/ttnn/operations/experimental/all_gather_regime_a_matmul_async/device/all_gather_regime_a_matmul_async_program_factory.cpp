@@ -549,12 +549,16 @@ struct FusedGatherContext {
 // In the FIXED prefix rather than the fused block because the on-chip ring runs on every path, including
 // tp == 1 where there is no fused block at all.
 enum RingSlotArg : uint32_t {
-    kRsOwnSlot = 17,   // slot this core's OWN stripe occupies (i.e. the step at which it is consumed)
-    kRsPeerSlot = 18,  // slot it occupies ON THE PEER -- direct-L1's fabric destination. Equal to kRsOwnSlot
-                       // only while every device shares one schedule; an arrival-ordered schedule is
-                       // per-device, so the sender must be told the receiver's slot rather than assume its own.
-    kRsFwdBase = 19,   // (G-1) pairs {src_slot, dst_slot_on_successor}, one per forward step
-    kRsArgCount = kRsFwdBase + 2u * 7u,  // G-1 == 7 forwards; == 33
+    kRsOwnSlot = 17,  // slot this core's OWN stripe occupies (i.e. the step at which it is consumed)
+    // The slot this core's chunk occupies ON THE PEER DEVICE -- direct-L1's fabric destination. Equal to
+    // kRsOwnSlot only while every device shares one schedule. Availability order does NOT: hop counts differ
+    // per device, so the peer sorts its chunks differently and a relay that assumed its own slot writes into
+    // the wrong one (measured: PCC 0.204). Two of them because a core can send both ways (a LINE origin, or a
+    // ring origin under the balanced schedule) and the two neighbours have different schedules again.
+    kRsPeerSlotFwd = 18,
+    kRsPeerSlotBwd = 19,
+    kRsFwdBase = 20,                     // (G-1) pairs {src_slot, dst_slot_on_successor}, one per forward step
+    kRsArgCount = kRsFwdBase + 2u * 7u,  // G-1 == 7 forwards; == 34
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -591,12 +595,50 @@ struct RingSchedule {
     }
 };
 
-inline RingSchedule build_ring_schedule() {
+// AVAILABILITY ORDER (spec appendix B phase 3). `fabric_hops[p]` is how many device-to-device hops the chunk
+// fetched by ring position p has to make to reach this device; pass an empty span for the rotation.
+//
+// A chunk becomes usable at core c at `fabric_hops(o)*kWave + on_chip_hops(o->c)*kHop`, and the core should
+// work on whatever is usable soonest. Today it instead consumes in ring order `c, c-1, c-2, ...`, which forces
+// the two cores per ring whose own chunk is in the LAST fabric wave to idle through the entire gather and then
+// owe their whole matmul -- that is the 19.6 us waiting term. See appendix B's worked example.
+//
+// Only the RATIO of the two constants matters, and only weakly: any ratio above G makes this "sort by fabric
+// hops, break ties by on-chip distance", which is the intent. Measured, a fabric hop is ~12 us against ~0.45 us
+// for an on-chip hop, so 100:1 is if anything conservative.
+constexpr uint32_t kWaveCost = 100u;
+constexpr uint32_t kHopCost = 1u;
+
+inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops) {
     RingSchedule sch;
     for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
         for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
             // Today's rotation: at step s, position p consumes the stripe that originated p-s positions back.
             sch.consume_pos[p][s] = (p + RingSchedule::kG - s) % RingSchedule::kG;
+        }
+    }
+    if (fabric_hops != nullptr) {
+        for (uint32_t c = 0; c < RingSchedule::kG; ++c) {
+            // Stable insertion sort by availability; ties fall back to chunk index so the schedule is
+            // deterministic (it must be: the host emits it and two kernels have to agree on it).
+            uint32_t order[RingSchedule::kG];
+            for (uint32_t o = 0; o < RingSchedule::kG; ++o) {
+                order[o] = o;
+            }
+            auto avail = [&](uint32_t o) {
+                return fabric_hops[o] * kWaveCost + ((c + RingSchedule::kG - o) % RingSchedule::kG) * kHopCost;
+            };
+            for (uint32_t i = 1; i < RingSchedule::kG; ++i) {
+                uint32_t v = order[i], j = i;
+                while (j > 0 && avail(order[j - 1]) > avail(v)) {
+                    order[j] = order[j - 1];
+                    --j;
+                }
+                order[j] = v;
+            }
+            for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
+                sch.consume_pos[c][s] = order[s];
+            }
         }
     }
     // Every core must consume every stripe exactly once, or some global K tile is dropped or double-counted
@@ -679,11 +721,16 @@ enum FusedGatherArg : uint32_t {
     // added here displaces the TensorAccessorArgs indices below it, which builds cleanly and then fails all
     // 40 tests on PCC (this branch has done exactly that once).
     kFgDl1PacketBytes = 43,
-    kFgNumReleaseRanges = 44,
+    // 1 => this core may DEFER its own-chunk wait out of the prologue and into the ring step that consumes it,
+    // so that while waiting it keeps relaying on the on-chip ring. Always safe for a leaf (nothing downstream
+    // depends on it). For a RELAY it trades a later fabric hand-off to the next device against not freezing
+    // the ring behind it -- which of those dominates is a measurement, hence TT_AGMM_DEFER_ALL.
+    kFgDl1Defer = 44,
+    kFgNumReleaseRanges = 45,
     // Followed by kFgNumReleaseRanges 6-word records {sx, sy, ex, ey, dests_fwd, dests_bwd} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 45,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block(s)
+    kFusedArgCount = 46,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block(s)
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -1392,7 +1439,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // direct-L1 that count is a property of this plan (on a LINE it even varies with this device's rank), so
     // the plan has to exist before the muxes are created. ring_pos is final by now: optimize_in0_ring_order
     // and the M-split placement both ran above.
-    std::vector<DirectL1Core> dl1_plan;
+    std::vector<DirectL1Core> dl1_plan, dl1_plan_fwd, dl1_plan_bwd;
     uint32_t dl1_clients_fwd = 0, dl1_clients_bwd = 0;
     if (direct_l1) {
         dl1_plan = build_direct_l1_plan(
@@ -1454,6 +1501,24 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         for (const auto& d : dl1_plan) {
             dl1_clients_fwd += d.send_fwd ? 1u : 0u;
             dl1_clients_bwd += d.send_bwd ? 1u : 0u;
+        }
+        // The two NEIGHBOUR devices' plans, built with the identical function so their hop counts -- and hence
+        // their availability order -- cannot drift from how they compute it themselves. Only their hop counts
+        // are used, to work out which slot each neighbour puts our chunk in.
+        const uint32_t rank_self = ttnn::ccl::get_linearized_index_from_physical_coord(
+            in0, mesh_coordinate, operation_attributes.cluster_axis);
+        for (uint32_t which = 0; which < 2u; ++which) {
+            const uint32_t nb_rank = which == 0u ? (rank_self + 1u) % operation_attributes.tp
+                                                 : (rank_self + operation_attributes.tp - 1u) % operation_attributes.tp;
+            (which == 0u ? dl1_plan_fwd : dl1_plan_bwd) = build_direct_l1_plan(
+                P,
+                geo,
+                Pk,
+                kb,
+                operation_attributes.tp,
+                nb_rank,
+                operation_attributes.topology_is_ring,
+                std::getenv("TT_AGMM_DIRECT_L1_BALANCED") != nullptr);
         }
     }
 
@@ -1785,9 +1850,50 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t in1_addr = in1.buffer()->address();
     const uint32_t out_addr = out.buffer()->address();
 
-    // ONE ring schedule for the whole program: both the writer's slot args and the in1 reader's consume order
-    // are derived from it below, so the two cannot disagree about the global-K order.
-    const RingSchedule ring_sch = build_ring_schedule();
+    // ONE ring schedule PER SLICE: both the writer's slot args and the in1 reader's consume order are derived
+    // from it below, so the two cannot disagree about the global-K order.
+    //
+    // Per slice rather than one global schedule because availability ordering depends on how many fabric hops
+    // each chunk needed, which is a property of the slice's own stream plan. The rotation (used on the staged
+    // path, and when TT_AGMM_RING_ROTATION=1 forces it for A/B) is slice-independent.
+    const bool ring_rotation = std::getenv("TT_AGMM_RING_ROTATION") != nullptr;
+    std::vector<RingSchedule> ring_sch(preaders_pf), ring_sch_fwd, ring_sch_bwd;
+    {
+        // hops[slice][position] -- the fabric hop count of the chunk that ring position fetches.
+        std::vector<std::array<uint32_t, RingSchedule::kG>> hops(preaders_pf);
+        if (direct_l1 && !ring_rotation) {
+            for (uint32_t i = 0; i < geo.num_cores; ++i) {
+                hops[P.cores[i].slice][P.cores[i].ring_pos] = dl1_plan[i].dist;
+            }
+        }
+        for (uint32_t sl = 0; sl < preaders_pf; ++sl) {
+            ring_sch[sl] = build_ring_schedule((direct_l1 && !ring_rotation) ? hops[sl].data() : nullptr);
+        }
+        // Same construction for the two neighbours, so we can ask where THEY put our chunk.
+        if (direct_l1 && !ring_rotation) {
+            std::vector<std::array<uint32_t, RingSchedule::kG>> hf(preaders_pf), hb(preaders_pf);
+            for (uint32_t i = 0; i < geo.num_cores; ++i) {
+                hf[P.cores[i].slice][P.cores[i].ring_pos] = dl1_plan_fwd[i].dist;
+                hb[P.cores[i].slice][P.cores[i].ring_pos] = dl1_plan_bwd[i].dist;
+            }
+            ring_sch_fwd.resize(preaders_pf);
+            ring_sch_bwd.resize(preaders_pf);
+            for (uint32_t sl = 0; sl < preaders_pf; ++sl) {
+                ring_sch_fwd[sl] = build_ring_schedule(hf[sl].data());
+                ring_sch_bwd[sl] = build_ring_schedule(hb[sl].data());
+            }
+        }
+        if (direct_l1 && !ring_rotation && std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
+            std::string s;
+            for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
+                s += fmt::format(" p{}(h{}):", p, hops[0][p]);
+                for (uint32_t k = 0; k < RingSchedule::kG; ++k) {
+                    s += fmt::format("{}{}", k ? "," : "", ring_sch[0].consume_pos[p][k]);
+                }
+            }
+            log_info(tt::LogOp, "regime_a_ring_order slice0{}", s);
+        }
+    }
 
     auto phys = [&](uint32_t core_idx) {
         const auto& c = P.cores[core_idx].coord;
@@ -1856,7 +1962,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // reader used to recompute it as (ring_pos + G - step) % G, i.e. a second independent derivation of
         // the global-K order the spec requires both sides to walk identically. One array, one derivation.
         for (uint32_t s = 0; s < geo.G; ++s) {
-            ra.push_back(ring_sch.consume_pos[cp.ring_pos][s]);
+            ra.push_back(ring_sch[cp.slice].consume_pos[cp.ring_pos][s]);
         }
         if (Sm == 1u) {
             ra.push_back(2u);  // 5 mrole = solo
@@ -1914,31 +2020,45 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // PHASE 2: derived from `ring_sch` rather than hand-written, so the writer and the in1 reader cannot
         // describe different orders. Still today's rotation, so the program stays bit-identical.
         {
+            const RingSchedule& sch = ring_sch[cp.slice];
             const uint32_t p = cp.ring_pos;
             const uint32_t succ = (p + 1u) % geo.G;
-            const uint32_t own_slot = ring_sch.slot_of(p, p);  // the step at which I consume my own stripe
-            // peer_slot: the slot the same stripe occupies on the same core index of the NEIGHBOUR DEVICE.
-            // Equal to own_slot while all devices share one schedule; phase 3's schedule is per-device and
-            // this becomes the peer device's slot for that stripe.
-            const uint32_t peer_slot = own_slot;
+            const uint32_t own_slot = sch.slot_of(p, p);  // the step at which I consume my own stripe
+            // Where each NEIGHBOUR puts this same chunk. With one shared schedule that is just own_slot; with
+            // availability order the neighbours sort differently, so ask their schedules directly.
+            const uint32_t peer_fwd = ring_sch_fwd.empty() ? own_slot : ring_sch_fwd[cp.slice].slot_of(p, p);
+            const uint32_t peer_bwd = ring_sch_bwd.empty() ? own_slot : ring_sch_bwd[cp.slice].slot_of(p, p);
             wa.push_back(own_slot);
-            wa.push_back(peer_slot);
-            for (uint32_t s = 0; s + 1u < geo.G; ++s) {
-                // Forward what I just consumed, into whichever slot my successor consumes it at.
-                wa.push_back(s);
-                wa.push_back(ring_sch.slot_of(succ, ring_sch.consume_pos[p][s]));
+            wa.push_back(peer_fwd);
+            wa.push_back(peer_bwd);
+            // FORWARD ORDER = my consume order with my SUCCESSOR'S OWN chunk removed (it already has that
+            // one, and 7 forwards cover the other 7). Because forwarding follows availability order too, a
+            // core waiting on its own late chunk keeps relaying the ones behind it -- the coupling that made
+            // one late chunk freeze the whole ring.
+            for (uint32_t s = 0, t = 0; s < geo.G; ++s) {
+                const uint32_t chunk = sch.consume_pos[p][s];
+                if (chunk == succ) {
+                    continue;  // never forward the successor's own chunk
+                }
+                TT_FATAL(t + 1u < geo.G, "forward order overflow at position {}", p);
+                wa.push_back(sch.slot_of(p, chunk));     // read this slot of mine
+                wa.push_back(sch.slot_of(succ, chunk));  // write that slot on my successor
+                ++t;
             }
-            // Phase-1 equivalence: own_slot 0, and (src, dst) == (s, s+1). Asserted so that deriving the
-            // schedule cannot silently change the program while it is still supposed to be bit-identical.
-            TT_FATAL(own_slot == 0u, "phase-2 schedule must reproduce own_slot 0, got {}", own_slot);
-            for (uint32_t s = 0; s + 1u < geo.G; ++s) {
-                TT_FATAL(
-                    wa[kRsFwdBase + 2u * s] == s && wa[kRsFwdBase + 2u * s + 1u] == s + 1u,
-                    "phase-2 schedule must reproduce the rotation at position {} step {}: got ({}, {})",
-                    p,
-                    s,
-                    wa[kRsFwdBase + 2u * s],
-                    wa[kRsFwdBase + 2u * s + 1u]);
+            // The ROTATION must still come out exactly as phase 1 hand-derived it: own_slot 0 and
+            // (src, dst) == (s, s+1). Keeps the staged path (and TT_AGMM_RING_ROTATION=1) bit-identical, and
+            // catches a schedule generator that has broken the case we can check exactly.
+            if (!direct_l1 || ring_rotation) {
+                TT_FATAL(own_slot == 0u, "rotation must give own_slot 0, got {}", own_slot);
+                for (uint32_t s = 0; s + 1u < geo.G; ++s) {
+                    TT_FATAL(
+                        wa[kRsFwdBase + 2u * s] == s && wa[kRsFwdBase + 2u * s + 1u] == s + 1u,
+                        "rotation must reproduce (s, s+1) at position {} step {}: got ({}, {})",
+                        p,
+                        s,
+                        wa[kRsFwdBase + 2u * s],
+                        wa[kRsFwdBase + 2u * s + 1u]);
+                }
             }
             TT_FATAL(
                 wa.size() == kRsArgCount,
@@ -2097,6 +2217,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back((direct_l1 && dl1_plan[i].send_bwd) ? 1u : 0u);
             wa.push_back(direct_l1 ? operation_attributes.gather_semaphores[0].address() : 0u);
             wa.push_back(fused_gather.dl1_packet_bytes);
+            // LEAVES ONLY. A relay cannot defer as the kernel stands: its prologue SENDS its chunk onward, so
+            // skipping the wait ships garbage -- measured directly, 12/12 phase-gate failures. Deferring a
+            // relay additionally requires moving its fabric send to arrival-time, which needs the mux
+            // open/close hoisted out of the prologue. Until then this is a leaf-only optimisation.
+            wa.push_back(
+                (direct_l1 && dl1_plan[i].has_stripe && dl1_plan[i].dist != 0u && !dl1_plan[i].send_fwd &&
+                 !dl1_plan[i].send_bwd)
+                    ? 1u
+                    : 0u);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);

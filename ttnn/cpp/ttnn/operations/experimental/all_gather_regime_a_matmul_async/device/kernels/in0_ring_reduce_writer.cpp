@@ -127,10 +127,13 @@ void kernel_main() {
     // A cb0 slot index is a CONSUMPTION-ORDER index: compute waits cumulatively and addresses each block by an
     // explicit ascending offset, so "consumed s-th" and "in slot s" are the same statement. The host therefore
     // controls consumption order by choosing which stripe lands in which slot, and the kernel just follows.
-    const uint32_t ring_own_slot = get_arg_val<uint32_t>(17);   // where MY stripe goes
-    const uint32_t ring_peer_slot = get_arg_val<uint32_t>(18);  // where it goes on the PEER (direct-L1 fabric)
-    constexpr uint32_t kRingFwdBase = 19;                       // (G-1) pairs {src_slot, dst_slot}
-    [[maybe_unused]] uint32_t fidx = 19u + 2u * (G - 1u);       // optional args start after the schedule
+    const uint32_t ring_own_slot = get_arg_val<uint32_t>(17);  // where MY chunk goes
+    // Where MY chunk goes on each neighbour device. Not the same as ring_own_slot once consumption is ordered
+    // by availability: hop counts differ per device, so each neighbour sorts its chunks differently.
+    const uint32_t ring_peer_slot_fwd = get_arg_val<uint32_t>(18);
+    const uint32_t ring_peer_slot_bwd = get_arg_val<uint32_t>(19);
+    constexpr uint32_t kRingFwdBase = 20;                  // (G-1) pairs {src_slot, dst_slot}
+    [[maybe_unused]] uint32_t fidx = 20u + 2u * (G - 1u);  // optional args start after the schedule
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
     const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
@@ -318,6 +321,20 @@ void kernel_main() {
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
     const uint32_t base0 = get_write_ptr(in0_cb);
 
+#if defined(DIRECT_L1)
+    // LEAF DEFERRAL. A core that receives its chunk over the fabric but relays nothing onward (hop distance
+    // tp-1) has no downstream dependant, so its wait for its own chunk can move OUT of the prologue and into
+    // the ring step where that chunk is actually consumed. Those are exactly the cores whose chunk lands in
+    // the LAST fabric wave -- the ones that set the makespan. Appendix B's worked example: core 2 idles
+    // through the entire gather and then owes all 8 of its steps, while two of its chunks have been sitting
+    // in its L1 since t~1.
+    //
+    // RELAY cores deliberately keep the eager prologue wait. Deferring theirs would push the next device's
+    // arrival out by however long this core computes first, which is strictly worse than the stall it saves.
+    uint32_t dl1_own_pending = 0;  // 1 => we still owe a wait for our own chunk
+    uint32_t dl1_recv_sem = 0;     // arrival semaphore address, hoisted so the ring loop can reach it
+#endif
+
     // ---- PHASE 0: fused fabric all-gather (Phase 1 of the design spec; DRAM-staged) ----
     //
     // Runs BEFORE the on-chip ring below. Two different rings, easy to confuse:
@@ -389,6 +406,7 @@ void kernel_main() {
         const uint32_t dl1_send_bwd = get_arg_val<uint32_t>(fa++);
         const uint32_t dl1_recv_sem_addr = get_arg_val<uint32_t>(fa++);
         const uint32_t dl1_packet_bytes = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_defer = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 6 words per range: sx, sy, ex, ey, dests_fwd, dests_bwd
         fa += 6u * num_release_ranges;
@@ -519,7 +537,6 @@ void kernel_main() {
             // slot rather than assuming its own -- otherwise a relay lands the stripe where the peer is not
             // expecting to consume it.
             const uint32_t dl1_my_base = base0 + ring_own_slot * shard_bytes;
-            const uint32_t dl1_peer_base = base0 + ring_peer_slot * shard_bytes;
             volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem_addr);
             if (!dl1_active) {
                 // This ring position lies entirely past the last source rank (tp * rank_span < 8 * W * kb):
@@ -558,9 +575,15 @@ void kernel_main() {
                 // DEPENDENCY STALL on THIS path. The staged path's ablation hooks live in the step-0 read
                 // that direct-L1 compiles out, so without this hook TT_AGMM_ABLATE would silently do
                 // nothing here and report the unablated time as the ablated one.
+                // A leaf defers this to the ring step that consumes the chunk; a relay must have it now.
+                dl1_recv_sem = dl1_recv_sem_addr;
+                if (dl1_defer != 0u) {
+                    dl1_own_pending = 1u;
+                } else {
 #if !defined(ABLATE_NOWAIT)
-                noc_semaphore_wait_min(dl1_recv, 1);
+                    noc_semaphore_wait_min(dl1_recv, 1);
 #endif
+                }
             }
             if (dl1_send_fwd || dl1_send_bwd) {
                 // Packet headers from the per-RISC PacketHeaderPool (12 on Blackhole), allocated ONCE: one
@@ -587,6 +610,9 @@ void kernel_main() {
                     if ((dir == 0u) ? (dl1_send_fwd == 0u) : (dl1_send_bwd == 0u)) {
                         continue;
                     }
+                    // Each neighbour has its own schedule, so its slot for this chunk differs.
+                    const uint32_t dl1_peer_base =
+                        base0 + (dir == 0u ? ring_peer_slot_fwd : ring_peer_slot_bwd) * shard_bytes;
                     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
                     sender.open();
                     // ABLATE_NOPAYLOAD sends no bytes but still opens, credits and closes -- so the mux
@@ -638,9 +664,10 @@ void kernel_main() {
                     sender.close();
                 }
             }
-            if (dl1_active && dl1_dist != 0u) {
+            if (dl1_active && dl1_dist != 0u && dl1_own_pending == 0u) {
                 // Re-arm for the next invocation. A GLOBAL semaphore is not zeroed by program launch (that
-                // is exactly why the credit lives in one), so whoever consumed it has to reset it.
+                // is exactly why the credit lives in one), so whoever consumed it has to reset it. A leaf
+                // that deferred its wait re-arms in the ring loop instead, right after consuming it.
                 noc_semaphore_set(dl1_recv, 0);
             }
         }
@@ -879,15 +906,54 @@ void kernel_main() {
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     // Step `step` consumes SLOT `step` -- slot index is the consumption-order index, see the note at
     // ring_own_slot. What varies is which stripe the host put there, and that is the whole schedule.
+#if defined(DIRECT_L1)
+    // Ordered by AVAILABILITY, not by ring position -- the host sorted each core's chunks by
+    // fabric_hops*WAVE + on_chip_hops*HOP and emitted that as the slot schedule. Two things follow, and both
+    // matter:
+    //
+    //  * FORWARD BEFORE CONSUME. The forward is gated only on what we have RECEIVED (or on our own chunk when
+    //    that is what we forward), never on the chunk we are about to consume. Previously the loop waited and
+    //    then forwarded, so a core blocked on its own late chunk relayed nothing and froze every core behind
+    //    it. That coupling, not the ring itself, is what turned one late chunk into a device-wide stall.
+    //  * A LEAF's own-chunk wait lands here (dl1_own_pending), at the step that actually consumes it, instead
+    //    of in the prologue.
+    for (uint32_t step = 0; step < G; ++step) {
+        auto ensure_own = [&]() {
+            if (dl1_own_pending != 0u) {
+                volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem);
+#if !defined(ABLATE_NOWAIT)
+                noc_semaphore_wait_min(r, 1);
+#endif
+                noc_semaphore_set(r, 0);  // re-arm; the prologue skipped this for us
+                dl1_own_pending = 0u;
+            }
+        };
+        // Number of received chunks needed before slot `sl` is filled: every slot below it except our own.
+        auto recv_needed = [&](uint32_t sl) { return (ring_own_slot <= sl) ? sl : (sl + 1u); };
+        if (step + 1 < G) {
+            const uint32_t fwd_src_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step);
+            const uint32_t fwd_dst_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step + 1u);
+            if (fwd_src_slot == ring_own_slot) {
+                ensure_own();
+            } else {
+                noc_semaphore_wait_min(fwd_ptr, recv_needed(fwd_src_slot));
+            }
+            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + fwd_dst_slot * shard_bytes);
+            noc_async_write(base0 + fwd_src_slot * shard_bytes, dst, shard_bytes);
+            // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
+            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
+        }
+        if (step == ring_own_slot) {
+            ensure_own();
+        } else {
+            noc_semaphore_wait_min(fwd_ptr, recv_needed(step));
+        }
+        cb_push_back(in0_cb, W * in0_blk);  // compute consumes this chunk (W blocks)
+    }
+#else
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == ring_own_slot) {
-#if defined(DIRECT_L1)
-            // This slot is ALREADY complete: the direct-L1 prologue above either read it from the local in0
-            // shard (this device owns the rank) or blocked until the upstream device wrote it into L1. There
-            // is no DRAM read and no per-shard arrival gate to evaluate here -- the arrival gate IS that
-            // block's semaphore wait, which has already returned.
-#else
             // read our OWN shard (shard index = ring_pos) from DRAM into our slot (+ barrier).
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
@@ -967,7 +1033,6 @@ void kernel_main() {
                 }
             }
             noc_async_read_barrier();
-#endif  // DIRECT_L1
         } else {
             // Received stripes land in ascending slot order, so consuming slot `step` needs this many of
             // them: every slot up to `step` except our own. (own_slot == 0 makes this `step`, as before.)
@@ -983,6 +1048,7 @@ void kernel_main() {
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
+#endif                          // !DIRECT_L1 ring loop
     noc_async_write_barrier();  // all ring forwards landed
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----
