@@ -154,3 +154,72 @@ def test_r3_an_incomplete_census_is_refused_not_used_as_a_lower_bound():
 
 def test_r3_a_zero_census_changes_nothing():
     assert abs(_rate(_GEMMA, device_weight_bytes=0, device_census_complete=True) - _rate(_GEMMA)) < 0.01
+
+
+# --- the WIDTH is measured, which is what the placeholder was standing in for -------------------
+
+
+def test_the_measured_width_replaces_the_placeholder():
+    """params x 1.0 B/param was a placeholder for a number nobody could get. voxtral is served bf16
+    -- 2 bytes per parameter -- so it published 149.3 tok/s/u against a true 74.7. gemma-3 is served
+    at a MIX (bf16 + bf4 + bf8, measured: 0.8057) and the placeholder happened to land within 24%,
+    which is why this survived: on one model it looked nearly right."""
+    E = {"dram_bw_gbps": 512.0}
+    vox = {"total_params": 3429000000}
+    assert abs(compute_target(vox, E).theoretical_rate - 149.3) < 1.0
+    vox_m = dict(vox, bytes_per_param=2.0, device_census_complete=True)
+    assert abs(compute_target(vox_m, E).theoretical_rate - 74.7) < 1.0
+
+
+def test_a_fractional_width_is_not_truncated_to_the_placeholder():
+    """_scalar coerces with type(default), so an int default turns 1.0625 into 1 -- silently
+    restoring the placeholder. gemma-3's measured bf8 width vanished exactly that way while
+    voxtral's 2.0 survived, so the fix appeared to work on one model and not the other. A width is
+    fractional BY NATURE: bf8 is 1.0625 and bf4 0.5625, because a 16-element tile shares an
+    exponent."""
+    E = {"dram_bw_gbps": 512.0}
+    f = {"total_params": 11180446320, "bytes_per_param": 1.0625, "device_census_complete": True}
+    got = compute_target(f, E).theoretical_rate
+    assert abs(got - 43.1) < 0.5, got
+    assert abs(got - 45.8) > 1.0, "1.0625 was truncated to 1 -- the placeholder is back"
+
+
+def test_an_incomplete_census_still_falls_back_to_the_placeholder():
+    """A refusal must cost nothing that is not already the case: the fallback IS today's behaviour."""
+    E = {"dram_bw_gbps": 512.0}
+    f = {"total_params": 11180446320, "bytes_per_param": 0.5, "device_census_complete": False}
+    assert abs(compute_target(f, E).theoretical_rate - 45.8) < 0.5
+
+
+def test_the_width_survives_the_marker_round_trip():
+    """The census runs in the workload process and the ceiling in another, so the marker is the only
+    place the width crosses. It was emitted and read at both ends, and parsed at neither."""
+    line = (
+        "TRACE_WEIGHT_BYTES=15485398560 scope=pipeline tensors=757 unknown_dtype=0 "
+        "complete=1 bytes_per_param=0.8057 dtypes=bfloat16:400,bfloat4_b:257"
+    )
+    assert float(line.split("bytes_per_param=", 1)[1].split()[0]) == 0.8057
+    src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    assert 'line.split("bytes_per_param=", 1)' in src, "the marker's width is emitted but never parsed"
+
+
+def test_the_mix_is_reported_so_the_average_can_be_checked():
+    """An average nobody can decompose is a number to be trusted rather than read. gemma-3's
+    0.8057 is only meaningful beside bfloat16:400, bfloat4_b:257, bfloat8_b:96."""
+    from agent.weight_census import census, marker
+
+    class _DT:
+        def __init__(self, n):
+            self.name = n
+
+    class _T:
+        def __init__(self, sh, dt):
+            self.shape, self.dtype = sh, dt
+
+    class _M:
+        def __init__(self):
+            self.a = [_T((64, 64), _DT("BFLOAT8_B")) for _ in range(3)]
+            self.b = [_T((64, 64), _DT("BFLOAT4_B")) for _ in range(1)]
+
+    m = marker(census(_M()))
+    assert "bytes_per_param=" in m and "bfloat8_b:3" in m and "bfloat4_b:1" in m

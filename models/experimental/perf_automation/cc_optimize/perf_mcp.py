@@ -2332,7 +2332,7 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         return {}
 
 
-def _persist_device_weight_bytes(nbytes: int, complete: bool) -> None:
+def _persist_device_weight_bytes(nbytes: int, complete: bool, bytes_per_param: float = 0.0) -> None:
     """Merge the census result into the model's own facts file. Best-effort; never raises.
 
     Written to the MODEL directory, and only when that directory was STATED -- a model fact resolved
@@ -2351,10 +2351,16 @@ def _persist_device_weight_bytes(nbytes: int, complete: bool) -> None:
                 doc = {}
         if not isinstance(doc, dict):
             return
-        if doc.get("device_weight_bytes") == int(nbytes) and doc.get("device_census_complete") == bool(complete):
+        if (
+            doc.get("device_weight_bytes") == int(nbytes)
+            and doc.get("device_census_complete") == bool(complete)
+            and (not bytes_per_param or doc.get("bytes_per_param") == float(bytes_per_param))
+        ):
             return
         doc["device_weight_bytes"] = int(nbytes)
         doc["device_census_complete"] = bool(complete)
+        if bytes_per_param and bytes_per_param > 0:
+            doc["bytes_per_param"] = float(bytes_per_param)
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(doc, indent=2) + "\n")
         os.replace(str(tmp), str(p))
@@ -2609,8 +2615,18 @@ def _run_full_pipeline_ms():
                 try:
                     _wb = int(line.split("TRACE_WEIGHT_BYTES=", 1)[1].split()[0])
                     _ok = "complete=1" in line
+                    # THE WIDTH IS THE PART THE CEILING CAN USE. The byte TOTAL counts everything
+                    # resident -- on gemma-3, 15.49 GB of which 6.85 GB is KV cache, which
+                    # active_bytes already prices from seq_len -- so dividing by it double-counts.
+                    # The RATIO is the average width of what the loader actually produced, and
+                    # multiplied by a param count it gives the weights figure the placeholder
+                    # 1.0 B/param was standing in for. Parsed here because the marker is the only
+                    # place it crosses the process boundary.
+                    _bpp = 0.0
+                    if "bytes_per_param=" in line:
+                        _bpp = float(line.split("bytes_per_param=", 1)[1].split()[0])
                     if _wb > 0:
-                        _persist_device_weight_bytes(_wb, _ok)
+                        _persist_device_weight_bytes(_wb, _ok, _bpp)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_STAGE_OPS[" in line:

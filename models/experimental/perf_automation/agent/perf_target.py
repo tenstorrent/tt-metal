@@ -302,7 +302,32 @@ def ceiling_params(model_facts: dict) -> int:
 
 def simple_active_bytes(model_facts: dict) -> int:
     """Bytes streamed per unit of work under the xB -> xGB rule. 0 when the param count is unknown."""
-    return int(round(ceiling_params(model_facts) * _BYTES_PER_PARAM))
+    params = ceiling_params(model_facts)
+    if not params:
+        return 0
+    # THE WIDTH, MEASURED. _BYTES_PER_PARAM is a placeholder -- 1 byte per parameter regardless of
+    # dtype -- and it is the whole reason voxtral published 141.8 tok/s/u against a true ~75: served
+    # bf16, it streams 2 bytes per parameter, not 1. gemma-3 is served bf8 (1.0625) so the
+    # placeholder landed within 6% and looked correct, which is why this went unnoticed.
+    #
+    # weight_census measures it from the BUILT model: every resident tensor's element count at its
+    # real dtype, so Σ(numel × width) / Σ(numel) is the average width actually in use. A model served
+    # part bf8 and part bf4 comes out at neither but at what it is.
+    #
+    # Deliberately the RATIO and not the census's byte TOTAL. The total counts everything resident --
+    # on gemma-3, 15.49 GB of which ~6.85 GB is KV cache, which the ceiling must not divide by
+    # because active_bytes prices KV separately from seq_len. Telling weights from cache needs a rule
+    # that holds for paged KV, Mamba state and architectures nobody has tested. The ratio needs none
+    # of it: cache is stored at the same widths as weights, so it barely moves the average.
+    # FLOAT default, deliberately: _scalar coerces with type(default), so an int default turns
+    # 1.0625 into 1 -- silently restoring the very placeholder this replaces. gemma-3's measured bf8
+    # width vanished that way while voxtral's 2.0 survived, so the fix appeared to work on one model
+    # and not the other. A width is fractional by nature: bf8 is 1.0625 and bf4 is 0.5625, because a
+    # 16-element tile shares an exponent.
+    _bpp = _scalar(model_facts.get("bytes_per_param", 0.0), 0.0)
+    if _bpp > 0 and model_facts.get("device_census_complete", True):
+        return int(round(params * float(_bpp)))
+    return int(round(params * _BYTES_PER_PARAM))
 
 
 def bw_fraction(model_facts: dict) -> float:
