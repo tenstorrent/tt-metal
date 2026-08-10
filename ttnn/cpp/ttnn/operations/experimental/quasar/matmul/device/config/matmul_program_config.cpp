@@ -635,9 +635,8 @@ MatmulProgramConfig get_matmul_program_config(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor B must have INTERLEAVED memory layout, got: {}",
             input_tensor_b.memory_config().memory_layout());
-        if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
-            (grid_size.x >= 1 and grid_size.y >= 1)) {
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "Input tensor A must have ROW_MAJOR shard orientation, got: {}",
@@ -897,48 +896,48 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
     const tt::tt_metal::DataType output_dtype) {
-    const bool has_user_grid = user_core_coord.has_value();
-    if (has_user_grid || !input_tensor_a.is_sharded()) {
-        CoreCoord core_coord;
-        if (has_user_grid) {
-            core_coord = user_core_coord.value();
-            return create_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                user_core_coord,
-                user_fused_activation,
-                compute_kernel_config,
-                mem_config,
-                output_dtype);
-        }
-        tt::tt_metal::IDevice* device = input_tensor_a.device();
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        return create_simple_matmul_program_config(
+    // Sharded A: grid/per_core come from shard_spec; user_core_coord is not applied
+    // (see TODO in get_matmul_program_config).
+    if (input_tensor_a.is_sharded()) {
+        bool bmm = user_run_batched;
+        return get_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
             transpose_b,
             bias_single_tile_size,
+            mem_config,
+            std::nullopt,
+            !bmm,
+            user_core_coord,
             compute_kernel_config,
-            compute_with_storage_grid_size,
+            output_dtype);
+    }
+    const bool has_user_grid = user_core_coord.has_value();
+    if (has_user_grid) {
+        return create_matmul_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            user_core_coord,
+            user_fused_activation,
+            compute_kernel_config,
             mem_config,
             output_dtype);
     }
-    bool bmm = user_run_batched;
-    return get_matmul_program_config(
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
         transpose_a,
         transpose_b,
         bias_single_tile_size,
-        mem_config,
-        std::nullopt,
-        !bmm,
-        user_core_coord,
         compute_kernel_config,
+        compute_with_storage_grid_size,
+        mem_config,
         output_dtype);
 }
 
