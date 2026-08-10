@@ -1661,6 +1661,11 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
     // Generate possible mesh shapes
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
+    if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::N300 && total_number_of_chips == 2) {
+        // An N300 is a single row of two Wormhole ASICs. Preserve the product's canonical orientation so
+        // auto-discovery agrees with n300_mesh_graph_descriptor.textproto and exposes the link as east/west.
+        mesh_shapes_to_try.insert(mesh_shapes_to_try.begin(), MeshShape(1, 2));
+    }
 
     const MeshId mesh_id{0};
 

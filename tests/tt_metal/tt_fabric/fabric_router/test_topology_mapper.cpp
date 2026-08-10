@@ -42,6 +42,7 @@ const std::map<std::string_view, ClusterRequirement>& topology_mapper_test_requi
         {"T3kMeshGraphTestHostRankWithManualPinning", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
         {"T3kMeshGraphTestFromPhysicalSystemDescriptor", {tt::tt_metal::ClusterType::T3K, std::nullopt}},
         {"N300MeshGraphTest", {tt::tt_metal::ClusterType::N300, std::nullopt}},
+        {"N300MeshGraphTestFromPhysicalSystemDescriptor", {tt::tt_metal::ClusterType::N300, std::nullopt}},
         {"P100MeshGraphTest", {tt::tt_metal::ClusterType::P100, std::nullopt}},
         {"DualGalaxyBigMeshTest", {tt::tt_metal::ClusterType::GALAXY, 2}},
         {"PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin", {tt::tt_metal::ClusterType::GALAXY, 2}},
@@ -263,6 +264,17 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
     EXPECT_EQ(
         topology_mapper.get_coord_range(mesh_id, MeshHostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1)));
+}
+
+TEST_F(TopologyMapperTest, N300MeshGraphTestFromPhysicalSystemDescriptor) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        cluster,
+        *physical_system_descriptor_,
+        FabricConfig::FABRIC_2D,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    EXPECT_EQ(mesh_graph.get_mesh_shape(MeshId{0}), MeshShape(1, 2));
 }
 
 TEST_F(TopologyMapperTest, P100MeshGraphTest) {
