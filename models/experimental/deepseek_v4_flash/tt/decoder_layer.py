@@ -231,6 +231,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             win_row=win_row,
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        # Both are spent, and at a wide batch the L1 they hold is the difference
+        # between the MoE's circular buffers fitting and not (a user's row is padded to
+        # a whole tile, so these grow with the batch). Nothing below reads them.
+        ttnn.deallocate(normed)
+        ttnn.deallocate(attn_out)
         post, comb, collapsed = self.ffn_hc(hidden_streams)
         collapsed = self.post_attention_layernorm(collapsed)
         mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)

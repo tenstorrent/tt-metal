@@ -16,6 +16,11 @@ the comparison is tight (unlike the reference PCC, which is dominated by bf4 err
 fails loudly on the two ways batching goes wrong -- users leaking into each other through a
 shared tile-row, and per-user cache state landing in the wrong slot.
 
+Both KV layouts are covered. With dense caches the users are rows of one buffer; with
+``paged`` they are rows of a page table indexing a shared block pool, which is what the
+traced multi-session path runs on and where a batching bug means one user reading another's
+blocks rather than a rounding difference.
+
 No HF reference and no system-interpreter subprocess: the config comes off the checkpoint's
 ``config.json`` and the RoPE tables are synthesised, which is sound here because both sides
 consume the identical tables.
@@ -43,6 +48,13 @@ from models.experimental.deepseek_v4_flash.tt.attention import (
     host_decode_mask,
     int32_pos_tensor,
     make_rope_table,
+)
+from models.experimental.deepseek_v4_flash.tt.paged_cache import (
+    PagedKVManager,
+    PagedLayerView,
+    build_groups,
+    plan_pool_blocks,
+    round_context,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
@@ -123,19 +135,94 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device):
     return _to_tt(cos_full, device), _to_tt(sin_full, device), _to_tt(-sin_full, device)
 
 
-def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int) -> dict[int, torch.Tensor]:
+_PAGE_BLOCK_SIZE = 32
+
+
+class _PagedKV:
+    """A private block pool + page table for one layer, built the way the model builds it.
+
+    Mirrors :meth:`DeepSeekV4Model.prepare_static_decode`'s paged state minus the traces:
+    one session per user, their page-table rows stacked into the ``[B, logical_blocks]``
+    tensor the paged ops index by user, and compressed blocks handed out as windows close.
+    Each :func:`_replay_decode` run builds its own, so a ``B == 1`` replay reads a genuinely
+    separate pool rather than a slice of the batched one.
+    """
+
+    def __init__(self, cfg, layer_type: str, seq_len: int, batch: int, device):
+        rates = [] if layer_type == "sliding_attention" else [cfg.compress_rates[layer_type]]
+        self.layer_type = layer_type
+        # Every group's entry count has to tile into whole blocks, which is the same
+        # rounding the model applies before it sizes its pools.
+        self.max_seq = round_context(seq_len, rates, _PAGE_BLOCK_SIZE)
+        groups = build_groups(
+            [layer_type], cfg.compress_rates, cfg.sliding_window, self.max_seq, block_size=_PAGE_BLOCK_SIZE
+        )
+        self.group = groups[layer_type]
+        # The paged axis is block-rounded, so a mask built for the dense axis only fits
+        # when the two lengths agree. They do for these geometries (the rounding above
+        # makes the entry count a whole number of blocks), and this pins that down rather
+        # than letting a future config silently mask the wrong columns.
+        if rates:
+            assert self.group.kv_len == cfg.sliding_window + self.max_seq // rates[0], (
+                f"paged axis {self.group.kv_len} != dense mask width "
+                f"{cfg.sliding_window + self.max_seq // rates[0]}"
+            )
+        self.manager = PagedKVManager(groups, plan_pool_blocks(groups, batch, batch * self.max_seq))
+        self.sids = [self.manager.open_session() for _ in range(batch)]
+
+        pool = ttnn.from_torch(
+            torch.zeros(self.manager.pools[layer_type].num_blocks, 1, self.group.block_size, cfg.head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.table = ttnn.from_torch(
+            torch.zeros(batch, self.group.logical_blocks, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        self.view = PagedLayerView(pool, self.table, self.group.position_modulo)
+        self._write_table()
+
+    def _write_table(self) -> None:
+        """Refresh the persistent table with one row per user, in slot order."""
+        rows = torch.cat([self.manager.page_row(sid, self.layer_type) for sid in self.sids])
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT), self.table
+        )
+
+    def step(self, pos: int) -> None:
+        """Give every user blocks for the rows a step at ``pos`` touches."""
+        # Every session is grown before the table is rewritten -- short-circuiting on the
+        # first session that moved would leave the rest of the batch unmapped.
+        grown = [self.manager.ensure_capacity(sid, pos) for sid in self.sids]
+        if any(grown):
+            self._write_table()
+
+
+def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int, paged: bool = False) -> dict:
     """Feed ``hidden`` ``[B, S, D]`` through ``decode`` one position at a time.
 
     Returns the outputs at positions ``>= capture_from`` as ``{pos: [B, D]}``. Each call
     builds its own cache, so a ``B == 1`` replay is a genuinely independent session rather
     than a slice of the batched one.
+
+    ``paged`` swaps the layer's dense KV buffers for a block pool addressed through a
+    per-user page table -- the layout the traced multi-session path runs on. The compressor
+    window buffers stay dense either way (they are per-user state, not KV), so only the
+    ``sliding`` / ``combined`` buffers actually move.
     """
     batch, seq_len, hidden_size = hidden.shape
     is_compressor = layer_type != "sliding_attention"
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
+    pkv = _PagedKV(cfg, layer_type, seq_len, batch, device) if paged else None
+    # The paged axis is sized by the block-rounded context, and the mask has to span it.
+    axis_seq = pkv.max_seq if paged else seq_len
     kv_cache = build_static_layer_cache(
-        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates, batch=batch
+        device, cfg.sliding_window, layer_type, cfg.head_dim, axis_seq, cfg.compress_rates, paged=paged, batch=batch
     )
 
     cos_half, sin_half = _rope_half_tables(torch.arange(seq_len), cfg.qk_rope_head_dim)
@@ -145,6 +232,8 @@ def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int) -> 
     captured: dict[int, torch.Tensor] = {}
     for pos in range(seq_len):
         attn.prefetch_weights()
+        if paged:
+            pkv.step(pos)
         cos_d, sin_d, neg_sin_d = _rope_rows(cos_half[pos : pos + 1], sin_half[pos : pos + 1], device)
 
         cos_win_d = sin_win_d = win_slot = win_row = None
@@ -165,10 +254,11 @@ def _replay_decode(attn, cfg, layer_type, hidden, device, capture_from: int) -> 
             neg_sin_d,
             cos_win_d,
             sin_win_d,
-            host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device),
+            host_decode_mask(cfg.sliding_window, layer_type, cr, pos, axis_seq, device),
             kv_cache,
             int32_pos_tensor(pos % cfg.sliding_window, device, batch),
             int32_pos_tensor(pos, device, batch),
+            paged=pkv.view if paged else None,
             pool_compressor=pool,
             win_slot=win_slot,
             win_row=win_row,
@@ -210,14 +300,23 @@ _LAYER_CASES = dict(
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(**_LAYER_CASES)
+@pytest.mark.parametrize("paged", (False, True), ids=["dense", "paged"])
 @pytest.mark.parametrize("batch_size", (8,))
-def test_attention_decode_batch_invariance(device, reset_seeds, layer_idx: int, seq_len: int, batch_size: int) -> None:
+def test_attention_decode_batch_invariance(
+    device, reset_seeds, layer_idx: int, seq_len: int, batch_size: int, paged: bool
+) -> None:
     """A batched decode step must reproduce every user's own ``B == 1`` answer.
 
     Replays ``batch_size`` independent sequences through one batched run, then replays each
     of them alone, and compares the last few positions user by user. The per-user replay is
     the control: same block, same weights, same RoPE tables, same positions -- the only
     difference is how many users share the step.
+
+    Run over both KV layouts. The dense one is what the eager path uses; the ``paged`` one
+    is what the traced multi-session path runs on, where the users are not merely rows of a
+    buffer but separate rows of a page table indexing a shared block pool. That is the
+    layout where a batching bug stops being an arithmetic detail and starts being one user
+    reading another's blocks, so it is worth pinning down before anything is built on it.
 
     Changing the batch size does move the arithmetic a little: SDPA-decode splits its KV
     reduction across cores per (head, user), so a B-user step merges the flash-attention
@@ -241,9 +340,9 @@ def test_attention_decode_batch_invariance(device, reset_seeds, layer_idx: int, 
             prefetcher.enter_context(tensor_prefetcher_session(device))
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
 
-        batched = _replay_decode(attn, cfg, layer_type, hidden, device, capture_from)
+        batched = _replay_decode(attn, cfg, layer_type, hidden, device, capture_from, paged=paged)
         single = [
-            _replay_decode(attn, cfg, layer_type, hidden[user : user + 1], device, capture_from)
+            _replay_decode(attn, cfg, layer_type, hidden[user : user + 1], device, capture_from, paged=paged)
             for user in range(batch_size)
         ]
 
@@ -259,12 +358,14 @@ def test_attention_decode_batch_invariance(device, reset_seeds, layer_idx: int, 
             relative = ((want - got).pow(2).mean().sqrt() / want.pow(2).mean().sqrt()).item()
             worst_pcc, worst_rel = min(worst_pcc, _pcc(want, got)), max(worst_rel, relative)
             assert passing, (
-                f"layer {layer_idx} ({layer_type}) pos {pos} user {user}: a batch of {batch_size} did not "
-                f"reproduce this user's B==1 output (relative RMS {relative:.3%}): {pcc_message}"
+                f"layer {layer_idx} ({layer_type}, {'paged' if paged else 'dense'} KV) pos {pos} user {user}: "
+                f"a batch of {batch_size} did not reproduce this user's B==1 output "
+                f"(relative RMS {relative:.3%}): {pcc_message}"
             )
     logger.info(
-        f"layer {layer_idx} ({layer_type}) batch-invariance holds over {len(batched)} positions "
-        f"x {batch_size} users; worst PCC {worst_pcc:.6f}, worst relative RMS {worst_rel:.3%}"
+        f"layer {layer_idx} ({layer_type}, {'paged' if paged else 'dense'} KV) batch-invariance holds over "
+        f"{len(batched)} positions x {batch_size} users; worst PCC {worst_pcc:.6f}, "
+        f"worst relative RMS {worst_rel:.3%}"
     )
 
 
@@ -275,8 +376,11 @@ def test_attention_decode_batch_invariance(device, reset_seeds, layer_idx: int, 
 # 8 is the supported ceiling, and it is L1 that sets it rather than the 32-user tile-row cap
 # in ``_pack_tokens``: the width-sharded query is the one thing that grows with B, and by 16
 # users it collides with SDPA-decode's static circular buffers. See the attention.py header.
+@pytest.mark.parametrize("paged", (False, True), ids=["dense", "paged"])
 @pytest.mark.parametrize("batch_size", (8,))
-def test_attention_decode_user_independence(device, reset_seeds, layer_idx: int, seq_len: int, batch_size: int) -> None:
+def test_attention_decode_user_independence(
+    device, reset_seeds, layer_idx: int, seq_len: int, batch_size: int, paged: bool
+) -> None:
     """A user's answer must not depend on what the *other* users in the step are decoding.
 
     Replays the batch twice with slot 0 carrying the identical sequence both times and every
@@ -302,17 +406,18 @@ def test_attention_decode_user_independence(device, reset_seeds, layer_idx: int,
             prefetcher.enter_context(tensor_prefetcher_session(device))
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
 
-        first = _replay_decode(attn, cfg, layer_type, hidden, device, capture_from)
-        second = _replay_decode(attn, cfg, layer_type, other, device, capture_from)
+        first = _replay_decode(attn, cfg, layer_type, hidden, device, capture_from, paged=paged)
+        second = _replay_decode(attn, cfg, layer_type, other, device, capture_from, paged=paged)
 
     for pos in sorted(first):
         want, got = first[pos][0], second[pos][0]
         relative = ((want - got).pow(2).mean().sqrt() / want.pow(2).mean().sqrt()).item()
         assert torch.equal(want, got), (
-            f"layer {layer_idx} ({layer_type}) pos {pos}: slot 0's output moved by {relative:.3%} "
-            f"relative RMS when only the other users' tokens changed -- users are not independent"
+            f"layer {layer_idx} ({layer_type}, {'paged' if paged else 'dense'} KV) pos {pos}: slot 0's output "
+            f"moved by {relative:.3%} relative RMS when only the other users' tokens changed "
+            f"-- users are not independent"
         )
     logger.info(
-        f"layer {layer_idx} ({layer_type}) users are independent: slot 0 is bit-identical across "
-        f"{len(first)} positions while the other {batch_size - 1} users decode different tokens"
+        f"layer {layer_idx} ({layer_type}, {'paged' if paged else 'dense'} KV) users are independent: slot 0 is "
+        f"bit-identical across {len(first)} positions while the other {batch_size - 1} users decode different tokens"
     )

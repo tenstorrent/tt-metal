@@ -1356,6 +1356,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             # slot, with the additive mask hiding the not-yet-written slots.
             if paged is not None:
                 _update_cache_at(None, kv_new, compress_pos, paged=paged)
+                ttnn.deallocate(kv_new)
                 out = self._attend(
                     q,
                     None,
@@ -1368,6 +1369,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 )
             else:
                 _update_cache_at(scache.sliding, kv_new, sliding_pos)
+                ttnn.deallocate(kv_new)
                 out = self._attend(q, scache.sliding, mask, cos, neg_sin)
             return ttnn.reshape(out, [b, s, 1, d])
 
@@ -1377,6 +1379,19 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # need no ``cache_position_modulo``.
         kv = None if paged is not None else scache.combined  # [B, 1, window + n_win, Dh]
         _update_cache_at(kv, kv_new, sliding_pos, paged=paged)
+        # Written, and one row per user is a whole tile of L1 each -- worth handing
+        # back before the compressor and SDPA below ask for their own.
+        ttnn.deallocate(kv_new)
+        # ``q`` is width-sharded over B*H rows of L1 and nothing reads it until the SDPA
+        # below, while the compressor in between is the step's L1 high-water mark. At a
+        # wide batch holding both at once is what leaves an op's circular buffers
+        # nowhere to go, so park q in DRAM across the compressor and bring it back in
+        # the layout SDPA expects. At batch 1 both fit and the round trip is dead cost.
+        q_config = q.memory_config() if b > 1 else None
+        if q_config is not None:
+            spilled = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(q)
+            q = spilled
         self.compressor.decode_static(
             tokens,
             cos_win,
@@ -1388,5 +1403,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             pool=pool_compressor,
             paged=paged,
         )
+        if q_config is not None:
+            q = ttnn.to_memory_config(q, q_config)
         out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
         return ttnn.reshape(out, [b, s, 1, d])
