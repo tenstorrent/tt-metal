@@ -602,7 +602,7 @@
     export PREFILL_REQUIRE_HIGH_POWER=1
     export PREFILL_EXPECTED_TPS=3750
     export PREFILL_PERF_MARGIN=0.0933
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
   test_type: minimax_prefill_perf
