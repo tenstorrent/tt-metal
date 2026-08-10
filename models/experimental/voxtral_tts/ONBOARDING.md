@@ -123,6 +123,11 @@ python $Q --tier fast  --tag after
 python $Q --compare before after         # exits 1 if anything is worse beyond tolerance
 ```
 
+**⚠ A TRACE MAKES EVERY LATER DEVICE ALLOCATION UNSAFE (`§6.64`).** Once `begin_trace_capture`
+has run, any `from_torch(..., device=)` or op that allocates can be corrupted when the trace
+executes — ttnn warns, then it hangs, then the board needs `tt-smi -r`. It happened here. All
+per-frame inputs must be preallocated and written with `copy_host_to_device_tensor` first.
+
 **⚠ A BLOCK A/B IS A SCREEN, NOT A VERDICT (`§6.63`).** Timing a block in a tight loop measures
 device time with dispatch fully overlapped. The real loop syncs **10 times per frame** at host
 round-trips and spends **2.8 ms/frame** drained, which can absorb a device saving completely —

@@ -4073,6 +4073,58 @@ a tight loop re-runs one program while the real loop alternates Block 1's ~470 o
 ~450 — but that is untested. **The methodological conclusion is unaffected and is the durable part
 of this section: a block A/B is a screen, `--tier audio`'s `ms_per_frame` decides.**
 
+### 6.64 — tracing Block 2 is worth 2.29 ms and needs an allocation refactor to collect it
+
+§6.63 left "where do the 3.77 ms go" open. Part of the answer, measured with §6.49's own probe on
+current HEAD:
+
+| | eager | traced | dispatch |
+|---|---|---|---|
+| **Block 2** `_solve` | 17.300 | **15.006** | **13.3% = 2.294 ms** |
+| **Block 1** 26 layers | 15.907 | 15.922 | **0.0%** |
+
+**§6.49 recorded 2.8–3.9% and concluded tracing was not worth shipping. Block 2 alone is now
+13.3%.** Fourth instance of the same pattern, same cause: §6.52 made Block 2's device work faster,
+so dispatch that had been hiding behind slower matmuls became exposed. §6.26 rejected trace-as-
+shipping as "three silent failure modes for 0.7%" — at 2.29 ms, 6% of a 37.5 ms frame, that
+trade is completely different.
+
+**The asymmetry is the interesting part.** Block 1 is 0.0% dispatch: 26 layers of 3.4B-parameter
+work, genuinely device-bound. Block 2 runs nearly as many ops (~600 vs ~470) over 390M parameters
+and 3-or-6 rows, so its ops are small and launch cost dominates. **Trace Block 2; leave Block 1
+alone.**
+
+**A HOST RUN-AHEAD HYPOTHESIS WAS TESTED AND IS WRONG.** Forcing a `synchronize_device` after
+every iteration of the tight loop — which removes the host's ability to enqueue ahead, changing
+nothing else — costs **+0.231 ms on Block 1 and +0.099 on Block 2**. The tight loop's advantage is
+not run-ahead.
+
+**WHY IT IS NOT A DROP-IN, AND THIS WEDGED THE CARD.** Attempting traced Block 2 inside the real
+loop produced:
+
+> `Allocating device buffers is unsafe due to the existence of an active trace. These buffers may
+> be corrupted once a trace is executed.`
+
+then hung, and the board had to be recovered with `tt-smi -r` after
+`RuntimeError: Read 0xffffffff over PCIe ID 3: the board should be reset`.
+
+**With a trace captured, nothing else may allocate on device.** The real loop allocates every
+frame, in both blocks: Block 1 uploads `cos`, `sin`, `pos_t` and the embedding per step;
+`semantic_code` uploads `h` and allocates its logits; `decode_frame` uploads `x0` and the CFG pair.
+**All of them must become preallocated persistent buffers written with
+`copy_host_to_device_tensor` before a trace can be executed at all.** That is a refactor of both
+blocks' input handling, not a local change — which is the concrete form of §6.26's "silent failure
+modes", and worth knowing before anyone starts.
+
+**So: 2.29 ms is available and the path to it is understood, but it is a day of careful work with a
+card-wedging failure mode, and §6.63's rule still applies — the block number is a SCREEN.** It has
+to be confirmed on `ms_per_frame`, and `trace_region_size` alone shifts the allocator enough to
+move trajectories (`95dc26363f`), so it needs the full WER gate rather than a timing check.
+
+**STILL UNEXPLAINED**: `decode_frame` is 21.0 ms in the real loop while `_solve` alone is 17.3 —
+a 3.7 ms wrapper whose uploads are all tiny. Not accounted for by dispatch (measured above), by
+host crossings (§6.63 removed them for +0.081), or by run-ahead (tested above).
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
