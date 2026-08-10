@@ -12,6 +12,8 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
+from ttml.parallel import TPStrategy
+
 
 class GroupedQueryAttention(AbstractModuleBase):
     """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
@@ -30,7 +32,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
@@ -39,6 +41,8 @@ class GroupedQueryAttention(AbstractModuleBase):
                 "Embedding size must be divisible by the number of attention heads. "
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
+
+        use_tp = tp_strategy.tensor_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
