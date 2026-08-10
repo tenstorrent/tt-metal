@@ -26,3 +26,13 @@
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+# Temporary: WH N150 didt sync-error is ~30x BH; run on Galaxy to compare and
+# dump frequency + probe/nonlinearity breakdown. Remove once diagnosed.
+- name: Galaxy realtime profiler didt sync error
+  cmd: run_realtime_profiler_didt_sync_error_test
+  skus:
+    wh_galaxy:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285

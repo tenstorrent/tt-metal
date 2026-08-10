@@ -31,16 +31,22 @@ inline constexpr auto kDeviceClockSyncInterval = std::chrono::microseconds(500);
 class DeviceClockSync {
 public:
     // A (host_timestamp, device_timestamp) sample and the uncertainty of that host time.
+    // For MMIO probes, error is the half-bracket and probe_error/nonlinearity stay zero.
+    // For pinned starts, error/probe_error/nonlinearity carry the chord claim that was current at pin.
     struct Anchor {
         std::chrono::steady_clock::time_point host_timestamp;
         uint64_t device_timestamp = 0;
         std::chrono::nanoseconds error{};
+        std::chrono::nanoseconds probe_error{};
+        std::chrono::nanoseconds nonlinearity{};
     };
 
     // Affine map: host_ns = (device_timestamp - device_cycle_offset) / frequency.
     struct RecordMapping {
         int64_t device_cycle_offset = 0;
-        std::chrono::nanoseconds error{};
+        std::chrono::nanoseconds error{};         // probe_error + nonlinearity
+        std::chrono::nanoseconds probe_error{};   // max MMIO half-bracket on chord endpoints
+        std::chrono::nanoseconds nonlinearity{};  // chord_nonlinearity leftover
         double frequency = 0.0;
     };
 
@@ -83,8 +89,10 @@ private:
     private:
         // Secant between adjacent probes.
         struct Chord {
-            std::chrono::nanoseconds error{};
-            double frequency = 0.0;  // device cycles / host ns
+            std::chrono::nanoseconds error{};         // probe_error + nonlinearity
+            std::chrono::nanoseconds probe_error{};   // max(open.error, close.error)
+            std::chrono::nanoseconds nonlinearity{};  // chord_nonlinearity leftover
+            double frequency = 0.0;                   // device cycles / host ns
             uint64_t open_device_timestamp = 0;
             double open_host_ns = 0.0;
             uint64_t close_device_timestamp = 0;

@@ -119,7 +119,7 @@ ttnn:
   # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
     wh_llmbox: 150
-    wh_galaxy: 50
+    wh_galaxy: 60
     wh_n150_civ2: 60
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60

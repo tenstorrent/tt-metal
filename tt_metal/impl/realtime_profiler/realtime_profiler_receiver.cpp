@@ -108,7 +108,11 @@ void RealtimeProfilerReceiver::publish_pages(
             .start_timestamp = start_timestamp,
             .end_timestamp = end_timestamp,
             .frequency = mapping->frequency,
-            .clock_sync = {.device_cycle_offset = mapping->device_cycle_offset, .error = mapping->error},
+            .clock_sync =
+                {.device_cycle_offset = mapping->device_cycle_offset,
+                 .error = mapping->error,
+                 .probe_error = mapping->probe_error,
+                 .nonlinearity = mapping->nonlinearity},
             .kernel_sources = data_collector_->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])),
         });
         sync_error_window_max_ =

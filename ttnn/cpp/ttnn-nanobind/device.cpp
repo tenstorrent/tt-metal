@@ -168,7 +168,16 @@ void py_device_module_types(nb::module_& m_device) {
         .def_prop_ro(
             "error_ns",
             [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.error.count(); },
-            "Estimated error in a host time derived from this mapping, in ns");
+            "Estimated error in a host time derived from this mapping, in ns "
+            "(= probe_error_ns + nonlinearity_ns)")
+        .def_prop_ro(
+            "probe_error_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.probe_error.count(); },
+            "MMIO half-bracket contribution to error_ns (max of chord endpoint probes), in ns")
+        .def_prop_ro(
+            "nonlinearity_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeClockSync& self) { return self.nonlinearity.count(); },
+            "Nonlinearity / DVFS contribution to error_ns, in ns");
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")

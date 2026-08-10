@@ -770,9 +770,16 @@ def test_sync_error_under_didt_load(mesh_device, request, determinism_check_inte
     didt_workload_iterations = int(cli_iters) if cli_iters is not None else 10_000
 
     errors = []
+    probe_errors = []
+    nonlinearities = []
+    frequencies_ghz = []
 
     def on_batch(batch):
-        errors.extend(record.clock_sync.error_ns for record in batch.records)
+        for record in batch.records:
+            errors.append(record.clock_sync.error_ns)
+            probe_errors.append(record.clock_sync.probe_error_ns)
+            nonlinearities.append(record.clock_sync.nonlinearity_ns)
+            frequencies_ghz.append(record.frequency)  # cycles/ns == GHz
 
     handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(on_batch)
     logger.disable("tests.didt.op_test_base")
@@ -791,15 +798,37 @@ def test_sync_error_under_didt_load(mesh_device, request, determinism_check_inte
     ordered = sorted(errors)
     assert ordered, "No real-time profiler records were delivered during the workload"
 
-    def pct(p):
-        return ordered[min(int(p * len(ordered)), len(ordered) - 1)]
+    def pct(vals, p):
+        ordered_vals = sorted(vals)
+        return ordered_vals[min(int(p * len(ordered_vals)), len(ordered_vals) - 1)]
 
+    def summarize(name, vals):
+        ordered_vals = sorted(vals)
+        return (
+            f"{name}: min={ordered_vals[0]}ns p50={pct(vals, 0.50)}ns p90={pct(vals, 0.90)}ns "
+            f"p99={pct(vals, 0.99)}ns max={ordered_vals[-1]}ns mean={statistics.mean(vals):.0f}ns"
+        )
+
+    logger.info(f"sync error over {len(ordered)} records: {summarize('total', errors)}")
+    logger.info(summarize("probe_error (MMIO bracket)", probe_errors))
+    logger.info(summarize("nonlinearity (DVFS/bow)", nonlinearities))
+
+    freq_sorted = sorted(frequencies_ghz)
     logger.info(
-        f"sync error over {len(ordered)} records: "
-        f"min={ordered[0]}ns p50={pct(0.50)}ns p90={pct(0.90)}ns p99={pct(0.99)}ns "
-        f"max={ordered[-1]}ns mean={statistics.mean(ordered):.0f}ns"
+        f"frequency_ghz over {len(freq_sorted)} records: "
+        f"min={freq_sorted[0]:.4f} p50={pct(frequencies_ghz, 0.50):.4f} "
+        f"p90={pct(frequencies_ghz, 0.90):.4f} p99={pct(frequencies_ghz, 0.99):.4f} "
+        f"max={freq_sorted[-1]:.4f} mean={statistics.mean(frequencies_ghz):.4f}"
     )
+    # Coarse histogram so CI logs show whether AICLK actually moved.
+    buckets = {}
+    for ghz in frequencies_ghz:
+        key = round(ghz, 2)  # 10 MHz bins
+        buckets[key] = buckets.get(key, 0) + 1
+    hist = ", ".join(f"{ghz:.2f}GHz:{count}" for ghz, count in sorted(buckets.items()))
+    logger.info(f"frequency_ghz histogram (10MHz bins): {hist}")
+
     assert ordered[0] > 0, "sync error should be populated"
-    assert pct(0.50) < 6_000, "median sync error too high under compute load"
-    assert pct(0.90) < 10_000, "p90 sync error too high under compute load"
-    assert pct(0.99) < 15_000, "tail sync error too high under compute load"
+    assert pct(errors, 0.50) < 6_000, "median sync error too high under compute load"
+    assert pct(errors, 0.90) < 10_000, "p90 sync error too high under compute load"
+    assert pct(errors, 0.99) < 15_000, "tail sync error too high under compute load"
