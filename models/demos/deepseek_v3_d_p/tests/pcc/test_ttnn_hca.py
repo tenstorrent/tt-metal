@@ -283,7 +283,7 @@ _CHUNK_SIZE = 4096
 # Programs the compressed-cache write compiles per chunk, per candidate. slice_write folds its offsets
 # into its own program hash, so a moving append offset costs a program every chunk; update_cache keeps
 # update_index and batch_offset out of the hash (update_cache_device_operation.cpp:160).
-_WRITE_COMPILES_PER_CHUNK = {"slice_write": 1, "token_at_a_time": 0}[COMPRESSED_WRITE]
+_WRITE_COMPILES_PER_CHUNK = {"fill_cache": 0, "slice_write": 1, "token_at_a_time": 0}[COMPRESSED_WRITE]
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", [_CHUNK_SIZE, _CHUNK_SIZE]),
     ("2chunk-ragged", [_CHUNK_SIZE, 3000]),
