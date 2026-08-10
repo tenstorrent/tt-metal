@@ -59,7 +59,10 @@ Tensor max(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 max compares on the accurate SFPU path (full fp32, so the result is
+    // an element of the input); true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false);
 
 Tensor min(
     const Tensor& input_tensor_arg,
@@ -69,7 +72,10 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 min compares on the accurate SFPU path (full fp32, so the result is
+    // an element of the input); true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false);
 
 Tensor std(
     const Tensor& input_tensor_arg,

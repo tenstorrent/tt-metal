@@ -27,9 +27,9 @@ inline std::string get_generic_reduction_doc(
                 * - INT32
                   - TILE)doc"
                                             : "";
-    // Only ttnn.mean exposes fast_and_approximate_mode.
+    // ttnn.mean / ttnn.min / ttnn.max expose fast_and_approximate_mode; ttnn.sum does not.
     const char* fast_approx_kwarg = has_fast_approximate_mode ? R"doc(
-            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc"
+            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation for mean, full float32 comparison for min/max, so their result is always an element of the input); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc"
                                                               : "";
     return fmt::format(
         R"doc(
@@ -118,10 +118,11 @@ Tensor generic_reduction_with_deprecated_correction(
         sub_core_grids);
 }
 
-// mean exposes an extra 'fast_and_approximate_mode' opt-in that sum/min/max do not, so it needs its
-// own wrapper instead of the shared generic_reduction_with_deprecated_correction<>. Same deprecated-
-// correction handling, plus the trailing accurate flag forwarded to ttnn::mean.
-inline Tensor mean_with_deprecated_correction(
+// mean/min/max expose an extra 'fast_and_approximate_mode' opt-in that sum does not, so they need
+// their own wrapper instead of the shared generic_reduction_with_deprecated_correction<>. Same
+// deprecated-correction handling, plus the trailing accurate flag forwarded to the op.
+template <auto Func>
+Tensor generic_reduction_with_fast_approximate_mode(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
@@ -138,7 +139,7 @@ inline Tensor mean_with_deprecated_correction(
             "The 'correction' parameter is deprecated and will be removed in a future release.",
             1);
     }
-    return ttnn::mean(
+    return Func(
         input_tensor,
         dim,
         keepdim,
@@ -171,7 +172,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        &mean_with_deprecated_correction,
+        &generic_reduction_with_fast_approximate_mode<&ttnn::mean>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -185,11 +186,12 @@ inline void bind_generic_reductions(nb::module_& mod) {
         // effect for non-fp32.
         nb::arg("fast_and_approximate_mode") = false);
 
-    const auto max_doc = get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true);
+    const auto max_doc =
+        get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &generic_reduction_with_deprecated_correction<&ttnn::max>,
+        &generic_reduction_with_fast_approximate_mode<&ttnn::max>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -198,13 +200,17 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU compare; true selects the FPU.
+        // No effect for non-fp32.
+        nb::arg("fast_and_approximate_mode") = false);
 
-    const auto min_doc = get_generic_reduction_doc("min", "ttnn.min", /*int32_supported=*/true);
+    const auto min_doc =
+        get_generic_reduction_doc("min", "ttnn.min", /*int32_supported=*/true, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &generic_reduction_with_deprecated_correction<&ttnn::min>,
+        &generic_reduction_with_fast_approximate_mode<&ttnn::min>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -213,7 +219,10 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU compare; true selects the FPU.
+        // No effect for non-fp32.
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 }  // namespace ttnn::operations::reduction::detail

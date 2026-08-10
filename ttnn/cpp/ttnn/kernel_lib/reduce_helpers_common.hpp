@@ -25,8 +25,10 @@ enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
  * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
  * Int32 MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
  *
- * Float32 SUM additionally opts into the SFPU path when the caller passes ReduceFp32Mode::Accurate
- * (accurate ttnn.mean); the host threads that mode in from the kernel's compile-time args.
+ * Float32 SUM, MAX and MIN additionally opt into the SFPU path when the caller passes
+ * ReduceFp32Mode::Accurate (accurate ttnn.mean / ttnn.max / ttnn.min); the host threads that mode in
+ * from the kernel's compile-time args. Float32 MIN then drives the LLK MIN reduce directly, so it
+ * skips the -MAX(-x) lowering the FPU path needs.
  */
 template <
     ckernel::PoolType pool_type,
@@ -40,11 +42,11 @@ constexpr bool is_sfpu_reduce_path() {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {
-        // Float32 opts into the SFPU path only in Accurate mode, and only for SUM (accurate ttnn.mean,
-        // which the host lowers to SUM + a 1/N post-mul). Everything else non-Int32 stays on the FPU.
-        if constexpr (
-            fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32 ||
-            pool_type != ckernel::PoolType::SUM) {
+        // Float32 opts into the SFPU path only in Accurate mode. SUM covers accurate ttnn.mean (which
+        // the host lowers to SUM + a 1/N post-mul); MAX/MIN cover accurate ttnn.max / ttnn.min, where
+        // the FPU's tf32 truncation would otherwise return a value that is not an element of the
+        // input. Everything else non-Int32 stays on the FPU.
+        if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
             return false;
         }
     }

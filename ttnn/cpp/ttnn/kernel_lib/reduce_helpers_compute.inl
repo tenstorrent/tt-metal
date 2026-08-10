@@ -25,30 +25,48 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
-// SFPU MAX fold
+// SFPU MAX fold. Int32 uses binary_max_int32_tile; Float32 uses binary_max_tile so the
+// compare sees full fp32 instead of the FPU's tf32-truncated operands (accurate min/max).
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile_init();
+    } else {
+        static_assert(format == DataFormat::Float32, "SFPU reduce MAX fold: Int32 or Float32 only");
+        binary_max_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile(a, b, out);
+    } else {
+        static_assert(format == DataFormat::Float32, "SFPU reduce MAX fold: Int32 or Float32 only");
+        binary_max_tile(a, b, out);
+    }
 }
 
-// SFPU MIN fold
+// SFPU MIN fold. Float32 drives binary_min_tile directly, so accurate fp32 min does not need
+// the -MAX(-x) lowering the FPU path uses (same as Int32 min, issue #49589).
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile_init();
+    } else {
+        static_assert(format == DataFormat::Float32, "SFPU reduce MIN fold: Int32 or Float32 only");
+        binary_min_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile(a, b, out);
+    } else {
+        static_assert(format == DataFormat::Float32, "SFPU reduce MIN fold: Int32 or Float32 only");
+        binary_min_tile(a, b, out);
+    }
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
@@ -303,7 +321,8 @@ ALWI void reduce(
         "Int32 AVG (mean) is not supported");
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN is only valid on the Int32 SFPU reduce path; the FPU path implements MIN as -MAX(-x)");
+        "MIN is only valid on the SFPU reduce path (Int32, or accurate fp32); the FPU path implements MIN as "
+        "-MAX(-x)");
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
