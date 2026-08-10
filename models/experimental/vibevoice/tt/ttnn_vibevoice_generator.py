@@ -333,7 +333,18 @@ class TTVibeVoiceGenerator:
         self._traj_path = os.environ.get("VV_LOG_TRAJ", "")
         self._traj_fh = None
 
-    _SF_WARMUP = 2
+    # Eager frames run before each (re)capture so the program cache is warm — a capture that has to
+    # load a new binary dies with "Cannot load new binaries during trace capture".  ONE frame is
+    # enough to populate it, and the second was pure cost: an eager frame is ~345 ms (Python
+    # dispatch over ~3400 ops) against ~32 ms for the traced replay, so at every segment boundary
+    # the extra warmup was ~1/4 of the whole ~1.35 s recapture.  The trace is released at each
+    # boundary (see _reset_segment_frame_trace), so this is paid once per SEGMENT, not once per run:
+    # 264 boundaries on the 100-min render.
+    #
+    # Insufficient warmup fails LOUDLY (TT_FATAL at begin_trace_capture) rather than silently
+    # corrupting the capture, so this cannot degrade audio undetected — verified with 0 warmups,
+    # which aborts immediately.
+    _SF_WARMUP = 1
 
     def _token_label(self, token_id: int) -> str:
         labels = {
