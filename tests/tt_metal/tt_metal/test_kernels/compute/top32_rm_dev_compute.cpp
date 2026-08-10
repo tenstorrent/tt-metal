@@ -9,12 +9,12 @@
 
 // DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
 #if defined(TRISC_UNPACK)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
 
 #if defined(TRISC_MATH)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
+#include "experimental/llk_math_top32_rm_api.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 

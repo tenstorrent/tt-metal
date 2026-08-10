@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ckernel_defs.h"
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_math_top32_rm.h"
+#include "experimental/llk_math_top32_rm.h"
 #include "llk_math_common_api.h"
 #include "llk_math_transpose_dest_api.h"
 

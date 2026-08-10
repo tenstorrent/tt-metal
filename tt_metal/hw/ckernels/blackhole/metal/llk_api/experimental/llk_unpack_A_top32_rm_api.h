@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A_top32_rm.h"
+#include "experimental/llk_unpack_A_top32_rm.h"
 #include "llk_unpack_common_api.h"
 
 /*******************************************
