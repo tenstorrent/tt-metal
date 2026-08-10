@@ -19,6 +19,10 @@
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
+
+class DataflowBuffer;
+template <>
+struct noc_traits_t<DataflowBuffer>;
 #endif
 
 #include "api/debug/assert.h"
@@ -326,8 +330,10 @@ public:
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
     // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
     // transfers (pass the DFB).
-    uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+    // On Quasar DM, this returns the uncached alias temporarily until we figure out a long term
+    // cache strategy.
+    uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
@@ -360,7 +366,20 @@ private:
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;
+#else
+    static constexpr uint32_t L1_UNCACHED_OFFSET = 0;
+#endif
+
+    // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
+    uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
+    uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
+
 #ifndef COMPILE_FOR_TRISC
+    friend struct noc_traits_t<DataflowBuffer>;
+
     void write_barrier_impl(const Noc &noc) const;
 #endif
 
@@ -436,20 +455,23 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
-        return src.get_read_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return src.get_noc_read_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const DataflowBuffer& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
-        return dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return dst.get_noc_write_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const DataflowBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
-        auto local_addr = dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
         return ::get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
