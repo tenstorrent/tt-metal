@@ -1,36 +1,50 @@
 #!/usr/bin/env python3
-"""Self-contained reproducer: an ACE-Step 1.5 DiT block's op sequence stalls at the first sync.
+"""A standalone ACE-Step 1.5 DiT-block op sequence in raw ttnn. **Historical / scaffolding only.**
 
     export TT_METAL_HOME=<tt-metal>  PYTHONPATH=<tt-metal>
     python models/experimental/ace_step_v15/repro_dit_block_stall.py
 
 No ACE-Step model code, no checkpoints, no goldens -- only raw ttnn ops on random tensors.
 
-SYMPTOM
-    Every op enqueues without error (the whole sequence returns in a few seconds), then the
-    FIRST synchronising readback (`ttnn.to_torch`) never returns. Killed only by SIGTERM.
-    `TT_METAL_WATCHER=10` polls for 275 s across 28 dumps and reports **no** stuck core,
-    no assert and no pending NOC transaction -- the device claims to be healthy while the
-    host waits forever.
+======================================================================================
+THIS SCRIPT DOES **NOT** REPRODUCE THE BUG IT WAS WRITTEN FOR. IT PASSES.
+Use `repro_sdpa_fp32_window_hang.py` instead (~30 lines, reproduces reliably).
+======================================================================================
 
-WHAT IS *NOT* THE CAUSE (each verified individually on a freshly reset board)
-    1. Any single op in isolation. The exact windowed SDPA call below
-       (q[1,16,128,128], k/v[1,8,128,128], is_causal=False, sliding_window_size=256)
-       completes in 1.34 s standalone, readback included.
-    2. Tensor memory config. Every tensor here -- and every tensor in the real block,
-       dumped from a live run -- is DRAM INTERLEAVED / TILE / bfloat16, unsharded,
-       program_config=None.
-    3. `sliding_window_size` relative to S. S=256/W=512 and S=128/W=256 both pass alone.
-    4. `from_torch` on the largest weight, (2048, 12288) via MeshDevice + mesh_mapper: 0.01 s.
-    5. Debug instrumentation: the stall happens with no readbacks at all until the end.
-    6. Sequence length: S=128 here, but S=32 passes the same op graph end to end.
+It was built to chase the hang later recorded as TRAP-13, and an earlier version of this
+docstring stated a "SYMPTOM" (all ops enqueue, then the first `ttnn.to_torch` never returns)
+plus a six-item "what is not the cause" list. **Both were wrong**, and are deleted rather than
+corrected in place because nothing in them survived:
+
+* The whole sequence completes in **1.90 s** on a genuinely reset board, sync included.
+* Every "eliminated cause" was measured on a card degraded by a previous mid-operation SIGTERM.
+  Such a card still opens in a normal ~0.8 s but enqueues ~4x slower and then hangs at the first
+  sync -- i.e. it mimics exactly the bug being hunted. `open_device` succeeding does **not** mean
+  the board is healthy; reset with `tt-smi -r` before every measurement.
+
+The real cause: `ttnn.transformer.scaled_dot_product_attention` deadlocks when its
+`compute_kernel_config` sets `fp32_dest_acc_en=True` **and** `sliding_window_size` is passed.
+Either alone is fine.
+
+Why this script misses it -- a genuine near-miss worth understanding: it *does* build a
+`fp32_dest_acc_en=True` config (`ckc` below), but only hands it to the **matmuls** via `mm()`.
+The SDPA call passes no `compute_kernel_config` at all, so it silently gets the op default and
+never hits the bad combination. Adding `compute_kernel_config=ckc` to the SDPA call below makes
+this script hang too.
+
+WHAT IS STILL USEFUL HERE
+    The `--stop-after` scaffolding: it syncs at a named point instead of at the end, which
+    bisects an op *sequence* rather than a single op. Handy for a future
+    enqueue-fine-then-stall-at-sync problem. Stages: norm|qkv|heads|qknorm|rope|sdpa|concat|
+    out|cross|end. Escapes: `--no-window`, `--plain-matmul`.
+    ⚠ One data point per board reset -- a stall's SIGTERM contaminates the next process, so a
+    `for stage in ...` loop yields exactly one trustworthy result and then garbage.
 
 ENVIRONMENT
     Wormhole b0 (N150), single chip, 12 GB. tt-metal HEAD as of 2026-08-03.
-    Repro is bf16 throughout, batch 1, no mesh parallelism (1x1 mesh).
+    bf16 throughout, batch 1, no mesh parallelism (1x1 mesh).
 
-Set STOP_AFTER to bisect: the script syncs at that point instead of at the end, which
-identifies the shortest prefix that stalls.
+See TRAP-13 in model-bringup/ace_step_1_5/ACE_STEP_1_5_BUGS.md for the full hunt.
 """
 import argparse
 import atexit

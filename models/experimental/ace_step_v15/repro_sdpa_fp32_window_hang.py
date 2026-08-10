@@ -1,8 +1,36 @@
 #!/usr/bin/env python3
-"""One SDPA compute-kernel-config case per process, so a stall cannot contaminate the next.
+"""Minimal reproducer for TRAP-13: SDPA deadlocks on `fp32_dest_acc_en` + `sliding_window_size`.
 
-    python sdpa_matrix.py <fidelity> <fp32_dest_acc> <packer_l1_acc> <window|none>
-e.g. python sdpa_matrix.py HiFi2 1 0 256
+One case per process, because a stall's SIGTERM contaminates the next run.
+
+    export TT_METAL_HOME=<tt-metal>  PYTHONPATH=<tt-metal>
+    python repro_sdpa_fp32_window_hang.py <fidelity> <fp32_dest_acc> <packer_l1_acc> <window|none>
+
+    timeout 100 python -u repro_sdpa_fp32_window_hang.py HiFi2 1 0 256    # HANGS (exit 124)
+    timeout 100 python -u repro_sdpa_fp32_window_hang.py HiFi2 0 0 256    # ok
+    timeout 100 python -u repro_sdpa_fp32_window_hang.py HiFi2 0 1 256    # ok
+    timeout 100 python -u repro_sdpa_fp32_window_hang.py HiFi2 1 1 none   # ok
+    timeout 100 python -u repro_sdpa_fp32_window_hang.py HiFi4 1 0 256    # HANGS (exit 124)
+
+Measured on Wormhole b0, q[1,16,128,128] / k,v[1,8,128,128], bf16, DRAM-interleaved,
+is_causal=False, program_config=None. It is specifically the fp32-dest-acc x window interaction:
+`packer_l1_acc` and `math_fidelity` are irrelevant, and either knob alone is safe.
+
+The op enqueues fine; the **readback** of its output never returns, and `TT_METAL_WATCHER`
+reports no stuck core, no assert and no pending NOC transaction. Consistent with a
+circular-buffer wait that is never satisfied (a core correctly blocked on a semaphore is not
+something the watcher flags), though that mechanism is **unverified**.
+
+⚠ **`tt-smi -r` between invocations.** A killed run leaves the card degraded-but-openable:
+`open_device` still returns in ~0.8 s while ops then hang at the first sync, so batching these
+cases in a loop produces one real data point followed by garbage.
+
+    ( source /localdev/acicovic/tt-xla/venv/bin/activate && tt-smi -r )
+
+Downstream fix: `sdpa_compute_config` in `tt/ttnn_ace_step_common.py` sets
+`fp32_dest_acc_en=False`. The window cannot be dropped instead -- TRAP-1 shows that silently
+degrades PCC to 0.762. Not yet reported upstream; draft issue text in
+model-bringup/ace_step_1_5/ISSUE_sdpa_fp32_window_hang.md.
 """
 import sys, time, torch, ttnn
 
