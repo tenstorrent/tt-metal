@@ -74,6 +74,44 @@ runs-on: [N150, in-service, cloud-virtual-machine]
 # toolchain lives in a long-lived container that the steps and tools exec into. The build image and
 # the card are therefore available without the agent ever holding either.
 
+# These run before the checkout, which is the whole point: a runner that cannot host the agent
+# should cost seconds to reject, not the half hour it takes to reach the step that finds out.
+pre-steps:
+  # gh-aw pins its MCP gateway to 127.0.0.1:8080 and starts it by removing any leftover
+  # `awmg-mcpg` container and immediately rebinding the port -- 1.3 ms apart in run
+  # 31218783110, which failed with `address already in use` because the dying container still
+  # held the binding. These are persistent VMs, so leftovers are normal and the port is not
+  # configurable from frontmatter. Clearing them here gives the old binding minutes to drop, and
+  # a port held by something else becomes a fast failure that names the holder. Removing another
+  # job's gateway is not a new hazard -- gh-aw removes that container by name unconditionally
+  # itself -- and a card runner only ever hosts one job, since the card is exclusive.
+  #
+  # `portdev` is removed for a different reason: this workflow leaks it (see post-steps), and a
+  # surviving one would make `docker run --name portdev` fail outright.
+  - name: Clear leftover state from earlier runs on this runner
+    run: |
+      docker rm -f awmg-mcpg portdev 2>/dev/null || true
+
+      if ! command -v ss >/dev/null; then
+        echo "ss is unavailable; leaving the port check to gh-aw"
+        exit 0
+      fi
+      for _ in $(seq 1 15); do
+        if ! ss -ltnH 'sport = :8080' | grep -q .; then
+          echo "gateway port 8080 is free"
+          exit 0
+        fi
+        sleep 2
+      done
+
+      # Naming the holder is the whole value of failing here: a container means leftover state and
+      # a rerun will land somewhere clean, whereas a host service means this runner pool cannot
+      # host a gh-aw agent at all. `-p` needs root to attribute sockets owned by other users.
+      echo "::error::Port 8080 is still bound after 30s. The gh-aw MCP gateway binds it and cannot be moved, so this runner cannot host the agent."
+      sudo -n ss -ltnp 2>/dev/null || ss -ltn || true
+      docker ps || true
+      exit 1
+
 steps:
   # The frontmatter schema carries no job-level or container-level `env`, so the environment is
   # established here. Everything written to $GITHUB_ENV is visible to the later steps and to the
@@ -164,6 +202,21 @@ steps:
         --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
         --ttmetal-home /work --codegen-root /codegen
 
+  # Diagnostic, and deliberately allowed to fail. Run 31218783110 built with credentials present
+  # and still reported `Errors: 1395` against remote storage -- every request failed, which is a
+  # transport problem, not the cache-key mismatch it was first read as. `garage.…svc.cluster.local`
+  # is cluster-internal DNS and this runner pool may sit outside that cluster, which would also
+  # explain why the 2.6-minute warm build only ever reproduced on the in-cluster `civ2` pool.
+  # Resolving and connecting here records the answer next to the build instead of leaving it to be
+  # inferred from hit rates.
+  - name: Probe the remote ccache endpoint
+    continue-on-error: true
+    run: |
+      docker exec portdev getent hosts garage.garage.svc.cluster.local
+      docker exec portdev curl -sS -m 10 -o /dev/null \
+        -w 'ccache endpoint: HTTP %{http_code} in %{time_total}s\n' \
+        http://garage.garage.svc.cluster.local:3900/
+
   # The remote ccache credentials are bound to this step alone and never written to $GITHUB_ENV.
   # Only this full build needs them; the agent's rebuilds recompile three translation units
   # against an already-warm tree, so leaking shared-cache write access into the agent's
@@ -182,17 +235,24 @@ steps:
       # build_metal.sh exit immediately on an unknown argument. The build is deliberately the last
       # command so its status is the step's -- a trailing `ccache -sv || true` masked a failed
       # build behind a green step on the first shakedown run.
+      # CCACHE_REMOTE_ONLY is off: while the remote is erroring on every request, it would leave
+      # ccache doing nothing at all, and local storage still pays for itself across the rebuilds
+      # the agent triggers within this job. CCACHE_LOGFILE is what turns the next remote failure
+      # into a readable cause rather than an error count.
       docker exec \
         -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
         -e AWS_DEFAULT_REGION=garage \
-        -e CCACHE_REMOTE_ONLY=true -e CCACHE_COMPRESS=true \
+        -e CCACHE_COMPRESS=true -e CCACHE_LOGFILE=/tmp/ccache.log \
         -e "CCACHE_REMOTE_STORAGE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" \
         portdev ./build_metal.sh --build-dir build --build-type Release --enable-ccache
 
   - name: ccache summary
     if: always()
     continue-on-error: true
-    run: docker exec portdev ccache -sv || true
+    run: |
+      docker exec portdev ccache -sv || true
+      # The statistics report a remote error count but never the reason; the log has it.
+      docker exec portdev bash -c 'grep -m 20 -i "remote\|s3\|http" /tmp/ccache.log || echo "no remote entries in the ccache log"' || true
 
   # The dev image already carries a working environment with ttnn and torch; `create_venv.sh`
   # refuses to run because it will not clobber the existing /opt/venv, and it is not needed. The
@@ -214,16 +274,56 @@ steps:
       '
       docker exec portdev python3 -c 'import ttnn, torch, yaml, graphviz; print("harness imports OK")'
 
-  # Informational, and deliberately non-fatal: the ported leg is still an empty stub here, so this
-  # is expected to report a failing verdict. Its value is proving the harness and the card work
-  # before the agent starts, so a later failure is unambiguously the agent's code.
+  # This exists to prove the harness and the card work before the agent starts, so that a later
+  # failure is unambiguously the agent's code. The ported leg is still an empty stub, so gate.py
+  # will report a failing verdict and exit non-zero -- that is expected and is not what this step
+  # grades. What it grades is whether the harness ran at all: a `blocked` verdict, an empty ledger,
+  # or missing device attribution all mean the numbers the agent later produces would be
+  # meaningless. Run 31203909328 sailed through this step green with an unbuilt tree because it was
+  # `continue-on-error` and swallowed everything, which is exactly the failure being closed here.
   - name: Native baseline
-    continue-on-error: true
     run: |
       docker exec portdev python3 .github/scripts/port/gate.py \
         --op "${{ inputs.op || 'pad' }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
         --category "${{ inputs.category || 'data_movement' }}" --band performance --repo /work \
-        --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] || '24' }}" --skip-write-check || true
+        --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] || '24' }}" --skip-write-check \
+        > /tmp/baseline.json || true
+      cat /tmp/baseline.json
+
+      python3 - /tmp/baseline.json <<'PY'
+      import json, sys
+
+      try:
+          report = json.loads(open(sys.argv[1]).read() or "{}")
+      except json.JSONDecodeError as exc:
+          sys.exit(f"the baseline produced no parseable verdict ({exc}); the harness did not run")
+
+      verdict = report.get("verdict") or report.get("performance", {}).get("verdict")
+      if verdict in (None, "blocked"):
+          sys.exit(f"baseline verdict is {verdict!r}: {report.get('error', 'see the report above')}")
+      if not report.get("ledger_counts", {}).get("in"):
+          sys.exit("the ledger produced no in-scope cases, so there is nothing to measure")
+
+      # The op-code note is the only positive evidence that the native and generic legs really
+      # dispatched on the card and that profiler rows lined up with them. Without it the device
+      # band is inconclusive, and it will still be inconclusive once the agent is done.
+      codes = next((n for n in report.get("notes", []) if n.startswith("op codes:")), None)
+      if codes is None or "native=" not in codes:
+          sys.exit("no device attribution for the native leg; " + "; ".join(report.get("notes", [])))
+      print(f"baseline harness OK -- {codes}, verdict {verdict!r} (a failing verdict is expected here)")
+      PY
+
+# Nothing removed `portdev` before this, so every failed run left a container holding
+# /dev/tenstorrent and the host network namespace on a shared VM -- four of them by run
+# 31218783110. That is the same kind of debris that broke that run, where the leftover was gh-aw's
+# own gateway container. This is also H8 of the threat model, specified and never implemented:
+# reset the card so a wedged device becomes this job's problem rather than the next job's.
+post-steps:
+  - name: Release the card and remove the toolchain container
+    if: always()
+    run: |
+      docker exec portdev tt-smi -r || tt-smi -r || echo "no tt-smi on the host or in the image; card not reset"
+      docker rm -f portdev || true
 
 tools:
   edit:
