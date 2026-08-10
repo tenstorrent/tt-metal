@@ -45,6 +45,7 @@ tt::tt_metal::ProgramDescriptor AttnResScoresProgramFactory::create_descriptor(
     const auto output_tile_size = tt::tile_size(output_data_format);
 
     const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
+    const auto num_partials = operation_attributes.num_partials;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
@@ -61,10 +62,10 @@ tt::tt_metal::ProgramDescriptor AttnResScoresProgramFactory::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    // One output tile consumes one tile of each statistic, pushed as a pair.
-    // Double-buffered so the reader runs a pair ahead of compute.
+    // One output tile consumes one tile of each statistic per rank, pushed as
+    // pairs. Double-buffered so the reader runs a candidate ahead of compute.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = kStatsPerCandidate * 2 * stats_tile_size,
+        .total_size = kStatsPerCandidate * num_partials * 2 * stats_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
@@ -88,8 +89,13 @@ tt::tt_metal::ProgramDescriptor AttnResScoresProgramFactory::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     // Candidate c occupies output page c and input pages c and c + C: dim 1 is
     // the stacked pair and everything below it is identical in both halves, so
-    // the stride between a candidate's two statistics is the whole output.
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(num_output_tiles)};
+    // the stride between a candidate's two statistics is the whole output. A
+    // gathering collective repeats that whole pair per rank, one output's worth
+    // of pages for each of the two statistics.
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<uint32_t>(num_output_tiles),
+        num_partials,
+        static_cast<uint32_t>(kStatsPerCandidate * num_output_tiles)};
     TensorAccessorArgs(*tensor_args.stats.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
@@ -119,7 +125,8 @@ tt::tt_metal::ProgramDescriptor AttnResScoresProgramFactory::create_descriptor(
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = {
         std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
-        std::bit_cast<uint32_t>(operation_attributes.eps)};
+        std::bit_cast<uint32_t>(operation_attributes.eps),
+        num_partials};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

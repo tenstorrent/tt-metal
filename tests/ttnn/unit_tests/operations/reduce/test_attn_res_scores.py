@@ -90,6 +90,30 @@ def test_attn_res_scores(shape, device):
     assert_with_pcc(_reference(torch_stats, candidates), ttnn.to_torch(output).float(), PCC)
 
 
+@pytest.mark.parametrize("num_partials", (2, 4, 8), ids=["tp2", "tp4", "tp8"])
+def test_attn_res_scores_folds_partials(num_partials, device):
+    """Per-rank statistics, still unsummed and stacked rank-major, fold in the op.
+
+    This is what lets the collective ahead of it gather instead of reduce, so the
+    reference is the same normalization over the summed pair: the op has to
+    reproduce a sum that never happened on the wire."""
+    torch.manual_seed(2026)
+    candidates, tokens, width = 9, 128, 1
+
+    # Each rank carries its share of the whole, so the summed pair lands at the
+    # scale `inv_hidden_size` normalizes against however many ranks there are.
+    partials = [_stats(candidates, tokens, width, torch.float32) / num_partials for _ in range(num_partials)]
+    stacked = torch.cat(partials, dim=1)
+    summed = torch.stack(partials).sum(dim=0)
+
+    output = ttnn.experimental.attn_res_scores(
+        _place(stacked, device), INV_HIDDEN_SIZE, EPS, num_partials=num_partials, dtype=ttnn.float32
+    )
+
+    assert list(output.shape) == [1, candidates, tokens, width]
+    assert_with_pcc(_reference(summed, candidates), ttnn.to_torch(output).float(), PCC)
+
+
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.float32), ids=["bf16", "fp32"])
 def test_attn_res_scores_dtypes(dtype, device):
     """The statistics arrive in whatever the collective carried, and the score
@@ -168,7 +192,7 @@ def test_attn_res_scores_program_cache(device):
 @pytest.mark.parametrize(
     "bad, message",
     (
-        ("odd_candidates", "must be even and non-zero"),
+        ("odd_candidates", "must be a non-zero multiple of 2"),
         ("batched", "requires a leading dim of 1"),
         ("rank", "requires a rank-4 input"),
         ("dtype", "only supports specific data types"),

@@ -14,6 +14,7 @@ ttnn::Tensor attn_res_scores(
     const ttnn::Tensor& stats,
     float inv_hidden_size,
     float eps,
+    uint32_t num_partials,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -37,6 +38,7 @@ ttnn::Tensor attn_res_scores(
         stats,
         inv_hidden_size,
         eps,
+        num_partials,
         dtype.value_or(stats.dtype()),
         memory_config.value_or(stats.memory_config()),
         kernel_config_val);
