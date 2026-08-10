@@ -578,48 +578,48 @@ ALWI void bcast_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builti
 // init (add_bcast_rows_init / mul_bcast_cols_init / ... , or the generic bcast_init<OP, DIM>). The
 // forwarders below preserve the old *_init_short names; init_bcast (above) is the deprecated full-config init.
 // =====================================================================================================================
-[[deprecated("Renamed to add_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to add_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void
+add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     add_bcast_rows_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to add_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to add_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void
+add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     add_bcast_cols_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to add_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to add_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void
+add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     add_bcast_scalar_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to sub_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to sub_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void
+sub_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     sub_bcast_rows_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to sub_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to sub_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void
+sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     sub_bcast_cols_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to sub_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_tiles_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to sub_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void
+sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     sub_bcast_scalar_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to mul_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_rows_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to mul_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void
+mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     mul_bcast_rows_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to mul_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_cols_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to mul_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void
+mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     mul_bcast_cols_init(icb0, icb1, call_line);
 }
 
-[[deprecated("Renamed to mul_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_bcast_scalar_init_short(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+[[deprecated("Renamed to mul_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void
+mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     mul_bcast_scalar_init(icb0, icb1, call_line);
 }
 
