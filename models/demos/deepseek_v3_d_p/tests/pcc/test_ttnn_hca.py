@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4HCACompressor,
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import COMPRESSED_WRITE, TtHCA, TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -280,10 +280,9 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
 # must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
 
-# Programs the compressed-cache write compiles per chunk, per candidate. slice_write folds its offsets
-# into its own program hash, so a moving append offset costs a program every chunk; update_cache keeps
-# update_index and batch_offset out of the hash (update_cache_device_operation.cpp:160).
-_WRITE_COMPILES_PER_CHUNK = {"fill_cache": 0, "slice_write": 1, "token_at_a_time": 0}[COMPRESSED_WRITE]
+# The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
+# program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
+_WRITE_COMPILES_PER_CHUNK = 0
 # (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard,
 # so 5120 is as legal as 4096 -- it is the runner's default and the one the append offset does not land
 # tile-aligned on, which is why it belongs here.
@@ -339,7 +338,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
         out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
 
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
-    state = tt_model.alloc_state(total)
+    state = tt_model.alloc_state(total, chunk_tokens=chunk_size)
     ms = tuple(mesh_device.shape)
     logger.debug(f"mesh={ms} scenario={name} chunk_size={chunk_size} iters={iters_valid} total={total}")
 
@@ -454,7 +453,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
     position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
 
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
-    state = tt_model.alloc_state(total)
+    state = tt_model.alloc_state(total, chunk_tokens=_CHUNK_SIZE)
     ref_cache = _RefHCACache(DeepseekV4HCACache(config))
     ms = tuple(mesh_device.shape)
     logger.debug(f"mesh={ms} chunks={chunks}x{_CHUNK_SIZE} total={total}")
