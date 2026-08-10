@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -345,32 +346,79 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     return desc;
 }
 
+// Re-point every per-dispatch address in a cached slice program, for the factory that built it.
+// Shared with MeshPartition, which drives these same factories directly, so the slot layout has one
+// home. Every shape-derived arg is keyed (both tensor specs, the slice params and factory.index() are
+// folded into compute_program_hash), so addresses are all that move on a hit.
+void patch_slice_program_addresses(
+    tt::tt_metal::Program& program,
+    const SliceDeviceOperation::program_factory_t& factory,
+    const SliceParams& operation_attributes,
+    const SliceInputs& tensor_args,
+    Tensor& output) {
+    // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
+    // addresses move. CBs are matched positionally -- src0, then c_16.
+    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = output.buffer()});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+        return;
+    }
+
+    // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
+    const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
+        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+            for (auto& a : col) {
+                if (a.size() > 0 && a[0] != 0) {
+                    a[0] = addr;
+                }
+            }
+        }
+    };
+    patch_slot0(kWriterKernelIdx, output.buffer()->address());
+
+    std::visit(
+        [&](auto&& f) {
+            using Factory = std::decay_t<decltype(f)>;
+            if constexpr (std::is_same_v<Factory, SliceRmProgramFactory>) {
+                // The reader reads from base+offset, which no Buffer* binding can express; reuse the
+                // helper create_descriptor calls so the emitted value cannot drift.
+                const auto dynamic_args = slice_rm_reader_dynamic_args(operation_attributes, tensor_args, output);
+                tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
+            } else if constexpr (std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+                patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
+            } else {
+                // Tile factories carry the reader's addresses in common args: input, then the
+                // start/end tensors for the tensor-args variant.
+                auto& common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
+                if (common.size() > 0) {
+                    common[0] = tensor_args.input.buffer()->address();
+                }
+                if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
+                    if (common.size() > 2) {
+                        common[1] = tensor_args.start_tensor.value().buffer()->address();
+                        common[2] = tensor_args.end_tensor.value().buffer()->address();
+                    }
+                }
+            }
+        },
+        factory);
+}
+
 void SliceDeviceOperation::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-
-    // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
-    // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
-    // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
-    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
-        tt::tt_metal::ProgramDescriptor cb_addr_only;
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
-        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
-        return;
-    }
-
-    // Other factories bake buffer addresses into their runtime args, so re-derive and re-apply.
-    auto desc = std::visit(
-        [&](auto&& f) {
-            return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-        },
-        factory);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    patch_slice_program_addresses(
+        program,
+        select_program_factory(operation_attributes, tensor_args),
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
 }
 
 }  // namespace ttnn::prim

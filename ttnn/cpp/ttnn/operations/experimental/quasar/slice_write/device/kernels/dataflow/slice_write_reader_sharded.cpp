@@ -14,9 +14,6 @@
 void kernel_main() {
     const uint32_t num_sticks = get_arg(args::num_sticks);
     DataflowBuffer cb_in0(dfb::in0);
-    DPRINT("SWR resv n={}\n", num_sticks);  // [#48552 DEBUG] slice_write reader localizer
     cb_in0.reserve_back(num_sticks);
-    DPRINT("SWR reserved\n");
     cb_in0.push_back(num_sticks);
-    DPRINT("SWR pushed/end\n");
 }
