@@ -140,6 +140,8 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         config: TTNNGPTConfig = None,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         max_seq: int = 128,
+        batch: int = 1,
+        data_mapper=None,
     ):
         super().__init__(
             device, parameters, config, math_fidelity=math_fidelity, activation_dtype=ttnn.bfloat16, attention="sdpa"
@@ -147,6 +149,13 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         import torch
 
         cfg = self.config
+        # Data-parallel serving: `batch` is the number of requests carried in the tensor's
+        # leading dim and `data_mapper` is how they are distributed (e.g.
+        # ttnn.shard_tensor_to_mesh_mapper(mesh, dim=0) -> one request per chip, per-chip
+        # batch 1). Weights/KV-cache keep self.mesh_mapper (replicate). Defaults reproduce the
+        # single-request path exactly: batch=1 and data_mapper=self.mesh_mapper.
+        self.batch = batch
+        self.data_mapper = self.mesh_mapper if data_mapper is None else data_mapper
         self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
         # BUG-1: sdpa_decode is wrong when the KV-cache length is an odd number of 32-tiles;
         # round up to an even tile count (multiple of 64). See TTNNGPTDecoder for details.
@@ -175,13 +184,17 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device, mesh_mapper=self.mesh_mapper)
+        # Per-request state: one cache position and one token embedding per request. Sharded by
+        # data_mapper, so on a 1xB mesh each chip holds its own [1]-shaped pos and [1,1,E] input.
+        self._pos = ttnn.from_torch(
+            torch.zeros(self.batch, dtype=torch.int32), device=device, mesh_mapper=self.data_mapper
+        )
         self._in = ttnn.from_torch(
-            torch.zeros(1, 1, cfg.n_embd),
+            torch.zeros(self.batch, 1, cfg.n_embd),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            mesh_mapper=self.mesh_mapper,
+            mesh_mapper=self.data_mapper,
         )
         self.trace_id = None
         self._out = None
@@ -224,7 +237,13 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         (ttnn.fill_cache), instead of P single-token decode steps -- each layer's K/V weights are read
         once, not P times. Latents are discarded (only the caches seed decode). Eager (not traced); run
         after reset_caches() and BEFORE capture() (allocating buffers under a live trace corrupts it).
-        prefix_emb: torch [1, P, 1024]."""
+        prefix_emb: torch [batch, P, 1024] (batch=1 for the single-request path).
+
+        Data-parallel note: when requests have different prompt lengths, right-pad them to a
+        common P with zeros. Padded positions do get K/V written, but each request's decode starts
+        at its own P_i <= P and sdpa_decode only attends to 0..cur_pos, so the pad K/V is never
+        read and is overwritten as that request decodes. The real positions are unaffected because
+        prefill attention is causal."""
         cfg = self.config
         E, nh, dh = cfg.n_embd, cfg.n_head, cfg.head_dim
         P = prefix_emb.shape[1]
@@ -233,7 +252,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            mesh_mapper=self.mesh_mapper,
+            mesh_mapper=self.data_mapper,
         )
         for li in range(cfg.n_layer):
             b = self.params["blocks"][li]
@@ -261,10 +280,18 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             ttnn.copy(ttnn.zeros_like(c, memory_config=ttnn.DRAM_MEMORY_CONFIG), c)
 
     def set_pos(self, pos):
-        """Set the KV-cache write/attend position (cache-state control; host int -> device _pos)."""
+        """Set the KV-cache write/attend position (cache-state control; host -> device _pos).
+
+        `pos` is either one int (applied to every request) or a per-request sequence of length
+        `batch` — data-parallel requests run at independent positions because their prompts have
+        different lengths and they stop at different steps."""
         import torch
 
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), self._pos)
+        if isinstance(pos, int):
+            t = torch.full((self.batch,), pos, dtype=torch.int32)
+        else:
+            t = torch.as_tensor(pos, dtype=torch.int32).reshape(self.batch)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, mesh_mapper=self.data_mapper), self._pos)
 
     def capture(self):
         """Compile (warmup) then capture the decode step into a trace. Warms at a scratch slot
