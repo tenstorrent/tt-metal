@@ -42,6 +42,7 @@ enum class ReaderRtArg : std::size_t {
     FinalCount,
     InputPageStart,
     InputPageEnd,
+    ReadySemaphore,
     DataValidSemaphore,
     Count,
 };
@@ -56,6 +57,9 @@ enum class WriterRtArg : std::size_t {
     FinalStart,
     FinalCount,
     DoLocalWrite,
+    ReadySemaphore,
+    ReadyNocX,
+    ReadyNocY,
     DataValidSemaphore,
     DataValidNocX,
     DataValidNocY,
@@ -146,7 +150,7 @@ using namespace CMAKE_UNIQUE_NAMESPACE;
 // (CB producer, no fabric) reads iteration 0 from local input and later iterations from what upstream relayed
 // into our output; the writer (CB consumer) unicasts each stripe one hop to the neighbor's output (same
 // address on every device). Direction/topology are runtime args, so both kernels compile once and run on all
-// cores. data_valid_sem gates relays and tracks completion.
+// cores. ready_sem protects destination initialization, while data_valid_sem gates relays and tracks completion.
 ////////////////////////////////////////////////////////////////
 
 HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFactory::create_mesh_workload(
@@ -165,7 +169,7 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     }
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    // Keep the relay/completion semaphore in L1_SMALL when the device reserves it.
+    // Keep the startup-readiness and relay/completion semaphores in L1_SMALL when the device reserves it.
     const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
     auto sem_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
@@ -174,6 +178,7 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
+    auto ready_sem = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
@@ -181,7 +186,8 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor, data_valid_sem);
+        auto cached_program =
+            create_at(operation_attributes, coord, tensor_args, output_tensor, ready_sem, data_valid_sem);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -194,6 +200,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const ttnn::MeshCoordinate& sender_device_coord,
     const HighBwAllGatherInputs& tensor_args,
     const Tensor& output_tensor,
+    const tt::tt_metal::GlobalSemaphore& ready_sem,
     const tt::tt_metal::GlobalSemaphore& data_valid_sem) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
@@ -654,11 +661,14 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             const uint32_t half = num_worker_output_chunks / 2;
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the
-            // data_valid_sem target on the neighbor's mirror core.
+            // data_valid_sem target on the neighbor's mirror core; partner_core is the opposite-direction worker
+            // targeted by the startup-ready handshake.
             for (uint32_t dir = 0; dir < num_directions; ++dir) {
                 const bool is_forward = (dir == 0);
                 const CoreCoord core = worker_core(link, dir, w);
+                const CoreCoord partner = worker_core(link, 1 - dir, w);
                 const CoreCoord mirror_core = mesh_device->worker_core_from_logical_core(core);
+                const CoreCoord partner_core = mesh_device->worker_core_from_logical_core(partner);
                 const auto neighbor = dir_neighbor(dir);
                 const auto neighbor_node =
                     neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
@@ -708,6 +718,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 reader_rt_args[rt_arg_index(ReaderRtArg::FinalCount)] = final_count;
                 reader_rt_args[rt_arg_index(ReaderRtArg::InputPageStart)] = input_tile_id_start;
                 reader_rt_args[rt_arg_index(ReaderRtArg::InputPageEnd)] = input_tile_id_end;
+                reader_rt_args[rt_arg_index(ReaderRtArg::ReadySemaphore)] = ready_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::DataValidSemaphore)] = data_valid_sem.address();
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
@@ -721,6 +732,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 writer_rt_args[rt_arg_index(WriterRtArg::FinalStart)] = final_start;
                 writer_rt_args[rt_arg_index(WriterRtArg::FinalCount)] = final_count;
                 writer_rt_args[rt_arg_index(WriterRtArg::DoLocalWrite)] = do_local_write ? 1u : 0u;
+                writer_rt_args[rt_arg_index(WriterRtArg::ReadySemaphore)] = ready_sem.address();
+                writer_rt_args[rt_arg_index(WriterRtArg::ReadyNocX)] = static_cast<uint32_t>(partner_core.x);
+                writer_rt_args[rt_arg_index(WriterRtArg::ReadyNocY)] = static_cast<uint32_t>(partner_core.y);
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidSemaphore)] = data_valid_sem.address();
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocX)] = static_cast<uint32_t>(mirror_core.x);
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocY)] = static_cast<uint32_t>(mirror_core.y);
@@ -768,6 +782,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .worker_cores = worker_cores,
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
+        .ready_sem = ready_sem,
         .data_valid_sem = data_valid_sem,
     };
 
@@ -784,6 +799,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        const uint32_t ready_addr = shared_vars.ready_sem.address();
         const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
@@ -792,9 +808,11 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
+            reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args.at(rt_arg_index(WriterRtArg::OutputAddress)) = output_addr;
+            writer_args.at(rt_arg_index(WriterRtArg::ReadySemaphore)) = ready_addr;
             writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
         }
     }

@@ -17,6 +17,7 @@ struct HighBwAllGatherUnicastFactory {
         std::vector<tt::tt_metal::CoreCoord> worker_cores;
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
+        tt::tt_metal::GlobalSemaphore ready_sem;
         tt::tt_metal::GlobalSemaphore data_valid_sem;
     };
 
@@ -42,6 +43,7 @@ private:
         const ttnn::MeshCoordinate& sender_device_coord,
         const HighBwAllGatherInputs& tensor_args,
         const Tensor& output_tensor,
+        const tt::tt_metal::GlobalSemaphore& ready_sem,
         const tt::tt_metal::GlobalSemaphore& data_valid_sem);
 };
 
