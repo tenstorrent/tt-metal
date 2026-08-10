@@ -335,6 +335,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
 
     signpost("HCA_START")
     kv_actual = 0
+    programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
         chunk = torch.zeros(batch, _CHUNK_SIZE, config.hidden_size)
@@ -357,6 +358,17 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.997)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
+
+        # Every chunk drives identical device shapes, so one compiled program must serve them all. A
+        # new entry means some op's attributes moved with the chunk -- exactly what breaks trace later.
+        now = mesh_device.num_program_cache_entries()
+        logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
+        if it > 0:
+            assert now == programs, (
+                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}); an op "
+                f"attribute or a shape changed between chunks"
+            )
+        programs = now
 
         kv_actual += valid
     signpost("HCA_END")
@@ -439,6 +451,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
 
     signpost("HCA_START")
     kv_actual = 0
+    programs = mesh_device.num_program_cache_entries()
     for it in range(chunks):
         chunk = hidden[:, kv_actual : kv_actual + _CHUNK_SIZE]
         chunk_pos = position_ids[:, kv_actual : kv_actual + _CHUNK_SIZE]
@@ -467,6 +480,15 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
         logger.debug(f"  iter {it} (kv_actual={kv_actual} entries={state.entry_count}): PCC {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
+
+        now = mesh_device.num_program_cache_entries()
+        logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
+        if it > 0:
+            assert now == programs, (
+                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}); an op "
+                f"attribute or a shape changed between chunks"
+            )
+        programs = now
 
         kv_actual += _CHUNK_SIZE
     signpost("HCA_END")
