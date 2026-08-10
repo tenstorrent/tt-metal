@@ -762,6 +762,7 @@ class SdpaOp(Enum):
 
 class SdpaFwOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
+
     Recip = 0  # calculate_recip_first_column, sfpu_reciprocal_iter<2> or <1>-plus-bf16-round
     Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
 
