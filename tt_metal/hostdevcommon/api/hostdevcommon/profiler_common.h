@@ -237,8 +237,10 @@ static_assert(
     SPSC_CONTROL_END <= PROFILER_L1_CONTROL_VECTOR_SIZE,
     "SPSC/drainer control layout overflows the profiler L1 control vector");
 // Governs the L1 buffer SIZING (part of mailboxes_t, which is L1-size-bounded) and the DRAM path.
-// The drainer SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
-// so the L1 profiler ring keeps its size (holding 128 4-word markers instead of 256 2-word ones).
+// BOTH paths use 2-word markers -- SPSC_MARKER_WORDS in kernel_profiler.hpp is 2 -- so the 512-word ring
+// that PROFILER_L1_VECTOR_SIZE yields below holds 256 markers per RISC.
+// Do NOT size anything off a 4-word drainer marker: this comment used to claim that (and 128 markers per
+// ring), which was never true of the code as committed.
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
