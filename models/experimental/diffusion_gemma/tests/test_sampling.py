@@ -735,14 +735,10 @@ def test_canvas_sample_matches_torch_argmax_with_readback_device_noise(device):
 
 @requires_device
 @pytest.mark.use_module_device
-@pytest.mark.xfail(
-    reason=(
-        "QB2 ttnn.rand regenerated noise is currently not iid enough for W4 distributional canvas sampling: "
-        "uniform-logit argmax histograms show empty/high buckets while torch-injected Gumbel noise is exact."
-    ),
-    strict=True,
-)
 def test_canvas_sample_regenerated_noise_distribution(device):
+    """Distributional gate on ttnn.rand-regenerated Gumbel noise. xfail(strict) before
+    tt-metal#52024 (histograms showed empty/high buckets from cross-element correlation);
+    the lane-salted SFPU RNG passes it."""
     num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
@@ -962,8 +958,8 @@ def test_token_entropy_bf16_accurate_and_bfp8_degrades(device, temperature):
 
 
 # Gumbel-max/argmax run on bf16 or fp32 — `ttnn.argmax` rejects bfp8 TILE inputs
-# ("Only BFLOAT16, FLOAT32 are supported", assert.hpp). The canvas sampler therefore
-# keeps logits at bf16+ for the argmax step (see test_gumbel_max_rejects_bfp8).
+# ("Only BFLOAT16, FLOAT32 are supported", argmax_device_operation.cpp). The canvas sampler
+# therefore keeps logits at bf16+ for the argmax step (see test_argmax_rejects_bfp8).
 @requires_device_sfpi
 @pytest.mark.use_module_device
 @pytest.mark.parametrize("dtype_name", ["bf16", "fp32"])
@@ -1004,15 +1000,22 @@ def test_zero_noise_gumbel_is_argmax(device, dtype_name):
 
 @requires_device_sfpi
 @pytest.mark.use_module_device
-def test_gumbel_max_rejects_bfp8(device, expect_error):
-    """Document the op constraint: `ttnn.argmax` rejects bfp8 TILE inputs, so the
-    Gumbel-max/argmax decision step must use bf16+ logits (entropy is fine in bfp8,
-    but it shows large drift — see test_token_entropy_*)."""
+def test_argmax_rejects_bfp8(device, expect_error):
+    """Document the op constraint: `ttnn.argmax` rejects bfp8 TILE inputs
+    (argmax_device_operation.cpp), so the decision step must reach argmax at bf16+
+    (entropy is fine in bfp8, but it shows large drift — see test_token_entropy_*).
+    The `gumbel_max` composite no longer trips this on bfp8 *logits*: on the current
+    base its eltwise intermediate is upcast before argmax, so the composite succeeds
+    end-to-end (asserted below to keep the contract visible)."""
     logits = _varied_logits(seed=5)
+    tt_bfp8 = _to(logits, device, ttnn.bfloat8_b)
     with expect_error(RuntimeError, match="BFLOAT16, FLOAT32"):
-        TS.gumbel_max(
-            _to(logits, device, ttnn.bfloat8_b), 0.8, _to(torch.zeros(1, _SEQ, _VOCAB), device, ttnn.bfloat8_b)
-        )
+        ttnn.argmax(tt_bfp8, dim=-1)
+
+    out = TS.gumbel_max(tt_bfp8, 0.8, _to(torch.zeros(1, _SEQ, _VOCAB), device, ttnn.bfloat8_b))
+    ids = ttnn.to_torch(out).squeeze(-1).to(torch.long)
+    assert ids.shape == (1, _SEQ)
+    assert int(ids.min()) >= 0 and int(ids.max()) < _VOCAB
 
 
 # --- device: entropy-budget acceptance chain -----------------------------------
