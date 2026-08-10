@@ -18,101 +18,75 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Computes base raised to the power of pow (base**pow)
+ * @brief Computes base raised to the power of pow (base**pow), for a bfloat16 dest
  *
- * This function implements binary exponentiation using a polynomial approximation algorithm
- * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
- * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
- * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
+ * Cheaper than the fp32 path: with only 8 mantissa bits to fill, a single fp32
+ * z = pow*log2(base) is precise enough, so the double-float argument split that
+ * _sfpu_unary_power_61f_updated_ needs can be dropped. log2 does still have to be
+ * accurate relative to its own magnitude, which is what the range reduction and
+ * the factored series are for.
  *
  * @param base The base value (sfpi::vFloat vector), can be any floating point number
  * @param pow The exponent/power value (sfpi::vFloat vector), can be any floating point number
  * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (skips zero-base check for optimization)
  *
- * @return sfpi::vFloat Result of base**pow
+ * @return sfpi::vFloat Result of base**pow, rounded to bfloat16
  *
  * Special Cases:
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
- * - Overflow/underflow: Clamped to appropriate limits
+ * - Overflow saturates to +/-inf, magnitudes below 2**-126 flush to zero
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
- * - vConstFloatPrgm1 = -127.0f;
  * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
- *
- * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
- *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
 template <bool IS_POSITIVE_EXPONENT>
-sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // The algorithm works in two steps:
-    // 1) Compute log2(base)
-    // 2) Compute base**pow = 2**(pow * log2(base))
-
+sfpi_inline sfpi::vFloat _sfpu_unary_power_bf16_impl_(sfpi::vFloat base, sfpi::vFloat pow) {
     // Step 1: Compute log2(base)
-    // Normalize base to calculation range
-    sfpi::vFloat abs_base = sfpi::abs(base);       // set base as positive
-    sfpi::vFloat x = sfpi::setexp(abs_base, 127);  // set exp to exp bias (put base in range of 1-2)
+    sfpi::vFloat abs_base = sfpi::abs(base);
+    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
+    sfpi::vInt exp = sfpi::exexp(abs_base);
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    vFloat series_result = PolynomialEvaluator::eval(x, -0x1.952992p+0f, 0x2.4f5388p+0f, -0xd.e712ap-4f, 0x2.44734p-4f);
-
-    // Convert exponent to float
-    sfpi::vInt exp = sfpi::exexp(base);
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
-
-    // De-normalize to original range
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
-    sfpi::vFloat log2_result = exp_f32 + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
-
-    // Step 2: Compute base**pow = 2**(pow * log2(base))
-    // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
-    // However, intermediary values can overflow, which leads to output increasing again instead of
-    // staying at 0.
-    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
-    sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
+    // Reduce to m in [sqrt(2)/2, sqrt(2)). Otherwise a base just under 1 comes out
+    // as exponent -1 with log2(m) near 1, and the two cancel.
+    constexpr float SQRT2 = 1.4142135381698608f;
+    v_if(m >= SQRT2) {
+        m = sfpi::addexp(m, -1);
+        exp = exp + 1;
+    }
     v_endif;
 
-    // The paper relies on the following formula (c.f. Sections 1 and 5):
-    // z = (bias + x * log2(a)) * N_m; where:
-    // N_m = 2**23
-    // bias = 0x3f800000
+    // ln(1+u)/u over u in [sqrt(2)/2-1, sqrt(2)-1]. Fitting ln(m)/u rather than
+    // ln(m) keeps the error proportional to u, so it dies off as base -> 1.
+    sfpi::vFloat u = m - 1.0f;
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        u, 1.00001132f, -0.499859631f, 0.332090169f, -0.254516661f, 0.225501433f, -0.146625668f);
 
-    // In this case, we transform the formula to:
-    // z = (bias) * N_m + (x * log2(a)) * N_m
-    // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = addexp(z_f32, 23)
+    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;  // vConst1Ln2 = 1.4426950408889634f;
+    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
+    sfpi::vFloat z = pow * (exp_f32 + (u * p) * vConst1Ln2);
 
-    // Notes:
-    // - N_m being a power of 2 ensures equivalent results
-    // - addexp(z_f32, 23) is used because it translates to a single-cycle SFPDIVP2
-    //   instruction with immediate operand (i.e. no extra register used).
-    //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
+    // Step 2: Compute base**pow = 2**z
+    // Anything that neither overflows nor underflows has |z| <= 128, so the clamp
+    // is free and keeps the rounding below sane for infinities and absurd powers.
+    z = sfpi::min(sfpi::max(z, -128.0f), 128.0f);
 
-    z_f32 = sfpi::addexp(z_f32, 23);  // equal to multiplying by 2**23
-    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
-    sfpi::vInt zii = sfpi::exexp(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
+    // 2**f for the reduced |f| <= 0.5
+    sfpi::vFloat q =
+        PolynomialEvaluator::eval(z - k, 1.00000012f, 0.69310534f, 0.240218654f, 0.0560058281f, 0.00968570821f);
 
-    // Compute formula in Horner form
-    sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-    sfpi::vFloat d2 =
-        sfpi::convert<sfpi::vFloat>(sfpi::as<vSMag>(sfpi::vInt(0xf94ee7) + zif), sfpi::RoundMode::Nearest);
-    sfpi::vFloat d3 = sfpi::convert<sfpi::vFloat>(sfpi::as<vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
-
-    d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
-
-    // Restore exponent
-    zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
-
-    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
+    // Scale by 2**k. setexp wraps the 8-bit exponent field instead of saturating,
+    // so both ends need an explicit check.
+    sfpi::vInt out_exp = sfpi::exexp(q, sfpi::ExponentMode::Biased) + k_int;
+    sfpi::vFloat y = sfpi::setexp(q, out_exp);
+    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_elseif(out_exp <= 0) { y = 0.0f; }
+    v_endif;
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     if constexpr (!IS_POSITIVE_EXPONENT) {
@@ -336,14 +310,14 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<true>(base, pow);
+            sfpi::dst_reg[0] = _sfpu_unary_power_bf16_impl_<true>(base, pow);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<false>(base, pow);
+            sfpi::dst_reg[0] = _sfpu_unary_power_bf16_impl_<false>(base, pow);
             sfpi::dst_reg++;
         }
     }
@@ -420,7 +394,6 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
 
 inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
-    sfpi::vConstFloatPrgm1 = -127.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
 
