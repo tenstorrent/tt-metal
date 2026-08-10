@@ -446,7 +446,6 @@ def main():
         "sanity-tests.yaml",
         # Single-card
         "single-card-demo-tests.yaml",
-        "perf-models.yaml",
         "perf-device-models.yaml",
         # T3000 (T3K)
         "t3000-demo-tests.yaml",
