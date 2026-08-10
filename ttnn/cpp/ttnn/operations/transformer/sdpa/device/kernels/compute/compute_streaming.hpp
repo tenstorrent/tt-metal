@@ -59,9 +59,15 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 // static copies return) with no measurable BH perf cost. On MATH/UNPACK threads pack_tile is
 // a no-op, so the outlined wrapper collapses to an empty inline function (zero overhead).
 #ifdef TRISC_PACK
+#ifdef Q_TINY_TILE
+ALWI void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
+    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
+}
+#else
 __attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
     llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
 }
+#endif
 #else
 ALWI void sdpa_pack_tile_ooo(uint32_t, uint32_t, uint32_t) {}
 #endif

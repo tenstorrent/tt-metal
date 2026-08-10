@@ -554,7 +554,9 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
         {
-            "q_chunk_size": 32,
+            # 16x32 tiny Q tiles improve scheduled tile-work utilization on K3 while retaining
+            # the q32 accuracy level (PCC > 0.9994 on both the first and final prefill chunks).
+            "q_chunk_size": 16,
             "k_chunk_size": 640,
             "num_heads": 96,
             "chunked_only": True,
