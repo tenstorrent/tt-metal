@@ -195,7 +195,7 @@
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-token-matching"
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-eval-1"
   model: llama3.3-70b-galaxy
   model_family: Llama
   skus:
