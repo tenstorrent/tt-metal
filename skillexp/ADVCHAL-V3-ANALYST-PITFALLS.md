@@ -183,3 +183,87 @@ from one directory, a proxy field standing in for the real one, an environment b
 That is the same sentence the v2 corpus put at the top of `FUTURE-RUNS.md`, and I wrote it into v3's
 `SKILL.md` as the discipline the *cells* must follow. It applies to the person writing the stage at least as
 much as to the agent running it.
+
+---
+
+# The root cause, one level below the eleven
+
+The eleven above are individually cheap to fix, and fixing them individually would miss the point. They were
+not eleven independent lapses.
+
+## The errors all pointed the same way
+
+| what I did | which way it pointed |
+|---|---|
+| read *"no cell applied the plan"* as a discipline problem rather than a capability one | made F5 worth **3.7×** |
+| took *"the middle rung is worth ~1 pp"* over the same corpus's measured flat 8→44 response | made the ladder sweep worth ~1 pp instead of ~0.1 |
+| used nmFN's −11.28 %, from the cell I had myself called least trustworthy | gave the run a headline target |
+| generalised the ladder rule from a single tensor width | made it a general capability |
+| shipped C5c as a bucket rule without checking the rows it moved | made the fix decisive rather than advisory |
+
+**Five for five, every one inflating the apparent value of the work.** I checked what would make the change
+look bigger and skipped the checks that would have made it look smaller. Random carelessness scatters; this
+has a sign, and the sign is the diagnosis. It is motivated reasoning, and the specific tell is that
+`0.5184` — the outlier on nmFN's ladder, and the number the whole −11 % target rested on — was the one rung
+nobody sanity-checked, because it pointed the way the work wanted to go.
+
+## The stance that produced it
+
+I was in **solution mode from the moment I stopped reading.** `IMPROVEMENTS.md` hands you a starred to-do
+list; it *reads* like a specification. I converted it into a work breakdown and started editing files. Every
+process failure follows from that stance:
+
+- design-then-verify is what you do when you think the answer is known and needs implementing;
+- predictions written from the same document as the fix is what you do when predictions are documentation
+  rather than experiments — such a prediction **cannot falsify the fix, because it inherits its errors**;
+- adopting their ledger as the work breakdown is what you do when the job is delivery rather than inquiry,
+  and it silently imports their **causal model** including where it mis-attributes;
+- tests authored from my own model of the change is what you do when tests are regression protection rather
+  than falsification. Twenty-one fixtures passed while C5c was 14-of-15 wrong.
+
+Underneath all of it: **the corpus establishes its problems with 149 measurements and proposes its remedies
+with almost none — and says so, quoting its own 1-in-6 refutation rate. I inherited the confidence of the
+diagnosis and spent it on the prescription.** Those are different epistemic objects. `ANALYST-PITFALLS` is a
+warning about the reliability of every neighbouring document; I mined it for content and ignored what it was
+telling me about the ledger I was implementing.
+
+The operational tell is a question I never asked. For each of ~20 changes I asked *"does this address the
+defect?"* I never asked *"what would this look like if it were wrong, and can I check that now?"* Asked
+twenty times that is about an hour of work, and it catches all four bad changes.
+
+## What should have been done differently — at the level of thinking, not of code
+
+1. **Separate "what is true" from "what to do", with a hard gate between them.** No remedy written until the
+   finding is re-derived from primary data. The corpus replay was the right instrument in the wrong slot: it
+   belonged *before* the design, where it would have killed three changes for free, not after, where it
+   caught one and the hardware caught the rest.
+2. **Write the falsification before the implementation.** Not a unit test of intent — a check whose expected
+   value comes from data you did not produce. A change whose wrongness you cannot cheaply describe is a guess
+   wearing a citation.
+3. **When the remedy is not derivable from the data, instrument instead of fixing.** This is the most useful
+   rule to come out of v3 and it was found by accident: C5c became a `space_hint` rather than a bucket rule,
+   which keeps the finding, adds no false positives, and leaves the judgement with whoever holds the IR. It
+   should have been the default for at least four changes — and it is the structural antidote to the bias
+   above, because instrumenting does not let you claim a win.
+4. **Attack mechanisms, not attributions.** Ask what made an outcome *possible*, never what the previous
+   analyst blamed. The oracle and the missing measurements-vs-decision reconciliation are two doors onto the
+   same three numbers in phi FN's data. v3 closed the one the ledger pointed at, and the identical failure
+   walked through the other on the first cell.
+5. **Distrust a number in proportion to how convenient it is.** The convenient ones are exactly where the
+   scepticism went missing.
+
+## The change ledger this implies
+
+Adopted for the remaining action points, and as a re-audit of those already implemented. One row per
+proposed change, and **no row means no change**:
+
+| column | why it exists |
+|---|---|
+| the finding, restated | forces separating finding from remedy |
+| the primary artefact it was **re-derived** from, with the number | the column that was empty for all four bad changes |
+| how this could be wrong | the question never asked |
+| the falsification, and its expected value **from data I did not produce** | a fixture written from intent cannot fail correctly |
+| if the remedy is not derivable: what is instrumented instead | makes "measure it" the cheap default, not the fallback |
+| which direction the error points if wrong | surfaces the bias while it is still cheap |
+
+The last column is the one a reviewer should read first. If every row points the same way, stop.
