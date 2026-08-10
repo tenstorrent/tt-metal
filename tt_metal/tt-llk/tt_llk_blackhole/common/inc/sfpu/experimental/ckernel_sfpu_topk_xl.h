@@ -108,6 +108,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h"
 
 namespace ckernel
 {
@@ -311,14 +312,10 @@ inline void _topk_xl_init_()
 // caller can fold a trailing INCRWC into the last store. See "Address-mod
 // recipe" at the top of the file.
 
-// Rebase the Dst write pointer for subsequent SFPSTOREs. Used by the
-// top-level functions to switch between the even and odd columns of the
-// two-tile DST region (offsets +0 and +2 from the tile base).
-inline void set_dst_write_addr_offset(std::uint32_t addr)
-{
-    std::uint32_t dst_index = addr + get_dest_buffer_base();
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
-}
+// set_dst_write_addr_offset (shared with deepseek_top32_rm) rebases the Dst
+// write pointer for subsequent SFPSTOREs; here it switches between the even
+// and odd columns of the two-tile DST region (offsets +0 and +2 from the
+// tile base).
 
 // Load 16 rows × 2 strips into LREG0..LREG7 (fused path).
 //   group 1: LREG0..3 at base+{0,4,8,12}
