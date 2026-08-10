@@ -10,21 +10,10 @@ on:
         type: choice
         options:
           - all
-          - stable_diffusion
-          - sentence_bert
           - resnet50
           - bert_tiny
           - distilbert
-          - segformer
           - metal_BERT_large_11
-          - mobilenetv2
-          - vgg_unet
-          - vanilla_unet
-          - swin_v2
-          - swin_s
-          - vovnet
-          - ufld_v2
-          - efficientnetb0
       platform:
         required: false
         type: choice
