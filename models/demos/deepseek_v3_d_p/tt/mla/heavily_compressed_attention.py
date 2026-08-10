@@ -17,9 +17,10 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
-# TEMPORARY: which candidate TtHCA._write_compressed uses, so the same test can measure each without a
-# code edit. Removed once one of them wins on program count and device perf.
-COMPRESSED_WRITE = os.environ.get("HCA_COMPRESSED_WRITE", "slice_write")
+# Which write TtHCA._write_compressed uses. token_at_a_time is the only one that compiles no program
+# per chunk, which chunked prefill needs; the others stay reachable so the same test can measure them.
+# TEMPORARY: the losers go away once the choice is settled.
+COMPRESSED_WRITE = os.environ.get("HCA_COMPRESSED_WRITE", "token_at_a_time")
 
 
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
