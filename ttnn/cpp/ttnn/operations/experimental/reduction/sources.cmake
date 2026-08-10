@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS
+    attn_res_accum_stats/attn_res_accum_stats.hpp
     attn_res_merge/attn_res_merge.hpp
     attn_res_scores/attn_res_scores.hpp
     attn_res_stats/attn_res_stats.hpp
@@ -13,6 +14,9 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS
 )
 
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
+    attn_res_accum_stats/attn_res_accum_stats.cpp
+    attn_res_accum_stats/device/attn_res_accum_stats_device_operation.cpp
+    attn_res_accum_stats/device/attn_res_accum_stats_program_factory.cpp
     attn_res_merge/attn_res_merge.cpp
     attn_res_merge/device/attn_res_merge_device_operation.cpp
     attn_res_merge/device/attn_res_merge_program_factory.cpp
@@ -48,6 +52,7 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS
+    attn_res_accum_stats/attn_res_accum_stats_nanobind.cpp
     attn_res_merge/attn_res_merge_nanobind.cpp
     attn_res_scores/attn_res_scores_nanobind.cpp
     attn_res_stats/attn_res_stats_nanobind.cpp
