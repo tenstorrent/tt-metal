@@ -25,11 +25,11 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 ////////////////////////////////////////////////////////////////
 // data_valid semaphore protocol
 //
-// data_valid counts the chunks upstream has relayed into our output -- cumulative over the op, reset at
-// completion. A chunk's absolute position is base_chunk + within-slice offset, with base_chunk = (iter-1) *
-// slice_count. The writer maintains the count (atomic-inc per chunks delivered); the reader waits on it with
-// noc_semaphore_wait_min at the last chunk of each batch it reads, then a final wait for total_chunks before
-// reset.
+// data_valid counts the chunks upstream has relayed into our output. The writer maintains the count (atomic-inc
+// per chunks delivered); the reader waits on it with noc_semaphore_wait_min at the last chunk of each batch it
+// reads, then waits for total_chunks and atomically subtracts exactly total_chunks at completion. Each
+// invocation consumes only its own credits, leaving any additional credits available to their owning
+// invocation. All reusable protocol state is maintained on device.
 //
 // Waiting on an absolute position (not a signal count) lets one reader path cover every case with no alignment
 // or per-topology special-casing:
