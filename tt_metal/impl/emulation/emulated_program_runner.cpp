@@ -2847,7 +2847,16 @@ static void init_core_cb_sync(
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
+            // Carry the faced-tile geometry silicon's pack/unpack init reads off the
+            // CB when the config sets it, else the full-tile default (16/4).
+            uint32_t cb_face_r_dim = 16, cb_num_faces = 4;
+            const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
+            if (cb_fg.has_value()) {
+                cb_face_r_dim = cb_fg->face_r_dim;
+                cb_num_faces  = cb_fg->num_faces;
+            }
+            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated(),
+                               cb_face_r_dim, cb_num_faces);
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -2962,8 +2971,15 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
+        // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
         if (device_slot < EMULE_NUM_CBS) {
-            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries);
+            uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
+            if (cfg.unpack_face_geometry.has_value()) {
+                dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
+                dfb_num_faces  = cfg.unpack_face_geometry->num_faces;
+            }
+            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries,
+                               /*globally_allocated=*/false, dfb_face_r_dim, dfb_num_faces);
         }
 
         // Initialize tile counters for this DFB.
