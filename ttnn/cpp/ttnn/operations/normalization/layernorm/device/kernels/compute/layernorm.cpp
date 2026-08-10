@@ -176,9 +176,13 @@ void kernel_main() {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-                dfb_x, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
+        numeric::row_wise_mean<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb_x_id,
+            dfb_scaler_id,
+            dfb_ex_id,
+            policies::FullBlockWithoutPopPolicy>(W, Wt, block_size, tile_width);
 
         // x - E[x]
         reconfig_data_format(dfb_x_id, dfb_ex_id);
@@ -240,9 +244,13 @@ void kernel_main() {
 #endif
 
         // Var[x]
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                dfb_xmm2, dfb_scaler, dfb_ex2, W, Wt, block_size, tile_width);
+        numeric::row_wise_mean<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb_xmm2_id,
+            dfb_scaler_id,
+            dfb_ex2_id,
+            policies::FullBlockWithPopPolicy>(W, Wt, block_size, tile_width);
 
         // Var[x] + eps
         dfb_ex2.wait_front(1);
