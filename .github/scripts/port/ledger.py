@@ -73,14 +73,70 @@ def _matches_known_bad(entry: dict, dtype: str, layout: str, kwargs: dict) -> bo
     return True
 
 
+# A dim is tile-aligned when it is a whole number of tile faces.
+TILE = 32
+
+
+def _outside_port_scope(case: dict, port_scope: dict) -> str | None:
+    """Why this case falls outside the ported builder entry point, if it does.
+
+    A sweep point can be entirely valid for the op and still sit outside the *entry point* being
+    transliterated. `untilize`'s port covers the interleaved tile path plus bfloat16 unpadding, while
+    non-tile-aligned bfloat8_b only reaches the generic through a typecast step that lives in no
+    ported builder. Those points are real and must route to native, so they belong in scope=out
+    rather than being dropped: scope=out is exactly what the routing check and the emitted routing
+    test are for, and dropping them would retire the evidence that the predicate rejects them.
+
+    Absent from a manifest this narrows nothing, which is why `pad` is unaffected.
+    """
+    if not port_scope:
+        return None
+
+    layouts = port_scope.get("layouts")
+    if layouts and case["layout"] not in layouts:
+        return f"port_scope: {case['layout']} layout is outside the ported builder"
+
+    dtypes = port_scope.get("dtypes")
+    if dtypes and case["dtype"] not in dtypes:
+        return f"port_scope: {case['dtype']} is outside the ported builder"
+
+    # Listed dtypes are in scope only on a whole number of tiles; others are in scope either way.
+    shape = case.get("shape") or []
+    if case["dtype"] in (port_scope.get("tile_aligned") or []) and len(shape) >= 2:
+        if shape[-2] % TILE or shape[-1] % TILE:
+            return (
+                f"port_scope: {case['dtype']} is in scope only on tile-aligned shapes, "
+                f"and {shape[-2]}x{shape[-1]} is not"
+            )
+    return None
+
+
+def _signature(case: dict) -> str:
+    """Identity of a case as an *input*, for deduplicating the union of several suites."""
+    return json.dumps(
+        [case["shape"], case["dtype"], case["layout"], case["kwargs"]],
+        sort_keys=True,
+        default=str,
+    )
+
+
 def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
-    """Expand the sweep grid and classify every point."""
+    """Expand the sweep grid and classify every point.
+
+    `sweep_suite` may name one suite or several. Several is a union, deduplicated on the input
+    signature: `untilize` draws tile-aligned bfloat8_b from `broaden_suite` and everything else from
+    `nightly`, and the two grids overlap. Without the dedupe a configuration present in both would be
+    measured twice and counted twice in every coverage figure.
+
+    The suites are expanded separately rather than merged, because their grids do not have to share
+    keys -- `broaden_suite` carries a `shard_strategy` axis that `nightly` does not -- so there is no
+    single product to take.
+    """
     module_name = manifest["sweep_module"]
-    suite = suite or manifest.get("sweep_suite")
+    requested = suite or manifest.get("sweep_suite")
+    suites = [requested] if isinstance(requested, str) else list(requested)
     module = importlib.import_module(module_name)
 
-    grid = module.parameters[suite]
-    keys = sorted(grid)
     invalidate = getattr(module, "invalidate_vector", None)
 
     vector_map = manifest.get("vector_map") or {}
@@ -90,45 +146,61 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
     declared_layouts = set(coverage.get("layouts") or [])
     dropped_reasons = [r.lower() for r in (manifest.get("dropped_codegen_reasons") or [])]
     known_bad = manifest.get("known_bad_golden") or []
+    port_scope = manifest.get("port_scope") or {}
 
     cases = []
-    for combo in itertools.product(*(grid[k] for k in keys)):
-        vector = dict(zip(keys, combo))
+    seen: set[str] = set()
+    for suite_name in suites:
+        grid = module.parameters[suite_name]
+        keys = sorted(grid)
+        for combo in itertools.product(*(grid[k] for k in keys)):
+            vector = dict(zip(keys, combo))
 
-        dtype = _dtype_name(_pluck(vector, vector_map.get("dtype", "dtype")))
-        layout = _layout_name(_pluck(vector, vector_map.get("layout", "layout")))
-        shape = _pluck(vector, vector_map.get("shape", "shape"))
-        kwargs = {name: _pluck(vector, path) for name, path in kwarg_map.items()}
+            dtype = _dtype_name(_pluck(vector, vector_map.get("dtype", "dtype")))
+            layout = _layout_name(_pluck(vector, vector_map.get("layout", "layout")))
+            shape = _pluck(vector, vector_map.get("shape", "shape"))
+            kwargs = {name: _pluck(vector, path) for name, path in kwarg_map.items()}
 
-        case = {
-            "case_id": f"{module_name.rsplit('.', 1)[-1]}[{len(cases)}]",
-            "shape": list(shape) if shape is not None else None,
-            "dtype": dtype,
-            "layout": layout,
-            "kwargs": kwargs,
-        }
+            case = {
+                "case_id": f"{module_name.rsplit('.', 1)[-1]}[{len(cases)}]",
+                "suite": suite_name,
+                "shape": list(shape) if shape is not None else None,
+                "dtype": dtype,
+                "layout": layout,
+                "kwargs": kwargs,
+            }
+            signature = _signature(case)
+            if signature in seen:
+                continue
+            seen.add(signature)
 
-        if dtype in _BLOCK_FLOAT and layout == "row_major":
-            case.update(scope=SCOPE_DROPPED, reason="not constructible: block-float requires TILE")
+            if dtype in _BLOCK_FLOAT and layout == "row_major":
+                case.update(scope=SCOPE_DROPPED, reason="not constructible: block-float requires TILE")
+                cases.append(case)
+                continue
+
+            if any(_matches_known_bad(e, dtype, layout, kwargs) for e in known_bad):
+                case.update(scope=SCOPE_DROPPED, reason="known_bad_golden: native oracle is wrong here")
+                cases.append(case)
+                continue
+
+            invalid, reason = (False, None)
+            if invalidate is not None:
+                invalid, reason = invalidate(dict(vector))
+
+            if not invalid:
+                # The manifest's port_scope is ANDed in here: valid for the op, but still possibly
+                # outside the entry point this port transliterates.
+                outside = _outside_port_scope(case, port_scope)
+                case.update(
+                    scope=SCOPE_OUT if outside else SCOPE_IN,
+                    reason=outside,
+                )
+            elif any(frag in (reason or "").lower() for frag in dropped_reasons):
+                case.update(scope=SCOPE_DROPPED, reason=f"dropped_codegen_reasons: {reason}")
+            else:
+                case.update(scope=SCOPE_OUT, reason=reason)
             cases.append(case)
-            continue
-
-        if any(_matches_known_bad(e, dtype, layout, kwargs) for e in known_bad):
-            case.update(scope=SCOPE_DROPPED, reason="known_bad_golden: native oracle is wrong here")
-            cases.append(case)
-            continue
-
-        invalid, reason = (False, None)
-        if invalidate is not None:
-            invalid, reason = invalidate(dict(vector))
-
-        if not invalid:
-            case.update(scope=SCOPE_IN, reason=None)
-        elif any(frag in (reason or "").lower() for frag in dropped_reasons):
-            case.update(scope=SCOPE_DROPPED, reason=f"dropped_codegen_reasons: {reason}")
-        else:
-            case.update(scope=SCOPE_OUT, reason=reason)
-        cases.append(case)
 
     # A declared coverage pair that never appears in scope=in means the manifest promises a surface
     # the sweep does not actually exercise -- the gates would then silently grade nothing there.

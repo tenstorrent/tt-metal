@@ -201,15 +201,18 @@ def build_ledger(manifest: str, out: Path, repo: Path) -> dict:
 
 
 def run_measure(
-    op: str, ledger: Path, band: str, out: Path, repo: Path, extra: list[str], env: dict | None = None
+    op: str, manifest: str, band: str, out: Path, repo: Path, extra: list[str], env: dict | None = None
 ) -> dict:
     cmd = [
         sys.executable,
         str(SCRIPTS / "measure.py"),
         "--op",
         op,
-        "--ledger",
-        str(ledger),
+        # The manifest, not the ledger JSON written beside it: a case's kwargs can hold live ttnn
+        # objects that JSON flattens to strings, so measure.py re-expands the sweep in process. See
+        # the note at the top of its `main`.
+        "--manifest",
+        manifest,
         "--band",
         band,
         "--out",
@@ -223,7 +226,7 @@ def run_measure(
 
 
 def run_device_band(
-    op: str, ledger: Path, out: Path, repo: Path, limit: int, reps: int, reports: Path, select: str
+    op: str, manifest: str, out: Path, repo: Path, limit: int, reps: int, reports: Path, select: str
 ) -> dict:
     """Device timings need a tracy-enabled build, so this leg runs under `python3 -m tracy`, which
     sets TT_METAL_DEVICE_PROFILER and post-processes the device logs into an ops report.
@@ -244,8 +247,8 @@ def run_device_band(
             str(SCRIPTS / "measure.py"),
             "--op",
             op,
-            "--ledger",
-            str(ledger),
+            "--manifest",
+            manifest,
             "--band",
             "device",
             "--out",
@@ -686,16 +689,14 @@ def main() -> int:
 
         if args.band in ("correctness", "both"):
             out = work / f"{args.op}_correctness.json"
-            # The manifest travels with this band so the golden can be resolved from it; see
-            # `measure.resolve_golden` for why that beats a table of per-op goldens in the harness.
-            data = run_measure(args.op, ledger_path, "correctness", out, repo, ["--manifest", args.manifest])
+            data = run_measure(args.op, args.manifest, "correctness", out, repo, [])
             report["correctness"] = grade_correctness(data["results"])
             report["correctness"]["golden"] = data.get("golden")
 
         if args.band in ("performance", "both"):
             wall = run_measure(
                 args.op,
-                ledger_path,
+                args.manifest,
                 "wall",
                 work / f"{args.op}_wall.json",
                 repo,
@@ -706,7 +707,7 @@ def main() -> int:
                 reports = work / f"{args.op}_profiler"
                 dev = run_device_band(
                     args.op,
-                    ledger_path,
+                    args.manifest,
                     work / f"{args.op}_device.json",
                     repo,
                     args.limit,

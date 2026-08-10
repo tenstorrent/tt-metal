@@ -277,6 +277,57 @@ def test_path(op: str, category: str) -> str:
     return f"{TEST_DIR}/{category}/test_{op}_codegen_routing.py"
 
 
+_TTNN_CONSTANTS: list[tuple[str, object]] | None = None
+
+
+def _ttnn_constants() -> list[tuple[str, object]]:
+    """Module-level `ttnn` constants, by convention the SCREAMING_CASE names.
+
+    Restricted to that convention deliberately. Comparing a value against every attribute of `ttnn`
+    would walk hundreds of operation callables and invoke `__eq__` on objects with no business being
+    compared. Sorted, so that a value reachable under two aliases always renders as the same one --
+    the pin in `gate.py` re-renders this file and compares it byte for byte.
+    """
+    global _TTNN_CONSTANTS
+    if _TTNN_CONSTANTS is None:
+        try:
+            import ttnn
+        except Exception:  # noqa: BLE001 - without ttnn there are no constants, and `_literal` refuses
+            _TTNN_CONSTANTS = []
+            return _TTNN_CONSTANTS
+        found = []
+        for name in sorted(dir(ttnn)):
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                continue
+            try:
+                candidate = getattr(ttnn, name)
+            except Exception:  # noqa: BLE001 - an attribute that raises on access is not a constant
+                continue
+            if not callable(candidate) and not isinstance(candidate, type):
+                found.append((name, candidate))
+        _TTNN_CONSTANTS = found
+    return _TTNN_CONSTANTS
+
+
+def _ttnn_constant_name(value) -> str | None:
+    """The name of the `ttnn` constant this value is, if it is one.
+
+    `memory_config=ttnn.DRAM_MEMORY_CONFIG` is a live object whose repr cannot be spelled as source,
+    but it is reachable by name, and the name is both readable and stable. Identity first across all
+    candidates, then equality, so an exact alias always beats a merely equal one.
+    """
+    for name, candidate in _ttnn_constants():
+        if candidate is value:
+            return name
+    for name, candidate in _ttnn_constants():
+        try:
+            if type(candidate) is type(value) and candidate == value:
+                return name
+        except Exception:  # noqa: BLE001 - an object that refuses comparison simply does not match
+            continue
+    return None
+
+
 def _literal(value) -> str:
     """Render a ledger value as Python source that reconstructs it.
 
@@ -296,6 +347,12 @@ def _literal(value) -> str:
     if "ttnn" in module or "tt_lib" in module:
         if kind.__name__ == "Shape":
             return f"ttnn.Shape({_literal(list(value))})"
+        # Before the enum guess below, because a name is evidence and a lowercased repr is an
+        # inference. `MemoryConfig` reaches here: its repr carries C++ scope markers, so the pattern
+        # below correctly refuses it, and only the name gets it into the file.
+        named = _ttnn_constant_name(value)
+        if named:
+            return f"ttnn.{named}"
         # `DataType.BFLOAT16`, `Layout.TILE` and friends round-trip through their lowercase ttnn
         # alias. The pattern is strict because the obvious loose version -- accept anything with a
         # dot in it -- turns the default `<module.Class object at 0x...>` repr into a confident
