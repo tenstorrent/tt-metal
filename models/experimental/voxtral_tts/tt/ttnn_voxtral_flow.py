@@ -124,8 +124,7 @@ class TtVoxtralFlow:
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
         h = self._norm(x, w["an"])
         # q, k and v share one weight and one matmul -- see NOTES.md [flow-09] for the fusion.
-        # NOTES.md [flow-23] -- Block 2 shares Block 1's dims exactly (3072 / 9216 / 32 heads x
-        # 128) and B*3 is 3 or 6 rows, one tile, so gpt's decode program configs apply unchanged.
+        # NOTES.md [flow-23] -- same dims as Block 1, one tile of rows, so its configs apply
         qkv = ttnn.linear(h, w["wqkv"], program_config=DECODE_PRG["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
         # NOTES.md [flow-10] -- FUSED head split. 6.31 hand-rolled this into 9 ops and won
@@ -147,9 +146,7 @@ class TtVoxtralFlow:
         x = ttnn.add_(x, ttnn.linear(a, w["wo"], program_config=DECODE_PRG["wo"],
                                      compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1))
         h = self._norm(x, w["fn"])
-        # NOTES.md [flow-12] -- SiLU rides along on the w1 matmul. It did NOT actually do so via
-        # activation="silu", which measures the same as a separate ttnn.silu; the fusion is real
-        # only in the program config. See NOTES.md [gpt-26]. STATUS.md 6.52.
+        # NOTES.md [flow-12] -- SiLU fuses only via the program config, never activation="silu"
         g = ttnn.linear(h, w["w1"], program_config=DECODE_PRG["w1"],
                         compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], program_config=DECODE_PRG["w3"],
