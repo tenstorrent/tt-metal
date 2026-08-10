@@ -25,17 +25,21 @@ void kernel_main() {
     const auto live_scores_addr = get_arg_val<uint32_t>(4);
     const auto num_output_tiles = get_arg_val<uint32_t>(5);
     const auto start_id = get_arg_val<uint32_t>(6);
+
+    // Common args: every core reads the same site, and the host re-patches the
+    // four site offsets in place on a program-cache hit.
+    //
     // Each scalar tensor's read site, already multiplied out to pages. Zero for a
     // scalar that carries a single plane, so the site is applied per operand.
-    const auto shift_page_offset = get_arg_val<uint32_t>(7);
-    const auto mass_page_offset = get_arg_val<uint32_t>(8);
-    const auto live_scores_page_offset = get_arg_val<uint32_t>(9);
+    const auto shift_page_offset = get_common_arg_val<uint32_t>(0);
+    const auto mass_page_offset = get_common_arg_val<uint32_t>(1);
+    const auto live_scores_page_offset = get_common_arg_val<uint32_t>(2);
     // The partial's read site, in whole Ht*Wt planes rather than scalar rows.
-    const auto partial_page_offset = get_arg_val<uint32_t>(10);
+    const auto partial_page_offset = get_common_arg_val<uint32_t>(3);
     // Unsummed statistics only: the distance from a rank's sum of squares to its
     // dots, and from one rank's pair to the next.
-    const auto live_dots_page_offset = get_arg_val<uint32_t>(11);
-    const auto live_partial_page_stride = get_arg_val<uint32_t>(12);
+    const auto live_dots_page_offset = get_common_arg_val<uint32_t>(4);
+    const auto live_partial_page_stride = get_common_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_wide = 0;
     constexpr uint32_t cb_id_scalars = 2;

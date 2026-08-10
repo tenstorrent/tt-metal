@@ -4,7 +4,11 @@
 
 #include "ttnn/operations/experimental/reduction/attn_res_merge/device/attn_res_merge_program_factory.hpp"
 
+#include "ttnn/operations/experimental/reduction/attn_res_merge/device/attn_res_merge_device_operation.hpp"
+
+#include <array>
 #include <bit>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -36,6 +40,31 @@ constexpr uint32_t kStatsPerPartial = 2;
 
 }  // namespace
 
+AttnResMergeSiteOffsets attn_res_merge_site_offsets(
+    const AttnResMergeParams& operation_attributes, const AttnResMergeInputs& tensor_args) {
+    const auto& input_shape = tensor_args.partial.padded_shape();
+    const uint32_t Wt = input_shape[-1] / TILE_WIDTH;
+    const uint32_t Ht = input_shape[-2] / TILE_HEIGHT;
+
+    // A scalar operand is one tile column wide, so its dim-0 plane is Ht pages and
+    // selecting a read site is a page offset. Resolved here rather than in the
+    // kernel because a shared operand ignores the site (see the operand comment on
+    // AttnResMergeParams), and that test belongs where the shapes are.
+    const auto scalar_page_offset = [&](const Tensor& scalar) {
+        return scalar.padded_shape()[0] == 1 ? 0u : operation_attributes.site * Ht;
+    };
+
+    // The partial is full width, so its dim-0 plane is a whole Ht*Wt block. Same
+    // selection as the scalars, different stride: a caller that reduced every read
+    // site in one dispatch hands the batch over whole and names its site here.
+    return {
+        .shift = scalar_page_offset(tensor_args.shift),
+        .mass = scalar_page_offset(tensor_args.mass),
+        .live_scores = scalar_page_offset(tensor_args.live_scores),
+        .partial = input_shape[0] == 1 ? 0u : operation_attributes.site * Ht * Wt,
+    };
+}
+
 tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     const AttnResMergeParams& operation_attributes,
     const AttnResMergeInputs& tensor_args,
@@ -56,16 +85,7 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     const uint32_t Wt = input_shape[-1] / TILE_WIDTH;
     const uint32_t Ht = input_shape[-2] / TILE_HEIGHT;
 
-    // A scalar operand is one tile column wide, so its dim-0 plane is Ht pages and
-    // selecting a read site is a page offset. Resolved here rather than in the
-    // kernel because a shared operand ignores the site (see the operand comment on
-    // AttnResMergeParams), and that test belongs where the shapes are.
-    const auto scalar_page_offset = [&](const Tensor& scalar) {
-        return scalar.padded_shape()[0] == 1 ? 0u : operation_attributes.site * Ht;
-    };
-    const uint32_t shift_page_offset = scalar_page_offset(tensor_args.shift);
-    const uint32_t mass_page_offset = scalar_page_offset(tensor_args.mass);
-    const uint32_t live_scores_page_offset = scalar_page_offset(tensor_args.live_scores);
+    const auto site_offsets = attn_res_merge_site_offsets(operation_attributes, tensor_args);
 
     // Unsummed statistics arrive as [1, 2P, N, 1]: one tile-plane of Ht pages per
     // half, a rank's two halves Ht apart and the next rank a pair further on.
@@ -73,12 +93,6 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     const uint32_t kScalars = kFixedScalars + (num_partials == 0 ? 1 : kStatsPerPartial * num_partials);
     const uint32_t live_dots_page_offset = Ht;
     const uint32_t live_partial_page_stride = kStatsPerPartial * Ht;
-
-    // The partial is full width, so its dim-0 plane is a whole Ht*Wt block. Same
-    // selection as the scalars, different stride: a caller that reduced every read
-    // site in one dispatch hands the batch over whole and names its site here.
-    const uint32_t partial_page_offset =
-        tensor_args.partial.padded_shape()[0] == 1 ? 0u : operation_attributes.site * Ht * Wt;
 
     const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -208,6 +222,20 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     auto* const live_scores_buffer = tensor_args.live_scores.buffer();
     auto* const output_buffer = tensor_return_value.buffer();
 
+    // Every core reads the same site out of the same operands, so the page offsets
+    // are common rather than per-core. The four that `site` decides are also the
+    // ones re-applied on a program-cache hit, and keeping them common bounds that
+    // patch at four writes instead of four per core. Their order is the contract
+    // with kAttnResMergeSiteArgIdx.
+    reader_kernel_desc.emplace_common_runtime_args({
+        site_offsets.shift,
+        site_offsets.mass,
+        site_offsets.live_scores,
+        site_offsets.partial,
+        live_dots_page_offset,
+        live_partial_page_stride,
+    });
+
     for (uint32_t i = 0, start_id = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core{i % num_cores_x, i / num_cores_x};
 
@@ -228,13 +256,7 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
              mass_buffer,
              live_scores_buffer,
              num_tiles_per_core,
-             start_id,
-             shift_page_offset,
-             mass_page_offset,
-             live_scores_page_offset,
-             partial_page_offset,
-             live_dots_page_offset,
-             live_partial_page_stride});
+             start_id});
         writer_kernel_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, start_id});
         compute_kernel_desc.emplace_runtime_args(core, {num_tiles_per_core, start_id});
 
@@ -246,6 +268,27 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> AttnResMergeDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t&,
+    const std::optional<ttnn::MeshCoordinate>&) {
+    const auto offsets = attn_res_merge_site_offsets(operation_attributes, tensor_args);
+    const std::array<uint32_t, 4> values = {offsets.shift, offsets.mass, offsets.live_scores, offsets.partial};
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(values.size());
+    for (uint32_t i = 0; i < values.size(); ++i) {
+        dynamic_args.push_back(
+            {.kernel_idx = kAttnResMergeReaderKernelIdx,
+             .core = {},
+             .arg_idx = kAttnResMergeSiteArgIdx + i,
+             .value = values[i],
+             .is_common = true});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::experimental::prim

@@ -5,6 +5,9 @@
 #pragma once
 
 #include <optional>
+#include <vector>
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "attn_res_merge_device_operation_types.hpp"
@@ -24,6 +27,14 @@ struct AttnResMergeDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // `site` is hash-excluded, so the offsets it resolves to are stale on every
+    // cache hit and have to be rewritten into the cached program.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 }  // namespace ttnn::experimental::prim
