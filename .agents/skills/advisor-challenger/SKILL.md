@@ -176,6 +176,21 @@ loop:  pull in the adjacent op across the nearest DRAM crossing   (removes 1.2-3
 
 The one combination worth enumerating is **across layer kinds** (step 6).
 
+## One discipline that prevents most of what goes wrong here
+
+Every serious failure in the reference corpus was **a lookup that failed and returned a reassuring
+answer**: a contract key not found, so the gate passed on a default; an ancestry test that could not hold,
+so it reported clean; a `git add` that matched nothing, so the cell was tagged empty; a branch name that
+did not resolve, so the cell was "skipped" in one log line. None raised an error. All produced a
+*comfortable* wrong state, which costs far more than a crash because nobody investigates a green run.
+
+> **After any lookup that gates a decision, assert that what you were looking for is actually there** —
+> count the rows, compare the trees, check the ref resolved, print the value you read. Never let absence
+> fall through to a default, and never report success from a step whose exit status you did not check.
+
+That applies to this stage's own artefacts too: if you read a field out of `report.json`,
+`reconciliation_*.json` or a CSV and it is missing, that is a stop, not a zero.
+
 ## Procedure
 
 ### 0. Preflight, and the layer counts
@@ -191,6 +206,13 @@ git -C $TTMLIR_ADVISOR_HOME rev-parse --short HEAD      # expect the pin: 618cd4
 If it is missing, `$shard-advise` SETUP.md part A has the build. **Do not rebuild while a measured stage is
 running:** `tt-mlir/third_party/tt-metal/src/tt-metal` symlinks the live tt-metal checkout, and every
 `cmake --build` overwrites `$TT_METAL_HOME/ttnn/ttnn/_ttnn.so`, breaking `import ttnn` for anything running.
+
+**Exclusivity, and it cannot be established afterwards.** Hosts are shared, and `tt-smi` reports board
+presence rather than utilisation, so there is no retrospective evidence that a measurement had the device
+to itself. Sample the device-using processes at the **start and end of every measurement** and record both;
+two reference cells predate that instrumentation and can never be shown to be clean.
+**And do not run a capture while a measurement is in flight** — the container that runs `ttnn-advise` maps
+the same device, so a capture during a timed stage corrupts it. Sequence them.
 
 **The layer counts, and they are load-bearing.** The full-model estimate multiplies per-layer microseconds by
 `layers_of_kind`, so a wrong count scales the headline directly. Derive them from the model's own config, not
@@ -621,6 +643,29 @@ verdict and `measured_ms`, or `hard_error` naming the item that would not run an
 isolated it. "Not tried" and "tried and lost" must not look the same in the artefacts; in the reference corpus
 four cells never applied the advice and recorded no reason, and their output is indistinguishable from a
 measured rejection. And **`reachable_by_advisor`** (step 2), so a zero says which kind of zero it is.
+
+**A blocked outcome is a passing outcome, and it must be cheap to report.** `final.json` takes
+`could_not_do[]`: each entry names what was not measurable, why, and the evidence (the hard error, the
+missing artefact, the knob that does not separate the effect). This exists because the alternative has a
+cost: when the only way to pass is to produce a number, a cell will produce one. In the reference corpus a
+cell that needed advisor evidence it could not generate wrote documentation citing a tool path that does
+not exist on its own host, with plausible hashes and op counts — fabricated provenance for a command that
+could not have run. Nothing detected it; a byte-identity comparison did, days later. **Reporting "I could
+not do this" must be strictly easier than inventing it.** One reference cell's only knob drove the norm and
+the residual chain together, so a norm-only effect was not screenable in principle — that is a result, and
+it needs somewhere to go.
+
+**Try to refute your own win before shipping it.** Every shipped change needs one *disconfirming*
+measurement, recorded as `disconfirmation`:
+
+- **order swap** — re-measure the incumbent in a fresh process *after* the candidate. A candidate that only
+  wins in the later process won a warm-up, not a placement. This is the failure the per-process rule and
+  `process_ordinal` exist to prevent, and it is worth one measurement to show it did.
+- **knob off** — re-measure with the shipped knob disabled and confirm you get the incumbent back. That
+  catches the case where the knob was never what changed.
+
+Neither is expensive, and the analysis that produced this stage refuted about **1 in 6 of its own
+recommendations** on follow-up. Assume yours has the same rate.
 
 `README.md`: the accounting from step 3, what was screened with its number, what was not and why, and the
 unreachable share. **Say what you could not do**, in a field of its own: one reference cell's only knob drove

@@ -119,12 +119,12 @@ for rj in "${caps[@]}"; do
   kind=$(basename "$(dirname "$rj")"); export CH_RJ="$rj" CH_KIND="$kind"
   python3 -c "import json,os,sys; json.load(open(os.environ['CH_RJ']))" 2>/dev/null \
     || err "$kind: report.json does not parse"
-  python3 - <<'PY' || fail=1
-import json, os, re, sys
+  python3 - <<'PY'
+import json, os, re, socket, sys
 r = json.load(open(os.environ["CH_RJ"])); kind = os.environ["CH_KIND"]
 try: i = json.load(open(os.environ["CH_D"] + "/incumbent.json"))
 except Exception: i = {}
-bad = []
+bad = []; soft2 = []
 traced, shipped = r.get("traced_weight_dtypes"), i.get("shipped_weight_dtypes")
 if not traced: bad.append("report.json records no traced_weight_dtypes")
 if not shipped: bad.append("incumbent.json records no shipped_weight_dtypes")
@@ -151,6 +151,31 @@ if not ac or ac.startswith("UNKNOWN"):
 elif pin and not ac.startswith(pin):
     bad.append(f"advisor at {ac[:12]} but the pin is {pin}. SETUP.md pins the commit so runs are "
                "comparable; re-capture at the pin or state the deviation.")
+# THE OPTIMIZER MUST NOT HAVE MOVED. That is the premise of comparing this run against the previous one:
+# the toolchain may carry tracer fixes (Python, tools/ttnn-jit/) but no placement change (lib/, include/).
+oc = prov.get("optimizer_files_changed_since_pin")
+if oc is None:
+    soft2.append("optimizer_files_changed_since_pin not recorded -- capture_template computes it as "
+                 "`git diff --name-only <optimizer pin>..HEAD -- lib include`. Without it, nobody can "
+                 "check the claim this comparison rests on: that the placement logic did not move.")
+elif isinstance(oc, list) and oc:
+    bad.append(f"the advisor toolchain changes {len(oc)} file(s) under lib/ or include/ since the "
+               f"optimizer pin ({', '.join(oc[:3])}...). That is a different optimizer, so results are not "
+               "comparable to the previous corpus. Either re-pin deliberately and say so, or drop them.")
+# THE TOOL MUST EXIST AT THE RECORDED PATH ON THIS HOST. A contaminated corpus cell wrote documentation
+# citing a TTMLIR_ADVISOR_HOME that does not exist on the machine that produced it, with plausible hashes
+# and op counts. Only a byte-identity comparison caught it, days later. Three lines turn that into a stop.
+tp = prov.get("tool_realpath") or prov.get("tool_path")
+if not tp or not prov.get("tool_sha256") or not prov.get("host"):
+    bad.append("the capture records no host fingerprint: host, tool_path/tool_realpath and tool_sha256 are "
+               "required beside every captured tool output, so a capture that could not have run on this "
+               "machine fails here instead of being discovered by hand later.")
+elif not os.path.isfile(str(tp)):
+    bad.append(f"the capture says it ran {tp}, which does not exist on this host ({socket.gethostname()}). "
+               "Either the artefact came from somewhere else, or its provenance is invented.")
+elif str(prov.get("host")) != socket.gethostname():
+    soft2.append(f"the capture was produced on {prov.get('host')} and this gate runs on "
+                 f"{socket.gethostname()}. Legitimate for a re-check; not for a measurement.")
 if not r.get("capture_policy_source"):
     bad.append("capture_policy_source unset: nothing records that the traced decoder was built with the "
                "SHIPPED policy rather than class defaults. Dtypes are checked below; layouts and "
@@ -182,8 +207,11 @@ if not ca: bad.append("report.json records no captured_at")
 if ma and ca and str(ca) < str(ma):
     bad.append(f"captured_at {ca} PRECEDES measured_at {ma}: the control is contaminated")
 for b in bad: print(f"CRITICAL: {kind}: {b}", file=sys.stderr)
-sys.exit(1 if bad else 0)
+for b in soft2: print(f"{'CRITICAL' if os.environ.get('CH_STRICT') == '1' else 'WARN'}: {kind}: {b}",
+                      file=sys.stderr)
+sys.exit(1 if bad else (2 if soft2 else 0))
 PY
+  case $? in 0) ;; 2) warn=$((warn+1)) ;; *) fail=1 ;; esac
 done
 [ "$fail" = 0 ] && ok "captures: per layer kind, dtypes match shipped, batch and order agree"
 
@@ -383,6 +411,15 @@ if not isinstance(apv, dict):
                 "'not tried' must not look like 'tried and lost'.")
 elif apv.get("measured_ms") is None and not apv.get("hard_error"):
     crit.append("advised_plan_verbatim has neither measured_ms nor hard_error, so it was not actually tried.")
+if f.get("changed") and not f.get("disconfirmation"):
+    warn.append("no disconfirmation recorded for a shipped change. Two cheap measurements: an ORDER SWAP "
+                "(re-measure the incumbent in a fresh process AFTER the candidate -- a candidate that only "
+                "wins in the later process won a warm-up) and KNOB OFF (confirm the incumbent comes back). "
+                "The analysis behind this stage refuted about 1 in 6 of its own recommendations.")
+if not f.get("changed") and not (f.get("could_not_do") or f.get("reachable_by_advisor")):
+    warn.append("a no-change outcome with neither could_not_do[] nor reachable_by_advisor. State which "
+                "kind of zero this is: nothing to find, or could not look. A blocked item is a PASSING "
+                "result here -- record it rather than reaching for a number.")
 if not f.get("reachable_by_advisor"):
     warn.append("reachable_by_advisor missing -- record which kinds were captured and the untraced window "
                 "share, so a contribution of zero reads as 'nothing to find' rather than 'could not look'. "

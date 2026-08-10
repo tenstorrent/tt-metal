@@ -25,9 +25,13 @@ DTYPE and the SHAPES.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
+import socket
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import torch
@@ -36,8 +40,17 @@ import ttnn
 
 # BUG FIX (v3): this defaulted to one developer's absolute path, so the template only worked on that host.
 TT_METAL_ROOT = os.environ.get("TT_METAL_ROOT") or os.environ.get("TT_METAL_HOME") or os.getcwd()
-# $shard-advise SETUP.md A.1 pins tt-mlir here so runs stay comparable. Recorded with every capture.
-ADVISOR_PIN = os.environ.get("CHALLENGER_ADVISOR_PIN", "618cd4e75d")
+# TWO PINS, because they answer different questions.
+#
+# ADVISOR_PIN is the toolchain this stage runs -- tt-mlir at the v3 tracer commit. OPTIMIZER_PIN is the
+# commit the PLACEMENT logic must still be at, and the v3 branch is that commit plus three files under
+# tools/ttnn-jit/ and nothing under lib/ or include/. Recording both is what lets a reader check the claim
+# the whole v2-vs-v3 comparison rests on: that the optimizer did not move.
+#
+# Getting this wrong is not cosmetic. The gate fails a capture whose advisor_commit does not start with the
+# expected pin, so a single stale pin string fails every cell of the run -- which is what this fixes.
+ADVISOR_PIN = os.environ.get("CHALLENGER_ADVISOR_PIN", "97724a1170")
+OPTIMIZER_PIN = os.environ.get("CHALLENGER_OPTIMIZER_PIN", "618cd4e75d")
 if TT_METAL_ROOT not in sys.path:
     sys.path.append(TT_METAL_ROOT)
 
@@ -151,11 +164,28 @@ def _record_traced_dtypes(out_dir: str) -> None:
     # reference corpus recorded it anywhere -- so advice from two different builds is indistinguishable and
     # the corpus is not comparable to itself. SETUP.md pins the commit for exactly this reason; record it.
     advisor_home = os.environ.get("TTMLIR_ADVISOR_HOME", "")
+
+    def _git(*args):
+        try:
+            return subprocess.run(["git", "-C", advisor_home, *args],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+        except Exception as exc:
+            return f"UNKNOWN: {exc}"
+
+    commit = _git("rev-parse", "HEAD")
+    # DID THE PLACEMENT LOGIC MOVE? The tracer commits are Python under tools/ttnn-jit/; anything under
+    # lib/ or include/ would be a different optimizer and a different experiment.
+    changed_optimizer = _git("diff", "--name-only", f"{OPTIMIZER_PIN}..HEAD", "--", "lib", "include")
+    # HOST FINGERPRINT. A contaminated v2 cell produced documentation citing a TTMLIR_ADVISOR_HOME that
+    # does not exist on the machine that wrote it, with plausible hashes and op counts -- fabricated
+    # provenance for a command that could not have run, and only byte-identity comparison caught it. The
+    # gate verifies the tool exists at this path ON THIS HOST, which turns that into a hard failure.
+    tool = shutil.which("ttnn-advise") or os.path.join(advisor_home, "build/bin/ttnn-advise")
     try:
-        commit = subprocess.run(["git", "-C", advisor_home, "rev-parse", "HEAD"],
-                                capture_output=True, text=True, check=True).stdout.strip()
+        with open(os.path.realpath(tool), "rb") as fh:
+            tool_sha = hashlib.sha256(fh.read()).hexdigest()
     except Exception as exc:
-        commit = f"UNKNOWN: {exc}"
+        tool_sha = f"UNKNOWN: {exc}"
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "traced_dtypes.json"), "w") as fh:
         json.dump({"layer_kind": LAYER_KIND, "layer_idx": LAYER_IDX, "batch": BATCH,
@@ -164,6 +194,13 @@ def _record_traced_dtypes(out_dir: str) -> None:
                    "policy_source": _incumbent.get("shipped_policy_source"),
                    "advisor_commit": commit, "advisor_pin_expected": ADVISOR_PIN,
                    "advisor_home": advisor_home,
+                   "optimizer_pin_expected": OPTIMIZER_PIN,
+                   "optimizer_files_changed_since_pin": (
+                       [f for f in changed_optimizer.splitlines() if f]
+                       if not changed_optimizer.startswith("UNKNOWN") else changed_optimizer),
+                   "host": socket.gethostname(),
+                   "tool_path": tool, "tool_realpath": os.path.realpath(tool), "tool_sha256": tool_sha,
+                   "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                    "capture_scope": CAPTURE_SCOPE}, fh, indent=2)
 
 
