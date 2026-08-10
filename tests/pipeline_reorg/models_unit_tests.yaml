@@ -1035,7 +1035,7 @@
 # Multihost (exabox) model-unit tests
 # ============================================================================
 # Entries whose SKU carries an `allocation` block in .github/sku_config.yaml
-# (bh_sc1, bh_sc4, bh_sc4-blitz, bh_sc4-mgd, bh_sc16 - all runs_on
+# (bh_sc1, bh_sc4, bh_sc16 - all runs_on
 # exabox-multihost-with-nfs) are routed by the pipeline to the
 # `models-unit-tests-multihost` job in models-unit-tests-impl.yaml instead of the
 # single-host container job. That job provisions the cluster via ttop, so the cmd
@@ -1155,7 +1155,7 @@
   team: models
 
 # ----------------------------------------------------------------------------
-# WAN 2.2 multihost quad-galaxy tests (bh_sc4-mgd)
+# WAN 2.2 multihost quad-galaxy tests (bh_sc4)
 # ----------------------------------------------------------------------------
 - name: TT-DiT Wan2.2-A14B transformer block unit tests
   cmd: |
@@ -1170,7 +1170,7 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee

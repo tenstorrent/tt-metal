@@ -1,15 +1,4 @@
-name: "[internal] Models end-to-end tests multihost (exabox) impl"
-
-# Multihost (exabox) e2e tests. Modeled on the multihost job in
-# demo-sp-multihost-impl.yaml: each leg runs on an exabox-multihost-ci runner with
-# container.image for worker provisioning, fans the build/wheel out with
-# `mpirun --pernode`, resets + validates the cluster, then runs the test.
-# Legs are selected by SKU: an entry lands here when prepare_test_matrix.py
-# marks it "multihost": true (exabox-multihost* runs_on and/or allocation block).
-#
-# Split out of models-e2e-tests-impl.yaml so the exabox lifecycle lives in one file.
-# The matrix is computed by load-test-matrix in models-e2e-tests-impl.yaml
-# (matrix_multihost output) and passed in.
+name: "[internal] Fabric Multihost Exabox Tests"
 
 on:
   workflow_call:
@@ -23,45 +12,93 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      matrix:
-        required: true
+      sp-config:
+        required: false
         type: string
-        description: "JSON array of exabox multihost legs (models-e2e-tests-impl.yaml matrix_multihost output)."
+        default: "sc4"
+        description: "Supercluster configuration (sc4)"
 
-# ttop cluster auth needs OIDC. Callers must grant id-token: write on the job that `uses` this
-# workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
 permissions:
-  contents: read
   id-token: write
+  contents: read
 
 jobs:
-  models-e2e-tests-multihost:
-    if: ${{ inputs.matrix != '[]' }}
+  load-test-matrix:
+    name: Load Test Matrix for ${{ inputs.sp-config }}
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.filter-tests.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_multihost_exabox_tests.yaml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Validate SKU exists
+        run: |
+          if ! grep -q "bh_${{ inputs.sp-config }}:" .github/sku_config.yaml; then
+            echo "::error::SKU 'bh_${{ inputs.sp-config }}' not found in .github/sku_config.yaml"
+            exit 1
+          fi
+          echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "e2e"
+
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "bh_${{ inputs.sp-config }}" \
+            ./.github/sku_config.yaml
+
+      - name: Filter tests by sp_config
+        id: filter-tests
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
+            exit 1
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILTERED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Filtered tests for ${{ inputs.sp-config }}:"
+          echo "$FILTERED" | jq .
+
+  multihost-tests:
     name: ${{ matrix.test-group.name }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+    needs: load-test-matrix
     env:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
-      PYTHONPATH: /home/user/tt-metal
-      # Shared NFS scratch for automapper launches (empty ttrun-cwd + ranklogs).
-      PIPELINE_DIR: /ci/models-e2e-${{ github.run_id }}-${{ strategy.job-index }}
-      TTRUN_CWD: /ci/models-e2e-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
-      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
-      # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
-      # downloaded. Requires the token's HF account to have accepted the model's license.
-      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      # Per-job NFS scratch for logs (cluster validation + DC validation tee).
+      PIPELINE_DIR: /ci/fabric-${{ github.run_id }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(inputs.matrix) }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # Consumed by the multihost runner container hook to provision remote worker pods.
+    # Job steps still run on the CPU/control runner; the hook handles worker image setup.
+    container:
+      image: ${{ inputs.docker-image }}
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
@@ -69,13 +106,13 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: Download Build Artifact
+      - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.build-artifact-name }}
           path: /ci/artifacts
 
-      - name: Download Python Wheel
+      - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
@@ -83,7 +120,6 @@ jobs:
 
       - name: Unpack artifacts & install
         run: |
-          # Move the cloned directory to workers. TODO: Clone directly to NFS
           rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
@@ -104,18 +140,18 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
-          # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
+          mkdir -p "$PIPELINE_DIR"
+
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user
           sudo chown "$(id -u):$(id -g)" /home/user
           cp -r /ci/tt-metal /home/user/
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
-
-          # Unpack artifacts
           mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
           echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
           printf ' - %s\n' "${ttnn_wheels[@]}"
@@ -125,11 +161,7 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          # Include pytest (+ pytest-timeout, needed by the --timeout flag) so test entries can
-          # run pytest in the worker venv, which is otherwise runtime-only.
-          mpirun --pernode uv pip install "${ttnn_wheels[@]}" pytest==9.0.3 pytest-timeout==2.4.0
-
-          mkdir -p "$PIPELINE_DIR"
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
@@ -147,17 +179,22 @@ jobs:
             ' || true
 
           run_cluster_validation() {
-            mpirun --pernode --tag-output \
+            local attempt="$1"
+            mpirun --pernode --tag-output bash -lc "
+              out=\"${PIPELINE_DIR}/cluster_validation_logs/\$(hostname)/attempt_${attempt}\"
+              mkdir -p \"\$out\"
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-              --send-traffic \
-              --hard-fail \
-              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 5
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+                --num-iterations 5 \
+                --output-path \"\$out\"
+            "
           }
 
           echo "--- Checking cluster health before reset ---"
-          if run_cluster_validation; then
+          if run_cluster_validation 0; then
             echo "SUCCESS: Cluster validation passed without reset"
             exit 0
           fi
@@ -179,7 +216,7 @@ jobs:
               sleep 5
 
               echo "--- Running cluster validation ---"
-              if run_cluster_validation; then
+              if run_cluster_validation "$attempt"; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
@@ -210,21 +247,11 @@ jobs:
             python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
           '
 
-      - name: Check /mnt/models access on workers
-        working-directory: /tmp
-        run: |
-          mpirun --pernode --tag-output bash -lc '
-            test -r /mnt/models
-          '
-
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
-        # Keep runtime compilation and tt-run working directory on a single source root.
         working-directory: /home/user/tt-metal
         run: |
-          # Store command safely using heredoc
           CMD=$(cat << 'EOF'
           ${{ matrix.test-group.cmd }}
           EOF
@@ -234,11 +261,11 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
-      - name: Upload launch + per-rank logs and automapper outputs
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: models-e2e-multihost-${{ strategy.job-index }}-${{ github.run_id }}
+          name: fabric-${{ inputs.sp-config }}-${{ strategy.job-index }}-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
@@ -248,7 +275,7 @@ jobs:
         run: |
           rm -rf "$PIPELINE_DIR"
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}

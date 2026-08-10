@@ -95,9 +95,9 @@ jobs:
               ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
               | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
-          # Split into single-host (container) and multihost (exabox ttop) legs. Multihost legs are
-          # tagged with "multihost": true by prepare_test_matrix.py when their SKU carries an
-          # `allocation` block in sku_config.yaml (i.e. runs_on exabox-multihost-with-nfs).
+          # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
+          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
           SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
           MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
           emit() {  # $1 = output name, $2 = compact JSON array
@@ -242,11 +242,10 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  # Multihost (exabox) e2e tests — the exabox ttop allocation/reset/teardown lifecycle lives in
-  # models-e2e-tests-multihost-impl.yaml (mirrors models-unit-tests-multihost). Legs are routed
-  # here (rather than to the containerized models-e2e-tests job) when their SKU carries an
-  # `allocation` block in sku_config.yaml, which prepare_test_matrix.py surfaces as
-  # "multihost": true and load-test-matrix collects into matrix_multihost.
+  # Multihost (exabox) e2e tests — lifecycle lives in models-e2e-tests-multihost-impl.yaml.
+  # Legs are routed here when prepare_test_matrix.py marks them "multihost": true
+  # (exabox-multihost* runs_on and/or allocation block) and load-test-matrix collects
+  # them into matrix_multihost.
   models-e2e-tests-multihost:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}

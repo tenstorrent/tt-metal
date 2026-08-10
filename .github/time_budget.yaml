@@ -225,8 +225,6 @@ scaleout:
     bh_galaxy: 60
     bh_sc1: 20 # single galaxy
     bh_sc4: 90
-    bh_sc4-blitz: 90 #blitz specific mgd sku
-    bh_sc4-mgd: 90 #general mgd sku
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -337,7 +335,7 @@ models:
     bh_quietbox_2: 195
     bh_galaxy: 78
     bh_sc1: 140
-    bh_sc4-mgd: 120
+    bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 30
@@ -365,7 +363,7 @@ models:
     bh_quietbox_2: 260
     bh_galaxy: 75
     bh_sc1: 75
-    bh_sc4-mgd: 50
+    bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172

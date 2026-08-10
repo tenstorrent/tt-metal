@@ -72,11 +72,11 @@
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
-    bh_sc4-blitz:
+    bh_sc4:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sc4-blitz
+  sp_config: sc4
 
 #TODO: re-enable after SC4 Stress Test when it is fixed
 # - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
@@ -104,11 +104,11 @@
 #         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #       > "${PIPELINE_DIR}/launch.log" 2>&1
 #   skus:
-#     bh_sc4-blitz:
+#     bh_sc4:
 #       timeout: 60
 #   owner_id: U08E1JCMAJF
 #   team: scaleout
-#   sp_config: sc4-blitz
+#   sp_config: sc4
 
 # =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)

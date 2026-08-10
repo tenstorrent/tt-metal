@@ -2134,7 +2134,7 @@ jobs:
                           "bh_quietbox_2 (BH QB2)",
                           "bh_galaxy (BH Galaxy)",
                           "bh_sc1 (BH Single Galaxy)",
-                          "bh_sc4-mgd (BH Supercluster 4 / MGD)"
+                          "bh_sc4 (BH Supercluster 4)"
                         ],
                         "type": "string"
                       }
@@ -2227,8 +2227,6 @@ jobs:
                           "bh_galaxy (BH Galaxy)",
                           "bh_sc1 (BH Single Galaxy)",
                           "bh_sc4 (BH Supercluster 4)",
-                          "bh_sc4-blitz (BH Supercluster 4 / Blitz)",
-                          "bh_sc4-mgd (BH Supercluster 4 / MGD)",
                           "bh_sc16 (BH Supercluster 16)"
                         ],
                         "type": "string"

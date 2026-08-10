@@ -286,10 +286,12 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
-            # SKUs carrying an `allocation` block are exabox multihost SKUs (runs_on
-            # exabox-multihost-with-nfs) that need the ttop allocation/reset lifecycle rather than
-            # the single-host container path. Mark the leg so consumers can route it accordingly.
-            entry["multihost"] = "allocation" in sku_entry
+            # Exabox multihost SKUs: either legacy `allocation` (ttop lifecycle) or the
+            # multihost-ci runner labels (helm chart provisions workers via container.image).
+            runs_on = sku_entry.get("runs_on") or []
+            entry["multihost"] = "allocation" in sku_entry or any(
+                isinstance(label, str) and "exabox-multihost" in label for label in runs_on
+            )
             substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 
