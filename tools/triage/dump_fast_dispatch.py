@@ -194,13 +194,51 @@ def read_wait_globals(
         dispatcher_core_data.kernel_name == "cq_dispatch"
         or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"
     )
-    # Inline: read wait-related globals directly from ELF
-    last_wait_count = _read_symbol_value(
-        kernel_elf, "last_wait_count", loc_mem_access, check_value=is_dispatcher_kernel
-    )
-    last_wait_stream = _read_symbol_value(
-        kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
-    )
+    last_wait_count: int | None = None
+    last_wait_stream: int | None = None
+    command_pointer: int | None = None
+    if dispatcher_core_data.kernel_name == "cq_dispatch_subordinate":
+        try:
+            # Shared-binary subordinates mirror wait/cmd state by channel. Prefer that when present
+            # so TLS migration does not regress 1CQ triage. Colocated 2CQ Inspector association is
+            # intentionally unchanged from main.
+            processor_index = location.noc_block.risc_names.index(risc_name)
+            triage_states = kernel_elf.get_global("dispatch_s_triage_state", loc_mem_access)
+            triage_state = None
+            for channel_index in range(2):
+                try:
+                    candidate = triage_states[channel_index]
+                except Exception:
+                    break
+                try:
+                    candidate_dm_index = int(candidate.dm_index)
+                except Exception:
+                    # Older one-channel array ELFs do not record the DM index.
+                    triage_state = candidate if channel_index == 0 else None
+                    break
+                if candidate_dm_index == processor_index:
+                    triage_state = candidate
+                    break
+            if triage_state is None:
+                raise ValueError(f"No dispatch_s triage state found for processor {processor_index}")
+            last_wait_count = int(triage_state.last_wait_count)
+            last_wait_stream = int(triage_state.last_wait_stream)
+            command_pointer = int(triage_state.cmd_ptr)
+        except TimeoutDeviceRegisterError:
+            raise
+        except Exception:
+            # Legacy subordinate ELFs expose scalar globals.
+            last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access, check_value=True)
+            last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access, check_value=True)
+            command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=True)
+    else:
+        last_wait_count = _read_symbol_value(
+            kernel_elf, "last_wait_count", loc_mem_access, check_value=is_dispatcher_kernel
+        )
+        last_wait_stream = _read_symbol_value(
+            kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
+        )
+        command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=is_dispatcher_kernel)
     last_event = _read_symbol_value(
         kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
     )
@@ -213,7 +251,6 @@ def read_wait_globals(
         if dispatcher_core_data.kernel_name == "cq_dispatch":
             log_check(False, f"Failed to read circular_buffer_fence for kernel {dispatcher_core_data.kernel_name}")
         circular_buffer_fence = None
-    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=is_dispatcher_kernel)
 
     def get_const_value(name: str, check_value: bool = True) -> int | None:
         try:
