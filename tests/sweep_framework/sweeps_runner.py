@@ -712,6 +712,38 @@ def _is_device_fatal_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_FATAL_SIGNATURES)
 
 
+# Signatures of HOST/driver resource exhaustion — the vector could not be set up because the
+# machine ran out of a kernel-driver resource, not because the op is wrong. Seen on lead-models
+# run 31308857249 job mesh4x8_col_2d_p1 (runner OM1-01A01-STGWH03):
+#
+#   Failed to allocate TLB window. Look at /sys/kernel/debug/tenstorrent/16/mappings and
+#   /proc/driver/tenstorrent/16/pids for more information.
+#   Error: tt_tlb_alloc failed with error code -12 for TLB size 1048576.
+#
+# -12 is ENOMEM, and the message itself points at the driver's mappings/pids tables, i.e. TLB
+# windows held by this or an earlier process. It was booked as a plain test failure because it
+# matched no signature, which is exactly the phantom-failure mode these lists exist to remove:
+# nothing about the op was exercised.
+#
+# Treated as sticky like the other infra classes. Address-space exhaustion does not heal while
+# the holder still holds it, so continuing would feed more vectors to a host that cannot map
+# device memory. Matched on the specific invariants ("failed to allocate tlb window",
+# "tt_tlb_alloc failed"), never on a bare filename — see the note on topology_mapper.cpp.
+_HOST_RESOURCE_SIGNATURES = (
+    "failed to allocate tlb window",
+    "tt_tlb_alloc failed",
+)
+
+
+def _is_host_resource_message(message) -> bool:
+    """Return True if a returned exception indicates host/driver resource exhaustion
+    (no device TLB window could be mapped), rather than a fault in the vector."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _HOST_RESOURCE_SIGNATURES)
+
+
 # Signatures of a transient kernel-ELF build/load failure. When the persisted
 # cache is cold (CI clears it before the job) and FABRIC_2D opens all chips at
 # once, the fabric_erisc_router ELF is built+loaded concurrently across devices;
@@ -809,8 +841,12 @@ def _is_infra_failure_message(message) -> bool:
     does not recover within the job (a wedge cascades into dispatch hangs, slow
     Galaxy resets, and all-zero/garbage outputs that mis-report as PCC failures).
     So rather than reset+continue on a machine that "once degraded is always
-    degraded", we classify the vector NOT_RUN and exit the whole run early."""
-    return _is_fabric_infra_message(message) or _is_device_fatal_message(message)
+    degraded", we classify the vector NOT_RUN and exit the whole run early.
+
+    Also covers host/driver resource exhaustion (no TLB window could be mapped):
+    the setup failed before the op ran, and the resource does not free itself
+    while its holder still holds it."""
+    return _is_fabric_infra_message(message) or _is_device_fatal_message(message) or _is_host_resource_message(message)
 
 
 def _set_crash_hang_defaults(result):
