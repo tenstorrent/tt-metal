@@ -174,6 +174,34 @@ def register_sources(category_dir: Path, op: str) -> list[str]:
     return added
 
 
+def glob_block(text: str) -> tuple[int, int]:
+    """Line span of the `file(GLOB_RECURSE kernels ...)` call: first line, and the closing line.
+
+    The op's name appears in this CMakeLists in two unrelated roles, and only one of them takes a
+    glob. `untilize` has `untilize/device/kernels/*.cpp` in this call *and* two explicit
+    `untilize/device/kernels/dataflow/*.cpp` entries in the `target_sources` FILE_SET further down.
+    Anchoring on the last match anywhere in the file put the codegen globs in that FILES list, where
+    CMake resolves every entry as a real path and expands nothing -- `Cannot find source file:
+    untilize/codegen/kernels/*.cpp`, at configure time, before a single object was compiled. `pad`
+    has no explicit entries, so its two glob lines were the only matches and the wrong search
+    happened to be right.
+
+    Located by paren balance rather than by finding the next `)`, so a nested call inside the glob
+    list would not end the block early.
+    """
+    lines = text.splitlines(keepends=True)
+    marker = next((i for i, line in enumerate(lines) if "GLOB_RECURSE kernels" in line), None)
+    if marker is None:
+        return -1, -1
+    start = next((i for i in range(marker, -1, -1) if "file(" in lines[i]), marker)
+    depth = 0
+    for i in range(start, len(lines)):
+        depth += lines[i].count("(") - lines[i].count(")")
+        if depth <= 0:
+            return start, i
+    return -1, -1
+
+
 def register_kernel_globs(category_dir: Path, op: str, kernels_dir: Path) -> list[str]:
     """Add one glob per extension present, so copied headers ship alongside the `.cpp` kernels.
 
@@ -189,13 +217,18 @@ def register_kernel_globs(category_dir: Path, op: str, kernels_dir: Path) -> lis
     if not added:
         return []
 
-    # Land directly after the op's own native kernel globs to keep the file grouped by op.
-    native = [ln for ln in text.splitlines(keepends=True) if ln.strip().startswith(f"{op}/device/kernels/")]
-    if not native:
-        sys.exit(f"scaffold: cannot find native kernel glob for {op!r} in {path}")
-    anchor = native[-1]
-    block = "".join(f"    {g}\n" for g in added)
-    path.write_text(text.replace(anchor, anchor + block, 1))
+    start, close = glob_block(text)
+    if start < 0:
+        sys.exit(f"scaffold: cannot find the file(GLOB_RECURSE kernels ...) call in {path}")
+
+    lines = text.splitlines(keepends=True)
+    # Beside the op's own globs to keep the call grouped by op, but confined to the call either way:
+    # an op with no native glob of its own goes in last rather than somewhere it would be a path.
+    own = [i for i in range(start, close) if lines[i].strip().startswith(f"{op}/")]
+    at = own[-1] + 1 if own else close
+    indent = re.match(r"\s*", lines[at - 1]).group(0) or "    "
+    lines[at:at] = [f"{indent}{glob}\n" for glob in added]
+    path.write_text("".join(lines))
     return added
 
 
@@ -433,8 +466,23 @@ def verify(op_dir: Path, op: str, kernels: list[Path]) -> list[str]:
         entry = f"{op}/codegen/{op}_codegen_{c}.cpp"
         if entry not in sources_text:
             errors.append(f"sources.cmake missing: {entry}")
-    if f"{op}/codegen/kernels/" not in cmake_text:
+    # Where the globs landed, not just whether the string is present anywhere. The weaker check
+    # passed with `errors: []` on a tree whose CMake configure could not succeed, because a glob
+    # written into a `target_sources` FILES list is still a substring of the file.
+    start, close = glob_block(cmake_text)
+    cmake_lines = cmake_text.splitlines()
+    placed = [i for i, line in enumerate(cmake_lines) if line.strip().startswith(f"{op}/codegen/kernels/")]
+    if not placed:
         errors.append(f"CMakeLists.txt missing any glob for {op}/codegen/kernels/")
+    elif start < 0:
+        errors.append("CMakeLists.txt has no file(GLOB_RECURSE kernels ...) call to hold the globs")
+    else:
+        stray = [i + 1 for i in placed if not start < i < close]
+        if stray:
+            errors.append(
+                f"CMakeLists.txt has {op}/codegen/kernels/ globs outside file(GLOB_RECURSE kernels ...) "
+                f"at line(s) {stray}; CMake will read them as literal paths"
+            )
     return errors
 
 
