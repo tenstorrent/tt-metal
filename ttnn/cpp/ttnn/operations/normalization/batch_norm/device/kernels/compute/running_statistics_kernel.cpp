@@ -3,11 +3,52 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "ttnn/kernel/compute/dest_format_helpers.hpp"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
+
+template <
+    uint32_t dfb_batch_id,
+    uint32_t dfb_old_id,
+    uint32_t dfb_updated_id,
+    bool AlsoOut0,
+    uint32_t dfb_one_id,
+    uint32_t dfb_momentum_id,
+    uint32_t dfb_out0_id>
+ALWI void update_running_stat() {
+    using D = ckl::Dst;
+    using ckl::BinaryFpuOp;
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<
+            ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            BinaryFpuOp::Sub,
+            ckl::BroadcastDim::None>{},  // D0 = 1 - momentum
+        ckl::
+            DestReuseBinary<ckl::input(dfb_old_id), BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1
+                                                                                                            // -
+                                                                                                            // momentum)
+                                                                                                            // *
+                                                                                                            // old_stat
+        ckl::BinaryFpu<
+            ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            D::D1>{},                           // D1 = momentum * batch_stat
+        ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
+        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
+        ckl::OptionalChainElement<
+            AlsoOut0,
+            ckl::PackTile<ckl::output(dfb_out0_id, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
+}
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
@@ -17,53 +58,60 @@ void kernel_main() {
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
 
-    DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
-    DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
-    DataflowBuffer dfb_momentum_obj(dfb::momentum);
-    DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
+    constexpr auto dfb_batch_mean_id = dfb::batch_mean;
+    constexpr auto dfb_batch_var_id = dfb::batch_var;
+    constexpr auto dfb_out0_id = dfb::out;
+    constexpr auto dfb_old_running_mean_id = dfb::old_running_mean;
+    constexpr auto dfb_old_running_var_id = dfb::old_running_var;
+    constexpr auto dfb_updated_running_mean_id = dfb::updated_mean;
+    constexpr auto dfb_updated_running_var_id = dfb::updated_var;
+    constexpr auto dfb_momentum_id = dfb::momentum;
+    constexpr auto dfb_one_id = dfb::one;
 
-    compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
+    DataflowBuffer dfb_batch_mean_obj(dfb_batch_mean_id);
+    DataflowBuffer dfb_batch_var_obj(dfb_batch_var_id);
+
+    compute_kernel_hw_startup(dfb_batch_mean_id, dfb_batch_var_id, dfb_out0_id);
     constexpr uint32_t onetile = 1;
 
-    dfb_one_obj.wait_front(1);
-    dfb_momentum_obj.wait_front(1);
+    DataflowBuffer(dfb_one_id).wait_front(1);
+    DataflowBuffer(dfb_momentum_id).wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-        //
-        // HAZARD: reader/writer push batch_mean and batch_var every tile regardless of
-        // which stats are present. Both must be waited and popped unconditionally here;
-        // omitting a pop will stall the producer after the DFB fills (DFB depth is 2).
-
+        // The reader produces both batch-stat streams for every tile, even when only one
+        // running statistic is requested. Consume both streams unconditionally to avoid
+        // filling either two-entry buffer and stalling its producer.
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
+        DataflowBuffer(dfb_out0_id).reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
-            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);           // 1 - momentum
-            mul_tiles_to_cb(dfb::momentum, dfb::batch_mean, dfb::tmp2, 0, 0, 0, 0);    // momentum * batch_mean
-            mul_tiles_to_cb(dfb::tmp1, dfb::old_running_mean, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_mean
-            if constexpr (old_running_var_has_value) {
-                // Var block below will pack to dfb::out.
-                add_tiles_to_cb(dfb::tmp2, dfb::tmp3, dfb::updated_mean, 0, 0, 1, 1);
-            } else {
-                // No var block — this is the last compute in the tile, so pack
-                // the mean result to both dfb::updated_mean and dfb::out.
-                add_tiles_to_two_cbs(dfb::tmp2, dfb::tmp3, dfb::updated_mean, dfb::out, 0, 0, 1, 1);
-            }
+            update_running_stat<
+                dfb_batch_mean_id,
+                dfb_old_running_mean_id,
+                dfb_updated_running_mean_id,
+                /*AlsoOut0=*/!old_running_var_has_value,
+                dfb_one_id,
+                dfb_momentum_id,
+                dfb_out0_id>();
         }
 
         if constexpr (old_running_var_has_value) {
-            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);          // 1 - momentum
-            mul_tiles_to_cb(dfb::momentum, dfb::batch_var, dfb::tmp2, 0, 0, 0, 0);    // momentum * batch_var
-            mul_tiles_to_cb(dfb::tmp1, dfb::old_running_var, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_var
-            // Last compute in the tile — pack to both dfb::updated_var and dfb::out.
-            add_tiles_to_two_cbs(dfb::tmp2, dfb::tmp3, dfb::updated_var, dfb::out, 0, 0, 1, 1);
+            update_running_stat<
+                dfb_batch_var_id,
+                dfb_old_running_var_id,
+                dfb_updated_running_var_id,
+                /*AlsoOut0=*/true,
+                dfb_one_id,
+                dfb_momentum_id,
+                dfb_out0_id>();
         }
 
+        DataflowBuffer(dfb_out0_id).push_back(onetile);
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);
     }
 
-    dfb_one_obj.pop_front(1);
-    dfb_momentum_obj.pop_front(1);
+    DataflowBuffer(dfb_one_id).pop_front(1);
+    DataflowBuffer(dfb_momentum_id).pop_front(1);
 }

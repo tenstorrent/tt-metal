@@ -4,76 +4,67 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_y = tt::CBIndex::c_0;
-    DataflowBuffer dfb_y_obj(cb_y);
-    constexpr auto cb_dy = tt::CBIndex::c_1;
-    DataflowBuffer dfb_dy_obj(cb_dy);
-    constexpr auto cb_dx = tt::CBIndex::c_16;
-    DataflowBuffer dfb_dx_obj(cb_dx);
+    constexpr auto dfb_y_id = tt::CBIndex::c_0;
+    constexpr auto dfb_dy_id = tt::CBIndex::c_1;
+    constexpr auto dfb_dx_id = tt::CBIndex::c_16;
 
-    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
-    DataflowBuffer dfb_ydy_obj(cb_ydy);
-    constexpr auto cb_sum = tt::CBIndex::c_25;
-    DataflowBuffer dfb_sum_obj(cb_sum);
-    constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
-    DataflowBuffer dfb_dy_m_sum_obj(cb_dy_m_sum);
+    constexpr auto dfb_ydy_id = tt::CBIndex::c_24;  // y * dy
+    constexpr auto dfb_sum_id = tt::CBIndex::c_25;
+    DataflowBuffer dfb_sum_obj(dfb_sum_id);
+    constexpr auto dfb_dy_m_sum_id = tt::CBIndex::c_26;  // dy - sum
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t dim_size = get_compile_time_arg_val(1);
+    constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t dim_size = get_compile_time_arg_val(1);
 
-    compute_kernel_hw_startup(cb_dy, cb_y, cb_dx);
+    compute_kernel_hw_startup(dfb_dy_id, dfb_y_id, dfb_dx_id);
 
-    constexpr int dst0 = 0;
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                copy_tile_to_cb(dfb_dy_obj, dfb_sum_obj);
+                copy_tile_to_dfb<dfb_dy_id, dfb_sum_id>();
             } else {
-                add_tiles_to_cb(dfb_sum_obj, dfb_dy_obj, dfb_sum_obj);
+                add_tiles_to_dfb<dfb_sum_id, dfb_dy_id, dfb_sum_id>();
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
-            // exp(y)
-            constexpr auto cb_exp = tt::CBIndex::c_24;
-            DataflowBuffer dfb_exp_obj(cb_exp);
-            exp_tile_to_cb(dfb_y_obj, dfb_exp_obj);
+            constexpr auto dfb_exp_id = tt::CBIndex::c_24;
+            exp_tile_to_dfb<dfb_y_id, dfb_exp_id>();
 
-            // sum * exp(y)
-            constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            DataflowBuffer dfb_inter2_obj(cb_inter2);
-            mul_tiles_to_cb(dfb_sum_obj, dfb_exp_obj, dfb_inter2_obj, 0, 0, /*pop0=*/0, /*pop1=*/1);
+            constexpr auto dfb_inter2_id = tt::CBIndex::c_26;
+            mul_tiles_to_dfb<dfb_sum_id, dfb_exp_id, dfb_inter2_id>(0, 0, /*pop0=*/0, /*pop1=*/1);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(dfb_dy_obj, dfb_inter2_obj, dfb_dx_obj);
+            sub_tiles_to_dfb<dfb_dy_id, dfb_inter2_id, dfb_dx_id>();
         }
         dfb_sum_obj.pop_front(onetile);
 #else
-        // compute sum(y * dy)
         for (uint32_t i = 0; i < dim_size; ++i) {
-            mul_tiles_to_cb(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj);
+            mul_tiles_to_dfb<dfb_y_id, dfb_dy_id, dfb_ydy_id>();
 
             if (i == 0) {
-                copy_tile_to_cb(dfb_ydy_obj, dfb_sum_obj);
+                copy_tile_to_dfb<dfb_ydy_id, dfb_sum_id>();
             } else {
-                add_tiles_to_cb(dfb_sum_obj, dfb_ydy_obj, dfb_sum_obj);
+                add_tiles_to_dfb<dfb_sum_id, dfb_ydy_id, dfb_sum_id>();
             }
         }
 
-        // compute final result
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
-            sub_tiles_to_cb(
-                dfb_dy_obj,
-                dfb_sum_obj,
-                dfb_dy_m_sum_obj,
+            sub_tiles_to_dfb<dfb_dy_id, dfb_sum_id, dfb_dy_m_sum_id>(
                 /*itile0=*/0,
                 /*itile1=*/0,
                 /*pop0=*/1,
@@ -81,10 +72,10 @@ void kernel_main() {
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(dfb_dy_m_sum_obj, dfb_y_obj, dfb_dx_obj);
+            mul_tiles_to_dfb<dfb_dy_m_sum_id, dfb_y_id, dfb_dx_id>();
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(dfb_dy_m_sum_obj, dfb_y_obj, dfb_dx_obj);
+            mul_tiles_and_negative_to_dfb<dfb_dy_m_sum_id, dfb_y_id, dfb_dx_id>();
 #endif
         }
         dfb_sum_obj.pop_front(onetile);

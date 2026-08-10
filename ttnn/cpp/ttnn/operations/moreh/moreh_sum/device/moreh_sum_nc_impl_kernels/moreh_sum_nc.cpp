@@ -2,49 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 void kernel_main() {
+    namespace ckl = compute_kernel_lib;
+
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    DataflowBuffer dfb_in1_obj(cb_in1);
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    DataflowBuffer dfb_out0_obj(cb_out0);
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t idx0 = 0;
-    constexpr bool acc_to_dest = true;
+    constexpr auto dfb_in0_id = tt::CBIndex::c_0;
+    constexpr auto dfb_in1_id = tt::CBIndex::c_1;
+    constexpr auto dfb_out0_id = tt::CBIndex::c_16;
 
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    dfb_in1_obj.wait_front(onetile);
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in1_id, dfb_out0_id);
 
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        add_init(cb_in0, cb_in1, acc_to_dest);
-        for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            dfb_in0_obj.wait_front(onetile);
-#if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_in0, cb_in1);
-#endif
-            add_tiles(cb_in0, cb_in1, idx0, idx0, dst0);
-            dfb_in0_obj.pop_front(onetile);
-        }
-        tile_regs_commit();
-
-        dfb_out0_obj.reserve_back(onetile);
-        tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-        pack_reconfig_data_format(cb_out0);
-#endif
-        pack_tile(dst0, cb_out0);
-        tile_regs_release();
-        dfb_out0_obj.push_back(onetile);
-    }
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::grid(num_output_tiles, num_input_tiles),
+        ckl::BinaryFpu<
+            ckl::input(
+                dfb_in0_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(dfb_in1_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
+            ckl::BinaryFpuOp::Add,
+            ckl::BroadcastDim::None,
+            ckl::Dst::D0,
+            ckl::DestAccumulation::PerRow>{},
+        ckl::PackTile<ckl::output(
+            dfb_out0_id,
+            ckl::ReservePolicy::PerOuter,
+            ckl::PushPolicy::PerOuter,
+            ckl::DataFormatReconfig::Enabled,
+            ckl::PackRelu::Disabled,
+            ckl::L1Accumulation::Disabled,
+            ckl::DestAccumulation::PerRow)>{});
 }

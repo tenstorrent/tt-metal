@@ -11,6 +11,10 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -30,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     // Magic CB indices are gone: each buffer is a named DFB binding. The local
     // aliases keep the LLK/FIFO call sites readable; each is the dfb:: handle,
-    // which converts implicitly to a CB id at the LLK call sites.
+    // which converts implicitly to a DFB id at the LLK call sites.
     constexpr auto in_dfb = dfb::input;
     constexpr auto cos_dfb = dfb::cos;
     constexpr auto sin_dfb = dfb::sin;
@@ -43,6 +47,26 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
+    constexpr auto bulk_block_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto bulk_output = [](auto dfb_id) {
+        return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto sin_cos_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            RELOAD_IMPL == 0 ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront,
+            RELOAD_IMPL == 0 ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled,
+            RELOAD_IMPL == 0 ? ckl::TileOffset::Set : ckl::TileOffset::Unset);
+    };
 
     DataflowBuffer in_dfb_obj(in_dfb);
     DataflowBuffer cos_dfb_obj(cos_dfb);
@@ -79,7 +103,7 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             uint32_t sin_cos_row_cnt = 0;
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
-                // input cb wait and reserve
+                // input dfb_id wait and reserve
                 in_dfb_obj.wait_front(Wt);
 #if RELOAD_IMPL == 1
                 sin_dfb_obj.wait_front(Wt);
@@ -91,7 +115,7 @@ void kernel_main() {
                 cos_interm_dfb_obj.reserve_back(Wt);
                 out_dfb_obj.reserve_back(Wt);
 
-                // // rotated = x @ trans_mat
+                // rotated = x @ trans_mat
                 // Matmul uses SrcOrder::Reverse: trans_mat is SrcA and input is SrcB.
                 reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, in_dfb);
                 pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
@@ -103,52 +127,41 @@ void kernel_main() {
                 }
                 REL();
                 rotated_in_interm_dfb_obj.push_back(Wt);
-                rotated_in_interm_dfb_obj.wait_front(Wt);
-
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_dfb, sin_dfb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, sin_interm_dfb, j);
-                }
-                REL();
-                sin_interm_dfb_obj.push_back(Wt);
-                rotated_in_interm_dfb_obj.pop_front(Wt);
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::BinaryFpu<
+                        bulk_block_input(rotated_in_interm_dfb),
+                        sin_cos_input(sin_dfb),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(sin_interm_dfb)>{});
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // cos_interim = x * cos
-                    mul_tiles(in_dfb, cos_dfb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_dfb, j);
-                }
-                REL();
-                cos_interm_dfb_obj.push_back(Wt);
-                in_dfb_obj.pop_front(Wt);  // Done with input
-#if RELOAD_IMPL == 1
-                sin_dfb_obj.pop_front(Wt);
-                cos_dfb_obj.pop_front(Wt);
-#endif
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            in_dfb,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Disabled),
+                        sin_cos_input(cos_dfb),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(cos_interm_dfb)>{});
 
-                sin_interm_dfb_obj.wait_front(Wt);
-                cos_interm_dfb_obj.wait_front(Wt);
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
-                add_init(cos_interm_dfb, sin_interm_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
-                    pack_tile(j, out_dfb, j);
-                }
-                REL();
-                out_dfb_obj.push_back(Wt);
-                sin_interm_dfb_obj.pop_front(Wt);
-                cos_interm_dfb_obj.pop_front(Wt);
+                ckl::add<
+                    bulk_block_input(cos_interm_dfb),
+                    bulk_block_input(sin_interm_dfb),
+                    bulk_output(out_dfb),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
@@ -166,6 +179,6 @@ void kernel_main() {
 #endif
     }
 
-    // Done with the transformation matrix, so remove from CB
+    // Done with the transformation matrix, so remove from DFB
     trans_mat_dfb_obj.pop_front(onetile);
 }

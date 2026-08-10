@@ -9,6 +9,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
@@ -19,6 +20,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -39,8 +45,8 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr uint32_t tile_width = get_compile_time_arg_val(25);
 
-    // Welford-fp32 alias args. When the alias is active, cb_in0_welford_id points
-    // to c_29 (shares SRAM with c_0) and cb_in_welford_id points to c_31 (shares SRAM with c_1).
+    // Welford-fp32 alias args. When the alias is active, dfb_in0_welford_id points
+    // to c_29 (shares SRAM with c_0) and dfb_in_welford_id points to c_31 (shares SRAM with c_1).
     // Both alias indices are configured with unpack_to_dest_mode=UnpackToDestFp32 so
     // transpose_tile preserves FP32 precision for the SFPU Welford.
     // The final-stage sub_tiles_bcast_scalar reads c_0 / c_1 (Default SrcA path).
@@ -48,10 +54,10 @@ void kernel_main() {
     // Unlike the mcast / no_mcast groupnorm kernels, no separate
     // welford_unpack_fp32_active flag is needed here. Both the TILIZE_IN and
     // non-TILIZE_IN branches route the welford intake transpose through an alias
-    // CB (cb_in_welford_id or cb_in0_welford_id), so the unpack-to-DEST fp32
+    // DFB (dfb_in_welford_id or dfb_in0_welford_id), so the unpack-to-DEST fp32
     // path is active on both branches iff the alias is active. In the
     // mcast/no_mcast kernels the TILIZE_IN branch tilizes directly into the
-    // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
+    // unpack-fp32 DFB without an alias, so those kernels need the unpack-fp32
     // state and the alias gating to be tracked independently.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
@@ -72,6 +78,13 @@ void kernel_main() {
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+#ifdef TILIZE_IN
+    constexpr uint32_t dfb_welford_in_id = dfb_in_welford_id;
+    constexpr uint32_t dfb_normalization_in_id = dfb_in_id;
+#else
+    constexpr uint32_t dfb_welford_in_id = dfb_in0_welford_id;
+    constexpr uint32_t dfb_normalization_in_id = dfb_in0_id;
+#endif
 
     // interm cbs
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
@@ -82,7 +95,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
 
-    // output cb
+    // output dfb_id
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
@@ -109,6 +122,18 @@ void kernel_main() {
     constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
+    constexpr auto offset_scalar_input = [](uint32_t dfb_id, ckl::WaitPolicy wait, ckl::PopPolicy pop) {
+        return ckl::input(
+            dfb_id, wait, pop, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set);
+    };
+    constexpr auto streaming_input = [](uint32_t dfb_id) {
+        return ckl::input(dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto streaming_output = [](uint32_t dfb_id) {
+        return ckl::output(
+            dfb_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    };
+
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
@@ -128,22 +153,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     dfb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
@@ -177,11 +202,7 @@ void kernel_main() {
         if constexpr (welford_fp32_alias) {
             // Reconfigure the transpose op for the alias buffer index consumed by the
             // welford loop below.
-#ifdef TILIZE_IN
-            transpose_init(dfb_in_welford_id);
-#else
-            transpose_init(dfb_in0_welford_id);
-#endif
+            transpose_init(dfb_welford_in_id);
         } else {
             transpose_init(dfb_in0_id);
         }
@@ -213,13 +234,8 @@ void kernel_main() {
             uint32_t curr_xy_coord = block_xy_coord;
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-#ifdef TILIZE_IN
-                transpose_init(dfb_in_welford_id);
-                transpose_tile(dfb_in_welford_id, tile_id, input_dst);
-#else
-                transpose_init(dfb_in0_welford_id);
-                transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
-#endif
+                transpose_init(dfb_welford_in_id);
+                transpose_tile(dfb_welford_in_id, tile_id, input_dst);
 
                 // Re-establish the welford SFPU replay buffer state. When transpose_tile
                 // takes the unpack-to-DEST fp32 path, transpose_tile calls
@@ -286,29 +302,25 @@ void kernel_main() {
         dfb_ex_partial.push_back(2);
 
         // Start Variance Calc
-        // Wait for final welford values in cb_ex_global_id
+        // Wait for final welford values in dfb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
-        dfb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         if constexpr (enable_fp32_reconfig) {
             reconfig_data_format_srca(dfb_ex_global_id);
         }
         reconfig_data_format_srcb(dfb_eps_id);
-        add_init(dfb_ex_global_id, dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    offset_scalar_input(dfb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None>{1 + (g << 1), 0u},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<streaming_output(dfb_ex2pe_id)>{});
         }
-        dfb_ex2pe.push_back(num_groups);
         // End Variance Calc
 
         dfb_ex2pe.wait_front(num_groups);
@@ -336,85 +348,47 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
-                    dfb_xmm.reserve_back(2);
-
-                    // // Now let us do the actual computation for the current group here
-                    // // a. x-u
                     reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
-                    sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            offset_scalar_input(dfb_normalization_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            offset_scalar_input(dfb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            ckl::BinaryFpuOp::Sub,
+                            ckl::BroadcastDim::Scalar>{tile_id, g << 1},
+                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
 
-                    tile_regs_acquire();
-#ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
-#else
-                    sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
-#endif
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-
-                    // // b. 1/[sqrt(Var + eps)] * mask
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
-
                     reconfig_data_format(dfb_in0_id, dfb_input_mask_id, dfb_ex_global_id, dfb_ex2pe_id);
-                    mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(2);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            offset_scalar_input(dfb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            offset_scalar_input(dfb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Scalar>{mask_index, g},
+                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
 
-                    // // c. a * b
-                    dfb_xmm.wait_front(2);
+                    // Normalize the centered input.
                     reconfig_data_format(dfb_input_mask_id, dfb_xmm_id, dfb_ex2pe_id, dfb_xmm_id);
-                    mul_init(dfb_xmm_id, dfb_xmm_id);
-                    tile_regs_acquire();
-                    mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
-                    tile_regs_commit();
-                    dfb_xmm.pop_front(2);
-                    dfb_xmm.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            offset_scalar_input(dfb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                            offset_scalar_input(dfb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::None>{0u, 1u},
+                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
 
-                    // // d. Add to cb_xmm_id (accumulate results)
-                    // // First we get the result in dst0
+                    // Accumulate contributions when a tile spans multiple groups.
                     if (group_offset == 0) {
-                        // When group_offset is 0, this is the first group for this tile,
-                        // so we can copy the results to cb_x_id without needing to add them
-                        copy_tile_init(dfb_xmm_id);
-
-                        dfb_xmm.wait_front(1);
-                        tile_regs_acquire();
-                        copy_tile(dfb_xmm_id, 0, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(1);
+                        ckl::copy<streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(ckl::EltwiseShape::single());
                     } else {
-                        // This is not the first group for this tile, so we need to add
-                        // the results over what is already in cb_x_id
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
-                        add_init(dfb_x_id, dfb_xmm_id);
-
-                        dfb_xmm.wait_front(1);
-                        dfb_x.wait_front(1);
-                        tile_regs_acquire();
-                        add_tiles(dfb_x_id, dfb_xmm_id, 0, 0, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(1);
-                        dfb_x.pop_front(1);
+                        ckl::add<streaming_input(dfb_x_id), streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
+                            ckl::EltwiseShape::single());
                     }
-
-                    // Then we pack the result into cb_x_id
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
 
                     uint32_t cols_available = tile_width - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
@@ -446,81 +420,58 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    // fp32: reset SrcA to dfb_x (fp32).
+                    // fp32: reset SrcA to dfb_x.
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                    mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
-
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            streaming_input(dfb_x_id),
+                            offset_scalar_input(dfb_gamma_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row>{0u, nt},
+                        ckl::PackTile<streaming_output(dfb_x_id)>{});
                 }
 
                 if constexpr (do_beta) {
-                    // fp32: reset SrcA to dfb_x (fp32).
+                    // fp32: reset SrcA to dfb_x.
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                    add_bcast_rows_init(dfb_x_id, dfb_beta_id);
-
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_x_id);
-                    tile_regs_release();
-                    dfb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            streaming_input(dfb_x_id),
+                            offset_scalar_input(dfb_beta_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::Row>{0u, nt},
+                        ckl::PackTile<streaming_output(dfb_x_id)>{});
                 }
 
-                // Write out the final output
-                // fp32: reset SrcA to dfb_x (fp32).
+#ifdef UNTILIZE_OUT
+                constexpr auto write_dfb_id = dfb_untilize_in_id;
+#else
+                constexpr auto write_dfb_id = dfb_out0_id;
+#endif
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_x_id);
                 }
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                copy_tile_init(dfb_x_id);
-
-                dfb_x.wait_front(1);
-                tile_regs_acquire();
-                copy_tile(dfb_x_id, 0, dst0);
-                tile_regs_commit();
-                dfb_x.pop_front(1);
-#ifdef UNTILIZE_OUT
-                auto write_dfb_id = dfb_untilize_in_id;
-#else
-                auto write_dfb_id = dfb_out0_id;
-#endif
-                DataflowBuffer write_dfb(write_dfb_id);
-                write_dfb.reserve_back(1);
-                tile_regs_wait();
 #ifndef UNTILIZE_OUT
-                // Packer was last set for bf16 dfb_xmm; reconfigure to write_dfb_id (may be fp32) before pack, restore
-                // after. Gated out for bf16 (no format change).
+                // The streaming output disables automatic reconfiguration, so select the fp32 output format.
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(write_dfb_id);
                 }
 #endif
-                pack_tile(dst0, write_dfb_id);
+                ckl::copy<streaming_input(dfb_x_id), streaming_output(write_dfb_id)>(ckl::EltwiseShape::single());
 #ifndef UNTILIZE_OUT
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(dfb_xmm_id);
                 }
 #endif
-                tile_regs_release();
-                write_dfb.push_back(1);
             }
         }
 
@@ -531,7 +482,7 @@ void kernel_main() {
     dfb_eps.pop_front(1);
     dfb_input_mask.pop_front(num_tiles_input_mask);
 
-    // Pop all the cb_beta_id and cb_gamma_id if used
+    // Pop all the dfb_beta_id and dfb_gamma_id if used
     if constexpr (do_beta) {
         dfb_beta.pop_front(per_core_N);
     }
@@ -541,12 +492,12 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<
+    ckl::untilize<
         per_core_N,
         dfb_untilize_in_id,
         dfb_untilize_out_id,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::untilize_config::InitUninitMode::InitAndUninit,
+        ckl::untilize_config::WaitMode::WaitUpfront,
+        ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }
