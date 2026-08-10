@@ -106,7 +106,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
 
     mod.def(
         "write_to_core",
-        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, nb::bytes data) {
+        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
             tt::tt_metal::experimental::noc_write(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),
@@ -180,7 +180,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
 
     mod.def(
         "write_to_core_immediate",
-        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, nb::bytes data) {
+        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
             tt::tt_metal::experimental::noc_write_immediate(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),

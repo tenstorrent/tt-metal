@@ -589,9 +589,11 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     const uint32_t data_addr = kLimBase + 0x10000;
 
     // Zero addresses are never valid -- 0 is not in LIM at all.
-    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, /*config=*/0, data_addr, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(D2HSocket(*mesh_device_, l2cpu, kFifoSize, /*config=*/0));
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(D2HSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0));
 
     // Misaligned addresses would corrupt the wire structs.
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr + 1, data_addr, H2DMode::HOST_PUSH));
@@ -612,11 +614,12 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
         *mesh_device_,
         l2cpu,
         /*fifo_size=*/0x200000,
-        /*config=*/kLimBase + 0x100000,
+        /*config_buffer_address=*/kLimBase + 0x100000,
         kLimBase + 0x180000,
         H2DMode::HOST_PUSH));
     // A ring below the LIM window entirely is also invalid in HOST_PUSH.
-    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0x1000, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0x1000, H2DMode::HOST_PUSH));
 }
 
 }  // namespace tt::tt_metal::distributed
