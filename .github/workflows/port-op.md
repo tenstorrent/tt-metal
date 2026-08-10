@@ -66,21 +66,31 @@ concurrency:
 
 timeout-minutes: 330
 
-runs-on: [N150, in-service, cloud-virtual-machine]
+# CIv2. Infra's call, and the pool this workflow has to live on: the label is a single string, not
+# the `[N150, in-service, cloud-virtual-machine]` label set that selects the CIv1 cloud-VM pool.
+# `test-installing-step-impl.yaml` runs on the same label and shows what this job needs from it --
+# docker preinstalled and usable by the runner user, and passwordless sudo -- while
+# `blackhole-e2e-tests-impl.yaml` and `ttnn-run-sweeps.yaml` pass `--device /dev/tenstorrent` on it,
+# which is only possible because the device node exists on the runner itself.
+runs-on: tt-ubuntu-2204-N150-viommu-stable
 
 # Deliberately NOT a job-level `container:`. The agent firewall and the MCP gateway both start
 # their own containers, so putting the job inside one would nest Docker and break them. Instead the
-# job stays on the runner host -- which a probe confirmed can open /dev/tenstorrent -- and the
+# job stays on the runner host -- which on the CIv1 pool a probe confirmed can open
+# /dev/tenstorrent, and which on this pool every card test does by the same mechanism -- and the
 # toolchain lives in a long-lived container that the steps and tools exec into. The build image and
 # the card are therefore available without the agent ever holding either.
 
 # These run before the checkout, which is the whole point: a runner that cannot host the agent
 # should cost seconds to reject, not the half hour it takes to reach the step that finds out.
 pre-steps:
-  # These runners are persistent, so a previous job's debris is normal: run 31218783110 found a
+  # Kept after the move to CIv2, where these runners are ephemeral and should hand the job a clean
+  # machine every time, because the cost of being wrong is asymmetric: the check is two seconds and
+  # the failure it prevents is a 25-minute build that dies at `docker run --name portdev`. On the
+  # CIv1 pool the runners were persistent and this was not hypothetical -- run 31218783110 found a
   # leftover `awmg-mcpg` container, and this workflow leaked `portdev` on every failure until
-  # post-steps existed. A surviving `portdev` makes `docker run --name portdev` fail outright, and
-  # a surviving gateway container holds the port gh-aw needs.
+  # post-steps existed. A surviving `portdev` makes `docker run --name portdev` fail outright, and a
+  # surviving gateway container holds the port gh-aw needs.
   #
   # The port check is a precondition, not the fix for either run that failed on 8080 -- that was
   # the profiler, see the toolchain container below. It stays because the gateway's port is fixed
@@ -187,13 +197,26 @@ steps:
       # stays inside portdev, where it still pays for itself -- the build step and the agent's
       # `build` tool both exec as root, so they share /root/.cache/ccache for the life of the job --
       # and post-steps deletes it with the container.
+      # The 1G hugepage mount exists on the bare-metal and CIv1 cloud-VM pools but not on this one,
+      # where the card arrives by VFIO passthrough: `blackhole-e2e-tests-impl.yaml` skips the very
+      # same mount on any runner whose labels say `viommu`. Probing beats hardcoding either answer,
+      # because `-v` on a missing source silently creates a root-owned empty directory on the host
+      # and mounts that, which is both a bind mount to nothing and the kind of host debris this
+      # workflow is not allowed to leave behind.
+      HUGEPAGES=()
+      if [ -d /dev/hugepages-1G ]; then
+        HUGEPAGES=(-v /dev/hugepages-1G:/dev/hugepages-1G)
+      else
+        echo "no /dev/hugepages-1G on this runner, so portdev starts without it"
+      fi
+
       docker run -d --name portdev \
         --device /dev/tenstorrent \
         --group-add 1457 \
         --network host \
         -v "${{ github.workspace }}:/work" \
         -v "${{ github.workspace }}/.codegen:/codegen" \
-        -v /dev/hugepages-1G:/dev/hugepages-1G \
+        "${HUGEPAGES[@]}" \
         -e TT_METAL_HOME=/work \
         -e PYTHONPATH=/work:/work/ttnn:/work/tools:/codegen \
         -e LD_LIBRARY_PATH=/work/build/lib \
@@ -248,11 +271,15 @@ steps:
       fi
       echo "scaffolded $(find "$dir" -type f | wc -l) stub files, all writable by $(id -un)"
 
-  # `garage.garage.svc.cluster.local` is cluster-internal DNS and does not resolve on this runner
-  # pool: `getent hosts` exits 2 here, in runs 31398278036 and 31402361412. That is the whole
-  # explanation for the `Errors: 1395` against remote storage -- the endpoint was never reachable,
-  # so no cache-key theory was needed -- and it is why the 2.6-minute warm build only ever
-  # reproduced on the in-cluster `civ2` pool.
+  # `garage.garage.svc.cluster.local` is cluster-internal DNS, and on the CIv1 cloud-VM pool it did
+  # not resolve: `getent hosts` exited 2 in runs 31398278036, 31402361412 and 31406186048. That is
+  # the whole explanation for the `Errors: 1395` against remote storage -- the endpoint was never
+  # reachable, so no cache-key theory was needed -- and it is why the 2.6-minute warm build only
+  # ever reproduced in-cluster. This step is left exactly as it was for the move to CIv2 rather than
+  # assuming the answer flips: it reports what it finds and the build proceeds either way. If it
+  # still fails to resolve here, the missing piece is the egress proxy that `clang-tidy-reusable.yaml`
+  # uses to reach the same bucket (`proxy.restricted-proxy.svc.cluster.local:3128`), which is worth
+  # wiring only into the build, not into the agent, whose firewall runs its own proxy.
   #
   # This step is also a lesson in reading CI. The first version ran under `bash -e`, so `getent`
   # exiting 2 aborted it before `curl` ran and it printed nothing at all; and because the step is
@@ -269,7 +296,7 @@ steps:
           http://garage.garage.svc.cluster.local:3900/ \
           || echo "::warning::The ccache endpoint resolves but did not answer; this build will be cold."
       else
-        echo "::warning::garage.garage.svc.cluster.local does not resolve on this runner, so the build runs without the remote ccache and takes about 25 minutes."
+        echo "::warning::garage.garage.svc.cluster.local does not resolve on this runner, so the build runs without the remote ccache and takes about 25 minutes. If this is a CIv2 runner, try the restricted-proxy that clang-tidy uses."
         if docker exec portdev getent hosts github.com >/dev/null 2>&1; then
           echo "github.com resolves, so DNS works generally and it is cluster-internal DNS specifically -- i.e. this is the runner pool, not the container."
         fi
@@ -426,6 +453,10 @@ post-steps:
       tar -czf /tmp/port-artifact/port-tree.tar.gz "$dir" || echo "::warning::no $dir to archive"
       git diff "${PORT_BASE_SHA}" -- . > /tmp/port-artifact/tracked.diff || true
       git status --porcelain > /tmp/port-artifact/status.txt || true
+      # gate.py writes its per-case measurements inside portdev, which the next step deletes. These
+      # reports are the only durable record of which cases were marginal and by how much, and that is
+      # exactly what judging the noise floor needs after the fact -- the transcript truncates them.
+      docker cp portdev:/tmp/port-gate /tmp/port-artifact/gate || echo "::warning::no gate reports to copy"
       ls -l /tmp/port-artifact/
 
   - name: Upload the port
