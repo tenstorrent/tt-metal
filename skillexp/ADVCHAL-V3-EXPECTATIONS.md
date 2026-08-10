@@ -1,4 +1,7 @@
-# advchal-v3 — expectations, revised after the nmFN shakedown
+# advchal-v3 — expectations, revised after the nmFN shakedown and the phase-1 audit
+
+**Stage frozen at `advchal-v3/stage-frozen` = `4ea2fb1fb7d`.** Every cell of the run measures against that
+tree and nothing else; `confirm-cell.sh` asserts each cell's `.agents` is byte-identical to it.
 
 Supersedes the per-cell targets in [`ADVCHAL-V3-CHANGES.md`](ADVCHAL-V3-CHANGES.md) §6. Those were **v2
 headline percentages carried across as targets**; one shakedown cell showed that at least one of them rests on
@@ -128,3 +131,31 @@ hit it.
 
 What is deliberately **not** changed: the coverage predictions (they held), the negative control (strengthened),
 the qwen `retilize` finding (out of scope and unaffected), and the run order.
+
+
+---
+
+## 7. What the phase-1 audit changed, and what it means for these numbers
+
+Each v3 change was re-derived from the corpus artefacts before being kept. Three outcomes move the
+expectations again — downwards in confidence, not in value.
+
+| change | re-derived result | effect on expectations |
+|---|---|---|
+| cliff rule | flags 5 of 12 cells, catches **4 of 4** known win cells, precision 0.80 | the detection half is sound; expectations stand |
+| `CLIFF_MAX_CORES` | **inert** — 1, 2 and 3 flag identical sets | no effect either way; documented as ineffective rather than tuned |
+| `CLIFF_MIN_SHARE_PCT` | 1.0 ≡ 2.0; **3.0 loses a win cell** | 2.0 is the largest value catching every win — now derived |
+| `regrid_only` | fires on **5 of 21** kind-runs | evidenced; expect it on the low-ceiling cells |
+| ladder | applies only to **shard** advice | cells whose cliff op is advised interleaved get **no ladder** — sweep the knob's own values |
+| `F5` | 0 of 15 corpus cells could apply a plan | expectations must be read as **bounded by the knob surface**; `inexpressible[]` is the number to watch |
+| `C1c` N≥2 | `spill.ran` true in **21 of 21** | requirement dropped; not part of any expectation |
+| `C3` warm process | **n=1** (one cell, 60×) | recommendation only; floors may vary more than the old text implied |
+| per-rung value | **0.08 pp**, not 1 pp | every ladder-derived increment in §3 shrinks by ~10× |
+
+**The one expectation that went up.** The gate now reconciles `measurements/` against the decision per layer
+kind. On the shakedown that would have turned a −0.60 % ship into a −1.76 % one, so **cells should now report
+closer to the best they measure** than v2 or the shakedown did. If a cell still ships well off its own best,
+that is a finding about the stage, not about the decoder.
+
+**What to watch per cell, in order:** `inexpressible[]` cost share · whether any measurement beat the shipped
+number · `reachable_by_advisor` on the dominant kind · flagged pool vs realised gain.
