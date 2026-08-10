@@ -68,24 +68,33 @@ ALWI void tile_regs_wait() {
  * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel
  * configuration.
  */
-[[deprecated("Use tile_regs_release() instead")]]
-ALWI void release_dst() {
-    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated("Use tile_regs_release() instead")]] ALWI void
+release_dst() {
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+    PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
 // new APIs, TODO: migrate all kernels to these
 
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
+ *
+ * | is_fp32_dest_acc_en | Select FP32 DEST section for commit handoff | bool | true/false (default: DST_ACCUM_MODE). Must match tile_regs_release. A non-default value is only valid while enable_fp32_dest_acc() is in effect. | False |
  */
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_commit() {
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+}
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
+ *
+ * | is_fp32_dest_acc_en | Select FP32 DEST section for release handoff | bool | true/false (default: DST_ACCUM_MODE). Must match tile_regs_commit. A non-default value is only valid while enable_fp32_dest_acc() is in effect. | False |
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
 }  // namespace ckernel
