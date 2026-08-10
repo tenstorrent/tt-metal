@@ -348,6 +348,20 @@ uint32_t read_split() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_BACKOFF_US: the writer's sleep when a poll round finds every socket empty.
+//
+// It was a fixed 50 us. That is fine when reads are large (cap 1024 = 64 KB retires a lot per wake), but
+// at a small cap each read frees only ~11 KB, so the writer drains what is visible, sleeps 50 us, and the
+// FIFO refills and credit-starves the DRAINER during the nap -- which is how the device reports
+// credit-wait while the writer reports 70% idle.
+uint32_t writer_backoff_us() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_BACKOFF_US");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
+    }();
+    return v;
+}
+
 uint32_t gap_max_cycles() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_GAP_MAX");
@@ -620,7 +634,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         // on the steady-state path and the zeroing happens once per buffer at startup instead of once per
         // read.
         const size_t max_read_words = static_cast<size_t>(cap ? cap : kHRingWords) * (kPageSize / sizeof(uint32_t));
-        constexpr size_t kPrefillBufs = 320;  // > the ~253 max queue depth observed, so the pool stays warm
+        const size_t kPrefillBufs = (cap && cap < 512) ? 1536 : 320;  // small caps => far more reads in flight  // > the ~253 max queue depth observed, so the pool stays warm
         for (uint32_t s = 0; s < kNSockets; s++) {
             std::lock_guard<std::mutex> lk(dq_[s].m);
             for (size_t i = 0; i < kPrefillBufs; i++) {
@@ -1603,6 +1617,7 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     ss.pages += np;
     // Take a buffer from the pool. If the decoder has fallen behind and the pool is dry, still read (the
     // FIFO must keep draining or the DRISC stalls) but discard the data and count it.
+    const uint64_t t_pool0 = tsc_now();
     std::vector<uint32_t> pooled;
     bool discard = false;
     {
@@ -1618,6 +1633,7 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
             discard = true;
         }
     }
+    w_pool_ns_ += tsc_now() - t_pool0;
     std::vector<uint32_t>& dst = discard ? ss.buf : pooled;
     {
         ZoneScopedNC("buf-resize", 0xD35400);
@@ -1661,12 +1677,14 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
     }
     // Hand the raw buffer to the decoder and go straight back to polling. This is the whole point: the ack
     // (issued inside sock->read above) is no longer behind 85% of host work.
+    const uint64_t t_enq0 = tsc_now();
     {
         std::lock_guard<std::mutex> lk(dq_[sock_idx].m);
         dq_[sock_idx].work.push_back(
             DecodeItem{&ctx, sock_idx, std::move(pooled), static_cast<size_t>(np) * page_words});
     }
     dq_[sock_idx].cv.notify_one();
+    w_enq_ns_ += tsc_now() - t_enq0;
     return true;
 }
 
@@ -1711,7 +1729,7 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
     const auto t_wall0 = t_writer_entry;
     bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
-    auto backoff = std::chrono::microseconds(50);
+    auto backoff = std::chrono::microseconds(writer_backoff_us());
     // Drain-to-empty on stop: stop() sets P_STOP first, so the X280 stops producing; keep reading until every
     // socket has been empty for a sustained window, else the tail of the run is lost. Deadline backstops it.
     constexpr uint32_t kQuiesceEmpties = 200;
@@ -2375,6 +2393,14 @@ void PerfDebugProfiler::stop() {
             w_predrain_ns_ * tsc_ns_per_tick() / 1e6,
             w_reads_ ? (static_cast<double>(w_predrain_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
             w_resize_ns_ * tsc_ns_per_tick() / 1e6);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] writer handoff: pool-acquire {:.1f} ms ({:.0f} ns/read) | enqueue+notify "
+            "{:.1f} ms ({:.0f} ns/read) -- both take the SAME mutex the decoder holds while dequeuing",
+            w_pool_ns_ * tsc_ns_per_tick() / 1e6,
+            w_reads_ ? (static_cast<double>(w_pool_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0,
+            w_enq_ns_ * tsc_ns_per_tick() / 1e6,
+            w_reads_ ? (static_cast<double>(w_enq_ns_) * tsc_ns_per_tick() / w_reads_) : 0.0);
         // TWO THREADS, TWO BUDGETS. decode+publish run on the DECODER thread, not the writer -- charging
         // them against the writer's wall produced "134% busy" with negative idle. And the per-read timers
         // are TSC TICKS while poll/decode/publish are steady_clock ns; mixing them inflated sock-read by

@@ -275,7 +275,12 @@ private:
     // at ~64 MB. On exhaustion the reader still DRAINS the FIFO into a scratch and discards, because leaving
     // the FIFO full would back-pressure the DRISC and stall the workload -- losing capture beats perturbing
     // the thing being measured, the same policy the BroadcastRing already uses on its own overflow.
-    static constexpr size_t kMaxPooledBufs = 1024;
+    // Pool ceiling. SIZED IN BUFFERS, so it is really a limit on reads-in-flight -- and the right number
+    // depends on the per-read page cap, which is tunable. At cap 1024 (64 KB reads) the queue peaked at
+    // 363 and 1024 was ample; at cap 176 (11 KB reads) there are 4.6x more reads, the queue pinned at
+    // exactly 1023 and the writer began DISCARDING: 5.31M of 6.0M records, ~11% of the capture silently
+    // lost, with worst-sweep credit-wait doubling to 155 us. Overridable so the two knobs can be matched.
+    static constexpr size_t kMaxPooledBufs = 4096;
     struct DecodeItem {
         DeviceCtx* ctx = nullptr;
         uint32_t sock = 0;
@@ -312,7 +317,14 @@ private:
     // to "the copy" would be a guess. These three separate it.
     uint64_t w_resize_ns_ = 0;
     uint64_t w_ack_ns_ = 0;
-    uint64_t w_predrain_ns_ = 0;  // diagnostic: store-buffer drain charged separately from the ack
+    uint64_t w_predrain_ns_ = 0;
+    // Per-read handoff costs (TSC ticks). At a small page cap the writer does 4.6x more reads and stalls
+    // are 4x worse with identical bytes -- the cost scales with READ COUNT, and it is not the copy, the
+    // ack, the pool size or the writer's sleep (all measured/falsified). These two time the remaining
+    // per-read work: taking a buffer from the pool, and the enqueue+notify handoff to the decoder. Both
+    // take the SAME mutex the decoder holds while dequeuing, so contention is the standing suspect.
+    uint64_t w_pool_ns_ = 0;
+    uint64_t w_enq_ns_ = 0;  // diagnostic: store-buffer drain charged separately from the ack
     uint64_t w_decode_ns_ = 0;
     uint64_t w_publish_ns_ = 0;
     uint64_t w_reads_ = 0;
