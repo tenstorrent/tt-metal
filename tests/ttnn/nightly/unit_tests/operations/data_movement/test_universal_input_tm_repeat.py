@@ -1087,3 +1087,14 @@ def test_repeat_optional_output_tensor(device, layout, shape, repeat_shape):
 
     assert_equal(torch_result, ttnn.to_torch(output))
     assert_equal(torch_result, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_aliases_input_raises(device, expect_error):
+    """Prealloc must be a distinct buffer; shared storage would corrupt on direct-write paths."""
+    shape = (1, 2, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    with expect_error(RuntimeError, "must not alias the input buffer"):
+        ttnn.repeat(input_tensor, [1, 1, 1, 1], optional_output_tensor=input_tensor)

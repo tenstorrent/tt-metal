@@ -334,6 +334,9 @@ ttnn::Tensor repeat(
         TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
         TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
         TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
+        // Direct-write kernels read input while writing output; shared storage corrupts (slice forbids this).
+        TT_FATAL(
+            out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
     }
 
     // Copy into preallocated when the composite path could not write it directly.
@@ -386,7 +389,13 @@ ttnn::Tensor repeat(
     const bool needs_final_i2s = output_mem_config.is_sharded();  // refined after native_sharded below
     // Tentative: codegen/tile paths can take optional; RM+TILE roundtrip cannot.
     auto maybe_direct_out = [&](bool allow) -> std::optional<Tensor> {
-        return (allow && optional_output_tensor.has_value()) ? optional_output_tensor : std::nullopt;
+        if (!allow || !optional_output_tensor.has_value()) {
+            return std::nullopt;
+        }
+        if (working_tensor.buffer() == optional_output_tensor->buffer()) {
+            return std::nullopt;
+        }
+        return optional_output_tensor;
     };
 
     {
@@ -434,7 +443,8 @@ ttnn::Tensor repeat(
 
     const bool will_i2s = !native_sharded && needs_final_i2s;
     // Prim can own the prealloc when no subsequent to_layout/i2s reallocates.
-    const bool prim_can_land = optional_output_tensor.has_value() && !needs_rm_tilize_roundtrip && !will_i2s;
+    const bool prim_can_land = optional_output_tensor.has_value() && !needs_rm_tilize_roundtrip && !will_i2s &&
+                               working_tensor.buffer() != optional_output_tensor->buffer();
 
     // Snapshot orientation before the L1-interleaved staging hop strips it.
     std::optional<ShardOrientation> input_orientation_hint;
