@@ -254,6 +254,9 @@ class TTVibeVoiceGenerator:
         self._sf_neg_start: Optional[ttnn.Tensor] = None  # const embed(speech_start_id)
         self._sf_pos_pos: Optional[ttnn.Tensor] = None
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
+        # [pos_pos, neg_pos] pair for the shared batch-2 KV cache (None -> two separate caches).
+        self._sf_pos_b2: Optional[ttnn.Tensor] = None
+        self._kv_shared_b2 = False
         self._sf_noise: Optional[ttnn.Tensor] = None
         # Device-side diffusion noise: the whole run's pre-drawn noise is uploaded once as a
         # [max_steps, 64] table and the frame's row is gathered INSIDE the capture from a device
@@ -949,9 +952,11 @@ class TTVibeVoiceGenerator:
                 ttnn.release_trace(self.device, _t)
             setattr(self, _attr, None)
 
-    def _sf_write_int(self, buf: ttnn.Tensor, val: int) -> None:
+    def _sf_write_int(self, buf: ttnn.Tensor, val) -> None:
+        """Host-write an int (or list of ints, for the shared batch-2 position pair) into buf."""
+        vals = val if isinstance(val, (list, tuple)) else [val]
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(torch.tensor([val], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(torch.tensor(vals, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
             buf,
         )
 
@@ -1099,6 +1104,9 @@ class TTVibeVoiceGenerator:
         if seg_frame_idx == 0:
             self._sf_write_int(self._sf_pos_pos, start_pos)
             self._sf_write_int(self._sf_neg_pos, 0)
+            if self._sf_pos_b2 is not None:
+                # neg row at 0 for the boot; the boot advances it to 1 for the steady frames.
+                self._sf_write_int(self._sf_pos_b2, [start_pos, 0])
             ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # cond_pos(0) seed
             if not self.lm._fused_rope:
                 # The host position mirrors exist ONLY to index the fp32 RoPE tables.  On the fused
@@ -1141,20 +1149,43 @@ class TTVibeVoiceGenerator:
             if not self.lm._fused_rope:
                 self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, 0)
             ttnn.copy(input_a=self._sf_neg_start, input_b=self._sf_neg_embed)
-            _, nh = lm.forward_decode_traced_embeds(
-                self._sf_neg_embed,
-                self._sf_cos_neg,
-                self._sf_sin_neg,
-                self._sf_neg_pos,
-                kv_neg,
-                return_last_hidden=True,
-                need_logits=False,
-            )
+            if self._sf_pos_b2 is not None:
+                # Shared batch-2 cache: the neg row cannot be written by a B=1 forward (a batch-2
+                # cache write touches every row), so run the SAME batched forward with speech_start
+                # in both rows at positions [start_pos, 0].  Row1 is the negative prefill we want;
+                # row0's k/v land at start_pos, exactly the index frame 0's lm2 overwrites before
+                # anything reads it, and its hidden/logits are discarded.
+                emb = ttnn.concat(
+                    [self._sf_neg_embed, self._sf_neg_embed], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                _, hb2 = lm.forward_decode_traced_embeds_b2(
+                    emb,
+                    [(self._sf_cos_neg, self._sf_sin_neg), (self._sf_cos_neg, self._sf_sin_neg)],
+                    self._sf_pos_b2,
+                    kv_pos,
+                    lm_head_w=self._sf_lm_head_valid,
+                )
+                H = lm.cfg.hidden_size
+                nh = ttnn.slice(hb2, [1, 0, 0, 0], [2, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                _, nh = lm.forward_decode_traced_embeds(
+                    self._sf_neg_embed,
+                    self._sf_cos_neg,
+                    self._sf_sin_neg,
+                    self._sf_neg_pos,
+                    kv_neg,
+                    return_last_hidden=True,
+                    need_logits=False,
+                )
             if self._sf_neg_hidden is None:
                 self._sf_neg_hidden = ttnn.clone(nh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             else:
                 ttnn.copy(input_a=nh, input_b=self._sf_neg_hidden)
             ttnn.plus_one(self._sf_neg_pos)  # device neg_pos → 1
+            if self._sf_pos_b2 is not None:
+                # Advance ONLY the neg row: plus_one on the shared pair would move pos_pos too, and
+                # frame 0's lm2 must still write the positive row at start_pos.
+                self._sf_write_int(self._sf_pos_b2, [start_pos, 1])
             if not self.lm._fused_rope:
                 self._sf_neg_pos_host = 1
                 self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
@@ -1196,19 +1227,23 @@ class TTVibeVoiceGenerator:
             # blind to the audio feedback, so CFG stops cancelling the shared state component and
             # extrapolates it by cfg_scale (loop gain > 1 → long-form energy runaway / latch).
             emb_b2 = ttnn.concat([pos_in, pos_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            _shared = self._sf_pos_b2 is not None
             logits0, hidden_b2 = lm.forward_decode_traced_embeds_b2(
                 emb_b2,
                 [(self._sf_cos_pos, self._sf_sin_pos), (self._sf_cos_neg, self._sf_sin_neg)],
-                [self._sf_pos_pos, self._sf_neg_pos],
-                [kv_pos, kv_neg],
+                self._sf_pos_b2 if _shared else [self._sf_pos_pos, self._sf_neg_pos],
+                kv_pos if _shared else [kv_pos, kv_neg],
                 lm_head_w=self._sf_lm_head_valid,
             )
             h0 = ttnn.slice(hidden_b2, [0, 0, 0, 0], [1, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             h1 = ttnn.slice(hidden_b2, [1, 0, 0, 0], [2, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.copy(input_a=h0, input_b=self._sf_hidden_buf)  # cond_pos(k+1)
             ttnn.copy(input_a=h1, input_b=self._sf_neg_hidden)  # cond_neg(k+1)
-            ttnn.plus_one(self._sf_pos_pos)
-            ttnn.plus_one(self._sf_neg_pos)
+            if _shared:
+                ttnn.plus_one(self._sf_pos_b2)  # both CFG rows advance by 1 per frame
+            else:
+                ttnn.plus_one(self._sf_pos_pos)
+                ttnn.plus_one(self._sf_neg_pos)
             tok = ttnn.argmax(logits0, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 1 elem, LOCAL idx
             # Append the token index to this frame's audio (written by the dp2 replay that ran just
             # before this trace) so the host reads one tensor instead of two.  Casting the index to
@@ -1289,6 +1324,10 @@ class TTVibeVoiceGenerator:
             self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
             self._sf_pos_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self._sf_neg_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            # Shared batch-2 cache: ONE [pos_pos, neg_pos] tensor — the batched attention takes a
+            # single per-batch position tensor, and both rows advance by 1 per frame so one
+            # in-trace plus_one covers them.
+            self._sf_pos_b2 = _z([2], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) if self._kv_shared_b2 else None
             _hd = lm.cfg.head_dim
             self._sf_cos_pos = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_sin_pos = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
@@ -1533,9 +1572,17 @@ class TTVibeVoiceGenerator:
         # Preallocate fixed-size KV caches (TT LM path only).  Positive cache holds
         # prefill + all generated tokens; negative cache is reset per speech segment
         # (reused buffer), so it only needs to span one segment ≤ max_steps.
+        # ONE shared batch-2 cache (row0=pos, row1=neg) so the traced frame runs a single batched
+        # attention per layer.  Only for the traced free-running path — the eager (--no-trace) and
+        # forced-token paths drive the neg row through B=1 forwards that would write row0, so they
+        # keep the two separate caches.
+        self._kv_shared_b2 = self._ref_lm is None and self._trace_segment and forced_tokens is None
         if self._ref_lm is None:
-            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
-            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
+            if self._kv_shared_b2:
+                kv_cache_pos = kv_cache_neg = self.lm.alloc_kv_cache(prefill_len + max_steps + 8, batch=2)
+            else:
+                kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
+                kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
         else:
             kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
             kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
@@ -1568,7 +1615,14 @@ class TTVibeVoiceGenerator:
                 decode_wall_s=0.0,
             )
 
-        neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+        if self._kv_shared_b2:
+            # The negative prefill would run a B=1 forward that writes ROW0 of the shared cache —
+            # i.e. clobber the positive prefill at position 0.  The traced path never uses its
+            # result (the in-frame _boot seeds neg_hidden), and the eager branch that does is
+            # unreachable while _kv_shared_b2 is set.
+            neg_pos, neg_start_hidden = 1, None
+        else:
+            neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
         neg_prev_diffusion_token: Optional[int] = None  # segment-first-frame flag (traced path)
         # Previous frame's inputs_embeds — what the reference's negative branch consumes (eager path).
         neg_prev_embeds: Optional[ttnn.Tensor] = None
