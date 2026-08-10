@@ -18,6 +18,7 @@
 #include "api/compute/pack_untilize.h"
 #endif
 #include <tt-metalium/constants.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
@@ -115,6 +116,11 @@ void kernel_main() {
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
 
+    // The reader emits a second, partial-fill scaler tile when W is not tile-aligned; the reduce
+    // helper applies it to the last W tile so the padding columns contribute nothing.
+    constexpr auto partial_scaler = (W % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                         : compute_kernel_lib::ReducePartialScaler::none();
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_cb<block_size>(dfb_in_rm, dfb_in, Wt);
@@ -175,10 +181,25 @@ void kernel_main() {
 #endif
 
 #ifndef RMSNORM
-        // E[x]
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-                dfb_x, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
+        // E[x] = (1/W) * sum over the row. cb_x stays resident (a later loop pops it), so the
+        // no-pop block policy walks it in block_size chunks without consuming anything.
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb_x_id,
+            dfb_scaler_id,
+            dfb_ex_id,
+            compute_kernel_lib::ReduceInputPolicy::BlockWaitNoPop,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst) { numeric::detail::scale_dest(dst, generic::bit_cast<uint32_t>(1.0f / W)); },
+            partial_scaler,
+            compute_kernel_lib::ReduceBlockConfig::of(block_size));
+        // row_wise_mean waited on its own output; reduce() does not, and the loop below reads
+        // dfb_ex_id immediately.
+        dfb_ex.wait_front(1);
 
         // x - E[x]
         reconfig_data_format(dfb_x_id, dfb_ex_id);
@@ -239,10 +260,23 @@ void kernel_main() {
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #endif
 
-        // Var[x]
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                dfb_xmm2, dfb_scaler, dfb_ex2, W, Wt, block_size, tile_width);
+        // Var[x] = (1/W) * sum of (x - E[x])^2 over the row. cb_xmm2 is consumed here, so the
+        // popping block policy drains it a block at a time — including the padding the producer
+        // pushed to keep the buffer block-aligned.
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb_xmm2_id,
+            dfb_scaler_id,
+            dfb_ex2_id,
+            compute_kernel_lib::ReduceInputPolicy::BlockWaitBlockPop,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst) { numeric::detail::scale_dest(dst, generic::bit_cast<uint32_t>(1.0f / W)); },
+            partial_scaler,
+            compute_kernel_lib::ReduceBlockConfig::of(block_size));
 
         // Var[x] + eps
         dfb_ex2.wait_front(1);
