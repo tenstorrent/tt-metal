@@ -451,7 +451,7 @@ Host must participate in **address aliasing**. Device must participate in **cred
 #### What “connected” means (three layers)
 
 1. **Same L1 FIFO (host)** — The local DFB/CB must be backed by the CrossNode/Global **data ring** address. Proven pattern today: GlobalCB via `CreateCircularBuffer(program, cores, config, *global_cb)` → `globally_allocated_address` from the GCB buffer ([`circular_buffer.cpp`](tt_metal/impl/buffers/circular_buffer.cpp); matmul ~2134–2142). Without this, relay is two unrelated rings.
-2. **Which local index pairs with which remote slot (host or kernel args)** — So DM/TRISC know `relay_id` ↔ `remote_dfb_id`.
+2. **Which local index pairs with which remote slot (host or kernel args)** — So DM knows `relay_id` ↔ `remote_dfb_id`. TRISC only needs the local index.
 3. **Runtime relay protocol (device)** — Receiver DM: `register_relay_dfb` → `wait_front` → `push_relay_front` → `pop_front` (NOC ack). Compute: local `wait_front`/`pop_front` only. Credits stay with DM; compute never issues NOC atomics.
 
 So: host **must** own (1). (2) needs an explicit association somewhere. (3) is always a device API. Relay remains **optional** — DM↔DM skips (2)/(3) entirely. CrossNode vs Global share the same host aliasing shape; Global only means the aliased buffer outlives programs.
@@ -463,8 +463,8 @@ Host creates CrossNode/Global + a separate local CB/DFB; kernels take `remote_df
 | Pros | Cons |
 |------|------|
 | Minimal host API; flexible per-kernel | Easy to mis-alias addresses; host does not validate the pair |
-| Matches “DM owns credits” clearly | Every kernel re-implements the wiring |
-| Fine for DM↔DM (no relay) | Every kernel re-implements align / pairing |
+| Matches “DM owns credits” clearly | Every kernel re-implements pairing / compile-arg wiring |
+| Fine for DM↔DM (no relay) | |
 
 #### Approach B — Attach metadata only (`relay_dfb_name`)
 
@@ -504,18 +504,19 @@ Host sees the pair and injects init so kernels never call `register_relay_dfb`.
 | | Resize / multi-relay / mid-kernel rebinding get magical |
 | | Prefetcher-style switching is awkward |
 
-#### TRISC `align_local_cbs_to_cross_node_receiver_dfb` — long-term wiring
+#### TRISC runtime align — **GlobalDFB only**, not CrossNode
 
-Keep the **helper**; stop requiring **user kernels** to call it.
+`align_local_cbs_to_remote_cb` exists because GlobalCB/GlobalDFB rings **persist mid-flight across programs**: a freshly FW-inited local CB starts at ring begin, while the live remote `rd_ptr` may be elsewhere. TRISC must re-align to that live state (today manually; long-term JIT-emitted like `ALIGN_LOCAL_CBS_TO_REMOTE_CBS`).
 
-| Today (scaffolding) | Phase 3 target (GlobalCB mirror) |
-|---------------------|----------------------------------|
-| Test TRISC kernels manually call `align_local_cbs_to_cross_node_receiver_dfb` | Host Approach **C** aliases local CB/DFB to `dfb_buffer()` |
-| DM still `register_relay_dfb` | `program.cpp` JIT-emits `ALIGN_LOCAL_CBS_TO_CROSS_NODE_DFBS` (name TBD) that expands to the helper — same pattern as `ALIGN_LOCAL_CBS_TO_REMOTE_CBS` / `set_remote_circular_buffer_init` |
-| | TRISC kernels only `cb_wait_front` / `cb_pop_front` on the local relay index |
-| | DM keeps explicit `register_relay_dfb` + `push_relay_front` / `pop_front` (credit ownership stays visible; do not fully hide like Approach D for v1) |
+**CrossNode does not need this.** Every CrossNode program init resets `fifo_rd_ptr` / `fifo_wr_ptr` to `fifo_start_addr`. With Approach **C** (local CB/DFB aliased onto `dfb_buffer()`), normal local CB/DFB FW init already matches the ring — no TRISC helper, no remote id in the compute kernel, no JIT `ALIGN_LOCAL_CBS_TO_CROSS_NODE_*`.
 
-The helper remains the implementation behind the emitted define (analogous to `align_local_cbs_to_remote_cb`). Manual calls in `cross_node_dfb_relay_trisc.cpp` are temporary Approach A scaffolding until JIT emit lands.
+| Type | TRISC align needed? | Mechanism |
+|------|---------------------|-----------|
+| **CrossNodeDFB** | **No** | Host Approach C + reset-on-init FW; TRISC only local wait/pop |
+| **GlobalDFB** (Phase 2/3) | **Yes** (WH/BH) | `align_local_cbs_to_global_receiver_dfb` (name TBD) — GlobalCB mirror; JIT-emit long-term. Quasar: preserve TC state across programs / co-init, not a software ptr patch |
+| DM `register_relay_dfb` | Both (when relay used) | Stores `relay_id`; DM-side `align_relay_init` may still reset DM's local wr/rd copy at register time |
+
+Removed: `align_local_cbs_to_cross_node_receiver_dfb` (was a mistaken CrossNode port of the GlobalCB helper).
 
 #### Plan default (Phase 3)
 
@@ -523,8 +524,9 @@ The helper remains the implementation behind the emitted define (analogous to `a
 |---------|-----|
 | Same L1 address / size / cores | **Host** — prefer **Approach C** |
 | Optional name/handle for tooling & Metal 2.0 | Host metadata on Attach (**B** as supplement — resolve it or drop it; do not rely on it alone) |
-| Credit bridge (`push_relay_front` / `pop_front`) | **Device** — keep `register_relay_dfb` (or one-shot align) explicit on DM |
-| TRISC local CB ptr/limit sync | **Host/JIT** — emit align define; kernels do not call `align_local_cbs_to_cross_node_receiver_dfb` by hand |
+| Credit bridge (`push_relay_front` / `pop_front`) | **Device** — keep `register_relay_dfb` explicit on DM |
+| TRISC local CB ptr/limit sync (CrossNode) | **Nothing** — Approach C + reset-on-init suffice; TRISC never sees remote id |
+| TRISC local CB ptr/limit sync (Global) | **Host/JIT** — emit Global align define (GlobalCB pattern); not applicable to CrossNode |
 
 **Avoid for production ops:** device-only (A) as the sole contract — address sharing will silently break. **Avoid:** Attach string as the only API (B alone). **Avoid for v1:** fully hiding relay in FW (D).
 

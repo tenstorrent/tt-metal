@@ -114,27 +114,4 @@ FORCE_INLINE void setup_cross_node_dfb_interfaces(uint32_t tt_l1_ptr* dfb_l1_bas
     }
 }
 
-// Mirror experimental::align_local_cbs_to_remote_cb for CrossNodeDFB relay DFBs.
-// TRISC calls this at kernel start so its local CB interface matches the live
-// CrossNodeReceiverDFBInterface (populated by firmware from the config page).
-// DM-side register_relay_dfb() performs the same alignment on the DM copy only.
-template <uint32_t num_local_cbs>
-FORCE_INLINE void align_local_cbs_to_cross_node_receiver_dfb(
-    uint8_t remote_dfb_id, const uint32_t (&local_cb_indices)[num_local_cbs]) {
-    const CrossNodeReceiverDFBInterface& iface = get_cross_node_receiver_dfb_interface(remote_dfb_id);
-    uint32_t fifo_limit = iface.fifo_limit_page_aligned >> cb_addr_shift;
-    uint32_t fifo_size = fifo_limit - (iface.fifo_start_addr >> cb_addr_shift);
-    uint32_t fifo_ptr = iface.fifo_rd_ptr >> cb_addr_shift;
-    for (uint32_t i = 0; i < num_local_cbs; ++i) {
-        LocalCBInterface& local_cb = get_local_cb_interface(local_cb_indices[i]);
-        ASSERT(fifo_size % local_cb.fifo_page_size == 0);
-        uint32_t fifo_num_pages = fifo_size / local_cb.fifo_page_size;
-        local_cb.fifo_limit = fifo_limit;
-        local_cb.fifo_size = fifo_size;
-        local_cb.fifo_num_pages = fifo_num_pages;
-        local_cb.fifo_wr_ptr = fifo_ptr;
-        local_cb.fifo_rd_ptr = fifo_ptr;
-    }
-}
-
 }  // namespace experimental
