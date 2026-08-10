@@ -20,9 +20,12 @@ def _mesh_device():
 class Sharding:
     """A tensor's mesh layout (placements + distribution shape), read from its live topology."""
 
-    def __init__(self, placements: list | None, dist_shape: list[int] | None) -> None:
+    def __init__(
+        self, placements: list | None, dist_shape: list[int] | None, read_error: Exception | None = None
+    ) -> None:
         self._placements = placements
         self._dist_shape = dist_shape
+        self._read_error = read_error
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
@@ -31,18 +34,29 @@ class Sharding:
             topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
             placements = list(topology.placements())
             dist_shape = list(topology.distribution_shape())
-        except Exception:
-            placements, dist_shape = None, None  # no topology (unit mesh / older ttnn build)
+        except Exception as e:
+            # A unit mesh reads back as 1-D [Replicate], so anything caught here is a genuine
+            # failure (e.g. `get_value` on an unmaterialized lazy param). Fail open, keep the cause.
+            return cls(None, None, read_error=e)
         return cls(placements, dist_shape)
 
     @property
+    def read_error(self) -> Exception | None:
+        """The exception that prevented reading the topology, if any."""
+        return self._read_error
+
+    @property
     def placements(self) -> list | None:
-        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``), or None on a unit mesh."""
+        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``).
+
+        A fully replicated tensor flattens to a single ``Replicate``, so this can be shorter
+        than the mesh rank: never index it by mesh axis. None only if unreadable.
+        """
         return self._placements
 
     @property
     def dist_shape(self) -> list[int] | None:
-        """Distribution shape: the mesh extent the tensor is laid out over per axis, or None on a unit mesh."""
+        """Mesh extent the tensor is laid out over per axis; None only if unreadable."""
         return self._dist_shape
 
     @property
