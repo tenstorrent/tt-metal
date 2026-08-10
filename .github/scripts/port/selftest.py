@@ -135,6 +135,8 @@ check("aligned bfloat8_b is in scope", scope_of("bfloat8_b", [1, 1, 32, 32])[0] 
 s, r = scope_of("bfloat8_b", [1, 1, 33, 64])
 check("non-aligned bfloat8_b is out of scope", s == "out", f"got {s}")
 check("and says why", bool(r) and "tile-aligned" in r, str(r))
+# One reason for the whole class, not one per shape: it is the routing test's grouping key.
+check("the reason does not name the shape", bool(r) and "33" not in r, str(r))
 check("non-aligned bfloat16 stays in scope", scope_of("bfloat16", [1, 1, 33, 64])[0] == "in")
 check("aligned bfloat16 stays in scope", scope_of("bfloat16", [1, 1, 64, 64])[0] == "in")
 
@@ -258,6 +260,63 @@ for op, expect_beside in (("untilize", True), ("permute", False)):
         errors = scaffold.verify(op_dir, op, [])
         check(f"[{op}] verify rejects a glob outside the call",
               any("outside file(GLOB_RECURSE" in e for e in errors), str(errors))
+
+# ====== 7. strata labels agree across the JSON boundary, and are readable
+import strata  # noqa: E402
+
+axes, _ = strata.choose_axes(cases, 24)
+check("memory_config is an axis", "kwargs.memory_config" in axes, str(axes))
+
+live_labels = [strata.stratum_key(c, axes) for c in cases]
+# What gate.py sees: the ledger after ledger.py has written and reloaded it.
+reloaded = json.loads(json.dumps({"cases": cases}, indent=2, default=str))["cases"]
+json_labels = [strata.stratum_key(c, axes) for c in reloaded]
+check("measure-side and gate-side labels agree", live_labels == json_labels,
+      f"{live_labels[0]!r} != {json_labels[0]!r}")
+check("labels name the constant instead of dumping its repr",
+      all("DRAM_MEMORY_CONFIG" in l or "L1_MEMORY_CONFIG" in l for l in live_labels), live_labels[0])
+check("labels carry no C++ field dump", not any("memory_layout=" in l for l in live_labels), live_labels[0])
+
+# ============ 8. a leg may span several op codes across cases, but not within one
+import gate  # noqa: E402
+
+def attribute(rows, order):
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
+        fh.write("OP CODE,DEVICE KERNEL DURATION [NS]\n")
+        for code, ns in rows:
+            fh.write(f"{code},{ns}\n")
+        name = fh.name
+    return gate.attribute_device_rows(Path(name), order)
+
+# untilize's real shape: native is one device op on an aligned case and another on a non-aligned one.
+order, rows = [], []
+for case_id, native_code in (("c0", "UntilizeDeviceOperation"), ("c1", "UntilizeWithUnpaddingDeviceOperation")):
+    for leg, code in (("native", native_code), ("ported", "UntilizeCodegenDeviceOperation")):
+        order.append({"case_id": case_id, "leg": f"{leg}:warmup", "rep": -1, "error": None})
+        rows.append((code, 100.0))
+    for rep in range(2):
+        for leg, code in (("native", native_code), ("ported", "UntilizeCodegenDeviceOperation")):
+            order.append({"case_id": case_id, "leg": leg, "rep": rep, "error": None})
+            rows.append((code, 200.0 if leg == "native" else 150.0))
+
+samples, notes = attribute(rows, order)
+check("a leg spanning two op codes across cases is accepted", bool(samples), str(notes))
+check("both op codes are reported", any("op codes:" in n and "UntilizeWithUnpadding" in n for n in notes), str(notes))
+check("samples are attributed per case and leg",
+      sorted(samples) == [("c0", "native"), ("c0", "ported"), ("c1", "native"), ("c1", "ported")])
+
+# A demoted case sends the ported leg to the native op: same code on two legs, still fine.
+demoted_rows = [(c if l.startswith("native") or "warmup" in l else "UntilizeDeviceOperation", ns)
+                for (c, ns), l in zip(rows, [o["leg"] for o in order])]
+samples, notes = attribute(demoted_rows, order)
+check("a demoted case sharing native's op code is accepted", bool(samples), str(notes))
+
+# But a slipped positional join shows up as two op codes for one case and leg.
+slipped = list(rows)
+slipped[4] = ("SomethingElseDeviceOperation", 200.0)
+samples, notes = attribute(slipped, order)
+check("a slip within one case and leg is still caught", not samples and any("inconclusive" in n for n in notes),
+      str(notes))
 
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))

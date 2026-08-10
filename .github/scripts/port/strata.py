@@ -51,8 +51,19 @@ def _canonical(value) -> str:
 
 
 def _axis_value(case: dict, axis: str):
+    """The value of one axis for one case.
+
+    `kwargs_named` in preference to `kwargs`, because a kwarg can hold a live ttnn object and this
+    function is called from two processes that do not both have it. measure.py builds its cases in
+    process and holds `ttnn.DRAM_MEMORY_CONFIG` itself; gate.py reads the ledger JSON, where that
+    became a string. Partitioning and labelling from the named form makes them agree, and reads as
+    `memory_config=DRAM_MEMORY_CONFIG` rather than sixty characters of C++ field dump.
+    """
     if axis.startswith("kwargs."):
-        return (case.get("kwargs") or {}).get(axis.split(".", 1)[1])
+        name = axis.split(".", 1)[1]
+        named = case.get("kwargs_named")
+        source = named if isinstance(named, dict) and name in named else (case.get("kwargs") or {})
+        return source.get(name)
     return case.get(axis)
 
 
@@ -101,6 +112,7 @@ def discover_axes(cases: list[dict], budget: int = 0) -> list[str]:
     """
     names = ["dtype", "layout"]
     names += [f"kwargs.{k}" for k in sorted({k for c in cases for k in (c.get("kwargs") or {})})]
+
 
     ceiling = _ceiling(cases, budget)
     ranked = []

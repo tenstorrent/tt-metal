@@ -35,29 +35,46 @@ to what the field or the file actually permits over special-casing the op.
 | A kwarg holds a live `ttnn` object (`memory_config`) | The ledger's `json.dumps(..., default=str)` flattened it to `"MemoryConfig(...)"`, and every `ttnn.untilize(x, memory_config=...)` built from it would raise |
 | Has explicit `untilize/device/kernels/...` entries in `target_sources`, as well as a glob | `register_kernel_globs` anchored on the last match anywhere in the file and wrote `untilize/codegen/kernels/*.cpp` into the FILES list, where CMake resolves literal paths. Configure failed; `verify()` reported no errors because the string was present *somewhere* |
 | Its sweep module reuses the upstream suite (`from sweeps.untilize import ...`) | `tests/sweep_framework` was not on `PYTHONPATH`, so the module cannot import. `pad`'s sweep is self-contained |
+| Its native path is *two* device operations (`UntilizeDeviceOperation` on a tile-aligned input, `UntilizeWithUnpaddingDeviceOperation` otherwise) | The profiler attribution check required one op code per leg and declared the run inconclusive. The real invariant is one op code per *case* and leg -- a leg spanning several across cases is normal, and a demoted case deliberately puts native's op code on the ported leg |
+| Its generator injects kernel templates under a *different* op's directory (`ops/untilize/builder.py` names `untilize_with_unpadding/device/kernels/codegen_templates`) | `check_write_paths` counted them as writes outside the port and would have blocked every `verify`. They are the harness's own prototype leg dirtying the tree, so they are excluded |
 
-Two of those five were found only by a real run, and one of them (the CMake glob) had a green
-scaffold step in front of it. When adding a check, prefer asserting *where* something landed over
-asserting that it exists.
+Three of those were found only by a real run, and one (the CMake glob) had a green scaffold step in
+front of it. When adding a check, prefer asserting *where* something landed over asserting that it
+exists, and prefer the invariant that actually protects the conclusion over the strictest one that
+happens to hold for the op in front of you.
 
 `selftest.py` covers all of the above that can be checked without a device -- against a stubbed `ttnn`
 and a stubbed sweep module -- and runs on a laptop in under a second. Run it after touching
 `ledger.py`, `scaffold.py`, or `strata.py`. It is the only test the harness has.
 
+## What the `untilize` run has established so far
+
+Worth knowing, because it means these paths are no longer speculative:
+
+- The ledger expands to 112 in-scope and 96 out-of-scope cases. The 96 are `port_scope` doing its
+  job: non-tile-aligned `bfloat8_b`, which would otherwise have been force-graded as in-scope.
+- Stratification picks `dtype` and `kwargs.memory_config` as axes, four strata, no axis dropped.
+- The emitted routing test renders live `MemoryConfig` values as `ttnn.DRAM_MEMORY_CONFIG`, is valid
+  Python, and covers all 96 cases grouped under the condition that rejects them.
+- `ttnn.untilize` has no golden, so the golden check warns and passes, as designed.
+- A cold build on CIv2 takes about 12 minutes, so a failed run costs roughly 25 minutes to reach the
+  same point again. It is worth reading ahead for the next failure rather than fixing one at a time.
+
 ## What is *not* verified about this run
 
 None of the following could be checked without a device, so treat them as the likely failure points:
 
-- **Scale.** `pad`'s ledger is 196 cases. `untilize`'s is roughly twice that, because its `nightly`
-  grid uses a `gen_shapes` interval of 1 and the suite union adds more. The correctness band is
-  uncapped by deliberate design -- the routing claim only means something over the whole out-of-scope
-  set -- so this is the first time that choice has been stressed. If anything times out, it is this.
-- **No golden.** `ttnn.untilize` has no golden function registered, so `resolve_golden` falls back to
-  native and the "Check the golden against native" step emits a warning and passes trivially.
-  Correctness for this port therefore means *matches native output*, not *matches torch*. A port that
-  faithfully reproduces a native bug will pass. `pad` had a real torch golden, so this weaker oracle
-  is new, and the PR body should not be read as claiming more than it measures.
-- **Case counts, timings, and stratum labels** are all as-yet unobserved for this op.
+- **Scale.** 208 cases against `pad`'s 196, so comparable, but the correctness band calls native for
+  every case here because there is no golden to compare against instead. It is uncapped by deliberate
+  design -- the routing claim only means something over the whole out-of-scope set -- so if anything
+  times out, it is this.
+- **No golden.** `ttnn.untilize` has no golden function registered, so correctness means *matches
+  native output*, not *matches torch*. A port that faithfully reproduces a native bug will pass.
+  `pad` had a real torch golden, so this weaker oracle is new, and the PR body should not be read as
+  claiming more than it measures.
+- **Everything from the agent onward.** No run has yet reached the agent, so the deliverable contract,
+  the demotion logic, and the per-stratum grading have still only been exercised against synthetic
+  fixtures.
 
 ## The hard part of the `untilize` port itself
 
