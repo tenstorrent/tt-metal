@@ -88,8 +88,11 @@ jobs:
       HOME: /home/user
       TT_METAL_HOME: /home/user/tt-metal
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      # Per-job NFS scratch for logs (cluster validation + DC validation tee).
+      PYTHONPATH: /home/user/tt-metal
+      # Per-job NFS scratch for logs + automapper empty cwd / ranklogs.
       PIPELINE_DIR: /ci/fabric-${{ github.run_id }}-${{ strategy.job-index }}
+      TTRUN_CWD: /ci/fabric-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
     strategy:
       fail-fast: false
       matrix:

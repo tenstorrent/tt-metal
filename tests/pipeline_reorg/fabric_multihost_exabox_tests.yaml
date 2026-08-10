@@ -37,12 +37,19 @@
 
 - name: "Fabric stability short (SC4)"
   cmd: |
-    TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
 
-    tt-run --skip-mgd-check --skip-executable-check \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
       --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml \
       --filter 'name.*_short'
