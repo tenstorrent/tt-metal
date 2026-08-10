@@ -33,6 +33,7 @@ from helpers.sfpu_domains import (
     exclude_undefined_pair,
     for_op,
     integer_specials,
+    ops_with_singularity,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -1107,16 +1108,40 @@ def _build_edge_pair_src(mathop, formats):
     return torch.tensor(a + b, dtype=dtype)
 
 
-# The float binary ops with a registered singularity on one operand: div and fmod/remainder
-# divide by B, xlogy takes log(B), pow evaluates exp(B·ln A). Kept as a derived list so an
-# op gaining a singularity enrols itself.
-_BINARY_EDGE_OPS = [
-    MathOperation.SfpuElwdiv,
-    MathOperation.SfpuXlogy,
-    MathOperation.SfpuElwpow,
-    MathOperation.SfpuBinaryFmod,
-    MathOperation.SfpuBinaryRemainder,
-]
+# The ops this suite drives on an integer format. This sweep is float — its format axis is
+# Float16_b/Float32 and the override built above carries float values — so an integer op
+# that gains a singularity belongs in test_sfpu_binary_int_extremes or the shift edge tests
+# rather than here. Assembled from the lists that already drive them, so the two cannot
+# disagree.
+_INT_DRIVEN_BINARY_OPS = frozenset(
+    set(_INT_BINARY_STIMULI)
+    | set(_UINT32_BINARY_OPS)
+    | set(_SHIFT_EDGE_OPS)
+    | {
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuBitwiseOr,
+        MathOperation.SfpuBitwiseXor,
+        MathOperation.SfpuEqInt,
+        MathOperation.SfpuNeInt,
+        MathOperation.SfpuRsubInt32,
+    }
+)
+
+# Derived rather than listed, which is what the section header above promises: an op joins
+# this sweep by gaining an _OP_SINGULARITIES entry in sfpu_domains. Today that resolves to
+# div and fmod/remainder (which divide by B), xlogy (log of B) and pow (exp(B·ln A)). The
+# two intersections are what this sweep can actually drive — the same table holds the unary
+# poles (Reciprocal, Log, Asin, ...), and _CLASSIFIED_STIMULI_OPS is the declared set of ops
+# reaching sfpu_binary().
+_BINARY_EDGE_OPS = sorted(
+    (ops_with_singularity() & _CLASSIFIED_STIMULI_OPS) - _INT_DRIVEN_BINARY_OPS,
+    key=lambda op: op.name,
+)
+
+assert _BINARY_EDGE_OPS, (
+    "no float binary op reaching sfpu_binary() has an entry in "
+    "sfpu_domains._OP_SINGULARITIES, so test_sfpu_binary_edges would collect nothing"
+)
 
 
 # What driving the poles found on Wormhole, cross-checked against tt-isa-documentation.

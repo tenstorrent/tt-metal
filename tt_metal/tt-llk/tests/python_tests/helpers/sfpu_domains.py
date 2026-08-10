@@ -96,12 +96,20 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
 # Format-specific domain builders
 # ─────────────────────────────────────────────────────────────────────────────
 
+# The two e4m3 formats share an encoding and so a ceiling of 448, which is the narrowest
+# any builder below narrows for. Listed together everywhere, so a builder cannot honour one
+# and hand the other the wide-format branch.
+_E4M3_FORMATS = (DataFormat.MxFp8P, DataFormat.Fp8_e4m3)
+
+# e5m2 tops out at 57344 and Float16 at 65504: close enough to share a tier.
+_E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
+
 
 def _exp_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp(x) per format to avoid overflow."""
-    if fmt == DataFormat.MxFp8P:
+    if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
-    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+    elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
         # the lower bound is intentionally pushed to -100.0 so we cross the SFPU's negative-side
@@ -125,9 +133,9 @@ def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
     which is now the accuracy one at 16, not the overflow one at 80, so 32 rather
     than 160.
     """
-    if fmt == DataFormat.MxFp8P:
+    if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
-    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+    elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
@@ -136,9 +144,9 @@ def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
 
 def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for exp2(x) = 2^x per format to avoid overflow."""
-    if fmt == DataFormat.MxFp8P:
+    if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-7.0, high=7.0)
-    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+    elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
         # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound
@@ -177,9 +185,9 @@ def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
 
 def _square_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for square(x) = x^2 per format to avoid overflow."""
-    if fmt == DataFormat.MxFp8P:
+    if fmt in _E4M3_FORMATS:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-20.0, high=20.0)
-    elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
+    elif fmt in _E5M2_AND_FLOAT16:
         spec = StimuliSpec(
             distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         )
@@ -1150,9 +1158,9 @@ _FORMAT_MANTISSA_BITS: Dict[DataFormat, int] = {
     DataFormat.Bfp8_b: 7,
     DataFormat.Bfp4_b: 3,
     DataFormat.Bfp2_b: 1,
-    DataFormat.MxFp8R: 3,  # e4m3
-    DataFormat.Fp8_e4m3: 3,
-    DataFormat.MxFp8P: 2,  # e5m2
+    DataFormat.MxFp8R: 2,  # e5m2
+    DataFormat.MxFp8P: 3,  # e4m3
+    DataFormat.Fp8_e4m3: 3,  # e4m3
     DataFormat.MxFp4: 1,  # e2m1
 }
 
@@ -1248,6 +1256,23 @@ _OP_SINGULARITIES: Dict[
     MathOperation.SfpuBinaryFmod: {Operand.B: ((0.0, _BOTH),)},
     MathOperation.SfpuBinaryRemainder: {Operand.B: ((0.0, _BOTH),)},
 }
+
+
+def ops_with_singularity(
+    operand: Optional[Operand] = None,
+) -> FrozenSet[MathOperation]:
+    """Every op with a recorded singularity, optionally only those on *operand*.
+
+    This is how an edge sweep enrols its ops: intersect it with the ops the suite can
+    drive rather than listing them, so adding an entry to _OP_SINGULARITIES is enough to
+    get the op probed. A hand-written second list is the failure mode -- the table grows
+    and the sweep silently does not.
+    """
+    if operand is None:
+        return frozenset(_OP_SINGULARITIES)
+    return frozenset(
+        op for op, per_operand in _OP_SINGULARITIES.items() if operand in per_operand
+    )
 
 
 def _dedup_representable(values: List[float], fmt: DataFormat) -> List[float]:

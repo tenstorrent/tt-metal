@@ -562,13 +562,14 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
 
 # The #44750 fix is Wormhole-only: the Blackhole calculate_reduce_max_min_int32 path still converts to
 # sign-magnitude around a plain SFPSWAP (INT32_MIN still loads as sign-magnitude "-0"), so this repro
-# still fails there (tracked by tenstorrent/tt-metal#44750).
+# still fails there (tracked by https://github.com/tenstorrent/tt-metal/issues/44750).
 #
 # xfail rather than skip: the Blackhole fix is an external dependency, and a skip cannot tell us when it
 # lands — it stays green by omission forever. As a non-strict xfail the case still executes on Blackhole
 # and reports XPASS the moment the kernel is fixed. The marker is applied in the body (see below) rather
-# than as a decorator, because it depends on the injected_value parameter and only the INT32_MIN half is
-# expected to fail; pytest.mark.xfail's `condition` takes a bool or a string, not a per-param callable.
+# than as a decorator, because it depends on three of the parameters and pytest.mark.xfail's `condition`
+# takes a bool or a string, not a per-param callable — a decorator would have to blanket the whole
+# parametrization, masking the combinations that are still expected to be correct on Blackhole.
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
@@ -592,15 +593,29 @@ def test_int32_reduce_extreme(request, mathop, reduce_pool, injected_value, base
     if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
+    # On Blackhole the injected INT32_MIN reaches the comparator as sign-magnitude "negative zero", so it
+    # is ranked as 0 — but a datum that wins keeps its bit pattern. A lane is therefore wrong only where
+    # ranking INT32_MIN as 0 changes which datum wins, which depends on the sign of the base data:
+    #   MIN — a negative base datum ranks below 0 and is picked instead of INT32_MIN. With all-positive
+    #         base data INT32_MIN still ranks lowest, and the lane comes out correct.
+    #   MAX — 0 outranks every base datum only when they are all negative; otherwise the true maximum
+    #         still wins.
+    # Measured on p100a: exactly these 6 of the 24 variants fail. Marking the other 6 INT32_MIN variants
+    # would mask an unrelated Blackhole regression rather than isolate the tracked issue.
+    if reduce_pool == ReducePool.Min:
+        int32_min_changes_winner = base_range[0] < 0
+    else:
+        int32_min_changes_winner = base_range[1] <= 0
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and injected_value == INT32_MIN
+        and int32_min_changes_winner
     ):
         request.node.add_marker(
             pytest.mark.xfail(
                 reason="Blackhole calculate_reduce_max_min_int32 converts to sign-magnitude around "
                 "a plain SFPSWAP, so INT32_MIN loads as 'negative zero'. "
-                "tenstorrent/tt-metal#44750.",
+                "https://github.com/tenstorrent/tt-metal/issues/44750.",
                 strict=False,
             )
         )

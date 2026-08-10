@@ -33,7 +33,14 @@ def _bits(value: float) -> int:
 # small enough to matter against the tolerance. Kept deliberately small -- inputs are
 # uniform(-1, 1), so |scalar| <= 8 keeps every op's result inside the range where the
 # default bf16 tolerance is meaningful.
+#
+# Split across two tests rather than swept in one: the full axis is 6 scalars x 5 ops x
+# 2 formats x 2 dest modes, which is more hardware variants than presubmit should spend on
+# one kernel parameter. Presubmit drives the ops at a single representative scalar and the
+# remaining values run nightly.
+_PRESUBMIT_SCALAR = 2.0
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
+_NIGHTLY_SCALARS = tuple(s for s in _SCALARS if s != _PRESUBMIT_SCALAR)
 
 # ScalarDiv is the one op whose scalar is not the value the kernel sees: the host inverts the
 # divisor at compile time and the kernel only multiplies, so `d` never reaches the device.
@@ -52,7 +59,7 @@ def _scalar_bits_for(mathop, scalar):
 
 
 def _run_sfpu_binop_scalar(
-    formats, dest_acc, mathop, scalar=2.0, input_dimensions=[32, 32]
+    formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, input_dimensions=[32, 32]
 ):
     torch.manual_seed(0)
     scalar_bits = _scalar_bits_for(mathop, scalar)
@@ -112,25 +119,24 @@ def _run_sfpu_binop_scalar(
     ), "Assert against golden failed"
 
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=[
-        MathOperation.ScalarAdd,
-        MathOperation.ScalarSub,
-        MathOperation.ScalarMul,
-        MathOperation.ScalarDiv,
-        MathOperation.ScalarRsub,
+_SCALAR_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float32,
     ],
-    scalar=list(_SCALARS),
+    same=True,
 )
-def test_sfpu_binop_scalar(formats, dest_acc, mathop, scalar):
+
+_SCALAR_OPS = [
+    MathOperation.ScalarAdd,
+    MathOperation.ScalarSub,
+    MathOperation.ScalarMul,
+    MathOperation.ScalarDiv,
+    MathOperation.ScalarRsub,
+]
+
+
+def _skip_unsupported(formats, dest_acc, mathop, scalar):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
@@ -141,4 +147,25 @@ def test_sfpu_binop_scalar(formats, dest_acc, mathop, scalar):
     if mathop == MathOperation.ScalarDiv and scalar == 0.0:
         pytest.skip(_ZERO_DIVISOR_UNREACHABLE)
 
+
+@parametrize(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+)
+def test_sfpu_binop_scalar(formats, dest_acc, mathop):
+    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+    _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+    scalar=list(_NIGHTLY_SCALARS),
+)
+def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
+    """The rest of the scalar axis: zero, unity, a sign flip and a fractional multiplier."""
+    _skip_unsupported(formats, dest_acc, mathop, scalar)
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
