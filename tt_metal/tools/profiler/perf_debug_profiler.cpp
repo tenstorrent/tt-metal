@@ -610,6 +610,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         // Records per read: a page holds at most page_words/2 two-word markers.
         const size_t recs_per_page = (kPageSize / sizeof(uint32_t)) / 2;
         read_chunk_recs_ = cap ? static_cast<size_t>(cap) * recs_per_page : static_cast<size_t>(kHRingWords);
+        pub_last_ts_.assign(static_cast<size_t>(kNSockets) * devices_.front().nl, 0);
         ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
         // PRE-POPULATE THE BUFFER POOL.
         //
@@ -1457,6 +1458,32 @@ void PerfDebugProfiler::decode_and_publish(
     PerfDebugRec* const bend = ss.batch.data() + ss.batch.size();
     const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
 
+    // Publish a span of records to the ring. Used both for the tail of a read and for a mid-decode flush
+    // when the batch fills, so a full batch is never discarded.
+    auto publish_recs = [&](const PerfDebugRec* p, size_t n) {
+        if (n == 0 || !ring_) {
+            return;
+        }
+        w_recs_ += n;
+        // Stagger probe: remember each lane's FIRST marker timestamp (cheap: one compare per record).
+        if (!first_ts_.empty()) {
+            for (size_t k = 0; k < n; k++) {
+                const uint32_t ln = p[k].lane & 0x00FFFFFFu;
+                if (ln < first_ts_.size() && first_ts_[ln] == 0) {
+                    first_ts_[ln] = p[k].ts;
+                }
+            }
+        }
+        ZoneScopedNC("publish", 0xE67E22);  // orange: publish records to the BroadcastRing
+        const auto t_p0 = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> pg(publish_mu_);  // SP ring, N decoder threads -- see publish_mu_
+            ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(p, n));
+        }
+        w_publish_ns_ +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_p0).count();
+    };
+
     ZoneScopedNC("decode", 0x8E44AD);  // purple: pages -> records. With the sink decoupled this plus sock-read
                                        // is the writer's whole job; if it ever fills the thread, the DRAIN is
                                        // the wall (not Tracy) -- the opposite of the UFLD-v2 case.
@@ -1478,8 +1505,29 @@ void PerfDebugProfiler::decode_and_publish(
                 ss.stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring. Non-zero means
                              // the capture PERTURBED the workload (kernels elongated); still lossless.
             }
-            if (lane / kNRisc >= ctx.core_virt.size() || bcur >= bend) {
+            if (lane / kNRisc >= ctx.core_virt.size()) {
+                w_drop_lane_.fetch_add(1, std::memory_order_relaxed);
                 return;
+            }
+            if (bcur >= bend) {
+                // FLUSH, never drop. Dropping deleted markers mid-stream, which unpairs ZONE_START/END and
+                // leaves that lane's Tracy GPU stack permanently one level deeper (nesting is by push order),
+                // so one lost END scrambles every zone after it on that lane for the rest of the run.
+                publish_recs(ss.batch.data(), static_cast<size_t>(bcur - ss.batch.data()));
+                bcur = ss.batch.data();
+                w_batch_flush_.fetch_add(1, std::memory_order_relaxed);
+            }
+            {
+                // Lanes never cross sockets (contiguous core split), so [sock][lane] has a single writer.
+                const size_t li = static_cast<size_t>(sock_idx) * ctx.nl + lane;
+                if (li < pub_last_ts_.size()) {
+                    if (ts < pub_last_ts_[li]) {
+                        w_pub_regress_.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        pub_last_ts_[li] = ts;
+                        w_pub_ok_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
             }
             // Rebase to the first device ts this run sees, so zones land near the Tracy context origin
             // instead of ~device-wall-clock ticks into the timeline.
@@ -1530,24 +1578,7 @@ void PerfDebugProfiler::decode_and_publish(
     w_decode_ns_ +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec0).count();
 
-    const size_t bn = static_cast<size_t>(bcur - ss.batch.data());
-    w_recs_ += bn;
-    // Stagger probe: remember each lane's FIRST marker timestamp (cheap: one compare per record).
-    if (!first_ts_.empty()) {
-        for (size_t k = 0; k < bn; k++) {
-            const uint32_t lane = ss.batch[k].lane & 0x00FFFFFFu;
-            if (lane < first_ts_.size() && first_ts_[lane] == 0) {
-                first_ts_[lane] = ss.batch[k].ts;
-            }
-        }
-    }
-    if (bn != 0 && ring_) {
-        ZoneScopedNC("publish", 0xE67E22);  // orange: publish this read's records to the BroadcastRing
-        const auto t_p0 = std::chrono::steady_clock::now();
-        ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(ss.batch.data(), bn));
-        w_publish_ns_ +=
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_p0).count();
-    }
+    publish_recs(ss.batch.data(), static_cast<size_t>(bcur - ss.batch.data()));
 }
 
 bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
@@ -1856,7 +1887,22 @@ void PerfDebugProfiler::consumer_thread() {
         uint32_t got = 0;
         uint64_t vals[kMaxEventValues] = {};
     } pend;
+    std::vector<uint64_t> con_last_ts_(4096, 0);
     auto emit_batch = [&](std::span<PerfDebugRec> b) {
+        for (const auto& r : b) {
+            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
+                continue;
+            }
+            const uint32_t ln = r.lane & 0xFFFFFFu;
+            if (ln < con_last_ts_.size()) {
+                w_con_seen_.fetch_add(1, std::memory_order_relaxed);
+                if (r.ts < con_last_ts_[ln]) {
+                    w_con_regress_.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    con_last_ts_[ln] = r.ts;
+                }
+            }
+        }
         // Names are only resolvable once the workload's kernels have JIT-compiled, which has certainly
         // happened by the time records reach us.
         std::call_once(names_once_, [this]() {
@@ -2460,6 +2506,17 @@ void PerfDebugProfiler::stop() {
             ring_capacity_recs(),
             consumed_.load(),
             dropped_.load());
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] order/loss: per-lane ts regressions {} of {} at publish, {} of {} at consume "
+        "[both MUST be 0; non-zero = records reordered => Tracy nesting corrupt] | lane-bound drops {} | "
+        "batch flushes {}",
+        w_pub_regress_.load(),
+        w_pub_ok_.load() + w_pub_regress_.load(),
+        w_con_regress_.load(),
+        w_con_seen_.load(),
+        w_drop_lane_.load(),
+        w_batch_flush_.load());
     }
     tracy_.reset();
     devices_.clear();
