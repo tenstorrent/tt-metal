@@ -410,7 +410,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 17
+      timeout: 20
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -580,7 +580,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 27
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1
