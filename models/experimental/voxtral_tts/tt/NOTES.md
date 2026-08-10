@@ -566,8 +566,9 @@ single named constant rather than two literals.
           * `mc` -- decode keeps intermediates in L1 (see _L1, worth 0.9 ms). Prefill cannot: its
             `g` is [1,S,9216] and S reaches 384, i.e. 6.8 MB, so it passes DRAM.
 
-        `activation="silu"` on the FF1 matmul is bit-identical to a separate `ttnn.silu` and one
-        dispatch cheaper.
+        `activation="silu"` on the FF1 matmul is bit-identical to a separate `ttnn.silu` -- and it
+        is NOT CHEAPER, it is the same 157.9 us. See NOTES [flow-12] and STATUS.md 6.41; the "one
+        dispatch cheaper" this note used to claim was never measured and is false.
         """
 ```
 
@@ -1031,13 +1032,34 @@ permutation -- and it saves the separate ttnn.transpose the scores matmul would 
         # No `multiply(s, SCALE)` here: 1/sqrt(head_dim) is folded into wqkv's q rows at load time.
 ```
 
-### [flow-12] `_block` — SiLU rides along on the w1 matmul instead of being its...
+### [flow-12] `_block` — `activation="silu"` IS NOT FUSED. It never was, on either chip.
 
 ```text
-        # SiLU rides along on the w1 matmul instead of being its own op -- bit-identical (verified
-        # here at 19/576 acoustic codes and velocity PCC unchanged), 0.16 ms/frame, and the same
-        # thing Block 1 has always done. NOT the idea rejected in STATUS.md 6.8, which was fusing
-        # silu into the MULTIPLY below via input_tensor_a_activations; that one really is worthless.
+        # CORRECTED, STATUS.md 6.41. This note used to claim "SiLU rides along on the w1 matmul
+        # instead of being its own op ... 0.16 ms/frame". THAT IS FALSE and was false for the life
+        # of this port. Measured on N150, same shape, same dtype:
+        #
+        #     linear(activation="silu")      157.9 us
+        #     linear() then ttnn.silu()      157.9 us     <- IDENTICAL
+        #     linear() plain, no silu        147.4 us
+        #
+        # activation="silu" costs exactly what a separate op costs: +10.3 us. ttnn evidently issues
+        # a second kernel either way. The evidence was in our own maps all along -- w1 157.9 against
+        # w3's 147.5 at the SAME shape, dtype and floor, the only difference being the activation.
+        #
+        # SO WHY IS IT STILL WRITTEN THIS WAY? Because nothing on N150 beats it. Only a program
+        # config's fused_activation genuinely folds silu in, and per_core_N must divide the 288
+        # output tiles, which on 64 cores admits no good shape: 8x6 -> 162.1 us (0.975x), 8x4 ->
+        # 176.8, 8x2 -> 207.6. On the whole block it loses too, Block 1 -0.057 ms and Block 2
+        # -0.078 ms against spreads of 0.006-0.065. So the +10.3 us x 47 calls = 0.485 ms/frame is
+        # REAL and UNREACHABLE here.
+        #
+        # ON P150 IT IS REACHABLE: a 12x6 grid of 130 cores gives per_core_N=4 and folds silu in at
+        # 88.1 vs 98.8 us, worth 2.42 ms/frame -- lserbedzija/voxtral-tts-ttnn_p150, 1c91d3de4c0.
+        # Keep activation="silu" here; use a program config there.
+        #
+        # NOT the idea rejected in STATUS.md 6.8, which was fusing silu into the MULTIPLY below via
+        # input_tensor_a_activations; that one really is worthless.
 ```
 
 ### [flow-13] `_trunk` — FOLD THE CFG BATCH INTO ROWS -- worth 2.23x,...

@@ -2831,6 +2831,65 @@ P150 real **34/864 (3.9%)**, both **0 semantic**, both all-off-by-one. The fork'
 synthetic artifact this card shows at 97/288, and their bisect showed the fork point (unmodified N150
 code) already reading 85/288. **No P150 regression.**
 
+### 6.41 — `activation="silu"` was NEVER fused, on either chip; the fix is P150-only
+
+From `lserbedzija/voxtral-tts-ttnn_p150` (`1c91d3de4c0`), verified independently here. It corrects a
+claim this project has carried since Block 2's bring-up.
+
+**THE DIAGNOSIS IS RIGHT AND PORTABLE.** Same shape, same dtype, N150:
+
+    linear(activation="silu")      157.9 us   PCC vs fp64 0.9999634
+    linear() then ttnn.silu()      157.9 us   PCC vs fp64 0.9999634   <- IDENTICAL
+    linear() plain, no silu        147.4 us
+
+`activation="silu"` costs **exactly** what a separate op costs: **+10.3 us**. ttnn issues a second
+kernel either way. Over 47 w1 calls a frame (26 in Block 1 + 21 in Block 2) that is **0.485 ms/frame**
+of pure overhead we have been describing as fused.
+
+**AND THE EVIDENCE WAS IN OUR OWN MAPS THE WHOLE TIME.** §6.27 and §6.36 both list w1 at 157.9 and w3 at
+147.5 — **same shape, same dtype, same 155.1 us floor**, the only difference being the activation. I read
+them as "+2.9 over floor" and "-7.5 under floor" and never compared the two rows to each other. That is
+the second time this session a finding sat in a table I had already printed.
+
+**[flow-12] IS CORRECTED.** It claimed "SiLU rides along on the w1 matmul instead of being its own op …
+0.16 ms/frame". False, and false for the life of the port. [gpt-14]'s "one dispatch cheaper" is also
+corrected — never measured.
+
+**THE FIX DOES NOT TRANSFER.** Only a program config's `fused_activation` genuinely folds silu in, and
+`per_core_N` must divide the 288 output tiles, which on 64 cores admits no good shape:
+
+| grid | cores | per_core_N | best us | vs `activation="silu"` |
+|---|---|---|---|---|
+| **8x6** | 48 | 6 | **162.1** | **0.975x** |
+| 8x4 | 32 | 9 | 176.8 | 0.894x |
+| 8x3 | 24 | 12 | 184.7 | 0.856x |
+| 8x2 | 16 | 18 | 207.6 | 0.761x |
+| 4x8 | 32 | 9 | 261.0 | 0.605x |
+
+Nothing wins. **And it loses on the whole block too** — 6 rounds, interleaved:
+
+    BLOCK 1 step    A activation=silu 23.150 ms (spread 0.006)  B config 23.207  -0.057 ms
+    BLOCK 2 frame   A activation=silu 20.825 ms (spread 0.065)  B config 20.903  -0.078 ms
+
+Both gaps exceed their spreads, so A genuinely wins. **The 0.485 ms/frame is real and unreachable on
+N150 by this route.** On P150 it IS reachable: a 12x6 grid of 130 cores gives `per_core_N=4` and folds
+silu at 88.1 vs 98.8 us, worth 2.42 ms/frame there.
+
+**THEIR OTHER FINDING IS A MECHANISM FOR §6.33, AND IT IS P150-SPECIFIC.** They measured the silu op at
+**12.2 us isolated and ~54 us in-block** and explain it as *"a tight loop of identical ops pipelines, a
+real block of differing ops does not"* — which is exactly why isolated timing mispredicts, and it
+predicts isolated UNDERSTATES an op's in-block cost. **That amplification does not reproduce on N150**:
+our isolated 4 us gap stayed a 0.057-0.078 ms whole-block gap, roughly consistent rather than 4.4x
+amplified. Coherent with their own measurement that small ops cost 3.4x more on P150. So §6.33's
+mechanism is *plausibly* pipelining, but on this chip the effect is far weaker than their numbers imply
+and it still does not explain a whole-block gain from a slower op.
+
+**Three more of their P150 results reverse our N150 conclusions**, all consistent with the same
+"small ops cost 3.4x more there" regime — in-place elementwise pays (+0.929 ms/step, +0.790 ms/frame,
+against our §6.39 null), sdpa for Block 2's interior pays (45.4 ms/frame, against our §6.37 rejection),
+and dispatch is 3-4% there against the 0% §6.38 measured here. None of those is a contradiction; they
+are a different cost regime, and that is the single most useful thing to carry into any P150 port.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

@@ -320,6 +320,7 @@ Full numbers in STATUS; this is the index so you don't spend a day on a closed q
 | residual-as-bias, **Block 1** | w2's add is already free |
 | residual-as-bias, **Block 2** | **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
 | `ttnn.swiglu` | `TT_THROW`s on a concatenated pair; would need w1/w3 fused, which is 4× slower |
+| **w1 program config to genuinely fuse silu** | `activation="silu"` is **NOT fused** — it costs the same as a separate `ttnn.silu` (+10.3 µs, 0.485 ms/frame over 47 calls). Only `fused_activation` in a program config folds it in, and on 64 cores no legal grid wins: best 8×6 at 0.975× isolated, −0.057/−0.078 ms whole-block (`§6.41`). **Reachable on P150** (12×6 of 130 cores, 2.42 ms/frame) — not here |
 | `_solve` tensors moved into L1 | neutral-to-worse, monotonically (`§6.37`): 20.916 → 20.946 → 20.974 → 21.046 ms |
 | **eliminating CFG** | costs only **1.8%** (0.322 ms/frame), because 3 rows and 6 rows both pad to one 32-row tile and the row fold reads each weight once. `p2`'s known-zero half is also free (65.1 µs either way). "CFG doubles the work" does not hold here (`§6.35`) |
 
