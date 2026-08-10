@@ -81,7 +81,12 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
+    topology=None,
 ):
+    # Default keeps the original module-level topology (Linear) for the WH TG tests;
+    # BH-galaxy callers pass Ring to match the 2D-torus fabric.
+    if topology is None:
+        topology = TOPOLOGY
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
@@ -261,7 +266,7 @@ def run_reduce_scatter_test(
                 worker_sub_device_id,
                 cluster_axis=1,
                 mesh_device=mesh_device,
-                topology=TOPOLOGY,
+                topology=topology,
                 num_links=num_links,
                 num_heads=8,
                 num_kv_heads=1,

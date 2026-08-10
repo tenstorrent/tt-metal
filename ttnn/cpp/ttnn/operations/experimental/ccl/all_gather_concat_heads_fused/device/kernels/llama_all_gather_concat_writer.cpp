@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include <cstdint>
 #include <utility>
 #include <array>
@@ -34,6 +35,16 @@ constexpr uint32_t out_ready_sem_wait_value = get_compile_time_arg_val(10);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+// Host-computed fabric multicast routes (2D-fabric aware; 1D keeps hop-based behavior):
+// data fwd/bwd, then output-ready-semaphore sync fwd/bwd.
+constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11>();
+constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11 + ccl_routing_utils::num_line_multicast_args>();
+constexpr ccl_routing_utils::line_multicast_route_info_t sync_forward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11 + 2 * ccl_routing_utils::num_line_multicast_args>();
+constexpr ccl_routing_utils::line_multicast_route_info_t sync_backward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11 + 3 * ccl_routing_utils::num_line_multicast_args>();
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -73,6 +84,10 @@ void kernel_main() {
     arg_idx += num_sem_ranges;
     tt_l1_ptr uint32_t* mcast_dest_noc_end_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_sem_ranges;
+    // Per-range destination counts (host-derived from the actual concat core ranges; formerly
+    // hardcoded 2/6/8 which only matched the WH-TG concat grid).
+    tt_l1_ptr uint32_t* mcast_dest_counts = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_sem_ranges;
 
     size_t arg_for_fab = arg_idx;
     constexpr bool connect_to_fabric_when_creating = true;
@@ -100,10 +115,8 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    pkt_hdr_forward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    pkt_hdr_backward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open_finish();
@@ -152,15 +165,13 @@ void kernel_main() {
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, sync_forward_multicast_route_info);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, sync_backward_multicast_route_info);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
@@ -183,13 +194,8 @@ void kernel_main() {
     }
 
     if (wait_output_semaphore) {
-        for (uint32_t i = 0; i < 3; i++) {
-            uint32_t mcast_dest_num = 2;
-            if (i == 1) {
-                mcast_dest_num = 6;
-            } else if (i == 2) {
-                mcast_dest_num = 8;
-            }
+        for (uint32_t i = 0; i < num_sem_ranges; i++) {
+            uint32_t mcast_dest_num = mcast_dest_counts[i];
             concat_sem.set_multicast(
                 noc_obj,
                 mcast_dest_noc_start_x[i],

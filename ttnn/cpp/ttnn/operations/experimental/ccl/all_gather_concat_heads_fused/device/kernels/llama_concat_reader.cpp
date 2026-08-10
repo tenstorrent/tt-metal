@@ -139,8 +139,16 @@ void kernel_main() {
     uint32_t second_half_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
 
-    std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
-    std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
+    // Virtual NOC coords of the input shard cores for the local-batch copy. Host-computed:
+    // the previous hardcoded values were the WH-TG virtual coords and broke other archs (BH).
+    std::array<uint32_t, 8> core_noc_x;
+    std::array<uint32_t, 8> core_noc_y;
+    for (uint32_t k = 0; k < 8; k++) {
+        core_noc_x[k] = get_arg_val<uint32_t>(arg_idx++);
+    }
+    for (uint32_t k = 0; k < 8; k++) {
+        core_noc_y[k] = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     Noc noc_obj;
     CircularBuffer cb_q_out(cb_id_q_out);

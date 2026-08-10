@@ -127,6 +127,41 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ::ttnn::ccl::get_forward_backward_configuration(
             operation_attributes.ring_size, ring_index, operation_attributes.topology);
+    // On 2D fabrics the multicast routes are direction-specific (dst mesh/chip id + per-direction
+    // hops), so the dynamic-alternate trick of swapping the forward/backward packet headers between
+    // packets would send packets with the wrong route. Disable it there; 1D fabrics keep it.
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        dynamic_alternate = false;
+    }
+    // Fabric-topology-aware multicast route info. The legacy writer built raw 1D
+    // MulticastRoutingCommandHeaders, which no-op on 2D fabrics (e.g. the Blackhole galaxy 2D
+    // torus, where PACKET_HEADER_TYPE is HybridMeshPacketHeader and routes need dst mesh/chip ids
+    // plus per-direction hop counts). Emit host-computed route info the same way the proven
+    // all_gather_async writers do; ccl_routing_utils picks the encoding per fabric type (1D
+    // low-latency headers keep the exact old behavior).
+    const auto& forward_device_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+    const auto& backward_device_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor, mesh_coordinate, -1, operation_attributes.topology, operation_attributes.cluster_axis);
+    auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+        mesh_coordinate,
+        forward_device_coord,
+        backward_device_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
+    // The output-ready-semaphore mcast uses max(num_targets) when dynamic_alternate is on; emit a
+    // dedicated route pair for it so the kernel does not rebuild headers from hop counts.
+    const uint32_t num_max_targets = std::max(num_targets_forward, num_targets_backward);
+    const uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward;
+    const uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward;
+    auto [sync_mcast_forward_args, sync_mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+        mesh_coordinate,
+        forward_device_coord,
+        backward_device_coord,
+        num_sync_targets_forward,
+        num_sync_targets_backward,
+        mesh_device);
 
     // To overlap NLP local data with all gather, we divide the batches for each device into:
     //      - local batch (starts with start_local)
@@ -243,6 +278,20 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         }
     }
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
+    // Semaphore-multicast ranges for signaling the concat cores. The former hardcoded ranges
+    // (cols 5-6 rows {9, 0-2, 4-7}) match the WH-TG prefetcher-ring order, where the first 16 ring
+    // cores happen to be exactly those; on other ring orders (e.g. the BH galaxy ring, which starts
+    // at cols 1-3) the hardcoded rectangles signal cores that do not run the concat kernels (hang)
+    // while 3 real concat cores were skipped by a stale worker-core exclusion (crash in
+    // override_runtime_arguments). Derive the ranges + destination counts from the actual concat
+    // core ranges instead.
+    std::vector<CoreRange> sem_mcast_ranges_vec;
+    std::vector<uint32_t> sem_mcast_dest_counts;
+    for (const auto& cr : q_cores_vector) {
+        sem_mcast_ranges_vec.push_back(cr);
+        sem_mcast_dest_counts.push_back(cr.size());
+    }
+    const uint32_t num_semaphore_ranges = sem_mcast_ranges_vec.size();
     std::vector<CoreRange> sem_cores_vector;
     sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     range_count = 0;
@@ -362,8 +411,17 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
         dynamic_alternate,                // alternate
-        llama_configuration.num_semaphore_ranges,
+        num_semaphore_ranges,
         out_ready_sem_wait_value};
+    // Host-computed fabric multicast route info (2D-fabric aware): data fwd/bwd, then sync fwd/bwd.
+    all_gather_writer_ct_args.insert(
+        all_gather_writer_ct_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+    all_gather_writer_ct_args.insert(
+        all_gather_writer_ct_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+    all_gather_writer_ct_args.insert(
+        all_gather_writer_ct_args.end(), sync_mcast_forward_args.begin(), sync_mcast_forward_args.end());
+    all_gather_writer_ct_args.insert(
+        all_gather_writer_ct_args.end(), sync_mcast_backward_args.begin(), sync_mcast_backward_args.end());
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -490,13 +548,12 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
             concat_semaphore_id2,
         };
 
-        auto sem_mcast_ranges = CoreRangeSet(llama_configuration.semaphore_mcast_ranges);
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
         std::vector<uint32_t> mcast_end_x;
         std::vector<uint32_t> mcast_end_y;
 
-        for (const auto& range : sem_mcast_ranges.ranges()) {
+        for (const auto& range : sem_mcast_ranges_vec) {
             auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
             auto end_core = mesh_device->worker_core_from_logical_core(range.end_coord);
             if (writer_noc == tt::tt_metal::NOC::NOC_1) {
@@ -514,6 +571,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         writer_rt_args.insert(writer_rt_args.end(), mcast_start_y.begin(), mcast_start_y.end());
         writer_rt_args.insert(writer_rt_args.end(), mcast_end_x.begin(), mcast_end_x.end());
         writer_rt_args.insert(writer_rt_args.end(), mcast_end_y.begin(), mcast_end_y.end());
+        // Per-range multicast destination counts (formerly hardcoded 2/6/8 in the kernel, which
+        // only matched the WH-TG concat grid).
+        writer_rt_args.insert(writer_rt_args.end(), sem_mcast_dest_counts.begin(), sem_mcast_dest_counts.end());
 
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for ([[maybe_unused]] const auto& arg : writer_rt_args) {
@@ -537,6 +597,19 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     }
 
     /* rt for concat kernels*/
+    // Virtual NOC coords of the input-tensor shard cores, for the local-batch copy. The kernel
+    // used to hardcode the WH-TG virtual coords ({19,20,21}x{18,19,20}); on other archs (e.g.
+    // Blackhole) the logical->virtual mapping differs, so the local users were read from the
+    // wrong cores (silently: the guarding TT_ASSERT is compiled out in release builds). Pass
+    // the host-computed coords as runtime args instead.
+    std::vector<uint32_t> input_cores_x;
+    std::vector<uint32_t> input_cores_y;
+    for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
+        auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
+        input_cores_x.push_back(this_core.x);
+        input_cores_y.push_back(this_core.y);
+    }
+    std::vector<CoreCoord> concat_arg_cores;
     uint32_t q_start_addr = temp_tensor.buffer()->address();
     for (uint32_t i = 0; i < llama_configuration.concat_num_cores; ++i) {
         uint32_t second_half_core = 1;
@@ -546,24 +619,16 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
         // the upper half of the tile and rest are in the lower half of tile.
         const auto& core = cores[i];
-        std::vector<uint32_t> input_cores_x;
-        std::vector<uint32_t> input_cores_y;
-        std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
-        std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
-        for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
-            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
-            input_cores_x.push_back(this_core.x);
-            input_cores_y.push_back(this_core.y);
-            TT_ASSERT(
-                this_core.x == kernel_core_noc_x[k] && this_core.y == kernel_core_noc_y[k],
-                "This op should run on a TG machine");
-        }
-        bool is_worker_core = core.x == 1 && core.y == 0;
-        is_worker_core = is_worker_core || (core.x == 2 && core.y == 0);
-        is_worker_core = is_worker_core || (core.x == 3 && core.y == 0);
+        // Skip cores doubling as AG sender workers (they run the AG reader/writer kernels instead).
+        // This used to be a hardcoded {(1,0),(2,0),(3,0)} check: vestigial on the WH-TG grid (the
+        // first 16 ring cores are on cols 5-6) but wrong on ring orders that start at cols 1-3
+        // (BH galaxy): 3 real concat cores were skipped, leaving their kernels without runtime args.
+        bool is_worker_core =
+            std::find(sender_worker_cores.begin(), sender_worker_cores.end(), core) != sender_worker_cores.end();
         if (is_worker_core == 0) {
+            concat_arg_cores.push_back(core);
             std::vector<uint32_t> reader_runtime_args;
-            reader_runtime_args.reserve(6 + (2 * in_num_cores));
+            reader_runtime_args.reserve(6 + (2 * in_num_cores) + input_cores_x.size() + input_cores_y.size());
             reader_runtime_args = {
                 q_start_addr, input_tensor.buffer()->address(), concat_semaphore_id, concat_semaphore_id2};
 
@@ -571,6 +636,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
             reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
             reader_runtime_args.push_back(second_half_core);
             reader_runtime_args.push_back(i / 2);
+            // Local-batch input shard core coords (see comment above).
+            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_x.begin(), input_cores_x.end());
+            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_y.begin(), input_cores_y.end());
 
             tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, core, reader_runtime_args);
         }
@@ -582,6 +650,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         .num_concat_worker_cores = num_concat_worker_cores,
         .cb_q_output = cb_q_output,
         .cores = cores,
+        .concat_arg_cores = concat_arg_cores,
         .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .concat_reader_kernel_id = concat_reader_kernel_id,
@@ -626,8 +695,8 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
             worker_writer_sender_runtime_args[1] = semaphore.address();
         }
 
-        for (uint32_t i = 0; i < shared_vars.num_concat_worker_cores; ++i) {
-            const auto& core = shared_vars.cores[i];
+        // Only touch cores that received args at create time (AG sender-worker cores are excluded).
+        for (const auto& core : shared_vars.concat_arg_cores) {
             auto& concat_reader_runtime_args = GetRuntimeArgs(program, shared_vars.concat_reader_kernel_id, core);
             concat_reader_runtime_args[0] = q_start_addr;
             concat_reader_runtime_args[1] = input.buffer()->address();

@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
@@ -57,7 +58,12 @@ void kernel_main() {
     // worker count). The NoC ack counter must be credited against the
     // rectangle size or noc_async_write_barrier() will wait forever.
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
-    constexpr auto gamma_args = TensorAccessorArgs<25>();
+    // Host-computed fabric multicast route info (2D-fabric aware; see program factory).
+    constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
+        ccl_routing_utils::get_line_multicast_route_info_from_args<25>();
+    constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
+        ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_multicast_args>();
+    constexpr auto gamma_args = TensorAccessorArgs<25 + 2 * ccl_routing_utils::num_line_multicast_args>();
 
     Noc noc_obj;
     CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
@@ -142,10 +148,8 @@ void kernel_main() {
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
         volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-        pkt_hdr_forward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        pkt_hdr_backward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
         fabric_connection.open_finish();
         // 1. mcast via fabric to remote tensor addresses
         uint32_t tiles_read = 0;

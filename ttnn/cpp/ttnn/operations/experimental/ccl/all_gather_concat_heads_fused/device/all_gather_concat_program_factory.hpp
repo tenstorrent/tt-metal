@@ -15,6 +15,8 @@ struct AllGatherConcatSharedVariables {
     uint32_t num_concat_worker_cores = 0;
     tt::tt_metal::CBHandle cb_q_output{};
     std::vector<tt::tt_metal::CoreCoord> cores;
+    // Concat-reader cores that actually received runtime args (excludes AG sender-worker overlap).
+    std::vector<tt::tt_metal::CoreCoord> concat_arg_cores;
     tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
     tt::tt_metal::KernelHandle concat_reader_kernel_id{};

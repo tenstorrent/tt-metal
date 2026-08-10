@@ -125,6 +125,24 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         }
     }
 
+    // Fabric-topology-aware multicast route info for the stats all-gather. The legacy writer built raw
+    // 1D MulticastRoutingCommandHeaders, which are no-ops on 2D fabrics (e.g. the Blackhole galaxy
+    // 2D torus, where PACKET_HEADER_TYPE is HybridMeshPacketHeader and routes need dst mesh/chip ids
+    // plus per-direction hop counts). Emit host-computed route info the same way the proven
+    // all_gather_async writers do, and let ccl_routing_utils pick the encoding per fabric type
+    // (1D low-latency headers keep the exact old behavior).
+    const auto& forward_device_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        a, mesh_coord, 1, topology, operation_attributes.cluster_axis);
+    const auto& backward_device_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        a, mesh_coord, -1, topology, operation_attributes.cluster_axis);
+    auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+        mesh_coord,
+        forward_device_coord,
+        backward_device_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
+
     // Get worker cores, assuming 1 worker per link
     ShardSpec shard_spec = a.shard_spec().value();
     CoreRangeSet all_cores = shard_spec.grid;
@@ -692,6 +710,11 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
     writer_compile_time_args.push_back(num_mcast_dests);
+    // Multicast route info (6 args per direction), consumed by ccl_routing_utils in the writer.
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;

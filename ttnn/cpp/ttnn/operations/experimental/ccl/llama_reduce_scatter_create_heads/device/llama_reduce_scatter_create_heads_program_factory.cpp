@@ -19,7 +19,8 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail::rs_heads_fusion {
 
-std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
+ttsl::SmallVector<uint32_t> device_order_vector(
+    uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttsl::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
@@ -57,7 +58,11 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, t
             return a < b;
         });
     }
+    return device_order;
+}
 
+std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
+    const auto device_order = device_order_vector(ring_size, ring_index, topology);
     // Convert to string format
     std::string result = "{";
     for (size_t i = 0; i < device_order.size(); i++) {
@@ -65,6 +70,37 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, t
         if (i < device_order.size() - 1) {
             result += ", ";
         }
+    }
+    result += "}";
+    return result;
+}
+
+// Per-target fabric unicast route info, in the same order as device_order_array_string. Each entry
+// feeds ccl_routing_utils::fabric_set_line_unicast_route in the writer: on 2D fabrics (e.g. the BH
+// galaxy torus) that requires the target's {mesh_id, chip_id} (hop counts are meaningless to the 2D
+// routers - using them is why this op used to deadlock there); on 1D fabrics it stays {0, num_hops},
+// preserving the original behavior.
+std::string unicast_route_array_string(
+    uint32_t ring_size,
+    uint32_t ring_index,
+    tt::tt_fabric::Topology topology,
+    const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) {
+    const auto device_order = device_order_vector(ring_size, ring_index, topology);
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    std::string result = "{";
+    for (size_t i = 0; i < device_order.size(); i++) {
+        const uint32_t target = device_order[i];
+        uint32_t mesh_id = 0;
+        uint32_t chip_or_hops = 0;
+        if (is_2d_fabric) {
+            const auto& node_id = fabric_node_ids.at(target);
+            mesh_id = *node_id.mesh_id;
+            chip_or_hops = node_id.chip_id;
+        } else {
+            const uint32_t diff = std::abs(static_cast<int>(target) - static_cast<int>(ring_index));
+            chip_or_hops = (topology == tt::tt_fabric::Topology::Ring) ? std::min(diff, ring_size - diff) : diff;
+        }
+        result += "{" + std::to_string(mesh_id) + ", " + std::to_string(chip_or_hops) + "}, ";
     }
     result += "}";
     return result;
@@ -683,6 +719,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         operation_attributes.topology == ttnn::ccl::Topology::Linear ? 0 : 1};
 
     auto writer_defines = reader_defines;
+    // Fabric-topology-aware unicast routes (indexed in DEVICE_ORDER order); see
+    // detail::rs_heads_fusion::unicast_route_array_string for why hop counts break on 2D fabrics.
+    writer_defines["UNICAST_ROUTES"] = detail::rs_heads_fusion::unicast_route_array_string(
+        ring_size, ring_index, operation_attributes.topology, fabric_node_ids);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/"

@@ -15,6 +15,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 constexpr bool flush = false;
 void kernel_main() {
@@ -89,6 +90,9 @@ void kernel_main() {
         // Set up packet headers once
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
+        // Per-target fabric route info, same order as device_order (code gen'd in the program
+        // factory): {mesh_id, chip_id} on 2D fabrics, {0, num_hops} on 1D fabrics.
+        constexpr uint16_t unicast_routes[other_devices][2] = UNICAST_ROUTES;
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
         cb_packet_header.reserve_back(buffering_factor * num_packet_headers_storable);
         const auto packet_header_buffer_addr = cb_packet_header.get_read_ptr();
@@ -107,10 +111,21 @@ void kernel_main() {
 
         ASSERT(fabric_connection.is_logically_connected());
         fabric_connection.open_finish();
-        for (uint32_t target_device_id : device_order) {
+        for (uint32_t target_idx = 0; target_idx < other_devices; target_idx++) {
+            const uint32_t target_device_id = device_order[target_idx];
             // Calculate device-specific constants once per device
             bool forward_connection = true;
-            if constexpr (RING_TOPOLOGY) {
+            constexpr bool is_2d_fabric = std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>;
+            if constexpr (is_2d_fabric && RING_TOPOLOGY) {
+                // 2D fabric: fabric_set_unicast_route encodes the full hop-by-hop route into the
+                // header from the sender's routing table, so the packet MUST be injected into the
+                // EDM connection matching the table's first hop: shortest path, forward on ties
+                // (the parity-based load balancing below injects half the 2-hop packets backward
+                // with a forward route program - they are never delivered and wedge the routers).
+                const uint32_t right_distance = (target_device_id - chip_id + num_devices) % num_devices;
+                const uint32_t left_distance = (chip_id - target_device_id + num_devices) % num_devices;
+                forward_connection = right_distance <= left_distance;
+            } else if constexpr (RING_TOPOLOGY) {
                 const int diff = int(target_device_id) - int(chip_id);
                 const uint32_t num_hops = std::abs(diff) == 2 ? 2 : 1;
                 // To evenly distribute the load, we use the following logic:
@@ -119,12 +134,13 @@ void kernel_main() {
                 } else {
                     forward_connection = false;
                 }
-                fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
             } else {
-                const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
-                fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
                 forward_connection = target_device_id > chip_id;
             }
+            // Fabric-topology-aware route (host-computed): on 2D fabrics the routers need the
+            // target's {mesh_id, chip_id}; the old hop-count-only route never resolved there.
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                unicast_packet_header, {unicast_routes[target_idx][0], unicast_routes[target_idx][1]});
             auto& fabric_conn = forward_connection ? fabric_connection.get_forward_connection()
                                                    : fabric_connection.get_backward_connection();
 

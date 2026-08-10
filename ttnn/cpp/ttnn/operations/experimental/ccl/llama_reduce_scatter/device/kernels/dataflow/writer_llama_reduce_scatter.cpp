@@ -12,6 +12,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 constexpr bool flush = false;
 
 template <bool ring_topology>
@@ -104,6 +105,9 @@ void kernel_main() {
         // Set up packet headers once
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
+        // Per-target fabric route info, same order as device_order (code gen'd in the program
+        // factory): {mesh_id, chip_id} on 2D fabrics, {0, num_hops} on 1D fabrics.
+        constexpr uint16_t unicast_routes[other_devices][2] = UNICAST_ROUTES;
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
         const auto packet_header_buffer_addr = cb_packet_header.get_read_ptr();
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
@@ -123,10 +127,12 @@ void kernel_main() {
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open_finish();
         }
-        for (uint32_t target_device_id : device_order) {
-            // Calculate device-specific constants once per device
-            const uint32_t num_hops = distance<ring_topology>(chip_id, target_device_id, num_devices);
-            fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
+        for (uint32_t target_idx = 0; target_idx < other_devices; target_idx++) {
+            const uint32_t target_device_id = device_order[target_idx];
+            // Fabric-topology-aware route (host-computed): on 2D fabrics the routers need the
+            // target's {mesh_id, chip_id}; the old hop-count-only route never resolved there.
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                unicast_packet_header, {unicast_routes[target_idx][0], unicast_routes[target_idx][1]});
             auto& fabric_conn =
                 get_fabric_connection<ring_topology>(fabric_connection, chip_id, target_device_id, num_devices);
 
