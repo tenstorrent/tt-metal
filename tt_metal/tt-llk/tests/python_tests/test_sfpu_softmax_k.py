@@ -140,7 +140,7 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
         "sources/sfpu_softmax_k_test.cpp",
         formats,
         templates=[
-            SOFTMAX_K(k=k),
+            SOFTMAX_K(softmax_k=k),
         ],
         runtimes=[
             TILE_COUNT(1),

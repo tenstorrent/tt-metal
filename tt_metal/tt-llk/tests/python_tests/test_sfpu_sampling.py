@@ -268,7 +268,7 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
         "sources/sfpu_sampling_test.cpp",
         formats,
         templates=[
-            SAMPLING_OP(op=op),
+            SAMPLING_OP(sampling_op=op),
             SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
             VECTOR_MODE(vector_mode=vector_mode),

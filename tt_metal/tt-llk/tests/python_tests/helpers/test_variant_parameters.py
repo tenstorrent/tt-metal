@@ -687,10 +687,10 @@ class SOFTMAX_K(TemplateParameter):
     exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
     """
 
-    k: int = 16
+    softmax_k: int = 16
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int SOFTMAX_K = {self.k};"
+        return f"constexpr int SOFTMAX_K = {self.softmax_k};"
 
 
 @dataclass
@@ -700,10 +700,10 @@ class SAMPLING_OP(TemplateParameter):
     Emits ``#define SAMPLING_OP_<NAME>`` consumed by ``sfpu_sampling_test.cpp``.
     """
 
-    op: str = "recip_scalar"
+    sampling_op: str = "recip_scalar"
 
     def convert_to_cpp(self) -> str:
-        return f"#define SAMPLING_OP_{self.op.upper()}"
+        return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
 
 
 @dataclass
