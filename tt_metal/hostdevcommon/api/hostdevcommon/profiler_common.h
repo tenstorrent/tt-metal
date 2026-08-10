@@ -134,14 +134,14 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-// ---- SPSC / X280 backend control-word layout ------------------------------------------------------
-// The X280 backend overlays its OWN layout on the same profiler control vector. It deliberately does not
+// ---- SPSC / drainer backend control-word layout ------------------------------------------------------
+// The drainer backend overlays its OWN layout on the same profiler control vector. It deliberately does not
 // reuse ControlBuffer's HOST_/DEVICE_BUFFER_END_INDEX_* slots, and deliberately derives nothing from
 // PROFILER_MAX_RISC_COUNT: those are the DRAM profiler's DRAM-readout bookkeeping and its processor count,
 // and this backend has no stake in either.
 //
 // That coupling was not hypothetical. Upstream raised PROFILER_MAX_RISC_COUNT from 5 to 24 for Quasar,
-// which silently relocated this backend's ring tails from words 5..9 to 24..28 while the X280 firmware
+// which silently relocated this backend's ring tails from words 5..9 to 24..28 while the drainer firmware
 // still read 5..9. Those became dead reserved slots reading 0, so tail always equalled head: nothing ever
 // drained, the worker L1 rings filled, and every producing RISC blocked forever. A constant belonging to
 // the other backend moved this one's flow-control words.
@@ -155,11 +155,11 @@ enum ControlBuffer {
 static constexpr std::uint32_t PROFILER_SPSC_MAX_RISC = 24;
 
 enum SpscControlBuffer {
-    // [0, PROFILER_SPSC_MAX_RISC): ring HEAD per RISC -- consumer-written (X280), monotonic word count.
+    // [0, PROFILER_SPSC_MAX_RISC): ring HEAD per RISC -- consumer-written (drainer), monotonic word count.
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring TAIL per RISC -- producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // Host->kernel terminate signal: set at teardown when the X280 consumer is stopping. While clear, a
+    // Host->kernel terminate signal: set at teardown when the drainer consumer is stopping. While clear, a
     // producing RISC BLOCKS on a full ring (lossless). While set, the producer stops blocking and
     // proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge wait_until_cores_done()
     // during device close.
@@ -190,9 +190,9 @@ enum SpscControlBuffer {
     SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
 
-// STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
+// STICKY_META (SPSC/drainer backend): an 8B context packet emitted once per RISC per launch at the main
 // zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
-// host forward-fills that identity onto the following timing markers so the X280 reader can bulk-copy raw
+// host forward-fills that identity onto the following timing markers so the drainer reader can bulk-copy raw
 // markers with NO per-marker reshape. Its type sits in the same bits (28-30 of w0) as a marker's type, so
 // the host distinguishes it before decoding the rest. Must stay <= 7 (3-bit type field).
 enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B, STICKY_META };
@@ -235,9 +235,9 @@ constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CON
 // would fail the build on a defect this branch neither introduced nor can fix here.
 static_assert(
     SPSC_CONTROL_END <= PROFILER_L1_CONTROL_VECTOR_SIZE,
-    "SPSC/X280 control layout overflows the profiler L1 control vector");
+    "SPSC/drainer control layout overflows the profiler L1 control vector");
 // Governs the L1 buffer SIZING (part of mailboxes_t, which is L1-size-bounded) and the DRAM path.
-// The X280 SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
+// The drainer SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
 // so the L1 profiler ring keeps its size (holding 128 4-word markers instead of 256 2-word ones).
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
@@ -274,8 +274,8 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 // multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the WHOLE-PAGE PCIe write aligned. Alignment
 // is not a nicety here: the NoC MIS-DELIVERS a misaligned transfer rather than rejecting it.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
-// Wire type code. Must equal PP_BULK_SPAN in tools/x280_bm/include/prof_packet.h, which is plain C and
-// cannot include this header; x280_profzone_decode.hpp static_asserts that the two agree.
+// Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
+// cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
 // Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in prof_packet.h).
 constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;

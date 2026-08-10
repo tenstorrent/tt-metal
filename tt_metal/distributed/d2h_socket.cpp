@@ -146,8 +146,8 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     // sysmem_manager::allocate_region draws from a tiny (~8 KB) auxiliary region -- far too small for a real
     // socket FIFO (the relay needs a FIFO that can hold a whole drain snapshot, up to tens of KB). Carve the
     // FIFO (plus a contiguous bytes_sent slot) from the MAIN hugepage channel instead -- its upper half is
-    // free when the device's raw rings aren't in use, exactly what the X280 raw-ring path relies on. Each
-    // socket gets a 2 MB-aligned region (one X280 posted-TLB window) via a process-wide bump. The returned
+    // free when the device's raw rings aren't in use, exactly what the drainer raw-ring path relies on. Each
+    // socket gets a 2 MB-aligned region (one drainer posted-TLB window) via a process-wide bump. The returned
     // dev addr is the channel OFFSET (hi=0); the L2CPU sender ORs in pcie_base (NOC_XY_PCIE_ENCODING bit60).
     static std::atomic<uint64_t> s_hugepage_bump{0};
     uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
@@ -235,7 +235,7 @@ void D2HSocket::write_socket_metadata(
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else if (sender_is_l2cpu_) {
-        // Non-worker sender (X280 L2CPU): sender_core_.core_coord is a physical NoC coord and
+        // Non-worker sender (drainer L2CPU): sender_core_.core_coord is a physical NoC coord and
         // config_buffer_address_ is the full LIM address. Write directly via the cluster using
         // the virtual coord (worker_core_from_logical_core / WORKER translation would target a
         // Tensix worker instead).
@@ -276,7 +276,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
                                                : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
         // ASK whether this core has a static window; do not infer it from the sender kind. Metal maps
         // static TLBs at device init for workers/eth/dispatch and, on Blackhole, one 4 GB window per DRAM
-        // channel (ll_api::configure_static_tlbs). The X280 L2CPU is not among them -- but a DRAM core
+        // channel (ll_api::configure_static_tlbs). The drainer L2CPU is not among them -- but a DRAM core
         // (DRISC sender) may be, and a caller that wants one can configure it before constructing the
         // socket. Keying off sender_is_l2cpu_ conflated two unrelated things: the addressing semantics
         // above (which a non-worker sender genuinely needs) and static-TLB availability (which is a
@@ -325,10 +325,10 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    // NOTE: the L2CPU (X280) reaches a socket buffer by a posted write through the PCIe tile at pcie_base|addr
+    // NOTE: the L2CPU (drainer) reaches a socket buffer by a posted write through the PCIe tile at pcie_base|addr
     // (bit60 = NOC_XY_PCIE_ENCODING outbound routing). With IOMMU enabled that goes to the PCIe bus, so an
     // IOMMU-pinned PinnedMemory IOVA is reachable the same way the hugepage channel is -- PROVIDED the sender
-    // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the X280). So L2CPU can use
+    // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the drainer). So L2CPU can use
     // PinnedMemory too; profzone gets the full FIFO addr via P_HOST_BASE and writes it with bit60 set.
     // The predicate this branch used to spell out by hand -- is_iommu_enabled() ||
     // get_supports_64_bit_pcie_addressing() -- is exactly upstream's d2h_uses_hugepage_fallback(), so use theirs.

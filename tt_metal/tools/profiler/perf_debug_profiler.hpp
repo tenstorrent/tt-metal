@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf-debug profiler: the host-side home for the X280 (Blackhole L2CPU) device-zone capture path.
+// Perf-debug profiler: the host-side home for the Blackhole device-zone capture path.
 //
-// This is a clean module rather than a graft onto RealtimeProfilerManager: the X280 path needs none of the
+// This is a clean module rather than a graft onto RealtimeProfilerManager: the drain path needs none of the
 // manager's legacy baggage (the program-record D2H socket, the reserved-tensix core + dispatch handshake,
 // the host<->device sync machinery, the stale 4-word/44-bit-graft decode). It drains the worker per-RISC
-// SPSC profiler rings DIRECTLY via the resident X280 `profzone` firmware and streams device zones to Tracy.
+// SPSC profiler rings DIRECTLY via the resident drainer firmware and streams device zones to Tracy.
 //
-// Engine (proven in test_x280_realprof, silicon-verified):
+// Engine (proven in the standalone drain harness, silicon-verified):
 //   boot_profzone (idle-once + active-FW JUMP handoff)  ->  2 D2HSockets (dual relay, 4 MiB each, multi-window)
-//   ->  N continuous drain threads (pages -> profzone_decode -> WorkerZonePacket)  ->  RealtimeProfilerTracyHandler.
-// Reuses the shared contracts x280_profzone_boot.hpp + x280_profzone_decode.hpp so it can never drift from
-// the firmware. Booted once at MeshDevice bring-up (resident); P_STOP at teardown -- the X280 reset is
+//   ->  N continuous drain threads (pages -> spsc_decode -> WorkerZonePacket)  ->  RealtimeProfilerTracyHandler.
+// Reuses the shared contracts x280_profzone_boot.hpp + x280_spsc_decode.hpp so it can never drift from
+// the firmware. Booted once at MeshDevice bring-up (resident); P_STOP at teardown -- the drainer reset is
 // released exactly once and never re-asserted (re-asserting reset on a live L2CPU is the reservation-churn
 // trigger; only the active FW is (re)loaded via the JUMP handoff).
 #pragma once
@@ -47,11 +47,10 @@ class IDevice;
 struct RecRingHolder;  // pimpl for BroadcastRing<PerfDebugRec> (keeps the ring header out of this one)
 
 namespace profiler {
-class X280Driver;
-struct ProfzoneDecodeState;
+struct SpscDecodeState;
 }  // namespace profiler
 
-// Decoded device record handed writer -> reader. Layout mirrors test_x280_realprof's Rec exactly (ts first
+// Decoded device record handed writer -> reader. Layout mirrors the standalone drain harness's Rec exactly (ts first
 // packs it to 24 B instead of 32 padded), so both paths move the same bytes per record.
 struct PerfDebugRec {
     uint64_t ts;
@@ -61,7 +60,7 @@ struct PerfDebugRec {
     uint32_t prog;
 };
 
-// One PerfDebugProfiler per MeshDevice. Constructing it boots the X280 drainer on every eligible local
+// One PerfDebugProfiler per MeshDevice. Constructing it boots the drainer drainer on every eligible local
 // Blackhole device and starts the drain threads; destroying it (or calling stop()) signals P_STOP, joins
 // the threads, and leaves the resident idle FW alone (no reset).
 class PerfDebugProfiler {
@@ -75,10 +74,9 @@ public:
     // Stop draining: set P_STOP on every device, wait for the drainers to quiesce, join the host threads.
     // Idempotent. The idle FW stays resident (no reset).
     void stop();
-    void push_hart_zones();  // map X280 drain-hart spans to Tracy lanes (see .cpp); called from stop()
 
 private:
-    // Fixed drain config -- the silicon-validated defaults (see test_x280_realprof / the knee + Tracy sweeps):
+    // Fixed drain config -- the silicon-validated defaults (see the standalone drain harness / the knee + Tracy sweeps):
     // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
     static constexpr uint32_t kNRead = 2;
     static constexpr uint32_t kNRelay = 2;    // dual relay
@@ -116,8 +114,8 @@ private:
     // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
     // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
     // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
-    // X280 wall 1921M cyc. At 12 MiB: hostfull 0, spsc-wait 0, copy% 52, wall 30M cyc. Matches the
-    // test_x280_realprof --hring default. This is also the CEILING: NOC_2M_WINDOW_COUNT=224 with
+    // drainer wall 1921M cyc. At 12 MiB: hostfull 0, spsc-wait 0, copy% 52, wall 30M cyc. Matches the
+    // the standalone drain harness --hring default. This is also the CEILING: NOC_2M_WINDOW_COUNT=224 with
     // SOCKET_WIN_BASE=208 leaves 16 TLB windows and the FW maps nwin=ceil((in_off+bytes+64)/2MiB) consecutive
     // windows per socket, so kNSockets * nwin <= 16 (12 MiB -> nwin=7 -> 14). Raising further needs
     // SOCKET_WIN_BASE moved too.
@@ -165,7 +163,6 @@ private:
 
     struct DeviceCtx {
         uint32_t chip_id = 0;
-        std::unique_ptr<profiler::X280Driver> driver;
         std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];
         uint64_t params_addr = 0;  // profzone MBOX_PARAMS (P_STOP at teardown)
         uint32_t nl = 0;           // lanes = num_cores * NRISC
@@ -189,9 +186,9 @@ private:
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
-        std::unique_ptr<profiler::ProfzoneDecodeState> decode[kNSockets];
+        std::unique_ptr<profiler::SpscDecodeState> decode[kNSockets];
         bool active = false;
-        // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the X280 drain harts inject their own
+        // --hartzones equivalent (TT_METAL_PERF_DEBUG_HART_ZONES=1): the drain harts inject their own
         // busy/idle spans IN-BAND. {rdcycle, meta} pairs per hart (START,END alternating); each hart is written
         // by exactly one drain thread, so no lock is needed. Mapped to Tracy at stop() using the per-cluster
         // rdcycle->Tensix calibration that hart0 writes at boot when this mode is on.
@@ -213,7 +210,7 @@ private:
         std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
         uint64_t nharts = 0;
         // Marker rebase origin (first worker-kernel device ts seen by ANY socket), published so the hart-zone
-        // push can share it. The hart spans MUST use the same origin as the markers: the X280 starts draining
+        // push can share it. The hart spans MUST use the same origin as the markers: the drainer starts draining
         // at MeshDevice bring-up, seconds before the model runs, so rebasing the harts on their own first span
         // shifts their whole lane left of the kernels.
         // Plain (not atomic): DeviceCtx must stay movable, and the only contention is two drain threads both
@@ -263,7 +260,7 @@ private:
 
     std::vector<DeviceCtx> devices_;
     std::unique_ptr<PerfDebugTracyHandler> tracy_;
-    // ★ Same shape as test_x280_realprof: the drain NEVER blocks on Tracy. One writer publishes decoded
+    // ★ Same shape as the standalone drain harness: the drain NEVER blocks on Tracy. One writer publishes decoded
     // records into a BroadcastRing; a separate consumer pushes them to Tracy. A lagging consumer DROPS its
     // own records (reported) instead of back-pressuring the FIFO -> relay -> reader -> worker cores.
     // Measured why this is required: with the push inline, UFLD-v2 put relay0 in HOST-WAIT for 15.85 s of a

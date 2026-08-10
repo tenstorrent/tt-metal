@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Enriched worker-core kernel-zone packet for the perf-debug (X280) profiler. Host-built and fully
+// Enriched worker-core kernel-zone packet for the perf-debug (drainer) profiler. Host-built and fully
 // resolved (NOC0 coords translated, zone name deciphered, start/end split), so PerfDebugTracyHandler
 // just pushes it. Mirrors realtime_profiler's WorkerZonePacket (which the clean cut reverted away).
 #pragma once
@@ -14,7 +14,7 @@ namespace tt::tt_metal::perf_debug {
 
 struct WorkerZonePacket {
     uint32_t chip_id = 0;
-    uint32_t core_virtual_x = 0;  // as relayed by the X280 (its NoC view)
+    uint32_t core_virtual_x = 0;  // as relayed by the drainer (its NoC view)
     uint32_t core_virtual_y = 0;
     uint32_t core_noc0_x = 0;  // translated -> matches the standard DeviceProfiler / DRAM view
     uint32_t core_noc0_y = 0;
@@ -23,11 +23,7 @@ struct WorkerZonePacket {
     std::string_view name;      // deciphered zone name; stable for the profiler session
     uint64_t timestamp = 0;     // full device ticks (59-bit, reconstructed from STICKY_TIMER)
     bool is_start = false;      // true = ZONE_START, false = ZONE_END
-    bool is_x280 = false;       // true = an X280 L2CPU-hart zone (own context, distinct color) not a RISC
-    uint32_t color = 0;         // explicit Tracy zone color (0 = auto by name); set for X280 zones
-    std::string_view ctx_name;  // X280 only: overrides the context row name (e.g. "X280 rd0") so the row is
-                                // labeled by hart -- the per-lane header is GUI-derived from risc bits and
-                                // cannot be set client-side, so we make each hart its own named context row
+    uint32_t color = 0;      // explicit Tracy zone color (0 = auto by name)
 };
 
 // A point-in-time worker-core event: the unified PP_DATA packet (an "event" is just size 0). Resolved

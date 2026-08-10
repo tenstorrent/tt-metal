@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared host-side decoder for the X280 `profzone` 2-word + split-sticky stream.
+// Shared host-side decoder for the drainer `profzone` 2-word + split-sticky stream.
 //
 // This is the SINGLE SOURCE OF TRUTH for the host-side wire decode, so the standalone benchmark
-// (test_x280_realprof) and the production RealtimeProfilerManager can never drift apart on the marker
+// (the standalone drain harness) and the production RealtimeProfilerManager can never drift apart on the marker
 // format (the drift -- manager decoding a stale 4-word layout while profzone emits the 2-word linearized
-// stream -- is exactly what this module exists to prevent, mirroring x280_profzone_boot.hpp for the boot).
+// stream -- is exactly what this module exists to prevent).
 //
 // The wire is a self-framed variable-length stream of packets (prof_packet.h):
 //   STICKY_SRC   (1 word): sets the CURRENT lane (reader-injected on each source switch)
@@ -17,7 +17,7 @@
 //   marker       (2 word): ZONE_START/END/TOTAL -- emitted to the caller with its resolved lane/ts/prog
 //
 // D2HSocket/host pages are NOT packet-aligned, so a read can end mid-packet: the trailing partial packet is
-// carried in ProfzoneDecodeState::resid and prepended to the next call. Sticky state (cur_lane/cur_hi/prog)
+// carried in SpscDecodeState::resid and prepended to the next call. Sticky state (cur_lane/cur_hi/prog)
 // likewise persists across calls -- the stream is continuous.
 #pragma once
 
@@ -28,22 +28,22 @@
 #include <vector>
 
 #include "hostdevcommon/profiler_common.h"
-#include "prof_packet.h"
+#include "spsc_packet.h"
 
 static_assert(
     PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
-    "prof_packet.h (plain C, X280 firmware) and profiler_common.h (C++, metal kernels) must agree on the "
+    "prof_packet.h (plain C, drainer firmware) and profiler_common.h (C++, metal kernels) must agree on the "
     "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
 
 namespace tt::tt_metal::profiler {
 
 // Worker per-RISC SPSC ring depth (words) and RISC count -- MUST match the producer (kernel_profiler.hpp
 // RING_CAPACITY / profstream.c) so the BULKCORE sub-ring walk indexes correctly.
-inline constexpr uint32_t kProfzoneRingCap = 512;
-inline constexpr uint32_t kProfzoneNRiscDecode = 5;
+inline constexpr uint32_t kSpscRingCap = 512;
+inline constexpr uint32_t kSpscNRiscDecode = 5;
 
 // Sticky/framing state carried ACROSS decode calls for one continuous stream (one D2HSocket / host ring).
-struct ProfzoneDecodeState {
+struct SpscDecodeState {
     uint32_t cur_lane = 0xFFFFFFFFu;  // set by STICKY_SRC
     uint32_t cur_prog = 0;            // set by STICKY_PROG (program-global)
     std::vector<uint32_t> cur_hi;     // per-lane wall-clock high half (set by STICKY_TIMER), size = nl
@@ -77,15 +77,15 @@ struct ProfzoneDecodeState {
 // where type is PP_ZONE_START/END/TOTAL, zone_hash is the low-16 srcloc hash, and full_ts is the 59-bit
 // device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
-// No-op default for the optional X280 hart-zone sink (see the PP_X280_ZONE branch below).
-struct ProfzoneIgnoreX280 {
+// No-op default for the optional drainer hart-zone sink (see the PP_drainer_ZONE branch below).
+struct ProfzoneIgnoredrainer {
     void operator()(uint32_t /*hart*/, uint32_t /*meta*/, uint64_t /*rdcycle*/) const {}
 };
 
 // No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
 // unchanged. `type` is the wire type: PP_DATA ids are compile-time tags and can be name-resolved, PP_EVENT
 // ids are runtime values and must NOT be.
-struct ProfzoneIgnoreData {
+struct SpscIgnoreData {
     void operator()(
         uint32_t /*lane*/,
         uint32_t /*type*/,
@@ -97,17 +97,16 @@ struct ProfzoneIgnoreData {
 };
 
 // Largest PP_DATA payload the 7-bit size field can express; bounds the ring-unwrap scratch buffer.
-inline constexpr uint32_t kProfzoneMaxDataWords = 127;
+inline constexpr uint32_t kSpscMaxDataWords = 127;
 
-template <typename Emit, typename EmitX280 = ProfzoneIgnoreX280, typename EmitData = ProfzoneIgnoreData>
-inline void profzone_decode(
-    ProfzoneDecodeState& st,
+template <typename Emit, typename EmitData = SpscIgnoreData>
+inline void spsc_decode(
+    SpscDecodeState& st,
     const uint32_t* in,
     size_t in_n,
     uint32_t nl,
     Emit&& emit,
-    EmitX280&& emit_x280 = ProfzoneIgnoreX280{},
-    EmitData&& emit_data = ProfzoneIgnoreData{}) {
+    EmitData&& emit_data = SpscIgnoreData{}) {
     // Prepend the carried residual so packets that straddled the previous read are decoded whole.
     std::vector<uint32_t>& buf = st.resid;
     const size_t rn = buf.size();
@@ -127,7 +126,7 @@ inline void profzone_decode(
             }
             const uint32_t core = pp_bulkcore_core(w0);
             const uint32_t rawn = w[p + 1];
-            uint32_t prefix = 2u + kProfzoneNRiscDecode;  // {w0, count} + per-RISC {head,run} meta
+            uint32_t prefix = 2u + kSpscNRiscDecode;  // {w0, count} + per-RISC {head,run} meta
             if (prefix & 1u) {
                 prefix++;  // meta padded to an even word count (matches the producer framing)
             }
@@ -136,14 +135,14 @@ inline void profzone_decode(
             }
             const uint32_t* meta = &w[p + 2];
             const uint32_t* raw = &w[p + prefix];
-            for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
+            for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
                 const uint32_t head_mod = pp_bulk_head(meta[r]);
                 const uint32_t run = pp_bulk_run(meta[r]);
-                const uint32_t lane = core * kProfzoneNRiscDecode + r;
-                const uint32_t* ring = raw + (size_t)r * kProfzoneRingCap;
+                const uint32_t lane = core * kSpscNRiscDecode + r;
+                const uint32_t* ring = raw + (size_t)r * kSpscRingCap;
                 uint32_t i = 0;
                 while (i < run) {
-                    const uint32_t rw0 = ring[(head_mod + i) % kProfzoneRingCap];
+                    const uint32_t rw0 = ring[(head_mod + i) % kSpscRingCap];
                     if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
                         if (lane < nl) {
                             st.cur_hi[lane] = pp_timer_hi(rw0);
@@ -154,7 +153,7 @@ inline void profzone_decode(
                     if (i + 1 >= run) {
                         break;  // partial trailing marker inside the run (shouldn't happen on a full frame)
                     }
-                    const uint32_t rw1 = ring[(head_mod + i + 1) % kProfzoneRingCap];
+                    const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
                     if (pp_is_point(rw0)) {
                         // PP_DATA is VARIABLE length (2 + size). Its length is in the header, so the walk
                         // stays in sync without a per-type table -- the whole point of the unified packet.
@@ -165,9 +164,9 @@ inline void profzone_decode(
                         if (lane < nl) {
                             // The payload can wrap the circular ring, so unwrap it into a flat scratch buffer
                             // before handing it to the sink.
-                            uint32_t payload[kProfzoneMaxDataWords];
+                            uint32_t payload[kSpscMaxDataWords];
                             for (uint32_t k = 0; k < n; k++) {
-                                payload[k] = ring[(head_mod + i + 2 + k) % kProfzoneRingCap];
+                                payload[k] = ring[(head_mod + i + 2 + k) % kSpscRingCap];
                             }
                             const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
                             emit_data(lane, pp_type(rw0), pp_data_id(rw0), ts, st.cur_prog, payload, n);
@@ -201,14 +200,14 @@ inline void profzone_decode(
             const uint32_t* blk = ctrl + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
             const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
             const bool known = xy_it != st.core_of_xy.end();
-            for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
+            for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
                 // The payload is five WHOLE raw rings -- the drainer is a conduit and never repacked them
                 // (a CPU repack cost it 45% of its cycles). So the live window is the circular range
                 // [head, head+run) and the wrap is resolved here, on a host that has cycles to spare.
                 const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
                 const uint32_t* ring = blk;
-                blk += kProfzoneRingCap;  // rings are fixed-size and in RISC order, present even when empty
-                const uint32_t lane = known ? xy_it->second * kProfzoneNRiscDecode + r : nl;
+                blk += kSpscRingCap;  // rings are fixed-size and in RISC order, present even when empty
+                const uint32_t lane = known ? xy_it->second * kSpscNRiscDecode + r : nl;
                 if (lane >= nl) {
                     continue;
                 }
@@ -221,15 +220,15 @@ inline void profzone_decode(
                     st.head_drift++;
                 }
                 const uint32_t head = st.host_head[lane];
-                const uint32_t run = kernel_profiler::spsc_span_live(head, tail, kProfzoneRingCap);
+                const uint32_t run = kernel_profiler::spsc_span_live(head, tail, kSpscRingCap);
                 st.host_head[lane] = head + run;
-                const uint32_t head_mod = head % kProfzoneRingCap;
+                const uint32_t head_mod = head % kSpscRingCap;
                 if (run == 0) {
                     continue;
                 }
                 uint32_t i = 0;
                 while (i < run) {
-                    const uint32_t rw0 = ring[(head_mod + i) % kProfzoneRingCap];
+                    const uint32_t rw0 = ring[(head_mod + i) % kSpscRingCap];
                     if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
                         st.cur_hi[lane] = pp_timer_hi(rw0);
                         i += 1;
@@ -240,16 +239,16 @@ inline void profzone_decode(
                     if (i + 1 >= run) {
                         break;
                     }
-                    const uint32_t rw1 = ring[(head_mod + i + 1) % kProfzoneRingCap];
+                    const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
                     if (pp_is_point(rw0)) {
                         const uint32_t n = pp_data_size(rw0);
                         if (i + 2u + n > run) {
                             break;
                         }
                         // The payload can wrap the ring, so unwrap it into a flat scratch buffer first.
-                        uint32_t payload[kProfzoneMaxDataWords];
-                        for (uint32_t k = 0; k < n && k < kProfzoneMaxDataWords; k++) {
-                            payload[k] = ring[(head_mod + i + 2 + k) % kProfzoneRingCap];
+                        uint32_t payload[kSpscMaxDataWords];
+                        for (uint32_t k = 0; k < n && k < kSpscMaxDataWords; k++) {
+                            payload[k] = ring[(head_mod + i + 2 + k) % kSpscRingCap];
                         }
                         emit_data(
                             lane,
@@ -279,18 +278,7 @@ inline void profzone_decode(
                 st.cur_hi[st.cur_lane] = pp_timer_hi(w0);
             }
             p += 1;
-        } else if (pp_is_x280(w0)) {
-            // 3-word: an X280 DRAIN-HART zone (--hartzones / ProfzoneBootCfg::hartzones), riding IN-BAND in
-            // the marker stream: w0 = type|hart|kind|is_start, w1/w2 = the hart's 64-bit rdcycle.
-            // This branch is MANDATORY whenever hart zones are enabled, even if the caller ignores them: the
-            // generic tail below assumes a 2-WORD packet, so a 3-word X280 packet would desynchronize the
-            // whole walk and corrupt every marker after it (silently -- the stream would still "decode").
-            if (p + 2 >= sz) {
-                break;  // partial -> carry
-            }
-            emit_x280(pp_x280_hart(w0), pp_low27(w0), (static_cast<uint64_t>(w[p + 2]) << 32) | w[p + 1]);
-            p += 3;
-        } else if (pp_is_point(w0)) {
+                } else if (pp_is_point(w0)) {
             // 2 + size words: the unified EVENT/DATA packet (size 0 == a bare event). Self-describing
             // length, so an unknown payload shape can never desynchronize the walk.
             if (p + 1 >= sz) {

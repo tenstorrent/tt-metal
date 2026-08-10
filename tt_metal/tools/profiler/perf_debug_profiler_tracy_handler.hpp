@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Tracy sink for the perf-debug (X280) profiler. One Tracy context (device ROW) per worker core, keyed
+// Tracy sink for the perf-debug (drainer) profiler. One Tracy context (device ROW) per worker core, keyed
 // by NOC0 coord; the 5 RISCs are lanes within. Lifted from realtime_profiler's Tracy handler, trimmed to
 // the worker-zone path only (no program records, no host<->device sync, no callback registry -- the
 // PerfDebugProfiler drain threads call HandleWorkerZone directly).

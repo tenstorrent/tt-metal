@@ -3038,7 +3038,7 @@ void DeviceProfiler::pollDebugDumpResults(
 // path) rewinds the ring TAIL and breaks the continuous drain (~30x duplicate zones).
 //
 // Two such consumers exist and both are affected identically, because the hazard is the rewind, not who
-// is reading: TT_METAL_PERF_DEBUG_PROFILER (the X280 L2CPU drainer) and TT_METAL_DRISC_PROFILER (the
+// is reading: TT_METAL_PERF_DEBUG_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
 // DRISC drainer). Read once.
 static bool external_ring_drainer_active() {
     static const bool active = [] {
@@ -3061,9 +3061,9 @@ bool getDeviceProfilerState(ContextId context_id) {
         return false;
     }
 
-    // NOTE: PROFILE_KERNEL (marker emission) and the X280 firmware build key off get_profiler_enabled()
+    // NOTE: PROFILE_KERNEL (marker emission) keys off get_profiler_enabled()
     // DIRECTLY (build.cpp / build_env_manager.cpp), so disabling the DRAM profiler here does NOT stop the
-    // kernels emitting markers or the X280 FW from building -- it only stands down the DRAM readback/reset.
+    // kernels emitting markers -- it only stands down the DRAM readback/reset.
     return ctx.rtoptions().get_profiler_enabled() && !external_ring_drainer_active();
 }
 
