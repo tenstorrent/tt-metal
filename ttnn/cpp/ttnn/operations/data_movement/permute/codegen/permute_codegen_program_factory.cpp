@@ -39,14 +39,16 @@ std::array<uint32_t, PermuteCodegenDeviceOperation::kMaxDims> row_strides_of(
 // its inverse-permuted output page. No compute. Byte-identical to ops/permute/spec.py's
 // build_permute_rm.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvariant::create_descriptor(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     Tensor& output_tensor = tensor_return_value;
 
-    const uint32_t rank = attrs.rank;
-    const uint32_t elem_size = attrs.elem_size;
-    const uint32_t stick_bytes = attrs.input_shape[rank - 1] * elem_size;
-    const uint32_t num_rows = attrs.num_rows;
+    const uint32_t rank = operation_attributes.rank;
+    const uint32_t elem_size = operation_attributes.elem_size;
+    const uint32_t stick_bytes = operation_attributes.input_shape[rank - 1] * elem_size;
+    const uint32_t num_rows = operation_attributes.num_rows;
 
     // Legacy batch defaults (ops/permute/spec.py: permute builders have no env override / L1 clamp).
     constexpr uint32_t kReadBatch = 4;           // _RM_READ_BATCH
@@ -134,13 +136,13 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
         writer_rt.push_back(n);
         writer_rt.push_back(row_start);
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.input_shape[i]);
+            writer_rt.push_back(operation_attributes.input_shape[i]);
         }
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.dims[i]);
+            writer_rt.push_back(operation_attributes.dims[i]);
         }
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.output_strides[i]);
+            writer_rt.push_back(operation_attributes.output_strides[i]);
         }
         writer_desc.emplace_runtime_args(core, writer_rt);
 
@@ -154,21 +156,23 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
 // 32x32 row-major blocks -> compute (tilize -> transpose_tile -> pack_untilize) -> writer scatters
 // transposed rows to permuted pages. Byte-identical to ops/permute/spec.py's build_permute_rm_blocked.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedGeneric::create_descriptor(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     Tensor& output_tensor = tensor_return_value;
 
     constexpr uint32_t kBlockSize = 32;  // _X_BLOCK / _W_BLOCK
 
-    const uint32_t rank = attrs.rank;
-    const uint32_t elem_size = attrs.elem_size;
-    const uint32_t x_dim = attrs.dims[rank - 1];
-    const uint32_t X = attrs.input_shape[x_dim];
-    const uint32_t W = attrs.input_shape[rank - 1];
-    const uint32_t num_rows = attrs.num_rows;
+    const uint32_t rank = operation_attributes.rank;
+    const uint32_t elem_size = operation_attributes.elem_size;
+    const uint32_t x_dim = operation_attributes.dims[rank - 1];
+    const uint32_t X = operation_attributes.input_shape[x_dim];
+    const uint32_t W = operation_attributes.input_shape[rank - 1];
+    const uint32_t num_rows = operation_attributes.num_rows;
     const uint32_t x_blocks = (X + kBlockSize - 1) / kBlockSize;
     const uint32_t w_blocks = (W + kBlockSize - 1) / kBlockSize;
-    const uint32_t num_blocks_total = attrs.num_blocks_total;
+    const uint32_t num_blocks_total = operation_attributes.num_blocks_total;
 
     const uint32_t input_cb_page_size = kBlockSize * elem_size;       // cb_0 page (one W-chunk row)
     const uint32_t output_cb_page_size = kBlockSize * elem_size;      // cb_2 page (one X row)
@@ -271,7 +275,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
     };
     compute_desc.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc};
 
-    const auto input_strides = row_strides_of(attrs.input_shape, rank);
+    const auto input_strides = row_strides_of(operation_attributes.input_shape, rank);
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt);
     reader_desc.runtime_args.reserve(num_cores);
@@ -296,7 +300,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
         reader_rt.push_back(block_start);
         reader_rt.push_back(block_end);
         for (uint32_t i = 0; i < rank; i++) {
-            reader_rt.push_back(attrs.input_shape[i]);
+            reader_rt.push_back(operation_attributes.input_shape[i]);
         }
         for (uint32_t i = 0; i < rank; i++) {
             reader_rt.push_back(input_strides[i]);
@@ -309,13 +313,13 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreBlockedG
         writer_rt.push_back(block_start);
         writer_rt.push_back(block_end);
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.input_shape[i]);
+            writer_rt.push_back(operation_attributes.input_shape[i]);
         }
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.dims[i]);
+            writer_rt.push_back(operation_attributes.dims[i]);
         }
         for (uint32_t i = 0; i < rank; i++) {
-            writer_rt.push_back(attrs.output_strides[i]);
+            writer_rt.push_back(operation_attributes.output_strides[i]);
         }
         writer_desc.emplace_runtime_args(core, writer_rt);
 

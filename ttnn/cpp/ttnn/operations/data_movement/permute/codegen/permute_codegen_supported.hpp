@@ -7,6 +7,7 @@
 #include <string>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 #include <tt_stl/span.hpp>
 
 namespace ttnn::operations::data_movement {
