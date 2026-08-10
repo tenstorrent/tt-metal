@@ -111,8 +111,15 @@ class TtLatentUpsampler(LightweightModule):
         matrix = self._resample_matrix(length_in)  # [L_out, T]
         length_out = matrix.shape[0]
 
-        x = ttnn.to_layout(x_blc, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(x_blc)  # caller's latents temp, not reused after
+        # ``to_layout`` is a no-op when the caller already hands TILE (the GPT's latents are bf16
+        # TILE), and it then returns a tensor sharing x_blc's buffer -- so freeing x_blc would kill
+        # ``x`` too. Only free it when a real conversion happened; in the TILE case the caller's
+        # tensor is consumed by the ``deallocate(x)`` after the matmul instead, so either way the
+        # decoder still owns and releases its input.
+        tiled_in = x_blc.layout == ttnn.TILE_LAYOUT
+        x = x_blc if tiled_in else ttnn.to_layout(x_blc, ttnn.TILE_LAYOUT)
+        if not tiled_in:
+            ttnn.deallocate(x_blc)  # caller's latents temp, not reused after
         x = ttnn.reshape(x, [length_in, channels])  # drop batch for the 2D matmul
         program_config = self._matmul_program_config(length_out, channels)
         y = ttnn.matmul(  # [L_out, C]

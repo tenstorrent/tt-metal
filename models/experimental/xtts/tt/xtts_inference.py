@@ -15,8 +15,8 @@ tokenizer (not a tensor op); the conditioning 80-mel spectrogram now runs on
 device too (``TtConditioningMel`` — a port of ``xtts_conditioning.wav_to_mel``),
 so callers pass the raw reference waveform and the mel is computed on device.
 
-The GPT runs in bf16 and its latents are cast to fp32 ROW_MAJOR at the handoff to
-the (fp32) HiFi-GAN decoder.
+The GPT runs in bf16 and its latents are handed to the (all-bf16) HiFi-GAN decoder
+as they are — bf16 TILE, no cast or relayout at the boundary.
 """
 
 import time
@@ -101,9 +101,11 @@ class TtXtts(LightweightModule):
         return self._style_mean([self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)])
 
     def _decode_wav(self, latents_tt, ref_wav_spk):
-        # bf16 GPT latents -> fp32 ROW_MAJOR for the fp32 HiFi-GAN decoder.
-        latents = ttnn.to_layout(ttnn.typecast(latents_tt, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
-        return self.decoder(latents, ref_wav_spk)  # [1, T_out, 1]
+        # Hand the GPT's latents over as they are: bf16 TILE. They used to be typecast to fp32 and
+        # untilized to ROW_MAJOR here, for a decoder that was fp32 at the time; the decoder is all
+        # bf16 now and its upsampler tilizes its input as its first op, so that pair round-tripped
+        # straight back to where it started. Dropping both is bit-exact (A/B'd maxdiff 0.0).
+        return self.decoder(latents_tt, ref_wav_spk)  # [1, T_out, 1]
 
     def inference(
         self,
@@ -222,7 +224,7 @@ class TtXtts(LightweightModule):
         # below primes it. The captured region then does no host transfer at all, and the fast fold
         # is what gets traced — worth the trace-safe add's ~82us/pass, and it makes the replay
         # byte-identical to eager (the post-conv add was not: it diverges in the last bits).
-        lat_in = ttnn.to_layout(ttnn.typecast(latents, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
+        lat_in = latents  # bf16 TILE, handed straight over — see _decode_wav
         voc = self.decoder.decoder
         _ = voc(ttnn.clone(lat_in), g)  # warmup / compile; also primes the conditioning + bias caches
         ttnn.synchronize_device(dev)
