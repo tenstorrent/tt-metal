@@ -7,7 +7,7 @@
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
 
-// DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
+// DeepSeek Top32 headers (canonical experimental/ copies, resolved via the standard JIT LLK include paths).
 #if defined(TRISC_UNPACK)
 #include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
