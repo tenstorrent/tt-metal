@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Regression for ROW broadcast with DEST_TO_SRCA reuse. A 16x32 tile has two
+# faces in one face-row; DEST_TO_SRCA consumes one SrcA DVALID per face. The
+# first stage seeds DEST with non-zero data so the second stage also verifies
+# the destination-to-SrcA data path.
+
+supported_archs: ["wormhole", "blackhole"]
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [16, 32]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [16, 32]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+  - name: "row_broadcast"
+    dims: [16, 32]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+  - name: "elwadd_row_bcast_dest_to_srca_tiny_out"
+    dims: [16, 32]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "Fpu"
+        src_a: "row_broadcast"
+        src_b: "input_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerA"
+        broadcast_type: "ROW"
+        reuse_dest: "DEST_TO_SRCA"
+        acc_to_dest: true
+        math_fidelity: "LoFi"
+    block_size: [16, 32]
+    pack:
+      - output: "elwadd_row_bcast_dest_to_srca_tiny_out"
+        packer: "Packer"
