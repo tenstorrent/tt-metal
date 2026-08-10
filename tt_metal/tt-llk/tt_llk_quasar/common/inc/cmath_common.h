@@ -166,6 +166,7 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
     ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
+    ckernel::sync_regfile_write(p_gpr_math::TILE_SHAPE_IDX);
 }
 
 /**
