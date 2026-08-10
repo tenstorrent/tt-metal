@@ -903,7 +903,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
     auto& stats_output_tensor = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
-    std::size_t q_chunk_size = args.get_q_chunk_size();
+    const std::size_t requested_q_chunk_size = args.get_q_chunk_size();
+    // Blackhole's matrix engine gives a 16x32 result nearly the same issue cost as 32x32.
+    // For latent-V MLA, coalesce each adjacent pair of requested 16-row chunks into one
+    // physical 32-row compute chunk so QK and QK@V traverse K only once for both halves.
+    const bool coalesce_q16_mla = v_shares_k_buffer && input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE &&
+                                  requested_q_chunk_size == tt::constants::FACE_HEIGHT;
+    const std::size_t q_chunk_size = coalesce_q16_mla ? tt::constants::TILE_HEIGHT : requested_q_chunk_size;
     std::size_t k_chunk_size = args.get_k_chunk_size();
 
     tt::tt_metal::ProgramDescriptor desc;
@@ -1129,7 +1135,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
     log_debug(tt::LogOp, "num_local_q_chunks: {}", num_local_q_chunks);
     log_debug(tt::LogOp, "num_joint_q_chunks: {}", num_joint_q_chunks);
-    log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
+    log_debug(
+        tt::LogOp,
+        "q_chunk_size: requested={}, physical={}, coalesced={}",
+        requested_q_chunk_size,
+        q_chunk_size,
+        coalesce_q16_mla);
     log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
     log_debug(tt::LogOp, "num_q_chunks: {}", num_q_chunks);
     log_debug(tt::LogOp, "num_local_k_chunks: {}", num_local_k_chunks);

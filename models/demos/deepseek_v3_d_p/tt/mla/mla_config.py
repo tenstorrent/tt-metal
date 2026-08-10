@@ -554,8 +554,8 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
         {
-            # 16x32 tiny Q tiles improve scheduled tile-work utilization on K3 while retaining
-            # the q32 accuracy level (PCC > 0.9994 on both the first and final prefill chunks).
+            # Blackhole coalesces adjacent q16 MLA work into one matrix issue, avoiding the
+            # near-full issue cost of independent half-height QK/QK@V operations.
             "q_chunk_size": 16,
             "k_chunk_size": 640,
             "num_heads": 96,

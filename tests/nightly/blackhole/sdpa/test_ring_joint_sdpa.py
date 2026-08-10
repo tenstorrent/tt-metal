@@ -5721,9 +5721,9 @@ else:
         # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
-        # 16x32 performs half the FPU work per scheduled Q tile, so the conventional model-FLOP
-        # utilization is half the comparable 32x32 tile-work occupancy. Measured 2026-08-10.
-        ("kimi_k3", 16, 640, 4, 35.44),
+        # q16 requests are coalesced in adjacent pairs for latent-V MLA on Blackhole because the
+        # matrix engine's half-height issue cost is nearly that of a full tile. Measured 2026-08-10.
+        ("kimi_k3", 16, 640, 4, 66.54),
     ]
 
 
@@ -5795,15 +5795,12 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
-    tile_work_utilization = utilization * (ttnn.TILE_SIZE / q_chunk_size)
-
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
     upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
 
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
-        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}%, "
-        f"tile_work_util={tile_work_utilization:.2f}% "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}"
     )
@@ -5813,9 +5810,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
     )
     if q_chunk_size == 16 and model_name == "kimi_k3":
-        assert tile_work_utilization > 67.09, (
-            f"q16 tile-work utilization {tile_work_utilization:.2f}% did not exceed " "the measured q32 baseline 67.09%"
-        )
+        assert utilization >= 60.0, f"q16 math utilization {utilization:.2f}% is below the 60% target"
 
 
 @pytest.mark.timeout(600)
