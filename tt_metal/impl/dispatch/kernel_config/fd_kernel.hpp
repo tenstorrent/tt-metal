@@ -173,6 +173,7 @@ public:
     }
     ChipId GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
     int GetNodeId() const { return node_id_; }
+    uint8_t GetCQId() const { return cq_id_; }
     virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
 
     // Get the port index for which a given kernel is upstream/downstream of this one
@@ -199,7 +200,7 @@ protected:
         const std::string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<std::string, std::string> defines_in,
-        tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
+        tt::tt_metal::KernelBuildOptLevel opt_level);
     int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
@@ -230,6 +231,7 @@ protected:
     noc_selection_t noc_selection_;
     bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
     bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
+    uint32_t num_threads_ = 1;              // Quasar only; >1 for shared cq_dispatch_subordinate
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;

@@ -8,6 +8,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <map>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -118,37 +119,76 @@ DispatchSKernel::DispatchSKernel(
     this->logical_core_ = dispatch_core_manager.dispatcher_s_core(device_id, channel, cq_id_);
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log dispatch_s core info based on virtual core to inspector
-    auto virtual_core = this->GetVirtualCore();
-    Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
+    Inspector::set_dispatch_s_core_info(this->GetVirtualCore(), DISPATCH_S, cq_id, device_id, servicing_device_id);
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
     const auto& my_dispatch_constants = get_dispatch_mem_map();
 
-    uint32_t dispatch_s_buffer_base = 0xff;
-    if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
-        uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-        if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
-            // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE). Offset CB start idx.
-            dispatch_s_buffer_base = dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                                                my_dispatch_constants.dispatch_buffer_pages();
-        } else {
-            // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-            dispatch_s_buffer_base = dispatch_buffer_base;
+    std::set<uint8_t> upstream_cq_ids;
+    std::set<uint8_t> downstream_cq_ids;
+    for (const auto* kernel : upstream_kernels_) {
+        TT_FATAL(dynamic_cast<const PrefetchKernel*>(kernel) != nullptr, "DISPATCH_S upstream must be PREFETCH");
+        upstream_cq_ids.insert(kernel->GetCQId());
+    }
+    for (const auto* kernel : downstream_kernels_) {
+        TT_FATAL(dynamic_cast<const DispatchKernel*>(kernel) != nullptr, "DISPATCH_S downstream must be DISPATCH");
+        downstream_cq_ids.insert(kernel->GetCQId());
+    }
+    TT_FATAL(
+        upstream_cq_ids.size() == upstream_kernels_.size() && downstream_cq_ids.size() == downstream_kernels_.size(),
+        "DISPATCH_S requires one peer of each type per CQ");
+    TT_FATAL(upstream_cq_ids == downstream_cq_ids, "DISPATCH_S must have matching PREFETCH and DISPATCH peers by CQ");
+    served_cq_ids_.assign(upstream_cq_ids.begin(), upstream_cq_ids.end());
+
+    const bool serves_one_cq = served_cq_ids_.size() == 1;
+    const bool serves_cq0_and_cq1 = served_cq_ids_.size() == 2 && served_cq_ids_[0] == 0 && served_cq_ids_[1] == 1;
+    TT_FATAL(serves_one_cq || serves_cq0_and_cq1, "DISPATCH_S must serve exactly one CQ, or CQ0 and CQ1 when shared");
+    if (!serves_one_cq) {
+        for (const auto* kernel : upstream_kernels_) {
+            TT_FATAL(kernel->GetLogicalCore() == logical_core_, "Shared DISPATCH_S peers must be colocated");
+        }
+        for (const auto* kernel : downstream_kernels_) {
+            TT_FATAL(kernel->GetLogicalCore() == logical_core_, "Shared DISPATCH_S peers must be colocated");
+        }
+        const uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_id_);
+        for (const uint8_t served_cq_id : served_cq_ids_) {
+            TT_FATAL(
+                dispatch_core_manager_.dispatcher_s_core(device_id_, channel, served_cq_id) == logical_core_,
+                "All CQs served by one DISPATCH_S must resolve to the same core");
         }
     }
 
-    static_config_.cb_base = dispatch_s_buffer_base;
+    const bool dispatch_s_enabled = get_dispatch_query_manager_ref().dispatch_s_enabled();
+    // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE): start its CB past dispatch_d's.
+    const uint32_t cb_base_offset =
+        (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH)
+            ? (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) * my_dispatch_constants.dispatch_buffer_pages()
+            : 0;
+    for (const uint8_t served_cq_id : served_cq_ids_) {
+        auto& channel_config = static_config_.channels[served_cq_id];
+        channel_config.cb_base =
+            dispatch_s_enabled ? my_dispatch_constants.dispatch_buffer_base(served_cq_id) + cb_base_offset : 0xff;
+        channel_config.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        channel_config.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        // cq_dispatch.cpp derives dispatch_s_enabled from a non-zero shutdown sem id.
+        TT_FATAL(
+            channel_config.dispatch_d_shutdown_sem_id.value() != 0,
+            "DISPATCH_S shutdown semaphore for CQ {} must be non-zero",
+            served_cq_id);
+        channel_config.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, served_cq_id);
+        channel_config.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(served_cq_id);
+        channel_config.realtime_profiler_msg_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, served_cq_id);
+        channel_config.dispatch_telemetry_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, served_cq_id);
+        channel_config.dispatch_telemetry_control_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, served_cq_id);
+    }
+
     static_config_.cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
-    // used by dispatch_s to sync with prefetch
-    static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-    // used by dispatch_d to signal that its shutdown handoff is ready
-    static_config_.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-    static_config_.dispatch_s_sync_sem_base_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
-    // used by dispatch_d to signal that dispatch_s can send go signal
-
     static_config_.mcast_go_signal_addr =
         descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     static_config_.unicast_go_signal_addr =
@@ -157,16 +197,9 @@ void DispatchSKernel::GenerateStaticConfigs() {
             : 0;
     static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-    static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
-    static_config_.realtime_profiler_msg_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, cq_id_);
-    static_config_.dispatch_telemetry_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id_);
     static_config_.dispatch_telemetry_disabled = descriptor_.rtoptions().get_dispatch_telemetry_disabled();
-    static_config_.dispatch_telemetry_control_addr = my_dispatch_constants.get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, cq_id_);
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
@@ -232,18 +265,27 @@ void DispatchSKernel::GenerateStaticConfigs() {
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
-    // Upstream
-    TT_ASSERT(upstream_kernels_.size() == 1);
-    auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
-    TT_ASSERT(prefetch_kernel);
-    dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
-    dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
-
-    // Downstream
-    TT_ASSERT(downstream_kernels_.size() == 1);
-    auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
-    TT_ASSERT(dispatch_kernel);
-    dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
+    for (const uint8_t served_cq_id : served_cq_ids_) {
+        auto& channel = dependent_config_.channels[served_cq_id];
+        PrefetchKernel* prefetch_kernel = nullptr;
+        DispatchKernel* dispatch_kernel = nullptr;
+        for (auto* upstream : upstream_kernels_) {
+            if (upstream->GetCQId() == served_cq_id) {
+                TT_ASSERT(prefetch_kernel == nullptr);
+                prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream);
+            }
+        }
+        for (auto* downstream : downstream_kernels_) {
+            if (downstream->GetCQId() == served_cq_id) {
+                TT_ASSERT(dispatch_kernel == nullptr);
+                dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream);
+            }
+        }
+        TT_ASSERT(prefetch_kernel != nullptr && dispatch_kernel != nullptr);
+        channel.upstream_logical_core = prefetch_kernel->GetLogicalCore();
+        channel.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
+        channel.downstream_logical_core = dispatch_kernel->GetLogicalCore();
+    }
 }
 
 void DispatchSKernel::CreateKernel() {
@@ -266,42 +308,25 @@ void DispatchSKernel::CreateKernel() {
     auto virtual_core_range = CoreRange(virtual_start, virtual_end);
 
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
-    auto upstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
-    auto downstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.downstream_logical_core.value(), GetCoreType());
     auto downstream_s_virtual_core = device_->virtual_core_from_logical_core(UNUSED_LOGICAL_CORE, GetCoreType());
 
     auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
-    auto upstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
-    auto downstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
     std::map<std::string, std::string> defines = {
+        {"NUM_DISPATCH_S_CHANNELS", std::to_string(served_cq_ids_.size())},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
-        {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},  // Unused, remove later
-        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
-        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
-        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},                  // Unused, remove later
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},  // Unused, remove later
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},  // Unused, remove later
-        {"CB_BASE", std::to_string(static_config_.cb_base.value())},
         {"CB_LOG_PAGE_SIZE", std::to_string(static_config_.cb_log_page_size.value())},
         {"CB_SIZE", std::to_string(static_config_.cb_size.value())},
-        {"MY_DISPATCH_CB_SEM_ID", std::to_string(static_config_.my_dispatch_cb_sem_id.value())},
-        {"DISPATCH_D_SHUTDOWN_SEM_ID", std::to_string(static_config_.dispatch_d_shutdown_sem_id.value())},
-        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
-        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
         {"UNICAST_GO_SIGNAL_ADDR", std::to_string(static_config_.unicast_go_signal_addr.value())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
-        {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
          std::to_string(static_config_.max_num_go_signal_noc_data_entries.value())},
@@ -311,10 +336,7 @@ void DispatchSKernel::CreateKernel() {
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
-        {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
-        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
-        {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
         // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
         // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
@@ -336,18 +358,51 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
+    for (size_t channel_index = 0; channel_index < served_cq_ids_.size(); ++channel_index) {
+        const uint8_t served_cq_id = served_cq_ids_[channel_index];
+        const auto& channel = static_config_.channels.at(served_cq_id);
+        const auto& dependent_channel = dependent_config_.channels.at(served_cq_id);
+        const auto upstream_virtual_core =
+            device_->virtual_core_from_logical_core(dependent_channel.upstream_logical_core.value(), GetCoreType());
+        const auto downstream_virtual_core =
+            device_->virtual_core_from_logical_core(dependent_channel.downstream_logical_core.value(), GetCoreType());
+        const auto upstream_virtual_noc_coords =
+            device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
+        const auto downstream_virtual_noc_coords =
+            device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
+        const std::string suffix = served_cq_ids_.size() == 1 ? "" : "_" + std::to_string(channel_index);
+        defines["CB_BASE" + suffix] = std::to_string(channel.cb_base.value());
+        defines["MY_DISPATCH_CB_SEM_ID" + suffix] = std::to_string(channel.my_dispatch_cb_sem_id.value());
+        defines["UPSTREAM_DISPATCH_CB_SEM_ID" + suffix] =
+            std::to_string(dependent_channel.upstream_dispatch_cb_sem_id.value());
+        defines["DISPATCH_D_SHUTDOWN_SEM_ID" + suffix] = std::to_string(channel.dispatch_d_shutdown_sem_id.value());
+        defines["DISPATCH_S_SYNC_SEM_BASE_ADDR" + suffix] =
+            std::to_string(channel.dispatch_s_sync_sem_base_addr.value());
+        defines["COMPLETION_COUNTER_OFFSET" + suffix] = std::to_string(channel.completion_counter_offset.value());
+        defines["REALTIME_PROFILER_MSG_ADDR" + suffix] = std::to_string(channel.realtime_profiler_msg_addr.value());
+        defines["DISPATCH_TELEMETRY_ADDR" + suffix] = std::to_string(channel.dispatch_telemetry_addr.value());
+        defines["DISPATCH_TELEMETRY_CONTROL_ADDR" + suffix] =
+            std::to_string(channel.dispatch_telemetry_control_addr.value());
+        defines["UPSTREAM_NOC_X" + suffix] = std::to_string(upstream_virtual_noc_coords.x);
+        defines["UPSTREAM_NOC_Y" + suffix] = std::to_string(upstream_virtual_noc_coords.y);
+        defines["DOWNSTREAM_NOC_X" + suffix] = std::to_string(downstream_virtual_noc_coords.x);
+        defines["DOWNSTREAM_NOC_Y" + suffix] = std::to_string(downstream_virtual_noc_coords.y);
+    }
+    num_threads_ = served_cq_ids_.size();
+    configure_kernel_variant(
+        dispatch_kernel_file_names[DISPATCH_S], {}, defines, tt::tt_metal::KernelBuildOptLevel::Os);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
+        const auto& channel = static_config_.channels.at(served_cq_ids_.front());
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
             {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
-            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
-            {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(channel.realtime_profiler_msg_addr.value())},
+            {"DISPATCH_TELEMETRY_ADDR", std::to_string(channel.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
             {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
-            {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
+            {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(channel.dispatch_telemetry_control_addr.value())},
         };
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;
@@ -355,53 +410,53 @@ void DispatchSKernel::CreateKernel() {
     }
 }
 
+uint32_t DispatchSKernel::GetMyDispatchCbSemId(uint8_t cq_id) const {
+    return static_config_.channels.at(cq_id).my_dispatch_cb_sem_id.value();
+}
+
+uint32_t DispatchSKernel::GetDispatchDShutdownSemId(uint8_t cq_id) const {
+    return static_config_.channels.at(cq_id).dispatch_d_shutdown_sem_id.value();
+}
+
 void DispatchSKernel::ConfigureCore() {
-    if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
-        TT_ASSERT(static_config_.realtime_profiler_msg_addr.has_value());
-        zero_dispatch_s_realtime_profiler_msg_fields(
-            device_,
-            logical_core_,
-            GetCoreType(),
-            descriptor_.hal(),
-            static_config_.realtime_profiler_msg_addr.value());
+    for (const uint8_t served_cq_id : served_cq_ids_) {
+        const auto& channel = static_config_.channels.at(served_cq_id);
+        if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
+            zero_dispatch_s_realtime_profiler_msg_fields(
+                device_, logical_core_, GetCoreType(), descriptor_.hal(), channel.realtime_profiler_msg_addr.value());
 
-        TT_ASSERT(static_config_.dispatch_telemetry_control_addr.has_value());
-        dispatch_telemetry_types::DispatchTelemetryControl zero_dispatch_telemetry_control{};
-        detail::WriteToDeviceL1(
-            device_,
-            logical_core_,
-            static_config_.dispatch_telemetry_control_addr.value(),
-            std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry_control),
-                sizeof(zero_dispatch_telemetry_control)),
-            GetCoreType());
-    }
-
-    if (get_dispatch_query_manager_ref().distributed_dispatcher()) {
-        // Dispatch_s needs to init telemetry since it has a dedicated core
-        TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
-        TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
-        dispatch_telemetry_types::DispatchCoreTelemetry zero_dispatch_telemetry{};
-        if (static_config_.dispatch_telemetry_disabled.value()) {
-            zero_dispatch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
+            dispatch_telemetry_types::DispatchTelemetryControl zero_dispatch_telemetry_control{};
+            detail::WriteToDeviceL1(
+                device_,
+                logical_core_,
+                channel.dispatch_telemetry_control_addr.value(),
+                std::span<const uint8_t>(
+                    reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry_control),
+                    sizeof(zero_dispatch_telemetry_control)),
+                GetCoreType());
         }
-        detail::WriteToDeviceL1(
-            device_,
-            logical_core_,
-            static_config_.dispatch_telemetry_addr.value(),
-            std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry), sizeof(zero_dispatch_telemetry)),
-            GetCoreType());
 
-        // Just need to clear the dispatch message
-        std::vector<uint32_t> zero = {0x0};
-        const auto& my_dispatch_constants = get_dispatch_mem_map();
-        uint32_t dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
-        for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
-            uint32_t dispatch_s_sync_sem_addr =
-                dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_sync_offset(i);
-            detail::WriteToDeviceL1(device_, logical_core_, dispatch_s_sync_sem_addr, zero, GetCoreType());
+        if (get_dispatch_query_manager_ref().distributed_dispatcher()) {
+            TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+            dispatch_telemetry_types::DispatchCoreTelemetry zero_dispatch_telemetry{};
+            if (static_config_.dispatch_telemetry_disabled.value()) {
+                zero_dispatch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
+            }
+            detail::WriteToDeviceL1(
+                device_,
+                logical_core_,
+                channel.dispatch_telemetry_addr.value(),
+                std::span<const uint8_t>(
+                    reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry), sizeof(zero_dispatch_telemetry)),
+                GetCoreType());
+
+            std::vector<uint32_t> zero = {0x0};
+            const auto& my_dispatch_constants = get_dispatch_mem_map();
+            for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
+                const uint32_t dispatch_s_sync_sem_addr =
+                    channel.dispatch_s_sync_sem_base_addr.value() + my_dispatch_constants.get_sync_offset(i);
+                detail::WriteToDeviceL1(device_, logical_core_, dispatch_s_sync_sem_addr, zero, GetCoreType());
+            }
         }
     }
 

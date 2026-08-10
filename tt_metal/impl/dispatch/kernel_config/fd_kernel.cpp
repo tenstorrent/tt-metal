@@ -283,7 +283,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 path,
                 logical_core_,
                 experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
+                    .num_threads_per_cluster = num_threads_,
                     .compile_args = compile_args,
                     .defines = defines,
                     .opt_level = opt_level});
@@ -310,7 +310,7 @@ KernelHandle FDKernel::configure_kernel_variant(
             path,
             CoreCoord(logical_core_.x, logical_core_.y),
             experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1,
+                .num_threads_per_cluster = num_threads_,
                 .compile_args = compile_args,
                 .defines = defines,
                 .opt_level = opt_level});
