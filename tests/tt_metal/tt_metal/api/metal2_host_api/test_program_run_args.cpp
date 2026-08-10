@@ -2577,8 +2577,7 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
 // ============================================================================
 //
 // A hooked program never allocates, so GraphTracker reports its DFBs as CB allocations (#51674).
-// The alias skip and the borrowed flag are there to stop L1 over-reporting, and the hook gate keeps
-// a real run's trace untouched, so each needs a test that fails if it is dropped.
+// The alias skip, borrowed flag and hook gate each stop over-reporting, so each gets a test.
 
 // Records what a capture would see, so the reporting can be checked without a TTNN graph capture.
 class RecordingGraphProcessor : public IGraphProcessor {

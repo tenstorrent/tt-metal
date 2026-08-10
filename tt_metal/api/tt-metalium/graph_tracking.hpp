@@ -65,10 +65,7 @@ public:
         bool /*is_globally_allocated*/,
         const IDevice* /*device*/) {};
 
-    // Metal 2.0 program-scope L1. Reported apart from circular buffers, and apart from each other,
-    // so a consumer can tell which kind of memory it is looking at.
-    // borrows_memory: the buffer is a view onto memory owned elsewhere (a tensor's buffer), which is
-    // tracked in its own right, so summing it again would double-count that L1.
+    // borrows_memory: a view onto a tensor's buffer, so counting its bytes again double-counts.
     virtual void track_allocate_dataflow_buffer(
         const CoreRangeSet& /*core_range_set*/,
         uint64_t /*addr*/,
