@@ -225,10 +225,13 @@ Speaker 1: I heard there's big news in TTS lately?
 Speaker 2: Yes! Microsoft Research just open-sourced VibeVoice. The model can generate speech up to 90 minutes long, with smooth delivery and rich emotion — it's absolutely amazing.
 ```
 
-**Voice prompts** — 9 reference WAVs in `resources/voices/`: `en-Alice_woman`, `en-Carter_man`,
-`en-Frank_man`, `en-Maya_woman`, `en-Mary_woman_bgm`, `in-Samuel_man`, `zh-Anchen_man_bgm`,
-`zh-Bowen_man`, `zh-Xinran_woman`. Three demo ids carry an **auto-bound cast**
-(`DEMO_VOICE_CLONES` in [common/resource_utils.py](common/resource_utils.py)):
+**Voice prompts** — the bundled presets bind four English reference voices in `resources/voices/`:
+`en-Alice_woman`, `en-Carter_man`, `en-Frank_man`, `en-Maya_woman`. These are the only voices any
+preset uses and the exact set the rate-limited download fallback fetches (`_FALLBACK_VOICE_FILES` in
+[common/resource_utils.py](common/resource_utils.py)); a full (non-rate-limited) GitHub sync of
+upstream `demo/voices` also pulls its additional Chinese / background-music voices. The exact set
+tracks upstream `main` and is not commit-pinned. Three demo ids carry an **auto-bound cast**
+(`DEMO_VOICE_CLONES`):
 
 | Demo id | Speaker → voice |
 |---------|-----------------|
@@ -259,7 +262,7 @@ python models/experimental/vibevoice/demo/demo.py --text /tmp/my_script.txt \
 |------|---------|
 | `{demo_id}_tt.wav` | Generated audio — 24 kHz mono, PCM. Duration ≈ `ar_tokens × 133.3 ms` |
 | `{demo_id}_script.txt` | Verbatim copy of the script that was rendered |
-| `{demo_id}_meta.json` | Run manifest + perf: `demo_id`, `text_file`, `voice_cloning`, `voice_mapping`, `isl`, `full_prefill_tokens`, `warmup`, `max_length_times`, `max_new_tokens`, `tt_wav`, `script_copy`, and `prefill_s` / `prefill_tok_s` / `ttft_s` / `decode_tok_s` / `ms_per_tok_steady` / `e2e_s` / `ar_tokens_generated` |
+| `{demo_id}_meta.json` | Run manifest + perf. Manifest: `demo_id`, `text_file`, `voice_cloning`, `voice_mapping`, `isl`, `full_prefill_tokens`, `warmup`, `warmup_tokens`, `max_length_times`, `max_new_tokens`, `tt_wav`, `script_copy`. Perf (spread in from `summarize_generate_perf`): `prefill_tokens`, `ar_tokens_generated`, `prefill_s`, `prefill_tok_s`, `ttft_s`, `decode_s`, `decode_tok_s`, `ms_per_tok_steady`, `e2e_s`, `audio_s`, `rtf`, `rtf_x`, `rtf_decode`, `decode_mode`, `steady_decode_frames` |
 
 The run also prints a one-line perf summary (`prefill` tok/s, TTFT, `decode` tok/s, ms/tok, e2e,
 `ar_tokens`, `isl`) — the same fields written to `meta.json`. For representative timings at each ISL
@@ -296,6 +299,8 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 | `--no-voice-cloning` | off | Text-only prompt even when the demo has a speaker preset |
 | `--model_path <dir>` | auto-download | VibeVoice checkpoint directory |
 | `--output_dir <dir>` | `vibevoice/output` | Root output dir; artifacts go to `{output_dir}/{demo_id}/` |
+| `--weight-cache` / `--no-weight-cache` | `--weight-cache` (on) | Cache preprocessed device weights (LM + connectors + diffusion head + tokenizers) to disk and reload them on later runs, skipping the host tilize/cast + re-upload. Byte-exact, so it cannot change output. `--no-weight-cache` always rebuilds |
+| `--weight-cache-dir <dir>` | `$VV_WEIGHT_CACHE_DIR`, else `$TT_CACHE_PATH/vibevoice/weight_cache`, else `generated/ttnn/vibevoice/weight_cache` | Device-weight cache location; entries are keyed by checkpoint identity |
 | `--cfg_scale <float>` | `1.3` | Classifier-free guidance scale (2 LM rows per frame) |
 | `--num_steps <int>` | `10` | DPM-Solver++ diffusion steps per frame |
 | `--max_new_tokens <int>` | `None` | AR frame cap. Default: run until EOS, bounded by `max_length_times` |
@@ -313,8 +318,10 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 `--trace` / `VV_TRACE_SEGMENT=1` ttnn-captures the whole steady-state speech-diffusion frame
 (neg-LM + diffusion + post-diffusion + pos-LM) as one fully device-driven graph — the "llama shape":
 positions self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried —
-then replays it per frame. It gives **≈24–25 tok/s** steady-state decode vs ≈2.4 tok/s eager
-(~10× on the AR loop), and opens the device with a ~1.4 GB trace region + 2 command queues.
+then replays it per frame — roughly a **10×** speedup on the AR loop over eager decode — and opens
+the device with a ~1.4 GB trace region + 2 command queues. (For absolute tok/s see
+[Performance](#performance); that table is stale and understates current throughput — see the
+caution there.)
 
 | Flag | Env var | Scope | Notes |
 |------|---------|-------|-------|
@@ -331,6 +338,8 @@ stated.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `VIBEVOICE_MODEL_PATH` | unset | Checkpoint directory override (skips auto-download) |
+| `VV_WEIGHT_CACHE_DIR` | unset | Device-weight cache directory (same as `--weight-cache-dir`; else `$TT_CACHE_PATH/vibevoice/weight_cache`, else `generated/ttnn/vibevoice/weight_cache`) |
+| `VV_DISABLE_WEIGHT_CACHE` | unset (cache on) | Set to `1`/`true`/`yes` to disable the device-weight cache and rebuild from the checkpoint every run (same effect as `--no-weight-cache`) |
 | `VV_TRACE_SEGMENT` | `0` in the generator; `1` in the ISL-sweep test | Whole-segment fused decode trace. The demo always sets it explicitly from `--trace` (default on) / `--no-trace`, so the generator's `0` default only applies to callers that set neither |
 | `VV_FUSED_ROPE` | `1` (on) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the per-position fp32 RoPE rows (3.97 ms → 0.31 ms per frame). Was off after a 100-min run showed the speaking rate accelerating (median 208 wpm vs 153) with every energy/spectral gate passing; re-validated on the current frame — 42,498 AR tokens (same as the pacing-safe reference), 93.04 min, whisper pacing 169/173/195 wpm early/mid/late (median 173, natural 150-190). Permutes `wq`/`wk` at load, so its default must match `resolve_weight_cache`'s `rope{0,1}` key |
 | `VV_TTNN_RANDN` | `0` (off) | Draw diffusion init noise and the acoustic fix-std jitter with `ttnn.randn` on device instead of torch. Off by default: it is a different generator, so renders stop matching the torch reference and PCC comparison against it is no longer meaningful |
@@ -425,8 +434,8 @@ pytest models/experimental/vibevoice/tests/pcc/test_safe_paths.py -v
 
 | Quantity | Gate |
 |----------|------|
-| Component PCC (connectors, scheduler, diffusion head, LM head, tokenizers) | ≥ 0.99 |
-| Diffusion head (secondary) | relative Frobenius error ≤ 0.10, plus an allclose check |
+| Component PCC (connectors, scheduler, LM head, tokenizers) | ≥ 0.99 |
+| Diffusion head PCC | ≥ 0.995 (secondary: relative Frobenius ≤ 0.10, plus an allclose check). Lower gate than the other components because its SwiGLU FFN defaults to bf8b weights (`VV_BF8B_FFN`), not bit-exact vs bf16 |
 | Decoder-layer decode min PCC | ≥ 0.9975 (secondary: relative Frobenius ≤ 0.07) |
 | Prefill: speech embeds, KV cache | ≥ 0.99 |
 | Prefill: LM hidden | per-position **median** ≥ 0.96 (flattened PCC is pulled down by a few text-token outliers) |
@@ -472,15 +481,15 @@ Measured on **Blackhole P150** against the PyTorch / HuggingFace reference paths
 | | Semantic connector | 0.99999753 |
 | `test_dpm_scheduler_pcc.py` | DPM scheduler (10 steps) | 0.99993365 |
 | `test_lm_head_pcc.py` | LM head last-token logits | 0.99995073 |
-| `test_diffusion_head_pcc.py` | Diffusion head | 0.99985695 |
+| `test_diffusion_head_pcc.py` | Diffusion head (seed 0) | ≈0.9958 |
 | `test_semantic_tokenizer_pcc.py` | Semantic tokenizer encode | 0.99943061 |
 | `test_acoustic_tokenizer_pcc.py` | Acoustic encode | 0.99985584 |
 | | Acoustic decode (scaled random latents) | 0.99974055 |
 | | Acoustic decode (real encoder latents) | 0.99980000 |
 | `test_decoder_layer_pcc.py` | Layer-0 decode min / mean (steps 0–9) | 0.99819 / 0.99858 |
-| `test_decode.py` | Open-loop diffusion latent min / mean | 0.9996 / 0.9999 |
-| | Open-loop chain (fused) min / mean | 0.9999 / 1.0000 |
-| | Open-loop LM hidden min / mean | 0.9991 / 0.9995 |
+| `test_decode.py` | Open-loop diffusion latent min / mean | 0.9986 / 0.9999 |
+| | Open-loop chain (fused) min / mean | 1.0000 / 1.0000 |
+| | Open-loop LM hidden min / mean | 0.9990 / 0.9994 |
 | `test_e2e_wer.py` | Teacher-forced WER (`4p_climate_45min`, cap = 512) | 0.0000 |
 | `test_e2e_sim.py` | Voice-clone SIM (Carter vs best impostor) | 0.9914 / margin +0.3854 |
 | | 4-speaker self-ID (Alice / Carter / Frank / Maya) | 0.9805 / 0.9914 / 0.9957 / 0.9761 |
@@ -498,28 +507,27 @@ at long ISL; see the `test_prefill.py` docstrings).
 
 | ISL | speech_embed_PCC | hidden_med |
 |----:|-----------------:|-----------:|
-| 32 | 0.999976 | 0.99654 |
-| 64 | 0.999932 | 0.99739 |
-| 128 | 0.999932 | 0.99827 |
-| 256 | 0.999930 | 0.99436 |
-| 512 | 0.999929 | 0.96478 |
-| 1024 | 0.999924 | 0.98272 |
-| 2048 | 0.999936 | 0.98697 |
-| 4096 | 0.999939 | 0.99025 |
-| 8192 | 0.999940 | 0.99198 |
-| 16384 | 0.999915 | 0.99414 |
-| 24000 | 0.999942 | 0.99518 |
+| 32 | 0.997466 | 0.99551 |
+| 64 | 0.999929 | 0.99647 |
+| 128 | 0.999925 | 0.99691 |
+| 256 | 0.999927 | 0.99421 |
+| 512 | 0.999920 | 0.96332 |
+| 1024 | 0.999923 | 0.98222 |
+| 2048 | 0.999928 | 0.98686 |
+| 4096 | 0.999935 | 0.99020 |
+| 8192 | 0.999930 | 0.99177 |
+| 16384 | 0.999909 | 0.99386 |
+| 24000 | 0.999935 | 0.99484 |
 
 ## Performance
 
 ### End-to-end ISL sweep (`4p_climate_100min`, Blackhole P150)
 
 `tests/perf/test_e2e_isl_sweep_perf.py` on Blackhole P150 with fused-frame trace
-(`VV_TRACE_SEGMENT=1`, fp32 RoPE / `VV_FUSED_ROPE=0` — these numbers predate fused RoPE becoming
-the default, so they do not include its ~4%). Prompt cropped to each ISL after
-tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tokens=None`
-(EOS / `max_length_times×ISL`). **Decode tok/s** is steady fused-frame *replay* only
-(`decode_mode=steady_trace`) — capture / first-time compile frames are excluded.
+(`VV_TRACE_SEGMENT=1`). Prompt cropped to each ISL after tokenization; untimed warmup
+(`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tokens=None` (EOS / `max_length_times×ISL`).
+**Decode tok/s** is steady fused-frame *replay* only (`decode_mode=steady_trace`) — capture /
+first-time compile frames are excluded.
 
 | ISL | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E | AR toks |
 |----:|-------------:|---------:|-------------:|-------:|----:|--------:|
@@ -534,10 +542,6 @@ tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tok
 | 8192 | 830.7 | 9.862 | 23.70 | 42 | 739s | 15122 (EOS before 2×) |
 | 16384 | 854.8 | 19.167 | 22.94 | 44 | 1623s | 32768 |
 | 23038 | 758.9 | 30.359 | 22.46 | 45 | 2295s | 42498 (EOS before 2×) |
-
-Steady decode is **~24.7 tok/s** (≈40–41 ms/tok) through mid ISLs, easing slightly to
-**~22.5 tok/s** at full prompt (longer KV). TTFT stays ~5.7s through ISL≈2k, then rises with
-prefill cost to ~30s at full length.
 
 ### Performance tests (Tracy)
 
@@ -674,7 +678,7 @@ repeated here — see [Model description](#model-description) and [Upstream refe
 
 **Long-form rendering**
 
-- **`--chunks` boundaries are lossy.** The 64K context bound (≈94 min for the ~23k-token 100-min
+- **`--chunks` boundaries are lossy.** The 64K context bound (≈93 min for the ~23k-token 100-min
   script) is the model's, not the port's — but the port's workaround for exceeding it is
   `--chunks N`, which re-prefills each part with fresh KV caches and streaming conv state, so **each
   boundary costs roughly one garbled minute** of audio. The reference has no equivalent stitching, so
