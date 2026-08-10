@@ -674,8 +674,16 @@ void PerfDebugProfiler::set_drisc_niu_mode(IDevice* device, const CoreCoord& dri
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
     // This LaunchProgram is the heavyweight one: dram_barrier MMIO-polls a core in EVERY DRAM channel,
     // then wait_until_cores_done polls the launched core.
-    g_bringup_step = who + ":LaunchProgram(dram_barrier+wait_until_cores_done)";
-    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    // SPLIT ON PURPOSE, to tell the two halves of this step apart in a failure. The one-launch fix above
+    // guarantees the dram_barrier runs BEFORE any core is in stream mode -- but the completion poll
+    // necessarily runs AFTER, because this kernel's whole body IS the flip (drisc_niu_mode.cpp), so a
+    // core that has finished is by definition already in stream mode, where "all inbound NoC traffic
+    // terminates at L1" instead of being forwarded to GDDR. If the residual ~210 ms non-completing read
+    // is the poll rather than the barrier, only the second label can ever appear on a failure.
+    g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
+    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
+    detail::WaitProgramDone(device, p);
     g_bringup_step = who + ":done";
 }
 

@@ -74,6 +74,15 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-300}
 # run just pays the timeout again: a real sweep sat at 16 consecutive MASKED (45 s each) learning nothing,
 # because MASKED did not trigger recovery and nothing watched for a streak. 0 disables the bail-out.
 MAX_CONSEC_FAIL=${MAX_CONSEC_FAIL:-5}
+# Degradation thresholds for the in-band probes the profiler prints every run. Healthy on this box is
+# ack ~170-190 ns and read ~780-790 ns. The two bad states separate cleanly:
+#   ack normal + read ~2700 ns  -> Gen1 downtrain (posted writes barely care about link rate, reads pay
+#                                  the round trip). Needs a COLD power cycle; a warm reboot will not retrain.
+#   ack ~2300 ns + read ~2900   -> the 13x MMIO state (follows a box freeze + watchdog reboot).
+# These are checked because current_link_speed is NOT trustworthy on its own: a hung card reads healthy
+# for several runs, and a degraded card can read 32.0 GT/s while every read costs 3.5x.
+ACK_MAX_NS=${ACK_MAX_NS:-600}
+READ_MAX_NS=${READ_MAX_NS:-1500}
 EP=${EP:-0000:01:00.0}          # Blackhole endpoint
 RP=${RP:-0000:00:01.1}          # its root port -- the ONLY reliable link-state witness once wedged
 TT_SMI=${TT_SMI:-$(command -v tt-smi || echo "$HOME/.local/bin/tt-smi")}
@@ -199,6 +208,7 @@ log "=== drisc_wedge_watch: N=$N delay=$DELAY armed=$ARMED grid=${GX}x${GY} disp
 log "    host=$(hostname) out=$OUT stop_on_wedge=$STOP_ON_WEDGE allow_reboot=$ALLOW_REBOOT"
 log "    baseline endpoint=$(link_state "$EP") root_port=$(link_state "$RP")"
 log "    NOTE 2.5GT/s on either side = a DEGRADED link (cold power cycle), a different failure to WEDGE"
+log "    health thresholds: ack >= ${ACK_MAX_NS} ns => 13x state | read >= ${READ_MAX_NS} ns => Gen1 downtrain"
 
 nclean=0; nwedge=0; nteardown=0; nmasked=0; nmmio=0; nabort=0; nconsec=0
 for k in $(seq 1 "$N"); do
@@ -254,8 +264,36 @@ for k in $(seq 1 "$N"); do
     nclean=$((nclean+1))
   fi
 
-  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class,$SWEEP_ID" >> "$CSV"
-  [ "$class" != CLEAN ] && log "k=$k rc=$rc dur=${dur}s ep=$ep rp=$rp devsta=$ds -> $class"
+  # In-band latency probes. The profiler prints these once per socket on every run that gets far enough
+  # to create one, so they cost nothing and they are the only cheap way to see the degraded states.
+  ack_ns=$(grep -ahoE "ACK-WRITE probe: [0-9]+ ns" "$RUNLOG" 2>/dev/null | grep -oE "[0-9]+" | head -1)
+  read_ns=$(grep -ahoE "DEVICE-READ probe: [0-9]+ ns" "$RUNLOG" 2>/dev/null | grep -oE "[0-9]+" | head -1)
+  ack_ns=${ack_ns:-NA}; read_ns=${read_ns:-NA}
+
+  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class,$SWEEP_ID,$ack_ns,$read_ns" >> "$CSV"
+
+  # A degraded card makes every subsequent number describe the LINK, not the bug -- so stop rather than
+  # keep sweeping. Reads inflate 3.5x on a Gen1 downtrain, which changes durations, poll costs and very
+  # likely the stall rate being measured.
+  if [ "$ack_ns" != NA ] && [ "$read_ns" != NA ]; then
+    degraded=""
+    if [ "$ack_ns" -ge "$ACK_MAX_NS" ]; then
+      degraded="13x MMIO state (ack ${ack_ns} ns, read ${read_ns} ns) -- follows a box freeze + watchdog reboot"
+    elif [ "$read_ns" -ge "$READ_MAX_NS" ]; then
+      degraded="Gen1 read-latency state (ack ${ack_ns} ns normal, read ${read_ns} ns = ~3.5x) -- link downtrained"
+    fi
+    if [ -n "$degraded" ]; then
+      log "=== DEGRADED CARD at k=$k: $degraded ==="
+      log "    ep=$ep rp=$rp  (link speed alone is NOT a reliable check -- these probes are)"
+      log "    Needs a COLD POWER CYCLE; a warm reboot will not retrain and can convert one bad state"
+      log "    into the other. Any rate measured from here describes the link, not the failure."
+      if [ "${ALLOW_DEGRADED:-0}" != "1" ]; then
+        log "    stopping (ALLOW_DEGRADED=1 to sweep anyway)"
+        break
+      fi
+    fi
+  fi
+  [ "$class" != CLEAN ] && log "k=$k rc=$rc dur=${dur}s ep=$ep rp=$rp devsta=$ds ack=${ack_ns}ns read=${read_ns}ns -> $class"
 
   if [ "$class" = CLEAN ]; then
     nconsec=0
