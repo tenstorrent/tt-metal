@@ -16,10 +16,10 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.gdn.conv_fir_wh import (
     causal_conv1d_fir_dispatch as _causal_conv1d_fir,  # Upstream _causal_conv1d_fir on Blackhole; on Wormhole a local fork that builds the padded; input in ROW_MAJOR so the K shifted taps stop untilizing the whole tensor each; (UntilizeWithUnpadding 1,033us -> 15us at seq 2048). See conv_fir_wh.py.
 )
-from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    recurrent_gated_delta_rule_decode_ttnn,
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
+    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,  # Upstream on Blackhole; on Wormhole a local variant that skips q's dead-weight fp32 promotion (q never feeds the state write). See recurrent_decode_wh.py.
 )
+from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
@@ -164,6 +164,10 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    # Same taps stacked to [K, 1, qkv_dim] (-> [K,1,qkv_dim_tp] per device) for forward_decode's
+    # one-shot FIR: multiply([K,B,C],[K,1,C]) + sum(dim=0) replaces the K-step multiply/mac chain.
+    # Kept ALONGSIDE the per-tap list, which the prefill FIR paths (_causal_conv1d_fir) still use.
+    tw["conv_taps_stack"] = tpc.shard_small(torch.stack([t.reshape(1, -1) for t in taps], dim=0), mesh, c("tap_stack"))
     # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights / _conv1d_prefill.
     W1d = torch.stack(taps, dim=-1).reshape(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size).contiguous()
     tw["conv_w1d"] = ttnn.from_torch(
@@ -283,16 +287,23 @@ class TPGatedDeltaNet:
     # across 64 banks. Blackhole has both a larger L1 and (at TP=4) a smaller per-device Nv, and its
     # batched decode is already validated there, so the split is Wormhole-only.
     _DECODE_STATE_L1_BUDGET = 31 * (1 << 20)
+    # Approximate on-device bytes/element by rec_state dtype (bfloat8_b packs ~1 B/elem plus a small
+    # shared-exponent overhead, rounded down here since this budget is already a conservative
+    # estimate). Used by _decode_batch_split so the split threshold tracks whatever dtype
+    # reset_state actually allocated instead of assuming fp32.
+    _STATE_BYTES_PER_ELEM = {ttnn.bfloat8_b: 1, ttnn.bfloat16: 2, ttnn.float32: 4}
 
     def _decode_batch_split(self, B):
-        """Largest batch slice whose fp32 recurrent state fits the decode kernel's spare L1.
+        """Largest batch slice whose recurrent state fits the decode kernel's spare L1.
 
         Returns B itself (no splitting, byte-identical to the validated path) whenever the whole
-        batch fits — which is every case on Blackhole, and B<=16 on a Wormhole N300.
+        batch fits — which is every case on Blackhole, and B<=16 on a Wormhole N300 at fp32 state
+        (more at bf16/bf8 -- see _STATE_BYTES_PER_ELEM).
         """
         if tpc.is_blackhole():
             return B
-        per_user = self.Nv * self.Dk * self.Dv * 4  # fp32 state, one user
+        elem_bytes = self._STATE_BYTES_PER_ELEM.get(self.rec_state.dtype, 4)
+        per_user = self.Nv * self.Dk * self.Dv * elem_bytes  # one user's state, actual dtype
         # x2: the decode kernel holds the pre-decay state AND the freshly-decayed copy of it live at
         # once (recurrent_gated_delta_rule_decode_ttnn's `h = ttnn.multiply(h, decay_bhkv, ...)` does
         # not free the original `h` first) -- the budget must cover both, not just one copy.
@@ -316,8 +327,17 @@ class TPGatedDeltaNet:
             )
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
-        # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
-        if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
+        # fp32 recurrent state on Blackhole (QWEN35_GDN_STATE_BF16=1 reverts to bf16 there too).
+        # Wormhole defaults to bfloat16 state.
+        #
+        # A bfloat8_b state was tried here (smaller footprint, eases _decode_batch_split pressure, and
+        # a faster read/query matmul -- BF16 x BF8 -> BF16 measured ~44% faster than BF16 x BF16 at the
+        # real production shape). It was reverted: the full test suite showed real accumulation-drift
+        # failures directly attributable to it (confirmed by rerunning against the pre-bf8 commit) --
+        # test_gdn_tp_fused_chunk_prefill (fused-chunk prefill vs 256-step decode PCC 0.9776 < 0.99) and
+        # test_model_tp_decode_batched B8/B32 (batched decode logits PCC 0.9519 < 0.97 for one user at
+        # len=128). bf16 state does not reproduce either failure.
+        if tpc.is_blackhole() and os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = ttnn.from_torch(
                 torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
                 dtype=ttnn.float32,
@@ -331,7 +351,14 @@ class TPGatedDeltaNet:
         self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
-        self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
+        # _zero_rec must match self.rec_state's dtype for reset_state_inplace's ttnn.copy to work.
+        self._zero_rec = ttnn.from_torch(
+            torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.bfloat16),
+            dtype=self.rec_state.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
         # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
@@ -1003,24 +1030,34 @@ class TPGatedDeltaNet:
             )
         ttnn.deallocate(qkv)
 
-        # q/k/v: L1 on Wormhole. beta/g stay DRAM.
+        # q/k/v: L1 on Wormhole, but only up to T=2048 -- beyond that, DRAM. beta/g stay DRAM always.
         #
         # The note this replaces said "q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes
         # it". That was true, and it went stale when the in-proj rework dropped the 6912 pad: qkvzab is
-        # 3MB smaller, which is enough headroom for q+k+v (4+4+8MB = 256KB/core total).
+        # 3MB smaller, which is enough headroom for q+k+v (4+4+8MB = 256KB/core total) AT T=2048.
         # MEASURED in the real layer (Tracy, T=2048, N300 — perf14 -> perf16):
         #     q  47 -> 34us     k  59 -> 33us     v  94 -> 65us      = -68us/layer
         # matching the isolated sweep (192 -> 132us).
+        #
+        # The T=2048 headroom does NOT extrapolate to longer prompts: q/k/v scale linearly with T, and
+        # test_model_tp_long_prefill (T=2304, full 8-layer model) hit "Statically allocated circular
+        # buffers in program 4416 clash with L1 buffers ... L1 buffer allocated at 1178496 and static
+        # circular buffer region ends at 1277120" in _row_proj's matmul -- the extra ~288KB/core of q/k/v
+        # at T=2304 (vs 256KB/core at T=2048) left too little L1 for that matmul's circular buffers.
+        # Gating on T<=2048 (the only size this was ever measured safe at) avoids the crash for any
+        # longer single-pass prefill while keeping the win for T<=2048 chunks/prompts.
         #
         # z is NOT included and must not be: same experiment, z in L1 fails the full layer with a
         # scan-kernel CB clash (see the _z_mc note in _project_qkvzab). q/k/v are consumed by the chunk
         # kernel's reader; z is multiplied in at the very end, so it stays live strictly longer.
         #
-        # If you widen this, gate it on test_profile_single_layer_prefill, NOT on test_gdn_tp or
-        # test_prefill -- both of those passed with z in L1 and only the full layer caught the clash.
+        # If you widen this (raise the T threshold or re-include z), gate it on
+        # test_profile_single_layer_prefill AND test_model_tp_long_prefill, NOT on test_gdn_tp or
+        # test_prefill -- those pass with z in L1 / no T cap and only the full multi-layer model at
+        # realistic T catches the clash.
         # Wormhole only: Blackhole's placement was tuned separately and is left byte-identical.
         kd = self.key_dim_tp
-        _qkv_mc = None if tpc.is_blackhole() else ttnn.L1_MEMORY_CONFIG
+        _qkv_mc = None if tpc.is_blackhole() else (ttnn.L1_MEMORY_CONFIG if T <= 2048 else ttnn.DRAM_MEMORY_CONFIG)
         if self._gdn_flat_qkv:
             # Flat q/k/v: adapter splits heads inside untilize
             q = ttnn.slice(conv, (0, 0, 0), (1, T, kd), memory_config=_qkv_mc)
@@ -1630,9 +1667,28 @@ class TPGatedDeltaNet:
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
         ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
-        for j in range(1, self.K):
-            conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+        # FIR over the K taps. The per-tap chain (multiply + K-1 mac) costs K*2-1 = 7 DEVICE ops at
+        # K=4, because ttnn.mac does NOT fuse into a single kernel -- it dispatches a multiply and an
+        # add, which the Tracy profile shows as 7 BinaryNg ops for these 4 calls. Stacking the states
+        # into [K,B,C] and the taps into [K,1,C] turns the whole FIR into ONE broadcast multiply plus
+        # ONE reduction: 3 device ops (concat + multiply + sum) instead of 7.
+        # MEASURED (WH, K=4 B=32 C=4096, full shift+FIR+silu step): 43.0us / 8 ops vs the per-tap
+        # chain's 47.1us / 12 ops, with PCC 0.999997 vs 0.999995 (marginally BETTER, since the
+        # reduction accumulates once instead of rounding after every mac).
+        # The 4 in-place shift copies above are deliberately NOT folded in: they keep conv_states at
+        # fixed addresses for decode-trace replay, and every stacked-shift alternative measured worse
+        # (slice+concat 13.1us vs 11.2us; in-place slice_write 238us -- see git history).
+        # Blackhole keeps the per-tap chain: these numbers are WH-measured and BH's grid/L1 differ.
+        if tpc.is_blackhole():
+            conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
+            for j in range(1, self.K):
+                conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+        else:
+            _stk = ttnn.concat(st, dim=0, memory_config=_L1)  # [K, B, qkv_dim_tp]
+            _prod = ttnn.multiply(_stk, tw["conv_taps_stack"], memory_config=_L1)
+            ttnn.deallocate(_stk)
+            conv = ttnn.sum(_prod, dim=0, keepdim=True, memory_config=_L1)  # [1, B, qkv_dim_tp]
+            ttnn.deallocate(_prod)
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
@@ -1658,8 +1714,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
-        # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
-        _hp = os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"
+        # fp32 decode step on Blackhole (QWEN35_GDN_DECODE_BF16=1 reverts to bf16 there too).
+        # Wormhole always runs bf16 -- matches reset_state's state dtype above, same tradeoff.
+        _hp = tpc.is_blackhole() and os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"
         # Only the first B users' state participates when the batch is under the allocated max.
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
         _bstep = self._decode_batch_split(B)
