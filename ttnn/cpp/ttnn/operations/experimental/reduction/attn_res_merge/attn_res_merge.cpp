@@ -17,6 +17,9 @@ ttnn::Tensor attn_res_merge(
     const ttnn::Tensor& mass,
     const ttnn::Tensor& live_scores,
     uint32_t site,
+    uint32_t num_partials,
+    float inv_hidden_size,
+    float eps,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(
@@ -42,6 +45,9 @@ ttnn::Tensor attn_res_merge(
         mass,
         live_scores,
         site,
+        num_partials,
+        inv_hidden_size,
+        eps,
         memory_config.value_or(partial.memory_config()),
         kernel_config_val);
 }

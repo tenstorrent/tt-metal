@@ -299,6 +299,14 @@ class TtAttnRes(LightweightModule):
             "AttnRes reduces over the full hidden dim and cannot infer the sharding"
         )
 
+    def _to_stats_dtype(self, tensor):
+        """Widen to `stats_dtype`, consuming `tensor`. The identity if it already is."""
+        if tensor.dtype == self.stats_dtype:
+            return tensor
+        wide = ttnn.typecast(tensor, self.stats_dtype)
+        ttnn.deallocate(tensor)
+        return wide
+
     def _reduce_stats(self, stats):
         """Sum a `[1, C, N, k]` statistics tensor across the TP axis.
 
@@ -581,26 +589,43 @@ class TtAttnRes(LightweightModule):
 
         Both `d`-reductions ride one collective — this is the per-read cost on a
         TP mesh, and it is `2(S+1)` scalars per token."""
-        if self.fused_stats:
-            packed = ttnn.experimental.attn_res_stats(v, q, dtype=self.stats_dtype)
-            if self.tp_factor == 1:
-                return self._scores_from_stats(packed)
-            crossed = self._gather_stats(packed)
-            ttnn.deallocate(packed)
-            return self._scores_from_stats(crossed)
+        stats = self._stats_for_scores(v, q)
+        if stats is not None:
+            return self._scores_from_stats(stats)
 
-        sum_squares = self._local_sum_squares(v)
-        dots = self._local_dots(v, q)
-
-        if self.fused_scores:
-            return self._scores_from_stats(self._reduce_stats_packed(sum_squares, dots))
-
-        sum_squares, dots = self._reduce_stats_pair(sum_squares, dots)
+        sum_squares, dots = self._reduce_stats_pair(self._local_sum_squares(v), self._local_dots(v, q))
         reciprocal_rms = self._to_reciprocal_rms(sum_squares)
         scores = ttnn.mul(dots, reciprocal_rms)
         ttnn.deallocate(dots)
         ttnn.deallocate(reciprocal_rms)
         return scores
+
+    @property
+    def merge_folds_stats(self):
+        """`merge` hands the statistics to `attn_res_merge` and lets it score.
+
+        The score is a per-row scalar chain and `attn_res_merge` already runs one
+        in dest registers, so the read's whole normalization collapses into a pass
+        it makes anyway: no scoring program, and the score never reaches DRAM."""
+        return self.fused_merge and (self.fused_stats or self.fused_scores)
+
+    def _stats_for_scores(self, v, q):
+        """[1, C, N, d/tp] -> rank-stacked `[1, 2C * tp, N, 1]` statistics, or None.
+
+        None where the configuration reduces the two halves separately and never
+        forms the packed layout — the caller falls back to its own chain there."""
+        if self.fused_stats:
+            packed = ttnn.experimental.attn_res_stats(v, q, dtype=self.stats_dtype)
+            if self.tp_factor == 1:
+                return packed
+            crossed = self._gather_stats(packed)
+            ttnn.deallocate(packed)
+            return crossed
+
+        if self.fused_scores:
+            return self._reduce_stats_packed(self._local_sum_squares(v), self._local_dots(v, q))
+
+        return None
 
     def _scores_from_stats(self, stats):
         """Rank-stacked `[1, 2C * tp, N, 1]` statistics -> `[1, C, N, 1]` scores.
@@ -736,6 +761,14 @@ class TtAttnRes(LightweightModule):
         site_shifts = self._site_major(site_shifts)
         site_masses = self._site_major(site_masses)
 
+        if self.merge_folds_stats:
+            # `merge` reads these alongside the live stream's statistics through one
+            # circular buffer, which is one unpack configuration and so one dtype.
+            # Widening here is exact and costs two dispatches a block against the
+            # scoring program it lets every one of the block's reads drop.
+            site_shifts = self._to_stats_dtype(site_shifts)
+            site_masses = self._to_stats_dtype(site_masses)
+
         partials = self._mix(block_residual, exponentials)
 
         ttnn.deallocate(exponentials)
@@ -757,6 +790,23 @@ class TtAttnRes(LightweightModule):
             `[1, 1, N, d/tp_factor]`, equal to `forward` up to rounding.
         """
         self._assert_shard_width(prefix_sum)
+
+        if self.merge_folds_stats:
+            live_stats = self._stats_for_scores(prefix_sum, q)
+            merged = ttnn.experimental.attn_res_merge(
+                partial,
+                prefix_sum,
+                shift,
+                mass,
+                live_stats,
+                site=site,
+                num_partials=self.tp_factor,
+                inv_hidden_size=1.0 / self.hidden_size,
+                eps=self.eps,
+            )
+            ttnn.deallocate(live_stats)
+            return merged
+
         live_scores = self._scores(prefix_sum, q)
 
         if self.fused_merge:

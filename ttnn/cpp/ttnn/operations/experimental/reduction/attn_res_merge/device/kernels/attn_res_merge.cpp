@@ -23,13 +23,21 @@
 // deriving `a` and `b` costs one pack of two tiles and no CB traffic. It is
 // per-row work amortized over the row's Wt output tiles, and a core's tile run
 // is contiguous, so most cores derive one row's scalars and never revisit them.
+//
+// That headroom is why `live_scores` can arrive as the statistics it is derived
+// from instead of the score. Its own chain — sum the ranks, scale, add epsilon,
+// reciprocal square root, multiply — is dst-to-dst as well, so absorbing it
+// costs a few more registers on work already amortized over Wt tiles and saves
+// both a device program and a round trip through DRAM.
 
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -41,10 +49,18 @@ namespace {
 
 constexpr auto cb_wide = tt::CBIndex::c_0;     // [partial, prefix_sum] per output tile
 constexpr auto cb_row = tt::CBIndex::c_1;      // [a, b], produced here rather than read
-constexpr auto cb_scalars = tt::CBIndex::c_2;  // [shift, mass, live_scores] per token row
+constexpr auto cb_scalars = tt::CBIndex::c_2;  // [shift, mass, <live score source>] per token row
 constexpr auto cb_out = tt::CBIndex::c_16;
 
-constexpr uint32_t kScalars = 3;
+// fp32 bit patterns, which is what the SFPU scalar binops take. Unread below one
+// partial, where the live score arrives already normalized.
+constexpr uint32_t num_partials = get_compile_time_arg_val(1);
+constexpr uint32_t inv_hidden_size = get_compile_time_arg_val(2);
+constexpr uint32_t eps = get_compile_time_arg_val(3);
+
+constexpr uint32_t kFixedScalars = 2;
+constexpr uint32_t kStatsPerPartial = 2;
+constexpr uint32_t kScalars = kFixedScalars + (num_partials == 0 ? 1 : kStatsPerPartial * num_partials);
 constexpr uint32_t kRowWeights = 2;
 constexpr uint32_t kOperands = 2;
 constexpr uint32_t onetile = 1;
@@ -62,9 +78,41 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
     unary_op_init_common(cb_scalars, cb_row);
 
     tile_regs_acquire();
+    if constexpr (num_partials == 0) {
+        copy_tile(cb_scalars, kFixedScalars, dst_b);
+    } else {
+        // The live score, from the statistics up:
+        //
+        //   live_scores = dots * rsqrt(sum_squares * inv_hidden_size + eps)
+        //
+        // summed across ranks first. `dst_a` is the only register free until the
+        // sums collapse, so each rank's tiles land there one at a time.
+        copy_tile(cb_scalars, kFixedScalars, dst_den);
+        copy_tile(cb_scalars, kFixedScalars + 1, dst_b);
+
+        if constexpr (num_partials > 1) {
+            add_binary_tile_init();
+            for (uint32_t p = 1; p < num_partials; ++p) {
+                copy_tile(cb_scalars, kFixedScalars + kStatsPerPartial * p, dst_a);
+                add_binary_tile(dst_den, dst_a, dst_den);
+                copy_tile(cb_scalars, kFixedScalars + kStatsPerPartial * p + 1, dst_a);
+                add_binary_tile(dst_b, dst_a, dst_b);
+            }
+        }
+
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_den, inv_hidden_size);
+        add_unary_tile(dst_den, eps);
+
+        rsqrt_tile_init();
+        rsqrt_tile(dst_den);
+
+        mul_binary_tile_init();
+        mul_binary_tile(dst_b, dst_den, dst_b);
+    }
+
     copy_tile(cb_scalars, 0, dst_a);
     copy_tile(cb_scalars, 1, dst_den);
-    copy_tile(cb_scalars, 2, dst_b);
 
     binary_max_tile_init();
     binary_max_tile(dst_a, dst_b, dst_max);

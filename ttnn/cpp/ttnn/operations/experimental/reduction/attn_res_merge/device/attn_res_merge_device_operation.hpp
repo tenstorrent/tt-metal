@@ -37,6 +37,9 @@ Tensor attn_res_merge(
     const Tensor& mass,
     const Tensor& live_scores,
     uint32_t site,
+    uint32_t num_partials,
+    float inv_hidden_size,
+    float eps,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

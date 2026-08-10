@@ -13,15 +13,26 @@ namespace ttnn::experimental::prim {
 
 struct AttnResMergeParams {
     uint32_t site;
+    // Above zero, live_scores carries the statistics the live score is derived
+    // from rather than the score, stacked one pair per tensor-parallel rank, and
+    // the derivation happens here. inv_hidden_size and eps are that derivation's
+    // constants and are unread at zero.
+    uint32_t num_partials;
+    float inv_hidden_size;
+    float eps;
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
 // partial - [R, 1, H, W], TILE layout. prefix_sum - [1, 1, H, W]: the live
 //   stream is one plane behind every site, so only the partial batches.
-// shift, mass, live_scores - [R, 1, H, 1], TILE layout. One scalar per row,
-//   physically a tile whose column 0 holds it; that is already the layout
-//   BroadcastType::COL reads, so no pre-pass builds it.
+// shift, mass - [R, 1, H, 1], TILE layout. One scalar per row, physically a tile
+//   whose column 0 holds it; that is already the layout BroadcastType::COL reads,
+//   so no pre-pass builds it.
+// live_scores - [R, 1, H, 1] at num_partials 0, the same one-scalar-per-row
+//   layout. Above zero it is instead [1, 2 * num_partials, H, 1]: each rank's
+//   sum of squares then its dots, stacked rank-major the way a gathering
+//   collective leaves them.
 //
 // An operand's dim 0 is a read-site axis, and `site` picks the plane. At R == 1
 // the operand is shared by every site and `site` does not apply to it, which is

@@ -10,7 +10,8 @@
 void kernel_main() {
     // compile-time args
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr auto partial_args = TensorAccessorArgs<1>();
+    constexpr uint32_t num_partials = get_compile_time_arg_val(1);
+    constexpr auto partial_args = TensorAccessorArgs<2>();
     constexpr auto prefix_sum_args = TensorAccessorArgs<partial_args.next_compile_time_args_offset()>();
     constexpr auto shift_args = TensorAccessorArgs<prefix_sum_args.next_compile_time_args_offset()>();
     constexpr auto mass_args = TensorAccessorArgs<shift_args.next_compile_time_args_offset()>();
@@ -31,13 +32,19 @@ void kernel_main() {
     const auto live_scores_page_offset = get_arg_val<uint32_t>(9);
     // The partial's read site, in whole Ht*Wt planes rather than scalar rows.
     const auto partial_page_offset = get_arg_val<uint32_t>(10);
+    // Unsummed statistics only: the distance from a rank's sum of squares to its
+    // dots, and from one rank's pair to the next.
+    const auto live_dots_page_offset = get_arg_val<uint32_t>(11);
+    const auto live_partial_page_stride = get_arg_val<uint32_t>(12);
 
     constexpr uint32_t cb_id_wide = 0;
     constexpr uint32_t cb_id_scalars = 2;
     constexpr uint32_t wide_tile_bytes = get_tile_size(cb_id_wide);
     constexpr uint32_t scalar_tile_bytes = get_tile_size(cb_id_scalars);
     constexpr uint32_t kOperands = 2;
-    constexpr uint32_t kScalars = 3;
+    constexpr uint32_t kFixedScalars = 2;
+    constexpr uint32_t kStatsPerPartial = 2;
+    constexpr uint32_t kScalars = kFixedScalars + (num_partials == 0 ? 1 : kStatsPerPartial * num_partials);
 
     Noc noc;
     CircularBuffer cb_wide(cb_id_wide);
@@ -56,7 +63,7 @@ void kernel_main() {
         // over. `i % Wt == 0` is exactly the row boundary, and the scalar
         // tensors are one tile column wide so the row index is the page id.
         //
-        // The three go into one CB so the derivation reads them through a single
+        // They all go into one CB so the derivation reads them through a single
         // unpack configuration; the device operation rejects a mixed scalar dtype
         // for that reason.
         if (i == start_id || i % Wt == 0) {
@@ -75,12 +82,36 @@ void kernel_main() {
                 scalar_tile_bytes,
                 {.page_id = row + mass_page_offset},
                 {.offset_bytes = scalar_tile_bytes});
-            noc.async_read(
-                live_scores_accessor,
-                cb_scalars,
-                scalar_tile_bytes,
-                {.page_id = row + live_scores_page_offset},
-                {.offset_bytes = 2 * scalar_tile_bytes});
+
+            if constexpr (num_partials == 0) {
+                noc.async_read(
+                    live_scores_accessor,
+                    cb_scalars,
+                    scalar_tile_bytes,
+                    {.page_id = row + live_scores_page_offset},
+                    {.offset_bytes = kFixedScalars * scalar_tile_bytes});
+            } else {
+                // Rank-major, matching the layout a gathering collective leaves,
+                // and compute sums across the pairs.
+                uint32_t page = row + live_scores_page_offset;
+                uint32_t offset_bytes = kFixedScalars * scalar_tile_bytes;
+                for (uint32_t p = 0; p < num_partials; ++p) {
+                    noc.async_read(
+                        live_scores_accessor,
+                        cb_scalars,
+                        scalar_tile_bytes,
+                        {.page_id = page},
+                        {.offset_bytes = offset_bytes});
+                    noc.async_read(
+                        live_scores_accessor,
+                        cb_scalars,
+                        scalar_tile_bytes,
+                        {.page_id = page + live_dots_page_offset},
+                        {.offset_bytes = offset_bytes + scalar_tile_bytes});
+                    page += live_partial_page_stride;
+                    offset_bytes += kStatsPerPartial * scalar_tile_bytes;
+                }
+            }
             noc.async_read_barrier();
             cb_scalars.push_back(kScalars);
         }

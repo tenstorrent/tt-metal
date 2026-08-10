@@ -99,13 +99,33 @@ void AttnResMergeDeviceOperation::validate_on_program_cache_miss(
         args.site,
         partial_shape[0]);
 
+    const auto& live_shape = tensor_args.live_scores.padded_shape();
+    if (args.num_partials > 0) {
+        // Rank-major pairs on dim 1, which is what a gathering collective leaves
+        // and what the reader's page arithmetic walks. The site does not apply:
+        // the statistics are the live stream's and it is one plane behind all of
+        // them, so this operand never batches.
+        TT_FATAL(
+            live_shape[0] == 1 && live_shape[1] == 2 * args.num_partials,
+            "AttnResMerge at {} partials requires live_scores shaped [1, {}, N, 1], got {}",
+            args.num_partials,
+            2 * args.num_partials,
+            live_shape);
+        TT_FATAL(
+            args.inv_hidden_size > 0.0f,
+            "AttnResMerge derives the live score itself at {} partials and needs a positive inv_hidden_size, got {}",
+            args.num_partials,
+            args.inv_hidden_size);
+    }
+
     for (const auto& [tensor, name] : scalars) {
         TT_FATAL(
             tensor->logical_shape()[-1] == 1,
             "AttnResMerge {} must carry one scalar per row, i.e. a logical last dim of 1, got {}",
             name,
             tensor->logical_shape()[-1]);
-        for (int i = 1; i < 3; ++i) {
+        const int first_matched_dim = (args.num_partials > 0 && tensor == &tensor_args.live_scores) ? 2 : 1;
+        for (int i = first_matched_dim; i < 3; ++i) {
             TT_FATAL(
                 tensor->padded_shape()[i] == partial_shape[i],
                 "AttnResMerge {} dim {} is {} but partial's is {}; the candidate and row dims must match",
@@ -163,12 +183,20 @@ Tensor attn_res_merge(
     const Tensor& mass,
     const Tensor& live_scores,
     uint32_t site,
+    uint32_t num_partials,
+    float inv_hidden_size,
+    float eps,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::AttnResMergeDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .site = site, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
+        .site = site,
+        .num_partials = num_partials,
+        .inv_hidden_size = inv_hidden_size,
+        .eps = eps,
+        .output_mem_config = output_mem_config,
+        .compute_kernel_config = compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{
         .partial = partial, .prefix_sum = prefix_sum, .shift = shift, .mass = mass, .live_scores = live_scores};
 
