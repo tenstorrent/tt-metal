@@ -581,20 +581,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
-    # No MESH_DEVICE: the tests' mesh_device parametrize falls back to
-    # len(ttnn.get_device_ids()), i.e. whatever the runner has. The carried-over
-    # MESH_DEVICE=T3K asked for an 8-device mesh, and bh_quietbox_2 is 2x P300 = 4 chips,
-    # so all three tests skipped with "Requested more devices (8) than available (4)".
-    # That dates to #46805, which moved this entry from bh_loudbox (8 chips) to
-    # bh_quietbox_2 without dropping the T3K mesh.
     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # 12 min. Run 31198719303 -- the first run in which these tests actually executed --
-    # took 7 min 43 s with test_vision_model failing fast on the split error. With that
-    # test passing the job runs longer, so 10 min was too tight; 12 gives headroom over
-    # the measured 7:43 plus the extra work. Re-measure once the job is fully green.
     bh_quietbox_2:
       timeout: 12
       tier: 3
