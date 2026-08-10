@@ -4,10 +4,28 @@
 
 #pragma once
 
+#include <optional>
+
+#include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 
 namespace tt::tt_metal {
+class IDevice;
+
 namespace detail {
+
+/**
+ * Initialize device profiling data buffers
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           |
+ * True     |
+ * */
+void InitDeviceProfiler(IDevice* device);
 
 /**
  * Sync TT devices with host
@@ -19,6 +37,26 @@ namespace detail {
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
 void ProfilerSync(ProfilerSyncState state);
+
+// clang-format off
+/**
+ * Read device side profiler data for the device
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | device        | The device to be profiled                             | IDevice*                 |                           | Yes      |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
+ * */
+// clang-format on
+void ReadDeviceProfilerResults(
+    IDevice* device,
+    ProfilerReadState = ProfilerReadState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 }  // namespace detail
 }  // namespace tt::tt_metal

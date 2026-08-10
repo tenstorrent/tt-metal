@@ -5,10 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 
-#include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 
 #include "profiler_types.hpp"
@@ -19,13 +17,6 @@ class IDevice;
 namespace detail {
 
 void ClearProfilerControlBuffer(IDevice* device);
-
-void InitDeviceProfiler(IDevice* device);
-
-void ReadDeviceProfilerResults(
-    IDevice* device,
-    ProfilerReadState = ProfilerReadState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 void SetDeviceProfilerDir(const std::string& output_dir = "");
 
