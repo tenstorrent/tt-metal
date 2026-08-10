@@ -78,6 +78,25 @@ _CONV_FIDELITY_FP32 = ttnn.MathFidelity.HiFi4
 # convs only. Bit-exact: double-buffering changes how the conv streams data, not the math.
 _INTERLEAVED_CONV_DB = {"enable_act_double_buffer": True, "enable_weights_double_buffer": True}
 
+# Shard layout forced on an upsample conv, overriding ttnn's auto pick. ttnn's auto-sharder is an
+# L1-footprint minimiser applied one op at a time, and on ups[0] it gets the geometry wrong: that
+# conv's input is 139 x 512 -- short and wide -- so it cuts channels only (WIDTH, 66 cores) and runs
+# at 15.3% of peak FLOPs / 43.3us, while ups[1] does 1.8x the FLOPs in 12.7us at 47.1% on a BLOCK
+# placement. Forcing BLOCK here recovers most of that gap. The other three ups are left on auto:
+# they are long-and-narrow, where the auto pick is already the good one.
+#
+# Do NOT force HEIGHT on ups[0]: HEIGHT_SHARDED fails conv1d's DRAM slicer on exactly this
+# wide-channel/short-length shape (see TtConv1d's "No forced shard_layout" note in xtts_conv.py).
+_UPS_SHARD_OVERRIDE = {0: ttnn.TensorMemoryLayout.BLOCK_SHARDED}
+
+
+def _ups_conv_overrides(i):
+    ov = dict(_INTERLEAVED_CONV_DB)
+    if i in _UPS_SHARD_OVERRIDE:
+        ov["shard_layout"] = _UPS_SHARD_OVERRIDE[i]
+    return ov
+
+
 TILE = 32
 
 # Best (grid_x, grid_y, per_core_N, out_subblock_w, fp32_dest_acc, fidelity) per speaker-conditioning
@@ -176,6 +195,27 @@ class TtCondProj(LightweightModule):
 # A/B'd end-to-end at 2520us with stage 0 included vs 2512us without — so it stays on the unary.
 # Set to 0 to re-run that A/B, or to num_upsamples to disable the trick entirely.
 _FUSED_PRE_ACT_MIN_STAGE = 1
+
+# Hand each stage's MRF output to the next conv (ups[i+1], or conv_post for the last stage) still
+# L1-sharded, instead of gathering it to DRAM for the conv to immediately scatter back.
+#
+# The MRF already finishes with its sum L1-resident, and ttnn.conv1d takes its L1 path whenever the
+# input it is handed is already sharded -- so the gather and the scatter are a matched pair of pure
+# waste. Measured around ups[2]: exit gather 8.5us + conv entry scatter 7.1us + conv exit gather
+# 8.4us + next-MRF scatter 6.7us = 30.7us of movement wrapped around a 9.0us conv. Keeping the chain
+# sharded collapses those into ~0.4us Reshards, and (because the conv now returns a sharded output)
+# it is also what lets the stride<=2 sub-pixel shuffle reshape in L1 -- see TtConvTranspose1d.
+#
+# Best-effort: _mrf_interleaved still returns DRAM, and conv1d consumes either, so nothing depends
+# on the hand-off succeeding. Holding the stage activation resident across the ups conv does raise
+# peak L1, so forward() carries a gather-and-retry for a circular-buffer clash (same pattern as
+# TtResBlock1.forward). Set False to revert every stage to the DRAM hand-off.
+_SHARDED_STAGE_HANDOFF = True
+
+
+def _is_l1_clash(exc):
+    msg = str(exc).lower()
+    return "circular buffer" in msg or "clash" in msg
 
 
 def _fused_pre_act_plan(stage_i, sharded):
@@ -479,7 +519,7 @@ class TtHifiganGenerator(LightweightModule):
                 activations_dtype=act_dtype(i),
                 math_fidelity=conv_fid(i),
                 weight_scale=self.inv_num_kernels if i >= 1 else 1.0,
-                conv_config_overrides=_INTERLEAVED_CONV_DB,
+                conv_config_overrides=_ups_conv_overrides(i),
             )
             for i in range(self.num_upsamples)
         ]
@@ -501,6 +541,7 @@ class TtHifiganGenerator(LightweightModule):
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        self._cond = {}  # id(g) -> (g, cond_global, cond_biases) — see _conditioning
 
         self.resblocks = []
         for i in range(self.num_upsamples):
@@ -549,6 +590,66 @@ class TtHifiganGenerator(LightweightModule):
         self._pre_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
         self._final_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, FINAL_LRELU_SLOPE)
 
+    def _conditioning(self, g):
+        """``(cond_global, cond_biases)`` for speaker embedding ``g``, memoised on ``g``.
+
+        Every product here is a function of the speaker embedding ALONE, but ``g`` is fixed for a
+        whole utterance while ``forward`` runs once per decoded chunk — so rebuilding them per call
+        is pure waste. Measured on the profiled shape it is 54.7us of a 2227us pass, and 39.2us of
+        that is a single ``TilizeWithValPadding`` padding the 512-float ``g`` up to one tile row on
+        ONE core. Downstream, ``TtConvTranspose1d._inner_cond`` and ``TtConv1d``'s folded-bias cache
+        key off the tensors returned here, so a hit here makes those hit too — together that is the
+        whole ~91us conditioning path, and it removes the last host transfer from the fold.
+
+        The cache holds a reference to ``g`` itself, which is what makes the ``is`` check sound:
+        while we hold it, that buffer cannot be freed and re-issued to a different tensor at the
+        same address. It does assume ``g`` is not mutated in place; no caller does (it comes
+        straight out of the speaker encoder and is read-only from here on).
+
+        Entries are **never evicted automatically**, and that is deliberate rather than lazy. These
+        tensors are no longer recomputed inside a trace capture, so a captured trace holds recorded
+        reads of these exact device addresses. Freeing an entry to make room for the next one lets
+        those addresses be reissued, and a still-live trace then replays against whatever landed
+        there — measured: correlation with the expected waveform drops to ~0.0, silently. Retaining
+        them keeps every captured trace valid for as long as it lives, which is the behaviour
+        callers had before this was memoised.
+
+        The cost is that growth is per distinct ``g`` OBJECT, which is NOT the same as per speaker:
+        ``inference_fully_traced`` rebuilds ``g`` every call (it is the setup trace's output), so
+        re-decoding the same voice still adds an entry each time. Callers that loop must therefore
+        call :meth:`release_conditioning` once the traces that used them are released — see there.
+
+        The returned tensors are owned by this module — callers must not deallocate them."""
+        hit = self._cond.get(id(g))
+        if hit is not None and hit[0] is g:
+            return hit[1], hit[2]
+        # Reshape g to [1, 512] and tile it ONCE, shared by all five projections, and read it from
+        # L1 (18.2 -> 14.2us over the five; see _COND_MM_CFG).
+        g_mm = ttnn.to_layout(ttnn.reshape(g, [1, g.shape[-1]]), ttnn.TILE_LAYOUT)
+        g_l1 = ttnn.to_memory_config(g_mm, self._g_mem_config)
+        ttnn.deallocate(g_mm)
+        cond_global = ttnn.reshape(self.cond_layer(g_l1), [1, 1, self.cond_layer.n])  # [1,1,512], broadcasts over T
+        # conds[i](g) is a length-1 per-channel constant, folded into ups[i]'s bias epilogue.
+        cond_biases = [ttnn.reshape(c(g_l1), [1, 1, 1, c.n]) for c in self.conds]
+        ttnn.deallocate(g_l1)
+        self._cond[id(g)] = (g, cond_global, cond_biases)
+        return cond_global, cond_biases
+
+    def release_conditioning(self):
+        """Drop every memoised ``g``-derived product — this module's and the ups convs'.
+
+        Safe ONLY once no captured trace that ran through them is still live: a trace records reads
+        of these exact device addresses, so releasing them under a live trace makes it replay
+        garbage (see :meth:`_conditioning`). The natural call site is right after the vocoder's
+        ``release_trace``. Cheap and idempotent; the next forward rebuilds what it needs."""
+        for entry in self._cond.values():
+            for t in (entry[1], *entry[2]):
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+        self._cond.clear()
+        for u in self.ups:
+            u.release_cond_cache()
+
     def _mrf(self, i, o, post_act):
         """Multi-receptive-field fusion for upsample stage ``i``: sum the stage's ``num_kernels``
         resblocks over ``o`` (the mean's 1/num_kernels is folded into downstream weights, so this
@@ -567,7 +668,7 @@ class TtHifiganGenerator(LightweightModule):
         length, channels = o.shape[1], o.shape[2]
         if all(rb.will_shard(length, channels) for rb in rbs):
             try:
-                out = self._mrf_sharded(rbs, o, post_act)
+                out = self._mrf_sharded(rbs, o, post_act, keep_sharded=_SHARDED_STAGE_HANDOFF)
                 ttnn.deallocate(o)
                 return out
             except RuntimeError as e:
@@ -575,11 +676,18 @@ class TtHifiganGenerator(LightweightModule):
                     raise
                 for rb in rbs:
                     rb._blocked_lengths.add(length)  # don't retry sharding this length
+        if o.memory_config().is_sharded():
+            # ups[2]/ups[3] hand us their L1-sharded shuffle output (see TtConvTranspose1d). The
+            # sharded MRF above consumes that directly, but the interleaved fallback's convs expect
+            # the DRAM form, so gather before falling back.
+            gathered = ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(o)
+            o = gathered
         out = self._mrf_interleaved(rbs, o, post_act)
         ttnn.deallocate(o)
         return out
 
-    def _mrf_sharded(self, rbs, o, post_act):
+    def _mrf_sharded(self, rbs, o, post_act, keep_sharded=False):
         """L1-resident MRF sum: every resblock in the stage reads the same activation, so shard
         ``o`` ONCE here and lend that single shard to each of them (rather than each resblock
         re-deriving its own copy of the identical shard) -- each still runs its own conv chain in
@@ -612,6 +720,8 @@ class TtHifiganGenerator(LightweightModule):
             ttnn.deallocate(o_shard)
             if isinstance(pre_act, ttnn.Tensor) and pre_act.is_allocated():
                 ttnn.deallocate(pre_act)
+        if keep_sharded:
+            return z_sum  # next conv takes conv1d's L1 path straight off this — see _SHARDED_STAGE_HANDOFF
         out = ttnn.to_memory_config(z_sum, ttnn.DRAM_MEMORY_CONFIG)  # gather once for the whole stage
         ttnn.deallocate(z_sum)
         return out
@@ -642,32 +752,35 @@ class TtHifiganGenerator(LightweightModule):
         # Deep conv chain — the vocoder's memory-dominant path, whose activation footprint grows
         # with output length. Each temporary is freed the moment the next op consumes it.
         # cond_layer/conds are 1x1 projections of the length-1 speaker embedding g, run as tuned
-        # matmuls (TtCondProj). Reshape g to [1, 512] and tile it ONCE, shared by all five, and read
-        # it from L1 (18.2 -> 14.2us over the five; see _COND_MM_CFG). All five run HERE, ahead of the
-        # conv chain, so the L1 copy of g is freed before the first conv rather than competing with
-        # the interleaved resblock convs' circular buffers for the whole chain. conds[i] depends only
-        # on g, so hoisting it out of the loop is value-identical. Trace-safe (no host transfer).
-        g_mm = ttnn.to_layout(ttnn.reshape(g, [1, g.shape[-1]]), ttnn.TILE_LAYOUT)
-        g_l1 = ttnn.to_memory_config(g_mm, self._g_mem_config)
-        ttnn.deallocate(g_mm)
-        cond_global = ttnn.reshape(self.cond_layer(g_l1), [1, 1, self.cond_layer.n])  # [1,1,512], broadcasts over T
-        # conds[i](g) is a length-1 per-channel constant, folded into ups[i]'s bias epilogue below.
-        cond_biases = [ttnn.reshape(c(g_l1), [1, 1, 1, c.n]) for c in self.conds]
-        ttnn.deallocate(g_l1)
+        # matmuls (TtCondProj). All five run HERE, ahead of the conv chain, so the L1 copy of g is
+        # freed before the first conv rather than competing with the interleaved resblock convs'
+        # circular buffers for the whole chain. conds[i] depends only on g, so hoisting it out of the
+        # loop is value-identical — and out of the CALL too, hence the memo (see _conditioning).
+        # Owned by _conditioning; not freed here. Trace-safe (no host transfer).
+        cond_global, cond_biases = self._conditioning(g)
         pre = self.conv_pre(x)
         ttnn.deallocate(x)  # upsampler output, not reused after conv_pre
         # Stage 0's pre-activation is the conditioning add's only consumer, so it rides along as
         # that add's fused post-activation rather than as its own op.
         a = ttnn.add(pre, cond_global, activations=[self._pre_act])
         ttnn.deallocate(pre)
-        ttnn.deallocate(cond_global)
 
         for i in range(self.num_upsamples):
             # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) + conds[i](g)`` is
             # just a per-channel bias add — fold it into the ups conv's fused bias epilogue.
-            o = self.ups[i](a, cond_bias=cond_biases[i])
+            try:
+                o = self.ups[i](a, cond_bias=cond_biases[i])
+            except RuntimeError as e:
+                # ``a`` may be the previous stage's still-resident L1 sum (_SHARDED_STAGE_HANDOFF).
+                # That raises peak L1, and a clash is thrown at program-compile time (before
+                # enqueue, so the device is unharmed) — gather and retry the DRAM way.
+                if not (_is_l1_clash(e) and a.memory_config().is_sharded()):
+                    raise
+                a_dram = ttnn.to_memory_config(a, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(a)
+                a = a_dram
+                o = self.ups[i](a, cond_bias=cond_biases[i])
             ttnn.deallocate(a)
-            ttnn.deallocate(cond_biases[i])
             # Sum the 3 resblocks (mean folded into weights) and fuse the NEXT consumer's
             # pre-activation onto the sum's final add; frees o.
             last = i == self.num_upsamples - 1

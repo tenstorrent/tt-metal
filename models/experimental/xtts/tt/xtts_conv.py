@@ -38,8 +38,21 @@ from models.common.lightweightmodule import LightweightModule
 # The vocoder's conditioning-bias fold (TtConv1d.forward) prepares the combined bias on HOST via
 # ttnn.from_device — a device->host READ that is fatal inside a ttnn trace capture. It is the faster
 # path for eager execution (fused conv-bias epilogue, no full-length broadcast add), so it stays the
-# DEFAULT. When capturing a trace, wrap the region in ``cond_bias_trace_safe()`` (or call
+# DEFAULT.
+#
+# That read now happens ONLY on a cold cache: TtConv1d keeps the prepared combined bias (see
+# ``_folded_bias``), so a warm call does no host transfer and the fast fold is trace-capturable —
+# which is why the trace-safe alternative below is no longer used anywhere. **The precondition is
+# one warm-up call with the same ``g`` and input signature BEFORE begin_trace_capture** (which is
+# the same warm-up every trace region needs anyway, to compile its kernels).
+#
+# Capturing cold is not silently wrong, but it is an ugly failure: ttnn raises
+# ``TT_FATAL ... !is_capturing_trace`` from the from_device, and the now-unmatched
+# begin_trace_capture then deadlocks teardown — the process hangs rather than exiting on the error.
+# If you must capture without a warm-up, wrap the region in ``cond_bias_trace_safe()`` (or call
 # ``set_cond_bias_trace_safe(True)``) to switch to the equivalent trace-safe post-conv device add.
+# Note that path is ~82us/pass slower AND not bit-identical to eager (it adds post-conv in the
+# stage's bf16, where the fold combines in fp32).
 _COND_BIAS_TRACE_SAFE = False
 
 
@@ -282,6 +295,12 @@ class TtConv1d(LightweightModule):
         # decodes whatever the GPT produced), which is exactly the case the cache below breaks on.
         self._host_weight, self._host_bias = self.tt_weight, self.tt_bias
         self._prepared_for = None
+        # Cache of the PREPARED conditioning-folded bias -- see ``forward``'s ``cond_bias``.
+        # (id(cond_bias), input signature) -> (cond_bias, prepared bias). The cond_bias is held both
+        # as the identity check and to keep that tensor alive so its id stays unique. Never evicted,
+        # so a captured trace's recorded reads of a prepared bias stay valid; see
+        # TtHifiganGenerator._conditioning. One small entry per (speaker, input signature).
+        self._folded_bias = {}
 
         # No forced shard_layout: HEIGHT_SHARDED fails the DRAM slicer on the wide (1024-channel)
         # layers with short spatial extent; auto-sharding picks a valid layout per shape (PCC
@@ -329,7 +348,15 @@ class TtConv1d(LightweightModule):
         #     there). Set via cond_bias_trace_safe() around a trace region.
         fold = cond_bias is not None and not _COND_BIAS_TRACE_SAFE
         bias_tensor = self.tt_bias
-        if fold:
+        fold_key = (id(cond_bias), key) if fold else None
+        cached = self._folded_bias.get(fold_key) if fold else None
+        if cached is not None and cached[0] is cond_bias:
+            # Same cond_bias, same input signature -> the prepared combined bias from the previous
+            # call is still exactly right. Reusing it skips the add + untilize + from_device, and
+            # (the reason this matters beyond the ~9us) leaves NO host transfer on this path, so the
+            # fast fold becomes legal inside a trace capture. See the cache write below.
+            bias_tensor = cached[1]
+        elif fold:
             # Combine on device, then move to host so ttnn.conv1d prepares it through its normal
             # (host) bias path (a device unprepared bias makes conv pull it back to host anyway).
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
@@ -356,14 +383,21 @@ class TtConv1d(LightweightModule):
             return_weights_and_bias=True,
         )
         self.tt_weight = weight
-        if not fold:  # bias is the (prepared) base bias — cache it; when folding it is the combined bias
+        if fold:
+            # ``bias`` is the PREPARED combined bias. It is a function of cond_bias (i.e. of the
+            # speaker embedding) and of this input signature only, both of which are fixed for a
+            # whole utterance, so keep it for the next call rather than rebuilding it from host.
+            self._folded_bias[fold_key] = (cond_bias, bias)
+        else:  # bias is the (prepared) base bias — cache it
             self.tt_bias = bias
         self._prepared_for = key
-        if keep_sharded:
-            # Sharded-chain mode (input was L1-sharded): the L1 path already returns a
-            # HEIGHT_SHARDED TILE output; reshape is a metadata op that preserves the sharding
-            # (verified). No gather here — the chain owner gathers once at the end. cond_bias is
-            # never used on these (resblock) convs, so the trace-safe add path below is unreachable.
+        if keep_sharded and not (cond_bias is not None and not fold):
+            # Sharded-output mode: the conv's L1 path already returns a HEIGHT_SHARDED TILE output;
+            # reshape is a metadata op that preserves the sharding (verified). No gather here — the
+            # consumer owns it. Two callers: a resblock chain (input already L1-sharded, cond_bias
+            # never set) and TtConvTranspose1d's stride<=2 sub-pixel shuffle (input interleaved, the
+            # conv shards it internally). The guard excludes only the TRACE-SAFE cond_bias variant,
+            # whose post-conv broadcast add below needs an interleaved output.
             return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
         # Keep TILE: the conv already emits TILE/interleaved-DRAM, and the whole
         # vocoder conv chain (+ its eltwise ops) consumes TILE, so we skip the
@@ -411,6 +445,33 @@ class TtConvTranspose1d(LightweightModule):
         # then a length-interleave of those phase-channels reproduces the transpose conv.
         weight_sp, bias_sp, padding = _subpixel_weight(weight, bias, stride)
         self.conv = TtConv1d(device, weight_sp, bias_sp, stride=1, padding=padding, **conv_kwargs)
+        self._inner_cond_cache = {}  # id(cond_bias) -> (cond_bias, stride-tiled copy) — see _inner_cond
+
+    def _inner_cond(self, cond_bias: ttnn.Tensor) -> ttnn.Tensor:
+        """``cond_bias`` tiled ``stride``x to match the polyphase conv's ``out*stride`` phase-major
+        channels, memoised on the incoming tensor.
+
+        Like everything else on the conditioning path this is a function of the speaker embedding
+        alone, and the caller (TtHifiganGenerator) now hands back the same cond_bias object for as
+        long as ``g`` is unchanged — so the identity check hits on every call after the first. We
+        hold the source tensor in the cache so its identity stays unique while we key on it, and we
+        never evict, so a captured trace's recorded reads of this buffer stay valid — see
+        TtHifiganGenerator._conditioning for why that matters."""
+        hit = self._inner_cond_cache.get(id(cond_bias))
+        if hit is not None and hit[0] is cond_bias:
+            return hit[1]
+        tiled = ttnn.concat([cond_bias] * self.stride, dim=-1)  # [1,1,1,out*stride]
+        self._inner_cond_cache[id(cond_bias)] = (cond_bias, tiled)
+        return tiled
+
+    def release_cond_cache(self):
+        """Drop the memoised stride-tiled cond_bias and this conv's prepared folded biases.
+        See TtHifiganGenerator.release_conditioning for when that is safe."""
+        for _, tiled in self._inner_cond_cache.values():
+            if tiled.is_allocated():
+                ttnn.deallocate(tiled)
+        self._inner_cond_cache.clear()
+        self.conv._folded_bias.clear()  # prepared biases; freed with the last reference
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None) -> ttnn.Tensor:
         # Polyphase upsample: one conv (out*stride channels) on the un-stuffed input,
@@ -419,12 +480,10 @@ class TtConvTranspose1d(LightweightModule):
         # bias per output channel post-conv, so it equals the HiFi-GAN conditioning add.
         # It is tiled ``stride``x to match the conv's out*stride channels.
         batch_size, input_length, _ = x.shape
-        inner_cond = None
-        if cond_bias is not None:
-            inner_cond = ttnn.concat([cond_bias] * self.stride, dim=-1)  # [1,1,1,out*stride]
-        z = self.conv(x, cond_bias=inner_cond)  # [N, L, out*stride], phase-major channels
-        if inner_cond is not None:
-            ttnn.deallocate(inner_cond)
+        inner_cond = self._inner_cond(cond_bias) if cond_bias is not None else None  # cached; not ours to free
+        # stride<=2 shuffles in place on the conv's L1-sharded output (see below); stride 8 needs a
+        # row-major round-trip, so it takes the interleaved output.
+        z = self.conv(x, cond_bias=inner_cond, keep_sharded=self.stride <= 2)  # [N, L, out*stride], phase-major
 
         # Sub-pixel shuffle: [N, L, out*stride] -> [N, L*stride, out]. In row-major this
         # is a contiguous reinterpretation that lands phase phi of position q at output
@@ -439,6 +498,14 @@ class TtConvTranspose1d(LightweightModule):
         #     the 8-way tile gather costing more than a row-major round-trip, so those keep
         #     the untilize -> reshape -> retilize path.
         # Measured per-op under tracy on Blackhole; see the ups rows of the decoder report.
+        #
+        # The stride<=2 reshape additionally runs on the conv's L1-SHARDED output rather than on a
+        # DRAM gather of it (``keep_sharded`` above), and hands the sharded result straight to the
+        # MRF. A height shard splits rows and this reshape splits each row in two, so it is entirely
+        # shard-local -- and the MRF's own placement is one cheap Reshard away rather than a full
+        # scatter. Bit-identical to the DRAM spelling; measured per stage:
+        #   ups[2]  S2I 8.4 + reshape 56.5 + I2S 6.9 = 71.8us  ->  reshape 51.5 + reshard 0.4
+        #   ups[3]  S2I 8.5 + reshape 55.4 + I2S 6.2 = 70.1us  ->  reshape 51.4 + reshard 0.4
         shape = [batch_size, input_length * self.stride, self.out_channels]
         if self.stride <= 2:
             return ttnn.reshape(z, shape)
