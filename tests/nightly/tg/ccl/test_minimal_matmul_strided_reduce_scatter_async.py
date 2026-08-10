@@ -283,6 +283,32 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="ltx_ff2_4864_4096_4096_x12_y8_b457_window5_norecycle",
         ),
+        # Larger M (11520) on the same (12,8) grid. Mt_per_core=45 with mm_block_ht=4 gives 12 M
+        # blocks per core. Without a window the resident shard is 45x14 tiles = 1,290,240 B, leaving
+        # only ~171 KB of the 1,461,504 B L1 bank for circular buffers — less than the RS workers
+        # alone need (~213 KB), so EVERY blocking fails the CB-vs-L1 clash check. This unwindowed
+        # entry is kept as the demonstration of that; the windowed ones below are the fix.
+        *[
+            pytest.param(
+                MinimalMatmulStridedReduceScatterTestConfig(
+                    M=11520,
+                    K=3456,
+                    N=5120,
+                    dim=3,
+                    mm_block_m=128,
+                    mm_block_k=160,
+                    mm_block_n=224,
+                    mm_core_grid=ttnn.CoreCoord(12, 8),
+                    chunk_width_in_mm_blocks=1,
+                    subblock_h=4,
+                    subblock_w=1,
+                    num_workers_per_link=3,
+                    mm_window_blocks=w,
+                ),
+                id=f"x11520_3456_5120_x12_y8_b457_{'nowindow' if w is None else f'window{w}'}",
+            )
+            for w in (None, 2, 3, 4)
+        ],
     ],
 )
 @pytest.mark.parametrize(
@@ -478,6 +504,11 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
 # --------------------------------------------------------------------------- Block-shape sweep: fixed LTX video ff2
 _SWEEP_M, _SWEEP_K, _SWEEP_N = 4864, 4096, 4096
 _SWEEP_GRID = (12, 8)
+# Hand the MM output to the RS through a rolling L1 window this many M blocks deep (clamped to the
+# number of blocks a core actually has). 2 is the shallowest depth that still lets the matmul run a
+# block ahead of the readers, and measured perf is flat in this knob, so it is chosen to give the
+# circular buffers as much of the L1 bank as possible.
+_SWEEP_WINDOW_BLOCKS = 2
 _DEFAULT_BLOCK_RANGE = tuple(range(2, 17))  # 2..16 tiles (used per-axis when its env var is unset)
 _DST_MAX_TILES = 4  # matches the subblocks the other configs in this file use (sh*sw <= 4)
 # Evaluated at collection so the sweep skips (without opening a device) unless a driver set the env.
@@ -541,6 +572,11 @@ def _gen_block_sweep_configs():
             for bn in n_blocks:
                 if bn > nt_per_core:
                     continue
+                # Whether a blocking's circular buffers actually fit in L1 alongside the resident
+                # window is left to the device to decide: the sweep loop catches and logs the ones
+                # it rejects. Predicting it here needs a model of every CB both programs create,
+                # which is easy to get wrong and drifts as those factories change.
+                window = min(_SWEEP_WINDOW_BLOCKS, math.ceil(mt_per_core / bm))
                 sh, sw = _largest_valid_subblock(bm, bn)
                 configs.append(
                     MinimalMatmulStridedReduceScatterTestConfig(
@@ -556,6 +592,7 @@ def _gen_block_sweep_configs():
                         subblock_h=sh,
                         subblock_w=sw,
                         num_workers_per_link=3,
+                        mm_window_blocks=window,
                     )
                 )
     return configs
@@ -564,6 +601,10 @@ def _gen_block_sweep_configs():
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("num_links", [2], ids=["2link"])
 @pytest.mark.parametrize("cluster_axis", [0], ids=["axis_0"])
+# One batch runs ~100 blockings back-to-back, far past pytest.ini's 300s per-test timeout. Without
+# this the test is killed mid-batch and the driver silently gets results only for the configs that
+# ran before the cutoff — biased toward the low K/N end, since that is the iteration order.
+@pytest.mark.timeout(0)
 @pytest.mark.skipif(
     not _HAS_SWEEP_ENV, reason="block sweep: set SWEEP_{M,K,N}_BLOCKS env (drive with run_ff2_block_sweep.py)"
 )
@@ -618,6 +659,7 @@ def test_minimal_matmul_strided_reduce_scatter_block_sweep(
     if not configs:
         pytest.skip("no SWEEP_{M,K,N}_BLOCKS env set; drive with run_ff2_block_sweep.py")
 
+    skipped = []
     # Run every config back-to-back on the SAME device (opened once by the fixture) so the sweep is not dominated
     for idx, cfg in enumerate(configs):
         logger.info(
@@ -625,30 +667,41 @@ def test_minimal_matmul_strided_reduce_scatter_block_sweep(
             f"K_block={cfg.mm_block_k // 32} N_block={cfg.mm_block_n // 32} "
             f"subblock=({cfg.subblock_h},{cfg.subblock_w})"
         )
-        run_minimal_matmul_strided_reduce_scatter_impl(
-            mesh_device,
-            cfg.M,
-            cfg.K,
-            cfg.N,
-            cfg.dim,
-            num_links,
-            cfg.input_dtype,
-            cfg.layout,
-            mem_config_input,
-            mem_config_mm,
-            mem_config_rs,
-            topology=topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            num_workers_per_link=cfg.num_workers_per_link,
-            mm_block_m=cfg.mm_block_m,
-            mm_block_k=cfg.mm_block_k,
-            mm_block_n=cfg.mm_block_n,
-            subblock_h=cfg.subblock_h,
-            subblock_w=cfg.subblock_w,
-            mm_core_grid=cfg.mm_core_grid,
-            chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
-            rs_mode=rs_mode,
-            cluster_axis=cluster_axis,
-            check_correctness=False,  # perf sweep: skip golden matmul + PCC
-        )
+        # A config the L1 filter let through can still be rejected on device. Log and carry on
+        # rather than aborting: the batch's remaining configs are still worth timing, and bailing
+        # here would leave the driver with no profiler CSV at all for this batch.
+        try:
+            run_minimal_matmul_strided_reduce_scatter_impl(
+                mesh_device,
+                cfg.M,
+                cfg.K,
+                cfg.N,
+                cfg.dim,
+                num_links,
+                cfg.input_dtype,
+                cfg.layout,
+                mem_config_input,
+                mem_config_mm,
+                mem_config_rs,
+                topology=topology,
+                enable_trace=enable_trace,
+                num_iters=num_iters,
+                num_workers_per_link=cfg.num_workers_per_link,
+                mm_block_m=cfg.mm_block_m,
+                mm_block_k=cfg.mm_block_k,
+                mm_block_n=cfg.mm_block_n,
+                subblock_h=cfg.subblock_h,
+                subblock_w=cfg.subblock_w,
+                mm_core_grid=cfg.mm_core_grid,
+                chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
+                rs_mode=rs_mode,
+                cluster_axis=cluster_axis,
+                check_correctness=False,  # perf sweep: skip golden matmul + PCC
+                mm_window_blocks=cfg.mm_window_blocks,
+            )
+        except Exception as e:
+            skipped.append((cfg.mm_block_m // 32, cfg.mm_block_k // 32, cfg.mm_block_n // 32))
+            logger.warning(f"[block sweep] config failed on device, skipping: {str(e).splitlines()[0]}")
+
+    if skipped:
+        logger.warning(f"[block sweep] {len(skipped)}/{len(configs)} configs failed on device: {skipped}")
