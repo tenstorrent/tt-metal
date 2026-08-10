@@ -244,7 +244,7 @@ DSP_CMB_FABRIC_CFGS = [
 ]
 
 
-def fabric_cfg_to_init_reliability_mode(fabric_cfg):
+def _fabric_cfg_to_init_reliability_mode(fabric_cfg):
     # For fabric 1d the param is omitted. For fabric 2d ideally it would be strict for reliable perf measurements
     # Until CI HW supports it, use relaxed
     if fabric_cfg in (ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING):

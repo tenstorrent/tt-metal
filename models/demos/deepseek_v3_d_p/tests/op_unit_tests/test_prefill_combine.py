@@ -12,7 +12,6 @@ Uses torch-generated dispatch inputs to isolate the combine operation.
 
 import copy
 from dataclasses import dataclass
-from typing import list, tuple
 
 import pytest
 import torch
@@ -30,7 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import DSP_CMB_FABRIC_CFGS
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import DSP_CMB_FABRIC_CFGS, fabric_to_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -346,10 +345,10 @@ class _Test_Mesh:
     full_model_mesh: tuple[int, int]  # Intended for full production-scale testing
     proxy_test_meshes: list[tuple[int, int]]  # Intended for [0..N] proxy tests, typically on smaller HW
 
-    def target_reference_pairs():
-        pairs = [(full_model_mesh, full_model_mesh)]
-        for prxy in proxy_test_meshes:
-            pairs.append((prxy, full_model_mesh))
+    def target_reference_pairs(self):
+        pairs = [(self.full_model_mesh, self.full_model_mesh)]
+        for prxy in self.proxy_test_meshes:
+            pairs.append((prxy, self.full_model_mesh))
         return pairs
 
 
@@ -440,7 +439,7 @@ def _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg):
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for fabric_cfg, fabric_cfg_id in DSP_CMB_FABRIC_CFGS:
-        device_params = _fabric_to_device_params(fabric_cfg)
+        device_params = fabric_to_device_params(fabric_cfg)
         fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
         for model_name, model_config, is_extended_model, test_meshes in COMBINE_MODELS:
             for target_mesh, reference_mesh in test_meshes.target_reference_pairs():
@@ -476,7 +475,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                             dispatch_buffer_capacity_factor,
                             run_pcc,
                             marks=marks,
-                            id=f"{model_name}-{_mesh_id(target_mesh)}-{test_scenario_id}-{fabric_cfg_id}",
+                            id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}-{fabric_cfg_id}",
                         )
                     )
 
