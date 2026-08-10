@@ -255,6 +255,15 @@ def _build_tt_run_cmd(
     "--per-solution-timeout", type=int, default=None, help="EXTRA: kill a launch after N seconds (=> timeout)."
 )
 @click.option(
+    "--sweep-timeout",
+    type=int,
+    default=None,
+    help="EXTRA: total wall-clock budget (seconds) for the whole sweep. When exceeded, stop launching "
+    "further solutions and return what was swept so far WITH A WARNING (not an error). Checked before "
+    "each launch, so it never interrupts a solve already running. Only a sweep that found 0 solutions "
+    "exits non-zero.",
+)
+@click.option(
     "--stop-on-failure/--continue-on-failure",
     default=False,
     help="EXTRA: stop the sweep on the first failing solution (default: continue).",
@@ -296,6 +305,7 @@ def main(
     select,
     limit,
     per_solution_timeout,
+    sweep_timeout,
     stop_on_failure,
     sweep_report,
     log_dir,
@@ -307,6 +317,9 @@ def main(
     parsed_hosts = [h for h in hosts.split(",") if h] if hosts else None
     parsed_mpi_args = shlex.split(mpi_args) if mpi_args else None
     mock = mock_cluster_rank_binding is not None
+
+    # --sweep-timeout budget covers enumeration (Phase 1) + the per-solution sweep (Phase 2).
+    sweep_start = time.time()
 
     # 1. Obtain the solutions directory.
     if solutions_dir is not None:
@@ -369,7 +382,20 @@ def main(
     click.echo(f"{PREFIX} Sweeping {len(solutions)} solution(s) in {sol_dir}")
     click.echo(f"{PREFIX} Per-solution logs -> {logs_root}")
     results = []
+    stopped_early = False
     for i, sol in enumerate(solutions):
+        # Total-budget check (before launching, so we never interrupt a running solve).
+        if sweep_timeout is not None:
+            elapsed = time.time() - sweep_start
+            if elapsed >= sweep_timeout:
+                click.echo(
+                    f"{PREFIX} WARNING: --sweep-timeout ({sweep_timeout}s) reached after {round(elapsed, 1)}s; "
+                    f"stopping with {len(results)}/{len(solutions)} solution(s) swept "
+                    f"({len(solutions) - len(results)} not run)."
+                )
+                stopped_early = True
+                break
+
         cmd = _build_tt_run_cmd(
             tt_run=tt_run,
             solutions_dir=sol_dir,
@@ -448,10 +474,12 @@ def main(
         "enumeration": index.get("enumeration"),
         # Tally across the solutions actually swept this run.
         "summary": {
-            "total": len(results),  # solutions attempted
+            "total": len(results),  # solutions attempted (swept)
+            "found": len(solutions),  # solutions selected for the sweep (0 => the run already errored out)
             "passed": passed,  # workload exit code 0
             "failed": failed,  # workload non-zero exit
             "timed_out": timed_out,  # killed by --per-solution-timeout
+            "stopped_early": stopped_early,  # true => --sweep-timeout budget stopped the sweep before all were run
         },
         "results": results,
     }
@@ -466,7 +494,11 @@ def main(
         f"{PREFIX} SUMMARY: {passed}/{len(results)} passed"
         + (f", {failed} failed" if failed else "")
         + (f", {timed_out} timed out" if timed_out else "")
+        + (f" (stopped early by --sweep-timeout; {len(solutions) - len(results)} not run)" if stopped_early else "")
     )
+    # Stopping early on --sweep-timeout is NOT an error -- return what we swept. A sweep that found 0
+    # solutions has already exited non-zero above (_select_solutions / _generate_solutions). Real
+    # per-solution failures/timeouts still surface as a non-zero exit.
     if not dry_run and (failed or timed_out):
         sys.exit(1)
 
