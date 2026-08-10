@@ -20,6 +20,48 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
+#ifdef Q_TINY_TILE
+// Read one or more 16x32 Q tile rows from a tensor stored as ordinary 32x32 pages.  The two
+// face-rows of a full tile are contiguous, so a half-page read selects the requested q16 chunk.
+template <typename CatAddrGeneratorType>
+void read_q_tiny_block(
+    Noc noc,
+    const CatAddrGeneratorType& generator,
+    const Slice& half_tile_slice,
+    uint32_t cb_id,
+    uint32_t tiny_tile_bytes,
+    uint32_t barrier_threshold) {
+    const uint32_t rows = half_tile_slice.get_d2_size();
+    const uint32_t cols = half_tile_slice.get_d3_size();
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(rows * cols);
+    uint32_t dst = cb.get_write_ptr();
+    uint32_t barrier_count = 0;
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t half_row = half_tile_slice.d2_start + r;
+        const uint32_t full_row = half_row / 2;
+        const uint32_t half_offset = (half_row & 1u) * tiny_tile_bytes;
+        uint32_t page_id =
+            generator.tensor_shape.id_of(half_tile_slice.d0, half_tile_slice.d1, full_row, half_tile_slice.d3_start);
+        for (uint32_t c = 0; c < cols; ++c) {
+            noc.async_read(
+                generator.reader,
+                CoreLocalMem<uint32_t>(dst),
+                tiny_tile_bytes,
+                {.page_id = page_id + c, .offset_bytes = half_offset},
+                {});
+            dst += tiny_tile_bytes;
+            if (++barrier_count == barrier_threshold) {
+                noc.async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc.async_read_barrier();
+    cb.push_back(rows * cols);
+}
+#endif
+
 template <bool has_joint_inputs, bool has_gathered_joint_k, uint32_t joint_tensor_args_offset>
 constexpr uint32_t get_post_tensor_args_offset() {
     if constexpr (has_joint_inputs) {
@@ -797,7 +839,7 @@ void kernel_main() {
 
             // Default to local Q tensor; override below for joint Q when applicable.
             Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-            uint32_t q_end_seq_tile = q_local_padded_Nt;
+            [[maybe_unused]] uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
@@ -1023,6 +1065,9 @@ void kernel_main() {
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (first_k_for_q && need_q_read) {
                     const auto read_q = [&](const auto& q_gen) {
+#ifdef Q_TINY_TILE
+                        read_q_tiny_block(noc, q_gen, q_slice, cb_q_in, q_tile_bytes, q_barrier_threshold);
+#else
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                 const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
@@ -1047,6 +1092,7 @@ void kernel_main() {
                                 false /*transpose*/,
                                 q_barrier_threshold);
                         }
+#endif
                     };
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);

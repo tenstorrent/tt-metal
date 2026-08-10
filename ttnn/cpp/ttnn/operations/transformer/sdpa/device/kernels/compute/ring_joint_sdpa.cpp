@@ -115,7 +115,12 @@ void kernel_main() {
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
-    constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t edge_mask_tiles =
+#ifdef Q_TINY_TILE
+        has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 2 : 0);
+#else
+        has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+#endif
     constexpr uint32_t base_partial_offset = 1 + edge_mask_tiles;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =

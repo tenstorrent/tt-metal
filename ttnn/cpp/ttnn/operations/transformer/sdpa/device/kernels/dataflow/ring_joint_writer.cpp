@@ -17,6 +17,69 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
+#ifdef Q_TINY_TILE
+template <typename CatAddrGeneratorType>
+void issue_tiny_output_reads(
+    Noc noc, const CatAddrGeneratorType& generator, const Slice& half_slice, uint32_t cb_id, uint32_t tiny_tile_bytes) {
+    const uint32_t rows = half_slice.get_d2_size();
+    const uint32_t cols = half_slice.get_d3_size();
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(rows * cols);
+    uint32_t dst = cb.get_write_ptr();
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t half_row = half_slice.d2_start + r;
+        const uint32_t full_row = half_row / 2;
+        const uint32_t offset = (half_row & 1u) * tiny_tile_bytes;
+        uint32_t page = generator.tensor_shape.id_of(half_slice.d0, half_slice.d1, full_row, half_slice.d3_start);
+        for (uint32_t c = 0; c < cols; ++c) {
+            noc.async_read(
+                generator.reader,
+                CoreLocalMem<uint32_t>(dst),
+                tiny_tile_bytes,
+                {.page_id = page + c, .offset_bytes = offset},
+                {});
+            dst += tiny_tile_bytes;
+        }
+    }
+}
+
+template <typename CatAddrGeneratorType>
+void write_tiny_output_block(
+    Noc noc,
+    const CatAddrGeneratorType& generator,
+    const Slice& half_slice,
+    uint32_t end_half_row,
+    uint32_t cb_id,
+    uint32_t tiny_tile_bytes,
+    uint32_t trid) {
+    const uint32_t rows = half_slice.get_d2_size();
+    const uint32_t cols = half_slice.get_d3_size();
+    CircularBuffer cb(cb_id);
+    cb.wait_front(rows * cols);
+    uint32_t src = cb.get_read_ptr();
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t half_row = half_slice.d2_start + r;
+        if (half_row < end_half_row) {
+            const uint32_t full_row = half_row / 2;
+            const uint32_t offset = (half_row & 1u) * tiny_tile_bytes;
+            uint32_t page = generator.tensor_shape.id_of(half_slice.d0, half_slice.d1, full_row, half_slice.d3_start);
+            for (uint32_t c = 0; c < cols; ++c) {
+                noc.async_write<NocOptions::TXN_ID>(
+                    CoreLocalMem<uint32_t>(src + c * tiny_tile_bytes),
+                    generator.reader,
+                    tiny_tile_bytes,
+                    {},
+                    {.page_id = page + c, .offset_bytes = offset},
+                    {.trid = trid});
+            }
+        }
+        src += cols * tiny_tile_bytes;
+    }
+    noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = trid});
+    cb.pop_front(rows * cols);
+}
+#endif
+
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
 // Pushes output tiles into cb_prev_out and LSE tiles into cb_lse_in.
@@ -53,7 +116,11 @@ void read_prev_output_and_lse(
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
     // Read previous output for this Q chunk
+#ifdef Q_TINY_TILE
+    issue_tiny_output_reads(noc, cat_out_generator, out_slice, cb_prev_out, tile_bytes);
+#else
     read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
+#endif
 
     // Read previous LSE for this Q chunk
     CircularBuffer cb_lse(cb_lse_in);
@@ -64,11 +131,18 @@ void read_prev_output_and_lse(
             stats_writer,
             CoreLocalMem<uint32_t>(lse_addr),
             stats_tile_bytes,
+#ifdef Q_TINY_TILE
+            {.page_id = stats_tile_logical.id_of(nb, nq, i / 2, 0), .offset_bytes = (i & 1u) * stats_tile_bytes},
+#else
             {.page_id = stats_tile_logical.id_of(nb, nq, i, 0)},
+#endif
             {});
         lse_addr += stats_tile_bytes;
     }
     noc.async_read_barrier();
+#ifdef Q_TINY_TILE
+    CircularBuffer(cb_prev_out).push_back(out_slice.get_d2_size() * out_slice.get_d3_size());
+#endif
     cb_lse.push_back(Sq_chunk_t);
 }
 
@@ -86,12 +160,25 @@ static __attribute__((noinline, noclone)) void issue_stats_column_reads(
     const uint32_t stats_tile_bytes) {
     CircularBuffer cb(cb_id);
     cb.reserve_back(reserve_tiles);
-    uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
-    const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = cb.get_write_ptr();
     for (uint32_t r = 0; r < num_rows; ++r) {
-        noc.async_read(stats_writer, CoreLocalMem<uint32_t>(addr), stats_tile_bytes, {.page_id = tile_id}, {});
-        tile_id += row_stride;
+#ifdef Q_TINY_TILE
+        const uint32_t half_row = row_start + r;
+        noc.async_read(
+            stats_writer,
+            CoreLocalMem<uint32_t>(addr),
+            stats_tile_bytes,
+            {.page_id = stats_tile_logical.id_of(nb, nq, half_row / 2, 0),
+             .offset_bytes = (half_row & 1u) * stats_tile_bytes},
+            {});
+#else
+        noc.async_read(
+            stats_writer,
+            CoreLocalMem<uint32_t>(addr),
+            stats_tile_bytes,
+            {.page_id = stats_tile_logical.id_of(nb, nq, row_start + r, 0)},
+            {});
+#endif
         addr += stats_tile_bytes;
     }
 }
@@ -109,13 +196,26 @@ static __attribute__((noinline, noclone)) void issue_stats_column_writes(
     const uint32_t stats_tile_bytes,
     const uint32_t trid = 0) {
     CircularBuffer cb(cb_id);
-    uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
-    const uint32_t row_stride = stats_tile_logical.stride2();
     uint32_t addr = cb.get_read_ptr();
     for (uint32_t r = 0; r < num_rows; ++r) {
+#ifdef Q_TINY_TILE
         noc.async_write<NocOptions::TXN_ID>(
-            CoreLocalMem<uint32_t>(addr), stats_writer, stats_tile_bytes, {}, {.page_id = tile_id}, {.trid = trid});
-        tile_id += row_stride;
+            CoreLocalMem<uint32_t>(addr),
+            stats_writer,
+            stats_tile_bytes,
+            {},
+            {.page_id = stats_tile_logical.id_of(nb, nq, (row_start + r) / 2, 0),
+             .offset_bytes = ((row_start + r) & 1u) * stats_tile_bytes},
+            {.trid = trid});
+#else
+        noc.async_write<NocOptions::TXN_ID>(
+            CoreLocalMem<uint32_t>(addr),
+            stats_writer,
+            stats_tile_bytes,
+            {},
+            {.page_id = stats_tile_logical.id_of(nb, nq, row_start + r, 0)},
+            {.trid = trid});
+#endif
         addr += stats_tile_bytes;
     }
 }
@@ -148,6 +248,9 @@ void issue_restore_reads(
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
     const uint32_t out_num_tiles = out_rows * out_cols;
+#ifdef Q_TINY_TILE
+    issue_tiny_output_reads(noc, cat_out_generator, out_slice, cb_prev_out, tile_bytes);
+#else
     CircularBuffer cb_prev(cb_prev_out);
     cb_prev.reserve_back(out_num_tiles);
     uint32_t out_barrier_count = 0;
@@ -163,6 +266,7 @@ void issue_restore_reads(
         /*inner_stride=*/tile_bytes,
         /*barrier_threshold=*/0,
         out_barrier_count);
+#endif
 
     // Stats drains: single-column linear reads. Hoist id_of once per drain; advance by
     // strides[2] per row. All tiles assumed valid (no bounds clamp needed).
@@ -250,8 +354,12 @@ void save_accumulators_with_trid(
     // for these writes — no risk of trid leaking to unrelated writes since the tag is local
     // to each call.
 
+#ifdef Q_TINY_TILE
+    write_tiny_output_block(noc, cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, save_trid);
+#else
     write_block_row_grouped_trid<all_output_rows_valid>(
         noc, cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
+#endif
 
     // Bulk drain of max/sum
     CircularBuffer cb_max(cb_max_out);
@@ -324,7 +432,11 @@ void write_output_and_lse(
     const uint32_t cb_lse_out,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
+#ifdef Q_TINY_TILE
+    write_tiny_output_block(noc, cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, 0);
+#else
     write_block(noc, cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+#endif
 
     CircularBuffer cb_lse(cb_lse_out);
     cb_lse.wait_front(Sq_chunk_t);
@@ -335,7 +447,11 @@ void write_output_and_lse(
             stats_writer,
             stats_tile_bytes,
             {},
+#ifdef Q_TINY_TILE
+            {.page_id = stats_tile_logical.id_of(nb, nq, i / 2, 0), .offset_bytes = (i & 1u) * stats_tile_bytes});
+#else
             {.page_id = stats_tile_logical.id_of(nb, nq, i, 0)});
+#endif
         lse_addr += stats_tile_bytes;
     }
     noc.async_writes_flushed();
@@ -362,15 +478,22 @@ inline QChunkInfo get_q_chunk_info(
     const uint32_t Lt,
     const uint32_t q_local_padded_Nt) {
     QChunkInfo info;
+#ifdef Q_TINY_TILE
+    const uint32_t q_local_extent_t = q_local_padded_Nt * 2;
+    const uint32_t joint_extent_t = Lt * 2;
+#else
+    const uint32_t q_local_extent_t = q_local_padded_Nt;
+    const uint32_t joint_extent_t = Lt;
+#endif
     if constexpr (has_joint_q) {
         info.is_joint_q = q_chunk >= num_local_q_chunks;
         if (info.is_joint_q) {
             const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
             info.out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
-            info.stats_seq_start_tile = q_local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+            info.stats_seq_start_tile = q_local_extent_t + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
             info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-            info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_padded_Nt + Lt);
-            info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_padded_Nt + Lt);
+            info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_extent_t + joint_extent_t);
+            info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_extent_t + joint_extent_t);
             return info;
         }
     } else {
@@ -380,8 +503,8 @@ inline QChunkInfo get_q_chunk_info(
     info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
     info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
     info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
-    info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_padded_Nt);
-    info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_padded_Nt);
+    info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_extent_t);
+    info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_extent_t);
     return info;
 }
 
@@ -389,6 +512,10 @@ inline QChunkInfo get_q_chunk_info(
 // has_joint_q: when false, joint branch is statically dead.
 template <bool has_joint_q>
 inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_t Lt, uint32_t q_local_padded_Nt) {
+#ifdef Q_TINY_TILE
+    Lt *= 2;
+    q_local_padded_Nt *= 2;
+#endif
     if constexpr (has_joint_q) {
         return qi.is_joint_q ? Lt : q_local_padded_Nt * (ring_id + 1);
     } else {
@@ -694,8 +821,12 @@ void kernel_main() {
                     }
                     return out_generator;
                 }();
+#ifdef Q_TINY_TILE
+                write_tiny_output_block(noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, 0);
+#else
                 write_block_row_grouped_trid<output_has_no_padding>(
                     noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
+#endif
             }
             noc.async_write_barrier();
         } else if constexpr (use_deferred_norm) {
@@ -704,7 +835,11 @@ void kernel_main() {
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
             const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
+#ifdef Q_TINY_TILE
+            constexpr uint32_t sum_offset = (q_local_padded_Nt + Lt) * 2;
+#else
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
+#endif
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
             const uint32_t q_per_core = global_q_end - global_q_start;
@@ -896,8 +1031,12 @@ void kernel_main() {
                         }
                         return out_generator;
                     }();
+#ifdef Q_TINY_TILE
+                    write_tiny_output_block(noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, 0);
+#else
                     write_block_row_grouped_trid<output_has_no_padding>(
                         noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
+#endif
                 } else if (!single_q_chunk) {
                     deferred.pending = true;
                     deferred.trid = trid_for_q(q_index);

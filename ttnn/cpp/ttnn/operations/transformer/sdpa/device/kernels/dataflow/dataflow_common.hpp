@@ -340,7 +340,8 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
-    if constexpr (tile_bytes == bf16_size) {
+    constexpr uint32_t tiny_bf16_size = tt::constants::FACE_HEIGHT * tt::constants::TILE_WIDTH * 2;
+    if constexpr (tile_bytes == bf16_size || tile_bytes == tiny_bf16_size) {
         // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
         for (uint32_t i = 0; i < total_words; i++) {
             ptr[i] = 0xFF80FF80;
@@ -384,6 +385,7 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Face offsets in uint32 words
+    constexpr uint32_t num_faces = tile_bytes / (uint32_per_face * sizeof(uint32_t));
     constexpr uint32_t face_offsets[4] = {
         0,                    // Face 0: rows[0:16], cols[0:16]
         uint32_per_face,      // Face 1: rows[0:16], cols[16:32]
@@ -392,7 +394,7 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
     };
     constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
 
-    for (uint32_t f = 0; f < 4; f++) {
+    for (uint32_t f = 0; f < num_faces; f++) {
         uint32_t face_col_start = face_col_starts[f];
 
         if (unpad_col_in_tile <= face_col_start) {
@@ -492,6 +494,41 @@ void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
             for (uint32_t w = boundary_word; w < uint32_per_face_row; w++) {
                 ptr[row_base + w] = NEGINF_PAIR;
             }
+        }
+    }
+}
+
+// A 16x32 tiny tile contains one face row.  Select either rows [0,16) or [16,32) of the
+// ordinary causal diagonal so consecutive q16 chunks can share one physical 32-row Q/K tile.
+template <uint32_t tile_bytes, bool bottom_half>
+void fill_causal_diagonal_tile_bf16_tiny(Noc noc, uint32_t cb_id, uint32_t tile_id) {
+    fill_tile_zeros<tile_bytes>(noc, cb_id, tile_id);
+    constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;
+    constexpr uint32_t words_per_face_row = tt::constants::FACE_WIDTH / 2;
+    constexpr uint32_t words_per_face = tt::constants::FACE_HW / 2;
+    CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
+
+    if constexpr (!bottom_half) {
+        for (uint32_t i = 0; i < words_per_face; ++i) {
+            ptr[words_per_face + i] = NEGINF_PAIR;
+        }
+    }
+    constexpr uint32_t diag_face = bottom_half ? 1 : 0;
+    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+        uint32_t first_masked = row + 1;
+        if (first_masked >= tt::constants::FACE_WIDTH) {
+            continue;
+        }
+        uint32_t word = first_masked / 2;
+        const uint32_t pos = first_masked % 2;
+        const uint32_t row_base = diag_face * words_per_face + row * words_per_face_row;
+        if (pos != 0) {
+            ptr[row_base + word++] = 0xFF800000;
+        }
+        for (; word < words_per_face_row; ++word) {
+            ptr[row_base + word] = NEGINF_PAIR;
         }
     }
 }
@@ -620,7 +657,12 @@ void generate_lightweight_mask_tiles(Noc noc) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
-    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
+    constexpr uint32_t causal_diag_tiles =
+#ifdef Q_TINY_TILE
+        (!has_sliding_window && is_causal_lw) ? 2 : 0;
+#else
+        (!has_sliding_window && is_causal_lw) ? 1 : 0;
+#endif
     constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
@@ -637,7 +679,12 @@ void generate_lightweight_mask_tiles(Noc noc) {
             noc, tile_idx);
         tile_idx += kSlidingWindowEdgeTiles;
     } else if constexpr (is_causal_lw) {
+#ifdef Q_TINY_TILE
+        fill_causal_diagonal_tile_bf16_tiny<mask_tile_size_bytes, false>(noc, cb_mask_in, tile_idx++);
+        fill_causal_diagonal_tile_bf16_tiny<mask_tile_size_bytes, true>(noc, cb_mask_in, tile_idx++);
+#else
         fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++);
+#endif
     }
 
     // Subsequent tiles: partial mask tiles for boundary conditions

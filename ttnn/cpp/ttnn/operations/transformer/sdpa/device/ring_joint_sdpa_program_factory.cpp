@@ -1024,7 +1024,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     In causal case, the causal mask takes care of masking K pad tokens.
     */
 
-    const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
+    const bool q_tiny_tile = q_chunk_size == tt::constants::FACE_HEIGHT;
+    const uint32_t q_tile_height = q_tiny_tile ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
+    const uint32_t Sq_chunk_t = q_chunk_size / q_tile_height;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
     // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
@@ -1086,7 +1088,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t joint_l_partial_col = logical_l % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles =
         (compile_time_global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    const uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    const uint32_t edge_mask_tiles =
+        has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? (q_tiny_tile ? 2 : 1) : 0);
     // Single CB holds neginf, either the causal diagonal or sliding edge palette, and partial masks.
     const uint32_t total_lightweight_mask_tiles = 1 + edge_mask_tiles + partial_mask_tiles;
 
@@ -1681,6 +1684,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (q_tiny_tile) {
+        defines["Q_TINY_TILE"] = "1";
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -1706,16 +1712,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
     tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
-    uint32_t q_tile_size = tt::tile_size(q_df);
+    const auto q_row_tile = tt::tt_metal::Tile({q_tile_height, tt::constants::TILE_WIDTH});
+    const auto full_tile = tt::tt_metal::Tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+    uint32_t q_tile_size = q_row_tile.get_tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t sum_tile_size = tt::tile_size(sum_df);
-    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t mask_tile_size = q_row_tile.get_tile_size(mask_df);
+    uint32_t out_tile_size = q_row_tile.get_tile_size(out_df);
+    uint32_t scalar_tile_size = q_row_tile.get_tile_size(scalar_df);
+    uint32_t im_tile_size = q_row_tile.get_tile_size(im_df);
+    uint32_t stats_tile_size = q_row_tile.get_tile_size(stats_df);
+    uint32_t sum_tile_size = q_row_tile.get_tile_size(sum_df);
+    uint32_t qk_im_tile_size = q_row_tile.get_tile_size(qk_im_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -1729,24 +1737,34 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
 
     uint32_t next_cb_index = 0;
-    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+    const auto allocate_cb = [&](uint32_t page_size_bytes,
+                                 uint32_t num_pages,
+                                 tt::DataFormat data_format,
+                                 const tt::tt_metal::Tile* tile = nullptr) -> uint32_t {
         const uint32_t cb_index = next_cb_index++;
+        CBFormatDescriptor format{
+            .buffer_index = static_cast<uint8_t>(cb_index),
+            .data_format = data_format,
+            .page_size = page_size_bytes,
+        };
+        if (tile != nullptr) {
+            format.tile = TileDescriptor{*tile};
+        }
         desc.cbs.push_back(CBDescriptor{
             .total_size = page_size_bytes * num_pages,
             .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = page_size_bytes,
-            }}},
+            .format_descriptors = {format},
         });
         return cb_index;
     };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
+    const auto allocate_tile_cb = [&](uint32_t num_tiles,
+                                      uint32_t tile_size,
+                                      tt::DataFormat data_format,
+                                      const tt::tt_metal::Tile* tile = nullptr) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format, tile == nullptr ? &full_tile : tile);
     };
 
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df, &q_row_tile);
     const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
@@ -1754,7 +1772,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
     constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
     const uint32_t cb_mask_in =
-        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
+        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df, &q_row_tile)
+                               : inactive_cb;
 
     // Streaming normalization broadcasts the per-head sink scalar directly.
     // Alias a valid CB while disabled so compile-time tile-size queries remain valid;
@@ -1764,52 +1783,55 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             return cb_q_in;
         }
         const tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
-        return allocate_tile_cb(1, tt::tile_size(sink_df), sink_df);
+        return allocate_tile_cb(1, q_row_tile.get_tile_size(sink_df), sink_df, &q_row_tile);
     }();
 
-    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, &q_row_tile);
+    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, &q_row_tile);
+    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, full_tile.get_tile_size(scalar_df), scalar_df);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df, &q_row_tile);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, &q_row_tile);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, &q_row_tile);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, &q_row_tile);
+    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, &q_row_tile);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, &q_row_tile);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, &q_row_tile);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, &q_row_tile);
 
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df, &q_row_tile);
 
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
     const bool needs_dram_accumulator_staging = !has_sliding_window;
-    const uint32_t cb_stats_in =
-        needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
+    const uint32_t cb_stats_in = needs_dram_accumulator_staging
+                                     ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df, &q_row_tile)
+                                     : cb_max_A;
     const uint32_t cb_prev_out =
-        needs_dram_accumulator_staging ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
-    const uint32_t cb_stats_out =
-        needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
+        needs_dram_accumulator_staging ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df, &q_row_tile) : cb_out;
+    const uint32_t cb_stats_out = needs_dram_accumulator_staging
+                                      ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df, &q_row_tile)
+                                      : cb_max_B;
 
     // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
+    const uint32_t cb_recip_scratch =
+        use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df, &q_row_tile) : inactive_cb;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out = compute pushes sum for writer to save to DRAM.
     // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
-    const uint32_t cb_sum_out =
-        use_streaming_compute
-            ? (needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df)
-                                              : cb_sum_A)
-            : inactive_cb;
-    const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df)
-                                              : cb_sum_B)
-            : inactive_cb;
+    const uint32_t cb_sum_out = use_streaming_compute
+                                    ? (needs_dram_accumulator_staging
+                                           ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, &q_row_tile)
+                                           : cb_sum_A)
+                                    : inactive_cb;
+    const uint32_t cb_sum_in = use_streaming_compute
+                                   ? (needs_dram_accumulator_staging
+                                          ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, &q_row_tile)
+                                          : cb_sum_B)
+                                   : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
     // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.

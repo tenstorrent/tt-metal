@@ -4797,7 +4797,7 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     is_causal=True,
     q_dtype=ttnn.bfloat16,
     kv_dtype=ttnn.bfloat8_b,
-    q_chunk_sizes=[32],
+    q_chunk_sizes=[16, 32],
     # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
     k_chunk_sizes=[512, 640],
     seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path

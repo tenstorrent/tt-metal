@@ -774,10 +774,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate chunk sizes if program config is provided
 
     TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_chunk_size == tt::constants::FACE_HEIGHT || q_chunk_size % tt::constants::TILE_HEIGHT == 0,
+        "q_chunk_size must be 16 or divisible by TILE_HEIGHT. Got q_chunk_size: {}, TILE_HEIGHT: {}",
         q_chunk_size,
-        tt::constants::TILE_WIDTH);
+        tt::constants::TILE_HEIGHT);
     TT_FATAL(
         k_chunk_size % tt::constants::TILE_WIDTH == 0,
         "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",

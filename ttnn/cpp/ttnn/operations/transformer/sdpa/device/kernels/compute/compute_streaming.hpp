@@ -165,13 +165,25 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
 #else
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
-ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
+ALWI bool should_use_blocked_pack_width(uint32_t pack_width) {
+#ifdef Q_TINY_TILE
+    // The Blackhole multi-tile pack MOP advances through 16x32 DEST planes rather than
+    // the full 32x32 slots used by matmul, which drops every odd output tile.  Pack each
+    // tiny tile from its explicit DEST slot until the blocked pack path is tile-shape-aware.
+    return false;
+#else
+    return pack_width >= MIN_BLOCKED_PACK_TILES;
+#endif
+}
 
 template <uint32_t old_cb, uint32_t new_cb>
 ALWI void sdpa_maybe_pack_reconfig_data_format() {
 #ifdef TRISC_PACK
-    if constexpr (pack_dst_format[old_cb] != pack_dst_format[new_cb]) {
-        pack_reconfig_data_format(old_cb, new_cb);
+    if constexpr (
+        pack_dst_format[old_cb] != pack_dst_format[new_cb] ||
+        pack_tile_face_r_dim[old_cb] != pack_tile_face_r_dim[new_cb] ||
+        pack_tile_num_faces[old_cb] != pack_tile_num_faces[new_cb]) {
+        pack_reconfig_data_format</*is_tile_dim_reconfig_en=*/true>(old_cb, new_cb);
     }
 #endif
 }
@@ -194,7 +206,8 @@ ALWI void sdpa_maybe_reconfig_data_format() {
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+        reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(
+            srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
@@ -205,7 +218,8 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
+        reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(
+            runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
@@ -408,6 +422,11 @@ void reduce_c_row_group(
     bool respect_trigger = false,
     uint32_t mirror_cb = INVALID_CB,
     bool overlap_first_half = false) {
+#ifdef TRISC_PACK
+    constexpr uint32_t num_faces = pack_tile_num_faces[in0_cb];
+#else
+    constexpr uint32_t num_faces = unpack_tile_num_faces[in0_cb];
+#endif
     const uint32_t group_size = sbh;
     const uint32_t row_start = row_group_index * group_size;
 
@@ -436,10 +455,11 @@ void reduce_c_row_group(
         CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger, num_faces);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
+        reduce_block_max_row_runtime(
+            in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half, num_faces);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
@@ -506,8 +526,13 @@ void sub_exp_block_bcast_cols(
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
+#ifdef Q_TINY_TILE
+        constexpr int iterations = 8;
+        constexpr VectorMode vector_mode_exp = VectorMode::R;
+#else
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
+#endif
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
@@ -2436,21 +2461,29 @@ void sdpa_ring_v2(
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
         uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+#ifdef Q_TINY_TILE
+        const uint32_t q_chunk_full_tile = q_chunk / 2;
+        const uint32_t q_chunk_half = q_chunk & 1u;
+#else
+        const uint32_t q_chunk_full_tile = q_chunk;
+        constexpr uint32_t q_chunk_half = 0;
+#endif
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
         uint32_t q_start_tile = 0;
         if constexpr (has_sliding_window) {
             q_start_tile = logical_nt - ring_size * q_local_padded_Nt + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk * Sq_chunk_t;
+                           q_chunk_full_tile * Sq_chunk_t;
         } else if constexpr (is_causal_sdpa) {
             if (is_causal_iter) {
-                q_start_tile = q_chunk * Sq_chunk_t;
+                q_start_tile = q_chunk_full_tile * Sq_chunk_t;
                 causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
+            q_start_tile =
+                chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk_full_tile * Sq_chunk_t;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2761,10 +2794,10 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
+                kv_pad_rotation_enabled ? q_chunk_full_tile * Sq_chunk_t : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
-                has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
+                has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx + q_chunk_half,
                 has_sliding_window ? 2 : 0,
                 has_sliding_window ? 3 : 0,
                 has_sliding_window ? 4 : 0,
