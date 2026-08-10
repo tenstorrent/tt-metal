@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // perf-debug profiler workload: dispatches kernels that emit 10 differently-named DeviceZoneScopedN zones
-// (with increasing durations) on ALL 5 RISCs of a small core grid, then closes. It does NOT drive the X280
+// (with increasing durations) on ALL 5 RISCs of a small core grid, then closes. It does NOT drive the drainer
 // itself -- run it with TT_METAL_PERF_DEBUG_PROFILER=1 so the PerfDebugProfiler boots at MeshDevice bring-up
 // and captures these zones (verify with a connected tracy-capture). TT_METAL_DEVICE_PROFILER=1 enables the
 // device profiler so the kernels actually emit markers. Grid + iteration count are overridable via argv.
@@ -24,7 +24,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
-    // --delay is the KNEE knob: uniform nop-iterations per zone, the SAME unit as test_x280_realprof
+    // --delay is the KNEE knob: uniform nop-iterations per zone, the SAME unit as the standalone drain harness
     // --proddelay, so 0 means MAX RATE (no spin) exactly as it does there. Smaller = higher marker rate.
     // Omitting --delay entirely selects the graduated ~1..100 us wall-clock durations, which is the right
     // default for a representative capture -- graduated is a separate MODE, not a magic --delay value.
@@ -109,11 +109,11 @@ int main(int argc, char** argv) {
         knee_mode ? "uniform nop-spin: knee mode" : "graduated ~1..100us wall-clock");
     if (knee_mode) {
         // No tick-derived rate here on purpose: --delay is nop LOOP ITERATIONS over a volatile counter
-        // (same unit as test_x280_realprof --proddelay), and one iteration is several cycles, so markers/s
+        // (same unit as the standalone drain harness --proddelay), and one iteration is several cycles, so markers/s
         // cannot be derived from it without measuring cycles-per-iteration. Printing a tick-derived rate is
         // what previously made this knee look ~30x worse than the harness's.
         printf(
-            "[perf-debug zones]   --delay=%u nop-iterations/zone (same unit as test_x280_realprof "
+            "[perf-debug zones]   --delay=%u nop-iterations/zone (same unit as the standalone drain harness "
             "--proddelay; 0 = max rate)\n",
             zone_cyc);
     }

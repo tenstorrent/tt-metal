@@ -961,7 +961,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_->shutdown();
         realtime_profiler_.reset();
     }
-    // Perf-debug (X280) profiler: its dtor sets P_STOP + joins the drain threads (no reset).
+    // Perf-debug (drainer) profiler: its dtor sets P_STOP + joins the drain threads (no reset).
     if (perf_debug_profiler_) {
         perf_debug_profiler_.reset();
     }
@@ -1521,22 +1521,22 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     if (realtime_profiler_) {
         return;
     }
-    // The perf-debug (X280) profiler REPLACES this one -- do not run both. They are not independent:
+    // The perf-debug (drainer) profiler REPLACES this one -- do not run both. They are not independent:
     // RealtimeProfilerManager reserves a tensix core, owns its own D2H socket + dispatch handshake, and
-    // consumes the SAME per-RISC SPSC profiler rings the X280 firmware drains. Two consumers on one SPSC
+    // consumes the SAME per-RISC SPSC profiler rings the drainer firmware drains. Two consumers on one SPSC
     // ring see each other's partial reads (observed: ~1800 "zone with end < start" warnings per ResNet
     // run), and its shutdown interleaves with dispatch teardown.
     // NOTE: TT_METAL_NO_RT_PROFILER is read NOWHERE in the tree -- it never disabled anything. This gate
-    // is the actual off switch, keyed on the same variable that turns the X280 path on.
+    // is the actual off switch, keyed on the same variable that turns the drain path on.
     const char* pd = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
     if (pd != nullptr && *pd != '\0' && *pd != '0') {
         log_info(tt::LogMetal, "[perf-debug profiler] enabled -- legacy realtime profiler is disabled for this run.");
         return;
     }
-    // Same exclusion, for the DRISC drainer. It is the successor to the X280 consumer and reads the very
+    // Same exclusion, for the DRISC drainer. It is the successor to the drainer consumer and reads the very
     // same SPSC rings, so it cannot share them with RealtimeProfilerManager either. This needs its own
     // variable rather than reusing TT_METAL_PERF_DEBUG_PROFILER, because that one does double duty: it
-    // also BOOTS the X280 (init_perf_debug_profiler), which would just swap one competing consumer for
+    // also BOOTS the drainer (init_perf_debug_profiler), which would just swap one competing consumer for
     // another. Producers on, no built-in consumer -- the drainer is supplied externally.
     const char* dd = std::getenv("TT_METAL_DRISC_PROFILER");
     if (dd != nullptr && *dd != '\0' && *dd != '0') {
@@ -1550,8 +1550,8 @@ void MeshDeviceImpl::init_perf_debug_profiler(const std::shared_ptr<MeshDevice>&
     if (perf_debug_profiler_) {
         return;
     }
-    // Opt-in: the X280 device-zone profiler boots the L2CPU drainer and spawns host drain threads.
-    // Off by default so it never contends with a standalone X280 bring-up or the standard profiler.
+    // Opt-in: the drainer device-zone profiler boots the L2CPU drainer and spawns host drain threads.
+    // Off by default so it never contends with a standalone drainer bring-up or the standard profiler.
     const char* s = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
     if (s == nullptr || *s == '\0' || *s == '0') {
         return;

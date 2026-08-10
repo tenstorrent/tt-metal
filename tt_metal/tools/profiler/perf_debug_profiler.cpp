@@ -16,7 +16,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tracy/Tracy.hpp>
-#include <common/TracyTTDeviceData.hpp>  // tracy::RiscType X280_RD0/X280_RELAY0 lanes
+#include <common/TracyTTDeviceData.hpp>  // tracy::RiscType worker lanes
 
 #include <chrono>
 #include <x86intrin.h>
@@ -45,13 +45,11 @@
 #include "llrt/tt_cluster.hpp"
 #include "hostdevcommon/profiler_common.h"
 
-#include "tools/profiler/x280_driver.hpp"
-#include "tools/profiler/x280_profzone_boot.hpp"
-#include "tools/profiler/x280_profzone_decode.hpp"
+#include "tools/profiler/spsc_marker_decode.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
 #include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
-#include "prof_packet.h"
+#include "tools/profiler/spsc_packet.h"
 #include "tt_metal/common/broadcast_ring.hpp"
 
 namespace tt::tt_metal {
@@ -71,7 +69,7 @@ struct RecRingHolder {
 };
 
 // Ring capacity in RECORDS (rounded up to a power of two by BroadcastRing), TT_METAL_PERF_DEBUG_RING_RECS.
-// Default 4M == test_x280_realprof's --mqcap default (~96 MB at 24 B/Rec). A lagging consumer DROPS rather
+// Default 4M == the standalone drain harness's --mqcap default (~96 MB at 24 B/Rec). A lagging consumer DROPS rather
 // than back-pressuring, so this sizes the burst it can absorb, not a correctness bound.
 size_t ring_capacity_recs() {
     static const size_t v = [] {
@@ -256,14 +254,6 @@ uint32_t nstage_cap(uint32_t computed) {
     return (cap != 0 && computed > cap) ? cap : computed;
 }
 
-// Read once: profile the X280 drain harts as well as the worker kernels.
-bool hart_zones_enabled() {
-    static const bool on = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_HART_ZONES");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return on;
-}
 }  // namespace
 
 // Per-read page cap, overridable at runtime for tuning: TT_METAL_PERF_DEBUG_MAX_PAGES (0 = uncapped, take
@@ -444,7 +434,7 @@ struct PerfDebugSync {
 
 PerfDebugSync sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker) {
     // RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H (H's own latency is
-    // irrelevant). Same registers the X280 firmware co-samples in calibrate().
+    // irrelevant). Same registers the drainer firmware co-samples in calibrate().
     constexpr uint64_t kWallClockL = 0xFFB121F0ULL;
     constexpr uint64_t kWallClockH = 0xFFB121F8ULL;
     constexpr uint32_t kSamples = 100;
@@ -552,7 +542,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     auto& cluster = MetalContext::instance(context_id).get_cluster();
 
     if (cluster.arch() != tt::ARCH::BLACKHOLE) {
-        log_debug(tt::LogMetal, "[perf-debug profiler] not Blackhole; skipping X280 capture.");
+        log_debug(tt::LogMetal, "[perf-debug profiler] not Blackhole; skipping drainer capture.");
         return;
     }
 
@@ -614,7 +604,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 
     // Spawn AFTER devices_ is stable (the threads index into it). ONE writer (read+decode+publish) and one
-    // consumer (ring -> Tracy), matching test_x280_realprof: the slow Tracy sink is off the drain path.
+    // consumer (ring -> Tracy), matching the standalone drain harness: the slow Tracy sink is off the drain path.
     if (!devices_.empty()) {
         const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
         // Records per read: a page holds at most page_words/2 two-word markers.
@@ -1077,7 +1067,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 
         try {
             // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
-            // X280) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
+            // drainer) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
             // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
             // so the window configured just above is what puts the DRISC on the static path.
             g_bringup_step = fmt::format("drainer {}: D2HSocket construct (writes config into DRISC L1)", d);
@@ -1195,7 +1185,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                         acc);
                 }
             }
-            ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
+            ctx.decode[d] = std::make_unique<pz::SpscDecodeState>();
             ctx.decode[d]->reset(ctx.nl);
             for (uint32_t c = 0; c < num_cores; c++) {
                 ctx.decode[d]->core_of_xy[coords[c]] = c;  // full map: lane ids stay global across drainers
@@ -1325,7 +1315,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // VERIFY THE DRAINER ACTUALLY STARTED. A resident drainer is launched fire-and-forget, so a core
             // that fails to come out of reset produces no error -- the producers simply fill their rings,
             // block (they are lossless), and the workload wedges forever with a perfectly healthy card. That
-            // is the same failure the X280 port hit: the host checked one hart, the rest never started, and
+            // is the same failure the earlier drain port hit: the host checked one hart, the rest never started, and
             g_bringup_step = fmt::format("drainer {}: heartbeat verify", d);
             // the run hung. Poll the heartbeat instead of assuming: it must leave 0 and then advance.
             {
@@ -1425,11 +1415,11 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     return true;
 }
 
-// ONE read+decode pass over (ctx, sock_idx): pages -> profzone_decode -> PerfDebugRec -> BroadcastRing.
+// ONE read+decode pass over (ctx, sock_idx): pages -> spsc_decode -> PerfDebugRec -> BroadcastRing.
 // Returns true if it moved data. Deliberately does NOT touch Tracy: the sink lives on the consumer thread so
 // a slow Tracy push can never back-pressure the FIFO -> relay -> reader -> worker cores. (Measured: with the
 // push inline, UFLD-v2 held relay0 in HOST-WAIT 15.85 s of a 19 s run and stalled producers 826x; with the
-// push removed, 0 stalls. This is the same structure test_x280_realprof uses.)
+// push removed, 0 stalls. This is the same structure the standalone drain harness uses.)
 // Decode + publish, OFF the reader thread.
 //
 // MEASURED: with this inline, the reader's ack rate was gated by per-marker work -- read 3.8 ms, decode
@@ -1437,18 +1427,18 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 // 17,366 producer stalls where the same device code with a minimal decode produced 0. The copy was never the
 // problem (15% of host work, 15-19 GB/s); the interpretation was.
 //
-// Sequential by construction: ProfzoneDecodeState carries sticky timer highs, the packet residual and the
+// Sequential by construction: SpscDecodeState carries sticky timer highs, the packet residual and the
 // per-lane head mirror across buffers, so buffers for one socket MUST be decoded in arrival order. That is
 // why there is one decoder per socket rather than a pool.
 void PerfDebugProfiler::decode_and_publish(
     DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf, size_t words) {
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
-    pz::ProfzoneDecodeState& st = *ctx.decode[sock_idx];
+    pz::SpscDecodeState& st = *ctx.decode[sock_idx];
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
     (void)ddbg;
     const auto t_dec_all = std::chrono::steady_clock::now();
     if (stall_only()) {
-        pz::profzone_decode(
+        pz::spsc_decode(
             st, buf.data(), words, ctx.nl,
             [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
                 if (hash == 0x7FFFu && type == PP_ZONE_START) {
@@ -1471,13 +1461,13 @@ void PerfDebugProfiler::decode_and_publish(
                                        // is the writer's whole job; if it ever fills the thread, the DRAIN is
                                        // the wall (not Tracy) -- the opposite of the UFLD-v2 case.
     const auto t_dec0 = std::chrono::steady_clock::now();
-    pz::profzone_decode(
+    pz::spsc_decode(
         st,
         buf.data(),
         words,
         ctx.nl,
         [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
-            // X280 wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
+            // SPSC wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
             // decode, so never compare a wire type against a PacketTypes value (they agree at 0/1 only by
             // history). PP_DATA events arrive on the emit_data sink below; PP_ZONE_TOTAL is not a duration.
             if (type != PP_ZONE_START && type != PP_ZONE_END) {
@@ -1499,15 +1489,8 @@ void PerfDebugProfiler::decode_and_publish(
             // Pack the device index into the high bits of lane: one ring serves every (device, socket), and
             // the consumer must know which DeviceCtx to resolve coords against. lane = core*NRISC+risc fits
             // comfortably in 24 bits (110 cores * 5 = 550), so the top 8 are free. Keeps PerfDebugRec
-            // byte-identical to test_x280_realprof's Rec.
+            // byte-identical to the standalone drain harness's Rec.
             *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, hash, prog};
-        },
-        // X280 drain-hart spans (bcfg.hartzones). Accumulate; they are placed at stop(), which reads the
-        // rdcycle->Tensix calibration. Written only by this (single) writer thread.
-        [&](uint32_t hart, uint32_t meta, uint64_t rdc) {
-            if (hart < ctx.hz_raw.size()) {
-                ctx.hz_raw[hart].push_back(DeviceCtx::HZMark{rdc, meta});
-            }
         },
         // PP_DATA point events (DeviceTimestampedData / DeviceRecordEvent). The payload cannot fit in a
         // 24-byte PerfDebugRec, and WIDENING the Rec would cost ~67% more ring bytes on a path that carries
@@ -1573,7 +1556,7 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
         return false;
     }
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
-    // No decode state here any more -- this thread only reads and acks; ProfzoneDecodeState belongs to the
+    // No decode state here any more -- this thread only reads and acks; SpscDecodeState belongs to the
     // decoder thread, which is the only place the stream is interpreted.
     const uint32_t page_words = kPageSize / sizeof(uint32_t);
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
@@ -1697,7 +1680,7 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
 }
 
 // The single writer thread: round-robin every (device, socket); each drain_pass publishes its own read as one
-// data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors test_x280_realprof.
+// data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors the standalone drain harness.
 void PerfDebugProfiler::decoder_thread(uint32_t sock_idx) {
     tracy::SetThreadName("perf-debug-decoder");
     DecodeQueue& q = dq_[sock_idx];
@@ -1726,7 +1709,7 @@ void PerfDebugProfiler::decoder_thread(uint32_t sock_idx) {
 }
 
 void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
-    tracy::SetThreadName("x280-writer");
+    tracy::SetThreadName("perf-debug-writer");
     // Startup accounting: the gap between this thread entering and its FIRST successful drain is the window
     // in which the D2H FIFO can fill unserviced -- which back-pressures relay -> reader -> worker rings and
     // stalls every producing RISC once. Reported so it is a number rather than an inference.
@@ -1738,7 +1721,7 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
     bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
     auto backoff = std::chrono::microseconds(writer_backoff_us());
-    // Drain-to-empty on stop: stop() sets P_STOP first, so the X280 stops producing; keep reading until every
+    // Drain-to-empty on stop: stop() sets P_STOP first, so the drainer stops producing; keep reading until every
     // socket has been empty for a sustained window, else the tail of the run is lost. Deadline backstops it.
     constexpr uint32_t kQuiesceEmpties = 200;
     std::chrono::steady_clock::time_point drain_deadline{};
@@ -1836,7 +1819,7 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] socket {} drained: {} pages, {} markers ({} reads); producer stall "
-                "zones: {} [0 = X280 kept up, non-zero = capture perturbed the workload]",
+                "zones: {} [0 = drainer kept up, non-zero = capture perturbed the workload]",
                 s,
                 ss.pages,
                 ss.emit,
@@ -1853,7 +1836,7 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
 // thing that suffers when Tracy cannot keep up: it DROPS its own records (reported) instead of stalling the
 // device. Runs until the writer is done and the ring is drained.
 void PerfDebugProfiler::consumer_thread() {
-    tracy::SetThreadName("x280-consume");
+    tracy::SetThreadName("perf-debug-consumer");
     if (!ring_) {
         return;
     }
@@ -1884,7 +1867,7 @@ void PerfDebugProfiler::consumer_thread() {
             } catch (const std::exception& e) {
                 log_warning(tt::LogMetal, "[perf-debug profiler] zone-name load failed ({})", e.what());
             }
-            zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
+            zone_names_[0x7FFFu] = "PRODUCER-STALL";  // PROFILER_STALL_ZONE_ID
         });
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
@@ -2478,295 +2461,9 @@ void PerfDebugProfiler::stop() {
             consumed_.load(),
             dropped_.load());
     }
-    push_hart_zones();  // must run BEFORE tracy_.reset() -- it creates/uses Tracy contexts
     tracy_.reset();
     devices_.clear();
 }
 
-// Map the collected X280 drain-hart spans onto the device timeline and push them to Tracy as their own
-// per-hart lanes ("rd0/rd1/relay0/relay1" in the GUI, via the widened RiscType). Runs once, at stop(), after
-// the drain threads have joined so hz_raw is stable.
-//
-// The harts timestamp themselves with rdcycle (a fixed 1 GHz counter), NOT the Tensix wall clock the kernel
-// markers use, so the two cannot be compared directly. hart0 therefore co-samples both clocks at boot (that
-// is what bcfg.hartzones also switches on) and the host least-squares fits tensix = a*rdcycle + b here.
-// Timestamps are rebased on the harts' OWN minimum, which cancels the constant offset between the
-// calibration reference core's raw wall clock and the marker timeline (the same per-node origin trick the
-// standalone harness uses; without it the whole lane can land before the origin and clamp to zero).
-void PerfDebugProfiler::push_hart_zones() {
-    if (!tracy_ || !hart_zones_enabled()) {
-        return;
-    }
-    for (auto& ctx : devices_) {
-        if (!ctx.driver || ctx.hz_raw.empty()) {
-            continue;
-        }
-        uint64_t total = 0;
-        for (const auto& v : ctx.hz_raw) {
-            total += v.size();
-        }
-        if (total == 0) {
-            log_warning(tt::LogMetal, "[perf-debug profiler] hart zones enabled but none were captured.");
-            continue;
-        }
-        // ---- rdcycle -> Tensix fit from hart0's boot co-samples {rdcycle_mid, tensix, noc_round_trip} ----
-        const uint32_t nc = pz::kProfzoneCalibN;
-        std::vector<uint64_t> raw(static_cast<size_t>(nc) * 3);
-        try {
-            ctx.driver->read_block(raw.data(), nc * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
-        } catch (const std::exception& e) {
-            log_warning(tt::LogMetal, "[perf-debug profiler] hart-zone calib read failed ({})", e.what());
-            continue;
-        }
-        std::vector<uint64_t> rts(nc);
-        for (uint32_t i = 0; i < nc; i++) {
-            rts[i] = raw[i * 3 + 2];
-        }
-        std::sort(rts.begin(), rts.end());
-        const uint64_t rt_cut = rts[nc / 2] + rts[nc / 2] / 2;  // drop NoC-contended outliers
-        const uint64_t x_base = raw[0], t_base = raw[1];
-        double sx = 0, st = 0, sxx = 0, sxt = 0;
-        uint32_t nfit = 0;
-        for (uint32_t i = 0; i < nc; i++) {
-            if (raw[i * 3 + 2] > rt_cut) {
-                continue;
-            }
-            const double x = static_cast<double>(raw[i * 3 + 0] - x_base);
-            const double t = static_cast<double>(raw[i * 3 + 1] - t_base);
-            sx += x;
-            st += t;
-            sxx += x * x;
-            sxt += x * t;
-            nfit++;
-        }
-        if (nfit < 2 || (sxx * nfit - sx * sx) == 0.0) {
-            log_warning(tt::LogMetal, "[perf-debug profiler] hart-zone calib unusable (nfit={})", nfit);
-            continue;
-        }
-        const double a = (sxt * nfit - sx * st) / (sxx * nfit - sx * sx);
-        const double b = (st - a * sx) / nfit;
-        auto map_ts = [&](uint64_t x) -> uint64_t {
-            return static_cast<uint64_t>(a * static_cast<double>(x - x_base) + b) + t_base;
-        };
-        // Rebase on the MARKER origin so hart spans and kernel zones share one timeline. Falls back to the
-        // harts' own minimum only if no markers were captured (nothing to align to).
-        uint64_t hz_min = ~0ull, hz_max = 0;
-        for (const auto& v : ctx.hz_raw) {
-            for (const auto& m : v) {
-                const uint64_t t = map_ts(m.rdc);
-                hz_min = std::min(hz_min, t);
-                hz_max = std::max(hz_max, t);
-            }
-        }
-        // Synced devices place hart spans on the same absolute Tensix timeline as the markers (no rebase).
-        const uint64_t marker_origin = ctx.synced ? 0 : ctx.marker_ts_base;
-        const uint64_t hz_span_start = hz_min;  // kept for the diagnostic below
-        if (ctx.synced) {
-            hz_min = 0;  // absolute Tensix time; the context anchor does the placement
-        } else if (marker_origin != 0) {
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] hart zones start {:.1f} ms BEFORE the first kernel marker (X280 drains "
-                "from MeshDevice bring-up); aligning both on the marker origin",
-                static_cast<double>(marker_origin - std::min(marker_origin, hz_min)) / 1.35e6);
-            hz_min = marker_origin;
-        }
-        (void)hz_span_start;
-        const CoreCoord l2t = pz::x280_l2cpu_tile(0);
-        static constexpr uint32_t kHartColor[4] = {0xE67E22u, 0xF1C40Fu, 0x1ABC9Cu, 0x3498DBu};
-        static constexpr uint32_t kBulkColor = 0xE74C3Cu;      // reader switched to BULK
-        static constexpr uint32_t kHostWaitColor = 0x34495Eu;  // relay blocked on a full host FIFO
-        static constexpr uint32_t kSpscWaitColor = 0x8E44ADu;  // reader blocked on a full LIM STAGE
-        // ★ Push ALL harts as ONE CHRONOLOGICALLY SORTED stream, not hart-by-hart. Every hart lane lives in
-        // the SAME Tracy GPU context, and Tracy's calibrated GPU-zone path expects timestamps to arrive in
-        // increasing order per context. Pushing all of hart0, then all of hart1, ... makes the context's clock
-        // jump backwards once per hart, which renders the lanes as separate blocks marched across the timeline
-        // even though their real windows fully overlap (verified: identical 10-bucket time histograms, all
-        // harts active throughout, min/max windows within 4 ms of each other).
-        struct HZItem {
-            uint64_t ts;
-            uint32_t hart;
-            uint32_t meta;
-        };
-        std::vector<HZItem> ordered;
-        ordered.reserve(total);
-        for (uint64_t h = 0; h < ctx.hz_raw.size(); h++) {
-            for (const auto& m : ctx.hz_raw[h]) {
-                ordered.push_back(HZItem{map_ts(m.rdc), static_cast<uint32_t>(h), m.meta});
-            }
-        }
-        // stable_sort: a hart's own START/END pair share no timestamp ordering guarantee otherwise, and equal
-        // timestamps must keep their emission order or a zone can close before it opens.
-        std::stable_sort(ordered.begin(), ordered.end(), [](const HZItem& a, const HZItem& b) { return a.ts < b.ts; });
-        std::vector<uint32_t> nz_per_hart(ctx.hz_raw.size(), 0);
-        // Per-hart, per-KIND accounting (0=DRAIN 1=BULK 2=HOST-WAIT 3=SPSC-WAIT). Counts alone mislead -- a few
-        // very long HOST-WAITs matter more than many short drains -- so accumulate occupancy too. This is what
-        // answers "is the host still the wall, or has the bottleneck moved upstream to the reader?"
-        const size_t nh = ctx.hz_raw.size();
-        std::vector<std::array<uint64_t, 4>> kcount(nh, {0, 0, 0, 0});
-        std::vector<std::array<uint64_t, 4>> kcyc(nh, {0, 0, 0, 0});
-        std::vector<std::array<uint64_t, 4>> kopen(nh, {0, 0, 0, 0});
-        for (const auto& it : ordered) {
-            const uint64_t h = it.hart;
-            const bool is_reader = (h < kNRead);
-            const std::string hname =
-                is_reader ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - kNRead));
-            const uint32_t lane_risc = is_reader ? (static_cast<uint32_t>(tracy::RiscType::X280_RD0) + h)
-                                                 : (static_cast<uint32_t>(tracy::RiscType::X280_RELAY0) + (h - kNRead));
-            const uint32_t is_start = it.meta & 1u;
-            const uint32_t kind = (it.meta >> 1) & 3u;
-            const char* suffix = (kind == 1) ? " BULK" : (kind == 2) ? " HOST-WAIT" : (kind == 3) ? " SPSC-WAIT" : "";
-            perf_debug::WorkerZonePacket pkt;
-            pkt.chip_id = ctx.chip_id;
-            pkt.is_x280 = true;
-            pkt.color = (kind == 1)   ? kBulkColor
-                        : (kind == 2) ? kHostWaitColor
-                        : (kind == 3) ? kSpscWaitColor
-                                      : kHartColor[h & 3];
-            pkt.core_noc0_x = static_cast<uint32_t>(l2t.x);
-            pkt.core_noc0_y = static_cast<uint32_t>(l2t.y);
-            pkt.risc = lane_risc;
-            const std::string zn = hname + suffix;
-            pkt.name = zn;
-            pkt.timestamp = (it.ts >= hz_min) ? (it.ts - hz_min) : 0;
-            pkt.is_start = (is_start != 0u);
-            tracy_->HandleWorkerZone(pkt);
-            nz_per_hart[h] += is_start;
-            if (is_start) {
-                kcount[h][kind]++;
-                kopen[h][kind] = it.ts;
-            } else if (kopen[h][kind] != 0) {
-                kcyc[h][kind] += (it.ts > kopen[h][kind]) ? (it.ts - kopen[h][kind]) : 0;
-                kopen[h][kind] = 0;
-            }
-        }
-        for (uint64_t h = 0; h < nz_per_hart.size(); h++) {
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] hart {} ({}): {} zones | DRAIN {}x/{:.0f}ms  BULK {}x/{:.0f}ms  "
-                "HOST-WAIT {}x/{:.0f}ms  SPSC-WAIT {}x/{:.0f}ms",
-                h,
-                (h < kNRead) ? "READ" : "RELAY",
-                nz_per_hart[h],
-                kcount[h][0],
-                static_cast<double>(kcyc[h][0]) / 1.35e6,
-                kcount[h][1],
-                static_cast<double>(kcyc[h][1]) / 1.35e6,
-                kcount[h][2],
-                static_cast<double>(kcyc[h][2]) / 1.35e6,
-                kcount[h][3],
-                static_cast<double>(kcyc[h][3]) / 1.35e6);
-        }
-        for (uint64_t h = 0; h < 0; h++) {  // (old per-hart push loop retained below only for its diagnostics)
-            const bool is_reader = (h < kNRead);
-            const std::string hname =
-                is_reader ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - kNRead));
-            const uint32_t lane_risc = is_reader ? (static_cast<uint32_t>(tracy::RiscType::X280_RD0) + h)
-                                                 : (static_cast<uint32_t>(tracy::RiscType::X280_RELAY0) + (h - kNRead));
-            uint32_t nz = 0, n_end = 0;
-            int depth_dbg = 0, max_depth_dbg = 0, unbalanced_dbg = 0;
-            for (const auto& m : ctx.hz_raw[h]) {
-                const uint32_t is_start = m.meta & 1u;
-                const uint32_t kind = (m.meta >> 1) & 3u;  // 0=drain 1=bulk 2=hostwait 3=spscwait
-                const char* suffix = (kind == 1)   ? " BULK"
-                                     : (kind == 2) ? " HOST-WAIT"
-                                     : (kind == 3) ? " SPSC-WAIT"
-                                                   : "";
-                const std::string zn = hname + suffix;
-                const uint64_t ts = map_ts(m.rdc);
-                perf_debug::WorkerZonePacket pkt;
-                pkt.chip_id = ctx.chip_id;
-                pkt.is_x280 = true;
-                pkt.color = (kind == 1)   ? kBulkColor
-                            : (kind == 2) ? kHostWaitColor
-                            : (kind == 3) ? kSpscWaitColor
-                                          : kHartColor[h & 3];
-                pkt.core_noc0_x = static_cast<uint32_t>(l2t.x);
-                pkt.core_noc0_y = static_cast<uint32_t>(l2t.y);
-                pkt.risc = lane_risc;
-                pkt.name = zn;
-                pkt.timestamp = (ts >= hz_min) ? (ts - hz_min) : 0;
-                pkt.is_start = (is_start != 0u);
-                tracy_->HandleWorkerZone(pkt);
-                nz += is_start;
-                // DIAG: START/END balance. Unbalanced pairs make the Tracy handler nest ever deeper instead of
-                // closing zones, which renders as giant cascading boxes. Under drain SATURATION the FW may not
-                // have room to inject the closing marker, so this is the prime suspect there.
-                if (is_start) {
-                    depth_dbg++;
-                    max_depth_dbg = std::max(max_depth_dbg, depth_dbg);
-                } else {
-                    n_end++;
-                    if (depth_dbg == 0) {
-                        unbalanced_dbg++;  // END with no open START (orphan)
-                    } else {
-                        depth_dbg--;
-                    }
-                }
-            }
-            // DIAG: per-hart mapped window. All four harts run CONCURRENTLY for the whole session, so these
-            // windows must OVERLAP. If they are disjoint/staggered, the per-hart rdcycle counters are not on a
-            // common origin and hart0's calibration cannot be applied to harts 1..3 as-is.
-            uint64_t h_min = ~0ull, h_max = 0;
-            for (const auto& m : ctx.hz_raw[h]) {
-                const uint64_t t = map_ts(m.rdc);
-                h_min = std::min(h_min, t);
-                h_max = std::max(h_max, t);
-            }
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] hart {} ({}): {} zones -> Tracy; window [{:.1f} .. {:.1f}] ms rel, raw_rdc0={}",
-                h,
-                is_reader ? "READ" : "RELAY",
-                nz,
-                ctx.hz_raw[h].empty() ? 0.0 : static_cast<double>(h_min - hz_min) / 1.35e6,
-                ctx.hz_raw[h].empty() ? 0.0 : static_cast<double>(h_max - hz_min) / 1.35e6,
-                ctx.hz_raw[h].empty() ? 0ull : ctx.hz_raw[h].front().rdc);
-            // DIAG: where in time this hart's zones actually LIVE (10 equal buckets over the whole hart-zone
-            // span). If lanes look "staggered" in the GUI but their min/max windows overlap, the answer is
-            // here: a lane whose zones all sit in one bucket renders as one narrow merged box at that offset.
-            {
-                const uint64_t span = (hz_max > hz_min) ? (hz_max - hz_min) : 1;
-                uint32_t bucket[10] = {0};
-                for (const auto& m : ctx.hz_raw[h]) {
-                    const uint64_t t = map_ts(m.rdc);
-                    const uint64_t rel = (t > hz_min) ? (t - hz_min) : 0;
-                    uint32_t bi = static_cast<uint32_t>((rel * 10) / span);
-                    bucket[std::min<uint32_t>(bi, 9)]++;
-                }
-                log_info(
-                    tt::LogMetal,
-                    "[perf-debug profiler]   hart {} TIME-HIST(10 buckets): {} {} {} {} {} {} {} {} {} {}",
-                    h,
-                    bucket[0],
-                    bucket[1],
-                    bucket[2],
-                    bucket[3],
-                    bucket[4],
-                    bucket[5],
-                    bucket[6],
-                    bucket[7],
-                    bucket[8],
-                    bucket[9]);
-            }
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler]   hart {} BALANCE: starts={} ends={} left_open={} orphan_ends={} max_depth={}",
-                h,
-                nz,
-                n_end,
-                depth_dbg,
-                unbalanced_dbg,
-                max_depth_dbg);
-        }
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] hart zones: {} spans over {:.1f} ms (a={:.5f}, {} calib samples kept)",
-            total,
-            static_cast<double>(hz_max - hz_min) / 1.35e6,
-            a,
-            nfit);
-    }
-}
 
 }  // namespace tt::tt_metal

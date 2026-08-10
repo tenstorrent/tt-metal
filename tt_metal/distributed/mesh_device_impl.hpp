@@ -160,7 +160,7 @@ private:
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
 
-    // Owns the perf-debug (X280 device-zone) profiler. Constructed by init_perf_debug_profiler()
+    // Owns the perf-debug (drainer device-zone) profiler. Constructed by init_perf_debug_profiler()
     // (gated by TT_METAL_PERF_DEBUG_PROFILER) and torn down in close_impl(). Independent of the RT
     // profiler above.
     std::unique_ptr<PerfDebugProfiler> perf_debug_profiler_;

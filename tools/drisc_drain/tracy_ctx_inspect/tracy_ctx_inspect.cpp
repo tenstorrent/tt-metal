@@ -15,7 +15,7 @@
 #include "server/TracyWorker.hpp"
 
 // Max GPU-zone nesting depth under `vec`. A correctly-paired workload lane is depth<=2 (a real zone plus
-// an occasional X280-STALL nested inside it); a lost-END / mis-paired lane grows a deep staircase.
+// an occasional PRODUCER-STALL nested inside it); a lost-END / mis-paired lane grows a deep staircase.
 static constexpr int kDepthCap = 256;  // stop descending here; a bugged lane can nest thousands deep
 // A Tracy GPU zone vector is either "magic" (GpuEvent stored by value) or pointer-stored (short_ptr).
 // The top-level timeline is magic; children may be either. Deref the wrong way = segfault, so branch on
@@ -48,7 +48,7 @@ static int gpu_max_depth(
 }
 
 // Print the zones along the DEEPEST nesting path (one per level): name + gpu start/end. Reveals whether a
-// pathological nest is real zones ("T*_Zone*") or X280-STALL, and whether ENDs are missing (start==end / a
+// pathological nest is real zones ("T*_Zone*") or PRODUCER-STALL, and whether ENDs are missing (start==end / a
 // parent that never closes before its children).
 static void dump_deep_path(
     const tracy::Worker& w, const tracy::Vector<tracy::short_ptr<tracy::GpuEvent>>& vec, int depth) {
@@ -175,13 +175,6 @@ int main(int argc, char** argv) {
                         printf("  --- deepest path, tid=%llu ---\n", (unsigned long long)td.first);
                         dump_deep_path(worker, td.second.timeline, 0);
                     }
-                }
-            }
-            // Dump each lane's top zone names for any X280 context -> verify per-hart labels (X280-rd0, ...).
-            if (nm && strstr(nm, "X280")) {
-                for (const auto& td : c->threadData) {
-                    printf("  --- X280 lane tid=%llu top zones ---\n", (unsigned long long)td.first);
-                    sample_top_zones(worker, td.second.timeline, 3);
                 }
             }
             static bool sampled = false;

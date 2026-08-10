@@ -1,5 +1,5 @@
 /*
- * prof_packet.h - X280 compact profiler packet wire format (per-lane, never-linearized design).
+ * prof_packet.h - drainer compact profiler packet wire format (per-lane, never-linearized design).
  *
  * Each (core,risc) lane is kept SEPARATE end to end (L1 ring -> per-lane LIM SPSC -> per-lane host
  * slot), so identity is structural (the host slot position IS the lane) and the packet carries NO
@@ -21,19 +21,19 @@
  * Framing is positional: packets are 2-word aligned in each lane's stream and the host knows the exact
  * word count, so there is no valid/header bit -- there are no pad slots to skip.
  *
- * Plain C header: included by the bare-metal FW (C), the worker producer kernel (C++), and the host
+ * Plain C header: included by the worker producer kernel (C++) and the host
  * consumer (C++). No dependencies.
  */
-#ifndef X280_PROF_PACKET_H
-#define X280_PROF_PACKET_H
+#ifndef drainer_PROF_PACKET_H
+#define drainer_PROF_PACKET_H
 
 #include <stdint.h>
 
-/* packet_type field (5 bits). This is the X280 wire's OWN type space -- deliberately INDEPENDENT of
+/* packet_type field (5 bits). This is the drainer wire's OWN type space -- deliberately INDEPENDENT of
  * hostdevcommon's PacketTypes, which belongs to the DRAM readback path. The two data sources never
  * co-exist and their host decoders share no code, so no value here needs to agree with a PacketTypes
  * value: ZONE_START/END coincide at 0/1 only by history. Do NOT reintroduce a 3-bit pass-through of a
- * PacketTypes value onto this wire -- that is what made ZONE_TOTAL(2) alias PP_X280_ZONE and
+ * PacketTypes value onto this wire -- that is what made ZONE_TOTAL(2) alias PP_drainer_ZONE and
  * TS_DATA_16B(5) alias PP_BULK_CORE, silently desynchronizing the whole packet walk. The producer maps
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
@@ -42,7 +42,7 @@
  * prog_id(payload32) in one packet. Emitted by the throwaway producer_common.h stand-in. The REAL
  * kernel_profiler path does NOT use this -- it splits identity into three separate stickies below
  * (PROG / TIMER produced at different stages, SRC injected by the reader). Kept so the untouched
- * profstream/test_x280_stream synthetic benchmark keeps decoding. */
+ * profstream/the synthetic drain benchmark synthetic benchmark keeps decoding. */
 #define PP_STICKY_META 6u
 /* STICKY_SRC: (core,risc) identity, injected by the READER into the LINEARIZED stream whenever it
  * switches to a new source ring. Everything after it (until the next STICKY_SRC) belongs to this lane.
@@ -59,7 +59,7 @@
  *   STICKY_TIMER : timer_hi -- the high half of the device wall-clock. Emitted by ANY risc at a marker
  *                  record whenever its high half ticks over. 1 WORD: low27 = timer_hi (fits 27 bits, no
  *                  payload word).
- *   STICKY_SRC   : (core,risc) lane identity -- injected by the X280 reader hart. 1 WORD: low27 = lane.
+ *   STICKY_SRC   : (core,risc) lane identity -- injected by the drainer reader hart. 1 WORD: low27 = lane.
  *
  * The real linearized stream is therefore VARIABLE-LENGTH: SRC/TIMER are 1 word, markers + PROG are 2.
  * The decoder advances by pp_packet_words(); SENT is always published on a packet boundary. (The frozen
@@ -89,7 +89,7 @@
 
 /* ZONE_TOTAL: an accumulated-duration zone (DO_SUM / profileScopeAccumulate). 2 words, but word1 is the
  * accumulated SUM, not a timer -- the host must not treat it as a timestamp. Moved off the DRAM path's
- * value 2, which aliases PP_X280_ZONE on this wire. */
+ * value 2, which aliases PP_drainer_ZONE on this wire. */
 #define PP_ZONE_TOTAL 11u
 
 /* --- PP_DATA low27 sub-fields --- */
@@ -113,16 +113,9 @@
  * progress from the heads, extent from the tails. A drainer that has to poll the control vector anyway
  * therefore injects NOTHING, which is the whole point: nothing on the wire can disagree with the worker.
  * Layout and the shared slice geometry live in hostdevcommon/profiler_common.h (SPSC_SPAN_*), which this
- * plain-C header cannot include; x280_profzone_decode.hpp static_asserts that the codes agree. */
+ * plain-C header cannot include; spsc_marker_decode.hpp static_asserts that the codes agree. */
 #define PP_BULK_SPAN 13u
 
-/* X280_ZONE: an X280 DRAIN-HART's own profiling zone (reader/relay activity), injected IN-BAND into the same
- * linearized stream as the worker data (readers inject into their LIM STAGE, relays into the socket) so the
- * host gets hart zones for FREE over the existing transport -- no separate side-channel poller. 3 WORDS:
- *   [0] word0 = pp_x280_w0(hart, is_start)   [1] rdcycle_lo   [2] rdcycle_hi
- * low27 of word0 = (hart << 1) | is_start. The host routes these to the per-X280 Tracy context (hart = lane),
- * mapping rdcycle -> Tensix via the calibration. They never enter the worker-marker/emit path. */
-#define PP_X280_ZONE 2u
 
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
@@ -192,29 +185,12 @@ static inline uint32_t pp_packet_words(uint32_t w0) {
     if (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) {
         return 1u;
     }
-    if (t == PP_X280_ZONE) {
-        return 3u;  // word0 + rdcycle_lo + rdcycle_hi
-    }
     if (t == PP_DATA || t == PP_EVENT) {
         return 2u + pp_data_size(w0);  // header + timer_low + payload (self-describing)
     }
     return 2u;
 }
 
-/* ----- X280_ZONE (in-band hart zone) ----- low27 = (hart<<3) | (kind<<1) | is_start -----
- * kind: 0=DRAIN (reader per-risc / relay copy), 1=BULK (reader adaptive bulk drain), 2=HOSTWAIT (relay
- * blocked on a full socket FIFO -- emitted with backdated [wait_start,wait_end] once room returns). */
-#define PP_X280_DRAIN 0u
-#define PP_X280_BULK 1u
-#define PP_X280_HOSTWAIT 2u
-#define PP_X280_SPSCWAIT 3u /* reader blocked on a full LIM STAGE ring (relay behind) -- backdated [start,end] */
-static inline uint32_t pp_x280_w0(uint32_t hart, uint32_t is_start, uint32_t kind) {
-    return pp_word0(PP_X280_ZONE, ((hart & 0x3Fu) << 3) | ((kind & 3u) << 1) | (is_start & 1u));
-}
-static inline int pp_is_x280(uint32_t w0) { return pp_type(w0) == PP_X280_ZONE; }
-static inline uint32_t pp_x280_hart(uint32_t w0) { return (pp_low27(w0) >> 3) & 0x3Fu; }
-static inline uint32_t pp_x280_is_start(uint32_t w0) { return pp_low27(w0) & 1u; }
-static inline uint32_t pp_x280_kind(uint32_t w0) { return (pp_low27(w0) >> 1) & 3u; }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }
@@ -241,4 +217,4 @@ static inline uint64_t pp_full_ts(uint32_t timer_hi, uint32_t timer_low) {
 static inline uint32_t pp_ts_hi(uint64_t ts) { return (uint32_t)((ts >> 32) & PP_TIMER_HI_MASK); }
 static inline uint32_t pp_ts_lo(uint64_t ts) { return (uint32_t)(ts & 0xFFFFFFFFu); }
 
-#endif /* X280_PROF_PACKET_H */
+#endif /* drainer_PROF_PACKET_H */

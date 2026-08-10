@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // perf-debug profiler workload: data-movement RISCs (BRISC = RISCV_0, NCRISC = RISCV_1). Each iteration
-// enters 10 DIFFERENTLY-NAMED DeviceZoneScopedN scopes with INCREASING durations, so the perf-debug (X280)
+// enters 10 DIFFERENTLY-NAMED DeviceZoneScopedN scopes with INCREASING durations, so the perf-debug (drainer)
 // profiler captures a variety of named zones across all RISCs. The name carries a per-RISC tag (BR_/NC_)
 // so each RISC's 10 zones are distinct. N_ITERS controls how many times the 10-zone sweep repeats.
 #include <cstdint>
@@ -20,7 +20,7 @@
 // swing through the sweep of durations instead of holding at the peak.
 // ZONE_MODE selects the zone body; ZONE_CYC is the nop-iteration count used when ZONE_MODE == 1.
 // These are SEPARATE on purpose: ZONE_CYC == 0 is a legitimate knee point (max rate, no spin at all), the
-// same as test_x280_realprof --proddelay 0, so it must not double as "use the graduated table".
+// same as the standalone drain harness --proddelay 0, so it must not double as "use the graduated table".
 #ifndef ZONE_MODE
 #define ZONE_MODE 0  // 0 = graduated wall-clock durations, 1 = uniform nop spin (knee sweeps)
 #endif
@@ -49,7 +49,7 @@
         }                                                                                          \
     }
 
-// KNEE body (ZONE_MODE == 1): byte-identical to test_x280_realprof's producer loop (realprof_dm.cpp,
+// KNEE body (ZONE_MODE == 1): byte-identical to the standalone drain harness's producer loop (realprof_dm.cpp,
 // WORK_SIZE), so ZONE_CYC and that test's --proddelay are the SAME UNIT and the two knees are directly
 // comparable. The counter MUST stay `volatile`: that is what forces a load/increment/store/compare per
 // iteration, so one iteration costs several cycles rather than a single nop. Do NOT turn this into a

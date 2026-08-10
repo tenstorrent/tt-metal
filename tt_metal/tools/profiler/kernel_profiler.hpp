@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// SPSC variant of the device kernel profiler (X280-drained).
+// SPSC variant of the device kernel profiler (drainer-drained).
 //
 // Same public macro API as the push-to-DRAM backend (kept verbatim in
 // kernel_profiler_push.hpp), but a wholly separate backend: each RISC streams its
 // markers into a per-RISC single-producer/single-consumer (SPSC) ring in L1, and a
-// drainer (X280 or DRISC) continuously empties those rings. The producing RISC
+// drainer (drainer or DRISC) continuously empties those rings. The producing RISC
 // **blocks** (spins on the consumer head) when its ring is full — so the stream is
 // lossless and flow-controlled, and there is **no DRAM traffic** at all.
 //
@@ -22,16 +22,16 @@
 //     identity     : profiler_control_buffer[SPSC_CORE_XY]  = (y << 16) | x
 //   tail/head are MONOTONIC word counts; storage index = count % CAPACITY.
 //   Append blocks while (tail - head) > CAPACITY - need, then writes + publishes
-//   tail. The X280 advances head as it drains.
+//   tail. The drainer advances head as it drains.
 //
-// NOTE: with this backend a profiled run REQUIRES the X280 consumer to be draining
+// NOTE: with this backend a profiled run REQUIRES the drainer consumer to be draining
 // — if a ring fills and nothing drains it, the producing RISC blocks (by design).
 // Tensix-focused; ETH cores are not a target here.
 
 #pragma once
 
 // ---- Arch dispatch -------------------------------------------------------
-// The SPSC backend below requires an X280 (L2CPU) consumer to drain the rings, and the X280 is
+// The SPSC backend below requires an drainer (L2CPU) consumer to drain the rings, and the drainer is
 // Blackhole hardware. Quasar has no L2CPU drainer, so an SPSC producer there would have no consumer
 // and the first full ring would block the RISC forever.
 //
@@ -97,7 +97,7 @@ extern uint32_t traceCount;
 // at init_profiler() so the FW zone's ZONE_START is held un-published until validity is resolved:
 // committed on a valid launch, rewound-and-never-published on an idle launch. This reproduces the
 // old DRAM backend's "don't push invalid cores to DRAM", so an idle core's FW-only zone (e.g.
-// BRISC-FW on a core that ran no kernel) never reaches the X280 drainer. Non-validator RISCs
+// BRISC-FW on a core that ran no kernel) never reaches the drainer drainer. Non-validator RISCs
 // (TRISC/NCRISC) only ever run on valid cores, so they leave this true and publish unconditionally.
 extern bool zoneValid;
 
@@ -116,7 +116,7 @@ extern uint32_t sumIDs[SUM_COUNT];
 constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
 // TRACE-ONLY mode (PROFILER_OPT_DO_TRACE_ONLY / TRACE_ON_TENSIX) has been REMOVED from this producer.
-// It gated the FW/KERNEL wrapper markers behind a per-replay state machine and forced myRiscID=0; the X280
+// It gated the FW/KERNEL wrapper markers behind a per-replay state machine and forced myRiscID=0; the drainer
 // path does not use it and it only obscured the live code. The parked DRAM producer
 // (kernel_profiler_push.hpp) still has the original implementation if it is ever needed back.
 #if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
@@ -144,7 +144,7 @@ constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;                // words (= data[] length)
 // SPSC layout, NOT the DRAM profiler's HOST_/DEVICE_BUFFER_END_INDEX_* slots -- see SpscControlBuffer.
 constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;  // producer (this RISC)
-constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (X280)
+constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (drainer)
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
@@ -173,34 +173,34 @@ inline __attribute__((always_inline)) uint32_t get_id(uint32_t id) { return id &
 
 // ---- SPSC ring primitives -------------------------------------------------
 
-// Reserved zone id for the X280 back-pressure stall zone. 16-bit id space; 0x7FFF won't collide with
-// a real Hash16_CT zone id in practice, and the host special-cases it to the name "X280-STALL".
+// Reserved zone id for the drainer back-pressure stall zone. 16-bit id space; 0x7FFF won't collide with
+// a real Hash16_CT zone id in practice, and the host special-cases it to the name "PRODUCER-STALL".
 constexpr uint32_t PROFILER_STALL_ZONE_ID = 0x7FFF;
 
-// ---- X280 compact wire format (2-word / 8B packets) ------------------------
-// This backend emits the compact per-lane packet format the X280 drain pipeline expects:
+// ---- SPSC compact wire format (2-word / 8B packets) ------------------------
+// This backend emits the compact per-lane packet format the drainer drain pipeline expects:
 //   word0: [31:27] type(5)  [26:0] low27       word1: [31:0] payload32
 // A MARKER (ZONE_START/END/TOTAL/TS_*) carries: low27 = 16-bit zone srcloc hash (room to grow to 27),
 // payload32 = timer_low. Identity is NOT in the marker anymore -- it is reconstructed on the host from
 // three "sticky" packets that persist until updated:
 //   STICKY_PROG  (type 8): payload32 = runtime host-id. Emitted at BRISC FW start (set_host_counter).
 //   STICKY_TIMER (type 9): low27 = timer_hi. Emitted by any RISC when its wall-clock high half ticks.
-//   STICKY_SRC   (type 7): (core,risc) lane -- injected by the X280 READER, never by the producer.
+//   STICKY_SRC   (type 7): (core,risc) lane -- injected by the drainer READER, never by the producer.
 // So a producing RISC writes ONLY markers + (rarely) a TIMER sticky; the reader knows which ring it is
 // draining, so it stamps the SRC identity. This drops the per-marker identity word (4->2 words) and the
-// need for the X280 to reshape.
+// need for the drainer to reshape.
 //
-// MUST stay in sync with tools/x280_bm/include/prof_packet.h. Inlined here (not #included) because the
-// kernel JIT build does not carry the tools/x280_bm/include path -- same pattern as producer_common.h.
+// MUST stay in sync with tt_metal/tools/profiler/spsc_packet.h. Inlined here (not #included) because
+// the kernel JIT build does not carry that include path.
 struct ppfmt {
     static constexpr uint32_t TYPE_SHIFT = 27;
     static constexpr uint32_t TYPE_MASK = 0x1Fu;
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     static constexpr uint32_t HASH16_MASK = 0xFFFFu;
-    // X280 wire type codes -- this wire's OWN space, NOT hostdevcommon PacketTypes values. The DRAM
+    // drainer wire type codes -- this wire's OWN space, NOT hostdevcommon PacketTypes values. The DRAM
     // readback path never co-exists with this one and shares no decode, so the two numberings are
     // independent. Passing a PacketTypes value straight through (the old 3-bit `>> 16 & 0x7`) is what
-    // made ZONE_TOTAL alias PP_X280_ZONE and TS_DATA_16B alias PP_BULK_CORE.
+    // made ZONE_TOTAL alias PP_drainer_ZONE and TS_DATA_16B alias PP_BULK_CORE.
     static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
     static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
@@ -273,7 +273,7 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     read_wall_clock(start_hi, start_lo);
     const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS + 2;  // caller marker + {START,END} + up to 2 TIMER stickies
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_CAPACITY - need)) {
-        invalidate_l1_cache();  // re-read the X280-updated head (and the terminate flag)
+        invalidate_l1_cache();  // re-read the drainer-updated head (and the terminate flag)
         if (profiler_control_buffer[PROFILER_TERMINATE]) {
             return;  // teardown: drop the marker + skip the stall zone rather than stall on a dead ring
         }
@@ -315,9 +315,9 @@ inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
 
 inline __attribute__((always_inline)) void publish_tail() {
     // Hold the tail while this launch is unvalidated/invalid: an idle core's FW zone is written into
-    // the ring but never made visible to the X280 drainer (see zoneValid).
+    // the ring but never made visible to the drainer drainer (see zoneValid).
     if (zoneValid) {
-        // Release fence: the X280 consumer reads TAIL then the marker slot over the NoC. Blackhole L1
+        // Release fence: the drainer consumer reads TAIL then the marker slot over the NoC. Blackhole L1
         // is write-through, but the marker-word stores and this TAIL store can still reach L1 SRAM out
         // of order, so a remote reader could observe the bumped TAIL before the words land and read a
         // stale/empty slot. Order the marker stores BEFORE the TAIL publish so TAIL is a true commit
@@ -329,9 +329,9 @@ inline __attribute__((always_inline)) void publish_tail() {
 }
 
 // Append one 2-word timing marker (type|srcloc-hash , timer_low), preceded by a STICKY_TIMER when the
-// wall-clock high half ticks. Blocks if the ring is full. Identity is injected by the X280 reader.
+// wall-clock high half ticks. Blocks if the ring is full. Identity is injected by the drainer reader.
 //
-// CRITICAL ordering: reserve ring room (which may BLOCK on a full ring and emit the X280-STALL zone) BEFORE
+// CRITICAL ordering: reserve ring room (which may BLOCK on a full ring and emit the PRODUCER-STALL zone) BEFORE
 // reading the clock. If we timestamped first, a marker delayed by a stall would carry a pre-stall time yet be
 // written into the ring AFTER the (later-timestamped) stall zone -> a backwards time jump on that lane. Reading
 // the clock after the room is secured makes the marker's time reflect when it is actually written (>= the stall
@@ -351,8 +351,8 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
 }
 
 // Emit the STICKY_META context packet (2 words) into ALL of this core's RISC rings, not just the
-// caller's. Each per-RISC ring the X280 drains needs its own (core_x, core_y, risc) + host_id header so
-// the host can forward-fill that identity onto the following raw markers -- letting the X280 reader
+// caller's. Each per-RISC ring the drainer drains needs its own (core_x, core_y, risc) + host_id header so
+// the host can forward-fill that identity onto the following raw markers -- letting the drainer reader
 // bulk-copy them with NO per-marker reshape. The type sits in the same valid/type bits (w0[31], w0[30:28])
 // the host reads on any marker, so a sticky is distinguished before its payload is decoded.
 //
@@ -361,7 +361,7 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
 // later). init_profiler() has already zeroed the rings this launch. For sibling rings the sticky lands
 // first; only BRISC's own ring has its FW ZONE_START ahead of the sticky (fine -- FW zone carries no ID).
 inline __attribute__((always_inline)) void mark_sticky_meta() {
-    // Retired: the combined (identity+id) context packet is gone. Identity is injected by the X280
+    // Retired: the combined (identity+id) context packet is gone. Identity is injected by the drainer
     // reader (STICKY_SRC); the runtime host-id is emitted as STICKY_PROG from set_host_counter. Kept
     // as a no-op in case anything still references it.
     return;
@@ -402,7 +402,7 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     } else {
         // Idle launch (this core ran no kernel): discard the un-published FW ZONE_START by rewinding
         // to the last committed tail. With zoneValid false, the matching ZONE_END and finish also
-        // stay unpublished, so nothing from this launch reaches the X280 drainer. The next launch's
+        // stay unpublished, so nothing from this launch reaches the drainer drainer. The next launch's
         // init_profiler() resets wIndex to this same tail and overwrites the stale words.
         wIndex = profiler_control_buffer[TAIL_INDEX];
     }
@@ -428,7 +428,7 @@ __attribute__((noinline)) void init_profiler(
     }
 #endif
     // Seed this RISC's tail from L1 ONCE per FW session, then keep wIndex monotonic across launches --
-    // do NOT re-read TAIL_INDEX per launch. The X280 reader drains a CONTINUOUS stream and tracks its own
+    // do NOT re-read TAIL_INDEX per launch. The drainer reader drains a CONTINUOUS stream and tracks its own
     // head; the standard device profiler resets TAIL_INDEX per program, so resuming from it would rewind
     // wIndex below the reader's head -> tail-head underflows -> the host decoder wraps the ring and emits
     // ~30x duplicate zones. wIndex lives in FW .bss (persists across kernel launches); publish_tail keeps
@@ -659,13 +659,13 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 // KERNEL wrapper: REPORTS, as an ordinary scope -- same profileScope path as DeviceZoneScopedN, so a real
 // model run shows a "<RISC>-KERNEL" span per kernel invocation alongside any op-level zones.
-// Toggle kept as a bisect handle: set X280_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
+// Toggle kept as a bisect handle: set drainer_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
 // clear this change of a ResNet teardown hang in wait_for_dispatch_cores -- the hang reproduces with the
 // wrapper zone OFF too, so it is NOT caused by emitting KERNEL zones (see FINDINGS / the perf_debug
 // teardown note). Useful because the SPSC ring is lossless-BLOCKING: any core emitting into a ring that
 // nobody drains wedges forever, so "who is emitting" is always worth being able to bisect.
-#define X280_KERNEL_WRAPPER_ZONE 1
-#if X280_KERNEL_WRAPPER_ZONE
+#define drainer_KERNEL_WRAPPER_ZONE 1
+#if drainer_KERNEL_WRAPPER_ZONE
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
