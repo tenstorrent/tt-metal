@@ -30,7 +30,13 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `bf16_decode.py` | what do bf16 weights through decode cost and buy? | **+29% for nothing** — worst-sample error is non-monotonic (§6.57) |
 | `run_mos.py` / `mos_percase.py` | automated MOS (DistillMOS) — is the device perceptually worse than fp32? | **no** — delta −0.017/−0.027; long-form mean **4.63** (§6.59). Needs `/tmp/mosvenv`, see `mos_setup.sh` |
 | `perceptual.py` | MCD / F0 / codec transparency vs the fp32 reference | codec SNR 42.9 dB, LSD 0.62 dB; **MCD failed its self-test and is not reported** (§6.59) |
+| `frame_ab.py` | does a block A/B predict the frame? | **no** — −2.124 ms on the blocks, 0 on the frame (§6.63) |
+| `rtf_repeat.sh` | how repeatable is the generator? | **0.390 ms** over three identical runs, so it can decide (§6.63) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
+
+**Read `frame_ab.py` before trusting any block A/B.** A tight loop measures device time with
+dispatch overlapped; the real loop drains at 10 host crossings per frame and can absorb a device
+saving whole. Block A/Bs screen; `--tier audio`'s `ms_per_frame` decides.
 
 **Read `mm_block_ab.py` before trusting any isolated sweep.** It is the counterexample: `w2` and
 `wo` posted 2.4× isolated wins and delivered exactly 0.00 ms in the block, while `w1` posted 1.03×

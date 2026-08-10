@@ -52,6 +52,10 @@ TOL = {
     # the tolerance its own percentage implies (0.5% of 864 measured codes ~ 4).
     "codes_real_pct": 0.5, "codes_real_n": 4,
     "wer_longform": 0, "mos_longform": 0.05,
+    # 0.5 ms is not a guess: three identical audio-tier runs on unchanged HEAD spread 0.390 ms
+    # (§6.63). ms_per_frame is the PRIMARY timing gate -- a block A/B is a screen only, because it
+    # measures device time with dispatch overlapped and the real loop drains at 10 host crossings
+    # per frame. §6.62 is the worked example: -2.124 ms on the blocks, 0 on the frame.
     "ms_per_frame": 0.5, "clicks_total": 0, "clipped_max_pct": 0.0,
 }
 

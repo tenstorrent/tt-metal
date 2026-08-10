@@ -123,6 +123,12 @@ python $Q --tier fast  --tag after
 python $Q --compare before after         # exits 1 if anything is worse beyond tolerance
 ```
 
+**⚠ A BLOCK A/B IS A SCREEN, NOT A VERDICT (`§6.63`).** Timing a block in a tight loop measures
+device time with dispatch fully overlapped. The real loop syncs **10 times per frame** at host
+round-trips and spends **2.8 ms/frame** drained, which can absorb a device saving completely —
+`§6.62` won 2.124 ms on the blocks and **zero** on the frame. Screen with a block A/B if you like;
+decide on `--tier audio`'s `ms_per_frame`, which is repeatable to 0.390 ms.
+
 **It takes TWO TAGS on purpose.** Nothing on this fork is judged against a number recorded in
 another session — `§6.15` and `§6.52` are both cases where that produced a regression that did not
 exist, and the codes gate's "10/288 vs 86/288" cost a session's worth of doubt for exactly this
