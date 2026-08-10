@@ -431,10 +431,10 @@ void kernel_main() {
         untilize_all_blocks_from_cb<block_size>(dfb_out, dfb_out_rm, Wt);
 #endif
     }  // NCHt loop
-    // The reduce scaler is generated once by the reader and reused (waited inside row_wise_mean)
+    // The reduce scaler is generated once by the reader and reused (waited inside reduce())
     // across every NCHt iteration but never popped. Pop the producer's tile count once here to
     // balance the CB. The reader pushes a second scaler tile only when the last column tile is
-    // partial (W not a multiple of tile_width), matching row_wise_mean's wait count.
+    // partial (W not a multiple of tile_width), matching the partial-scaler wait count.
     constexpr uint32_t num_scaler_tiles = (W % tile_width > 0) ? 2 : 1;
     DataflowBuffer(dfb_scaler).pop_front(num_scaler_tiles);
 }

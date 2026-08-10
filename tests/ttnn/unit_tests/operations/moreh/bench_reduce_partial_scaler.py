@@ -75,10 +75,24 @@ def main(out_path):
                 (f"softmax_small_w.{label}", lambda x=x: ttnn.operations.moreh.softmax(x, 3, strategy=S.SMALL_W))
             )
 
-        # layernorm: Step 3 was a pure reader refactor, included as a no-change control.
+        # layernorm small kernel (layernorm.cpp): E[x] and Var[x] reduces.
         for label, w in [("aligned_4096", 4096), ("ragged_4095", 4095)]:
             x = _mk(device, [1, 4, 1024, w])
             cases.append((f"layernorm.{label}", lambda x=x: ttnn.layer_norm(x)))
+
+        # layernorm with weight+bias -> exercises the same reduces with gamma/beta streaming.
+        for label, w in [("aligned_4096", 4096), ("ragged_4095", 4095)]:
+            x = _mk(device, [1, 4, 1024, w])
+            g = _mk(device, [1, 1, 32, w])
+            b = _mk(device, [1, 1, 32, w])
+            cases.append((f"layernorm_wb.{label}", lambda x=x, g=g, b=b: ttnn.layer_norm(x, weight=g, bias=b)))
+
+        # layernorm with a residual input -> FUSE_PRE_ADD, i.e. the reduce_multi_input path
+        # (large-tensor kernel) or the materialised pre-add (small kernel), depending on size.
+        for label, w in [("aligned_4096", 4096), ("ragged_4095", 4095)]:
+            x = _mk(device, [1, 4, 1024, w])
+            r = _mk(device, [1, 4, 1024, w])
+            cases.append((f"layernorm_residual.{label}", lambda x=x, r=r: ttnn.layer_norm(x, residual_input_tensor=r)))
 
         for name, fn in cases:
             secs = _bench(fn, device)
