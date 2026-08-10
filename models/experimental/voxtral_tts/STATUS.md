@@ -3942,6 +3942,13 @@ checked and survives (it cites "the lost free `activation=silu`", which §6.52 s
 free — but the conclusion *strengthens*, since the split arm now gets silu at +2.7 µs via the
 program config while a fused arm would still need a standalone one at +14.9).
 
+> **CORRECTED (§6.63): THIS DOES NOT SHOW UP END TO END.** The −1.918 ms/step below is real and
+> reproducible on the blocks, and a follow-up interleaved run put Block 1 + Block 2 together at
+> −2.124 ms. But the generator — since measured repeatable to **0.390 ms** over three identical
+> runs — reads **37.47 ms/frame before and 37.54 after**, i.e. no change. The device work genuinely
+> got faster; the frame did not. Keep the change (it is free, and device time will matter under
+> batching) but **do not credit it with an RTF improvement**. §6.63 has the reason.
+
 **Whole-block A/B, interleaved, 9 rounds, 0.190 ms noise floor:**
 
 | arm | ms/step | vs shipped |
@@ -3990,6 +3997,57 @@ otherwise have blocked it, so the justification has to be independent, and it is
 Tail risk is not dropped but measured better, by `tail_probe.py` counting failures over many seeds.
 Also fixed: `codes_real_n` and `codes_real_pct` are the same measurement in two units and
 disagreed (34→37 read WORSE at zero tolerance while 3.9%→4.3% read "same").
+
+### 6.63 — the block A/B does not predict the frame: 10 host crossings, 2.8 ms of drain
+
+§6.62 saves 2.124 ms of Block 1 + Block 2 time and moves the frame by nothing. Chasing that
+apart is the most useful thing in this section, because it undermines the instrument behind most
+of §6.39–§6.62.
+
+**FIRST, THE GENERATOR IS TRUSTWORTHY.** Three identical audio-tier runs on unchanged HEAD:
+
+| run | ms/frame | RTF |
+|---|---|---|
+| 1 | 37.747 | 0.5000 |
+| 2 | 37.514 | 0.4948 |
+| 3 | 37.356 | 0.4937 |
+| **mean** | **37.539** | **0.4961** |
+
+**Spread 0.390 ms.** So "no change" at 37.47 → 37.54 is a measurement, not noise, and the earlier
+2.45 ms gap I attributed to session noise was not that either.
+
+**THE BLOCKS ARE SLOWER INSIDE THE REAL LOOP THAN IN A TIGHT LOOP**, same session:
+
+| | tight loop | inside `generate()` | gap |
+|---|---|---|---|
+| Block 1 | 16.969 | 18.262 | +1.29 |
+| Block 2 | 18.541 | 21.027 | +2.49 |
+| **both** | **35.515** | **39.289** | **+3.77** |
+
+**WHY: HOST ROUND TRIPS DRAIN THE PIPELINE.** Instrumenting a real generation counts **10.1
+crossings per frame** — 3.0 `to_torch`, 7.1 `from_torch` — costing **2.796 ms/frame (5.6%)**. The
+loop is structurally `device → sync → host → device → sync → host`: `backbone.step` ends in a
+`to_torch`, `semantic_code` does a `linear` then a `to_torch` of 8320 logits to argmax on host, and
+`h` is uploaded again for Block 2. **A D2H's cost is not the copy — 8320 floats is 33 KB — it is
+every op still in flight having to finish first.**
+
+**THIS IS WHY §6.49 SAW 2.8–3.9% DISPATCH.** That measurement used a tight loop, which by
+construction never syncs. It was right about what it measured and silently wrong as a description
+of the real loop.
+
+**CONSEQUENCE FOR THE METHOD: a block A/B is a SCREEN, not a verdict.** It measures device time
+with dispatch fully overlapped; the real loop has drains that can absorb a device saving whole.
+§6.52's −4.24 ms did reach the frame (~44 → 37.5); §6.62's −1.9 did not. **Every timing claim on
+this branch made only from a block A/B is now provisional.**
+
+**AND §6.50 IS PROBABLY STALE, for the §6.47 reason.** It rejected moving the semantic argmax on
+device because the op measured 321 µs there against 10.9 µs on host — but that priced the OP in
+isolation and ignored the **D2H drain the host path forces every frame**. Same error class as
+§6.47's residual-as-bias: a correct isolated number, a premise that does not hold in the loop.
+
+**THE WORK THIS POINTS AT**, and it is larger than anything §6.52 or §6.62 won: keep `h` on device
+between Block 1 and Block 2, and do the semantic argmax on device, removing most of the 10
+crossings. Untested — see §7.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
