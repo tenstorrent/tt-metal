@@ -466,6 +466,7 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
