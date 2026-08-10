@@ -16,7 +16,6 @@ on:
           - sd35_large
           - motif
           - qwenimage
-          - wan2.2
           - mochi
           - deepseek-modules
       platform:

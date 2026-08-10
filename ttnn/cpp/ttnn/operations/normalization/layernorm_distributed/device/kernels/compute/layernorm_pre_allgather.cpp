@@ -38,9 +38,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(dfb::in0, dfb::res, dfb_inp_id);
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
 #else
-    binary_op_init_common(dfb_inp_id, dfb::reduce, dfb::x2);
+    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
     DataflowBuffer dfb_inp(dfb_inp_id);
@@ -62,7 +62,7 @@ void kernel_main() {
          */
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::x2);
-        mul_tiles_init(dfb_inp_id, dfb_inp_id);
+        mul_init(dfb_inp_id, dfb_inp_id);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp.wait_front(wt + blk);  // cumulative wait
 

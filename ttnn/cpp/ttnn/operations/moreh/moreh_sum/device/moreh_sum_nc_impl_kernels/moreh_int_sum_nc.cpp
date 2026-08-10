@@ -4,24 +4,23 @@
 
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
+    // num_output_tiles carries the per-core work-split count (the host's num_cols_per_core_group_N).
+    constexpr uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr uint32_t num_input_tiles = get_arg(args::num_input_tiles);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    DataflowBuffer dfb_out0_obj(cb_out0);
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
+    DataflowBuffer dfb_in0_obj(dfb::input);
+    DataflowBuffer dfb_out0_obj(dfb::out);
+    DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
     constexpr int onetile = 1;
     constexpr int idx0 = 0;
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(dfb::input, dfb::out);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
@@ -36,8 +35,11 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            uint32_t cb_out = (last_out) ? (cb_out0) : (cb_intermed0);
-            pack_tile_from_dst(DataflowBuffer(cb_out), dst0);
+            // Selected at runtime between the output DFB and the intermediate DFB; stays
+            // uint32_t-valued, since the generated dfb:: handles share one type and convert to
+            // uint32_t at compile time. Both DFBs are bound to this kernel, so both tokens exist.
+            uint32_t out_dfb = (last_out) ? (dfb::out) : (dfb::intermed0);
+            pack_tile_from_dst(DataflowBuffer(out_dfb), dst0);
             tile_regs_release();
             enable_reload = true;
         }

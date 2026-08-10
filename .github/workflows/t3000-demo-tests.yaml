@@ -11,11 +11,9 @@ on:
         options:
           - all
           - resnet50
-          - sentence_bert
           - sd35_large
           - motif
           - qwenimage
-          - wan22
           - mochi
           - qwen3_vl
       platform:
@@ -52,7 +50,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, resnet50, sd35_large, wan22, mochi, etc.)"
+        description: "Select model to test (all, resnet50, sd35_large, mochi, etc.)"
         required: false
         type: string
         default: "all"
