@@ -2583,21 +2583,37 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
 // Records what a capture would see, so the reporting can be checked without a TTNN graph capture.
 class RecordingGraphProcessor : public IGraphProcessor {
 public:
-    struct CbAllocation {
+    struct DfbAllocation {
         uint64_t size = 0;
-        bool is_globally_allocated = false;
+        bool borrows_memory = false;
     };
 
     void track_allocate_cb(
         const CoreRangeSet& /*core_range_set*/,
         uint64_t /*addr*/,
         uint64_t size,
-        bool is_globally_allocated,
+        bool /*is_globally_allocated*/,
         const IDevice* /*device*/) override {
-        cb_allocations.push_back(CbAllocation{.size = size, .is_globally_allocated = is_globally_allocated});
+        cb_sizes.push_back(size);
     }
 
-    std::vector<CbAllocation> cb_allocations;
+    void track_allocate_dataflow_buffer(
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t size,
+        bool borrows_memory,
+        const IDevice* /*device*/) override {
+        dfb_allocations.push_back(DfbAllocation{.size = size, .borrows_memory = borrows_memory});
+    }
+
+    void track_allocate_scratchpad(
+        const CoreRangeSet& /*core_range_set*/, uint64_t /*addr*/, uint64_t size, const IDevice* /*device*/) override {
+        scratchpad_sizes.push_back(size);
+    }
+
+    std::vector<uint64_t> cb_sizes;
+    std::vector<DfbAllocation> dfb_allocations;
+    std::vector<uint64_t> scratchpad_sizes;
 };
 
 // Blocking hooks stand in for RunMode::NO_DISPATCH, where programs are captured but never run.
@@ -2641,9 +2657,10 @@ TEST_F(ProgramRunArgsTestQuasar, TrackProgramCollapsesAliasedDataflowBuffers) {
         GraphTracker::instance().track_program(&program, mesh_device_.get());
     }
 
-    ASSERT_EQ(processor->cb_allocations.size(), 1u) << "aliased DFBs share one L1 region, report it once";
-    EXPECT_EQ(processor->cb_allocations[0].size, 4096u);
-    EXPECT_FALSE(processor->cb_allocations[0].is_globally_allocated);
+    ASSERT_EQ(processor->dfb_allocations.size(), 1u) << "aliased DFBs share one L1 region, report it once";
+    EXPECT_EQ(processor->dfb_allocations[0].size, 4096u);
+    EXPECT_FALSE(processor->dfb_allocations[0].borrows_memory);
+    EXPECT_TRUE(processor->cb_sizes.empty()) << "a dataflow buffer is not a circular buffer";
 }
 
 TEST_F(ProgramRunArgsTestQuasar, TrackProgramFlagsBorrowedDataflowBuffer) {
@@ -2657,10 +2674,31 @@ TEST_F(ProgramRunArgsTestQuasar, TrackProgramFlagsBorrowedDataflowBuffer) {
         GraphTracker::instance().track_program(&program, mesh_device_.get());
     }
 
-    ASSERT_EQ(processor->cb_allocations.size(), 1u);
-    EXPECT_TRUE(processor->cb_allocations[0].is_globally_allocated)
+    ASSERT_EQ(processor->dfb_allocations.size(), 1u);
+    EXPECT_TRUE(processor->dfb_allocations[0].borrows_memory)
         << "a borrowed DFB is backed by a tensor that is tracked in its own right";
-    EXPECT_EQ(processor->cb_allocations[0].size, 32u);
+    EXPECT_EQ(processor->dfb_allocations[0].size, 32u);
+}
+
+// Scratchpads are program-scope L1 stacked on top of the DFB region, so a consumer summing L1 has
+// to see them too or it under-reports — the wrong direction for a "does this fit" query.
+TEST_F(ProgramRunArgsTestQuasar, TrackProgramReportsKernelScratchpads) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // one DFB, entry_size 1024 * num_entries 2
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto processor = std::make_shared<RecordingGraphProcessor>();
+    {
+        ScopedGraphTracking tracking(processor, /*block_programs=*/true);
+        GraphTracker::instance().track_program(&program, mesh_device_.get());
+    }
+
+    ASSERT_EQ(processor->dfb_allocations.size(), 1u);
+    EXPECT_EQ(processor->dfb_allocations[0].size, 2048u);
+    EXPECT_THAT(processor->scratchpad_sizes, ::testing::ElementsAre(1024u));
+    EXPECT_TRUE(processor->cb_sizes.empty());
 }
 
 // Without a hook the program goes on to run, and its allocations report themselves with real
@@ -2675,7 +2713,8 @@ TEST_F(ProgramRunArgsTestQuasar, TrackProgramSkipsDataflowBuffersWhenProgramIsNo
         GraphTracker::instance().track_program(&program, mesh_device_.get());
     }
 
-    EXPECT_TRUE(processor->cb_allocations.empty());
+    EXPECT_TRUE(processor->dfb_allocations.empty());
+    EXPECT_TRUE(processor->scratchpad_sizes.empty());
 }
 
 }  // namespace

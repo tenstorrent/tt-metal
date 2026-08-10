@@ -563,27 +563,29 @@ ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed
 }  // namespace
 
 // The regression itself: this reported exactly 0 before DFBs were recorded.
-TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsNonZeroCbPeak) {
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsDataflowBufferPeak) {
     auto query = query_repeat(mock_device_.get());
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
-    EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
+    EXPECT_EQ(query.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
+    // The op has no circular buffers, so that metric stays 0 rather than absorbing the DFBs.
+    EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, 0u);
 }
 
 // Recording the buffers is only half the fix; the running total is a separate accumulator.
-TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory) {
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatDataflowBufferPeakContributesToPeakMemory) {
     auto query = query_repeat(mock_device_.get());
 
     ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
-    ASSERT_EQ(query.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
+    ASSERT_EQ(query.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
     EXPECT_EQ(
         query.resource_usage.peak_memory_usage_per_core,
-        query.resource_usage.cb_peak_size_per_core + query.resource_usage.l1_buffers_peak_per_core);
+        query.resource_usage.dataflow_buffer_peak_size_per_core + query.resource_usage.l1_buffers_peak_per_core);
 }
 
 // Must be two programs in ONE capture: separate queries each re-zero the counters, so their
 // equality would hold whether or not the per-program reset covers DFB nodes.
-TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakDoesNotAccumulateWithinOneCapture) {
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatDataflowBufferPeakDoesNotAccumulateWithinOneCapture) {
     auto single = query_repeat(mock_device_.get());
     auto doubled = query_two_repeats(mock_device_.get());
 
@@ -591,8 +593,10 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakDoesNotAccumulateWithinO
         << "Error: " << single.error_message.value_or("none");
     ASSERT_EQ(doubled.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << doubled.error_message.value_or("none");
-    ASSERT_EQ(single.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
-    EXPECT_EQ(doubled.resource_usage.cb_peak_size_per_core, single.resource_usage.cb_peak_size_per_core);
+    ASSERT_EQ(single.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
+    EXPECT_EQ(
+        doubled.resource_usage.dataflow_buffer_peak_size_per_core,
+        single.resource_usage.dataflow_buffer_peak_size_per_core);
 }
 
 // Guards the other direction: the added dataflow-buffer pass must leave ops that use real

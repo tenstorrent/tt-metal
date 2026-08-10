@@ -65,6 +65,21 @@ public:
         bool /*is_globally_allocated*/,
         const IDevice* /*device*/) {};
 
+    // Metal 2.0 program-scope L1. Reported apart from circular buffers, and apart from each other,
+    // so a consumer can tell which kind of memory it is looking at.
+    // borrows_memory: the buffer is a view onto memory owned elsewhere (a tensor's buffer), which is
+    // tracked in its own right, so summing it again would double-count that L1.
+    virtual void track_allocate_dataflow_buffer(
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t /*size*/,
+        bool /*borrows_memory*/,
+        const IDevice* /*device*/) {};
+
+    virtual void track_allocate_scratchpad(
+        const CoreRangeSet& /*core_range_set*/, uint64_t /*addr*/, uint64_t /*size*/, const IDevice* /*device*/) {};
+
+    // Releases every kind of program-scope L1 above: they share one lifetime.
     virtual void track_deallocate_cb(const IDevice* /*device*/) {};
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
@@ -138,6 +153,12 @@ public:
         uint64_t size,
         bool is_globally_allocated,
         const IDevice* device);
+
+    void track_allocate_dataflow_buffer(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool borrows_memory, const IDevice* device);
+
+    void track_allocate_scratchpad(
+        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, const IDevice* device);
 
     void track_deallocate_cb(const IDevice* device);
 

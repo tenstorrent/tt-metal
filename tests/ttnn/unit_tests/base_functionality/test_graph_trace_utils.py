@@ -397,10 +397,10 @@ def test_extract_resource_usage_per_core_empty():
 
 
 def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
-    """A Metal 2.0 op's L1 scratch must show up in the CB side of the resource usage.
+    """A Metal 2.0 op's L1 scratch must show up in the resource usage, under its own kind.
 
-    Ported ops allocate scratch as dataflow buffers and never call CreateCircularBuffer,
-    so `program->circular_buffers()` is empty and peak_cb came out 0 for all of them. #51674
+    Ported ops allocate scratch as dataflow buffers and never call CreateCircularBuffer, so
+    peak_cb came out 0 for all of them and nothing else accounted for the bytes. #51674
     """
     with ttnn.manage_device(device_id=0) as device:
         input_tensor = ttnn.from_torch(
@@ -418,16 +418,23 @@ def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
         ttnn.repeat(input_tensor, [1, 1, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG, implementation="native")
         captured_graph = ttnn.graph.end_graph_capture()
 
-        cb_nodes = [node for node in captured_graph if node["node_type"] == "circular_buffer_allocate"]
         # Each DFB is (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes, and neither is borrowed,
         # so both are owned L1 that the peak math must count exactly once.
-        assert [int(node["params"]["size"]) for node in cb_nodes] == [384, 384]
-        assert all(int(node["params"]["globally_allocated"]) == 0 for node in cb_nodes)
+        dfb_nodes = [node for node in captured_graph if node["node_type"] == "dataflow_buffer_allocate"]
+        assert [int(node["params"]["size"]) for node in dfb_nodes] == [384, 384]
+        assert all(int(node["params"]["borrows_memory"]) == 0 for node in dfb_nodes)
+        # A dataflow buffer is not a circular buffer, and must not be reported as one.
+        assert [node for node in captured_graph if node["node_type"] == "circular_buffer_allocate"] == []
 
         usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
-        assert usage.peak_cb == 768, f"dataflow buffers did not reach peak_cb, got {usage.peak_cb}"
-        assert usage.peak_total == usage.peak_cb + usage.peak_l1
+        assert (
+            usage.peak_dataflow_buffer == 768
+        ), f"dataflow buffers did not reach the peak, got {usage.peak_dataflow_buffer}"
+        assert usage.peak_cb == 0, f"a ported op has no circular buffers, got {usage.peak_cb}"
+        assert usage.peak_scratchpad == 0
+        # peak_total is the number an L1 budget check has to use.
+        assert usage.peak_total == usage.peak_dataflow_buffer + usage.peak_l1
 
 
 def test_extract_resource_usage_per_core_deprecated_kwarg():
