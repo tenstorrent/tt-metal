@@ -21,7 +21,12 @@ from types import SimpleNamespace
 
 import pandas as pd
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
-from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
+from helpers.perf import (
+    PerfConfig,
+    PerfReport,
+    combine_perf_reports,
+    postprocess_tile_loop,
+)
 from helpers.perf_schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
 from helpers.perf_wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData
@@ -237,6 +242,31 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     frame = _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
     assert stat_column("MATH_ISOLATE", MEAN) in frame.columns
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
+
+
+def test_postprocess_tile_loop_derives_per_tile_from_raw():
+    # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
+    raw = pd.DataFrame(
+        {
+            MARKER: ["INIT", "TILE_LOOP"],
+            "loop_factor": [1, 2],
+            "tile_cnt": [4, 4],
+            stat_column("MATH_ISOLATE", MEAN): [100.0, 80.0],  # TILE_LOOP total = 80
+            # a run-type-prefixed bounded %-metric — must NOT be divided
+            "L1_TO_L1_mean(fpu_utilization_pct)": [50.0, 60.0],
+        }
+    )
+
+    out = postprocess_tile_loop(raw.copy())
+
+    tl = out[out[MARKER] == "TILE_LOOP"].iloc[0]
+    init = out[out[MARKER] == "INIT"].iloc[0]
+    # TILE_LOOP wall-clock divided by loop_factor(2) * tile_cnt(4): 80 / 8 = 10
+    assert tl[stat_column("MATH_ISOLATE", MEAN)] == 10.0
+    # non-TILE_LOOP row untouched
+    assert init[stat_column("MATH_ISOLATE", MEAN)] == 100.0
+    # the prefixed %-metric column is left alone even on the TILE_LOOP row
+    assert tl["L1_TO_L1_mean(fpu_utilization_pct)"] == 60.0
 
 
 def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch):

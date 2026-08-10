@@ -41,7 +41,7 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
-# TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
+# TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
 
@@ -80,8 +80,16 @@ _CODE_SIZE_COMPONENTS = {
 # Common postprocessing
 
 
-def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+    """Derive per-tile TILE_LOOP figures from a raw report frame.
 
+    Divides each TILE_LOOP row's un-prefixed ``mean(...)``/``std(...)`` wall-clock
+    columns by ``loop_factor * tile_cnt`` (run-type-prefixed ``*_pct`` metric
+    columns are deliberately left untouched). Pure ``DataFrame -> DataFrame``, no
+    hardware — so it is the canonical way to turn the RAW stored table (a CSV or a
+    Parquet batch) into per-tile values downstream. Non-TILE_LOOP rows pass through
+    unchanged.
+    """
     if frame.empty:
         return pd.DataFrame()
 
@@ -245,7 +253,7 @@ class PerfReport:
         frame = pd.concat(self._frames, ignore_index=True)
         mask = pd.concat(self._masks, ignore_index=True)
 
-        frame = _postprocess_tile_loop(frame[mask])
+        frame = postprocess_tile_loop(frame[mask])
 
         self._frames = [pd.DataFrame(), frame]
         self._masks = [pd.Series(), pd.Series(True, index=frame.index)]
