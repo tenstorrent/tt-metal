@@ -31,6 +31,8 @@ from .llk_params import (
     StochasticRounding,
     Tilize,
     TopKSortDirection,
+    TopKXLChunkBaseMode,
+    TopKXLIndexOp,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -132,11 +134,11 @@ class SFPU_INT_OP(TemplateParameter):
     falls through to its default (add_int) path.
     """
 
-    op: str = ""
+    int_op: str = ""
 
     def convert_to_cpp(self) -> str:
-        if self.op:
-            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        if self.int_op:
+            return f"#define SFPU_INT_OP_{self.int_op.upper()}"
         return ""
 
 
@@ -220,14 +222,14 @@ class SFPU_TERNARY_OP(TemplateParameter):
     """Select the ternary SFPU op at compile time.
 
     Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``mathop.cpp_enum_value`` must match the
+    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
     ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
     """
 
-    mathop: MathOperation = None
+    ternary_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.mathop.cpp_enum_value};"
+        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -238,10 +240,10 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
     the SFPU. Emit the bit pattern so the C++ and torch golden agree exactly.
     """
 
-    value_bits: int = 0x40000000  # 2.0f
+    ternary_scalar_bits: int = 0x40000000  # 2.0f
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.value_bits}u;"
+        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.ternary_scalar_bits}u;"
 
 
 @dataclass
@@ -256,12 +258,10 @@ class SFPU_BINOP_MODE(TemplateParameter):
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
     _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
 
-    mathop: MathOperation = None
+    binop_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.mathop.cpp_enum_value]};"
-        )
+        return f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.binop_mathop.cpp_enum_value]};"
 
 
 @dataclass
@@ -301,6 +301,94 @@ class APPROX_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool APPROX_MODE = {self.approx_mode.cpp_enum_value};"
+
+
+@dataclass
+class REDUCE_BLOCK_CT_DIM(TemplateParameter):
+    """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
+
+    A standalone one-line constant, deliberately *not* routed through the matmul-centric
+    ``INPUT_DIMENSIONS`` bundle: this pure block-reduce test has no use for that bundle's
+    other fields (``FULL_RT_DIM`` / ``FULL_CT_DIM`` / ``BLOCK_RT_DIM``) or its
+    ``generate_input_dim`` tile-shape validation, and it needs only a plain compile-time
+    block width. The distinct name (``REDUCE_BLOCK_CT_DIM``, not ``BLOCK_CT_DIM``) also
+    preempts a redefinition clash if ``INPUT_DIMENSIONS`` — the sole emitter of
+    ``BLOCK_CT_DIM`` — is ever added to this test: the header generator concatenates every
+    param's ``convert_to_cpp()`` with no de-dup, so two same-named ``constexpr`` lines would
+    fail to compile. (This test does not currently emit ``BLOCK_CT_DIM``.)
+    """
+
+    reduce_block_ct_dim: int
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.reduce_block_ct_dim};"
+        )
+
+
+@dataclass
+class USE_RUNTIME(TemplateParameter):
+    """Selects the runtime (dynamic block_ct_dim) reduce_block_max_row LLK family."""
+
+    use_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool USE_RUNTIME = {str(self.use_runtime).lower()};"
+
+
+@dataclass
+class REINIT_MODE(TemplateParameter):
+    """Selects the reduce_block_max_row re-arm path: 0=none, 1=short (MOP + addrmods),
+    2=minimal (ADDR_MOD_1/2/6), 3=addrmod-only reinit (ADDR_MOD_1/2/3/6)."""
+
+    reinit_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REINIT_MODE = {self.reinit_mode};"
+
+
+@dataclass
+class CLOBBER_OP(TemplateParameter):
+    """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods
+    (reconfig-escape guard for the reinit paths):
+    0=none, 1=eltwise binary (all addrmods + MOP), 2=minimal_safe (ADDR_MOD_1/2/6 only),
+    3=addrmod_all (ADDR_MOD_1/2/3/6).
+    """
+
+    clobber_op: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int CLOBBER_OP = {self.clobber_op};"
+
+
+@dataclass
+class RESPECT_TRIGGER(TemplateParameter):
+    """Enable the reduce_block_max_row producer/consumer trigger handshake.
+
+    When true, the unpack splits the block reduce into two half-width MOP runs
+    separated by a HW semaphore wait (FPU_SFPU), so the reduce can start on the
+    first half of the block before the second half is signalled. The test's PACK
+    thread plays the producer (posts the tokens). Requires an even block_ct_dim
+    (the unpack MOP outerloop is block_ct_dim / 2)."""
+
+    respect_trigger: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RESPECT_TRIGGER = {str(self.respect_trigger).lower()};"
+
+
+@dataclass
+class OVERLAP_FIRST_HALF(TemplateParameter):
+    """Overlap the first-half reduce with the second-half pack (runtime family only).
+
+    When true (and RESPECT_TRIGGER + USE_RUNTIME), the unpack's first half gates on
+    the early UNPACK_MATH_DONE token instead of FPU_SFPU, so run()#1 overlaps the
+    second-half pack. Ignored by the compile-time unpack family (no overlap path)."""
+
+    overlap_first_half: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool OVERLAP_FIRST_HALF = {str(self.overlap_first_half).lower()};"
 
 
 @dataclass
@@ -439,6 +527,115 @@ class TOPK(TemplateParameter):
             "bool TOPK_STABLE_SORT;",
         ]
         return "\n".join(lines), "IIII?"
+
+
+@dataclass
+class GENERALIZED_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the generalized_moe_gate test.
+
+    ``read_base``/``from_*``/``to_*`` are SFPU column offsets; a run occupies the pair ``{lo, hi}``.
+    ``row_src``/``row_dst``/``srcb`` name copy4rows' 4-row DEST blocks and its SrcB scratch window.
+    ``eps`` and ``scale`` are float bit patterns, as the LLK takes them.
+    ``sections`` is how many DEST sections the kernel runs; 2 puts the second in the upper
+    half under DstSync::Half and packs it to buffer_Res[4..7].
+    ``sigmoid`` selects the op's enable_sigmoid front-end: transpose, sigmoid, then a RELOAD
+    binary reading SrcA back out of DEST.
+    """
+
+    mode: int = 0
+    sub_op: int = 0
+    grouped: bool = False
+    topk: int = 8
+    softmax: bool = False
+    produce_run: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+    read_base: int = 0
+    from_lo: int = 0
+    from_hi: int = 2
+    to_lo: int = 0
+    to_hi: int = 2
+    field: int = 0
+    idx_offset: int = 0
+    row_src: int = 0
+    row_dst: int = 4
+    srcb: int = 16
+    second_copy: bool = False
+    pre_copy4rows: bool = False
+    row_src_2: int = 0
+    row_dst_2: int = 8
+    srcb_2: int = 20
+    d2b_dst: int = 0
+    b2d_base: int = 0
+    sections: int = 1
+    sigmoid: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int GMG_MODE = {self.mode};",
+            f"constexpr int GMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool GMG_GROUPED = {str(self.grouped).lower()};",
+            f"constexpr std::uint32_t GMG_TOPK = {self.topk};",
+            f"constexpr bool GMG_SOFTMAX = {str(self.softmax).lower()};",
+            f"constexpr bool GMG_PRODUCE_RUN = {str(self.produce_run).lower()};",
+            f"constexpr bool GMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t GMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t GMG_SCALE = {self.scale};",
+            f"constexpr std::uint32_t GMG_READ_BASE = {self.read_base};",
+            f"constexpr std::uint32_t GMG_FROM_LO = {self.from_lo};",
+            f"constexpr std::uint32_t GMG_FROM_HI = {self.from_hi};",
+            f"constexpr std::uint32_t GMG_TO_LO = {self.to_lo};",
+            f"constexpr std::uint32_t GMG_TO_HI = {self.to_hi};",
+            f"constexpr std::uint32_t GMG_FIELD = {self.field};",
+            f"constexpr std::uint32_t GMG_IDX_OFFSET = {self.idx_offset};",
+            f"constexpr std::uint32_t GMG_ROW_SRC = {self.row_src};",
+            f"constexpr std::uint32_t GMG_ROW_DST = {self.row_dst};",
+            f"constexpr std::uint32_t GMG_SRCB = {self.srcb};",
+            f"constexpr bool GMG_SECOND_COPY = {str(self.second_copy).lower()};",
+            f"constexpr bool GMG_PRE_COPY4ROWS = {str(self.pre_copy4rows).lower()};",
+            f"constexpr std::uint32_t GMG_ROW_SRC_2 = {self.row_src_2};",
+            f"constexpr std::uint32_t GMG_ROW_DST_2 = {self.row_dst_2};",
+            f"constexpr std::uint32_t GMG_SRCB_2 = {self.srcb_2};",
+            f"constexpr std::uint32_t GMG_D2B_DST = {self.d2b_dst};",
+            f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
+            f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
+            f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class TOPK_XL(TemplateParameter):
+    k: int = 512
+    num_chunks: int = 1
+    tail_elements: int = 512
+    num_rows: int = 1
+    index_op: TopKXLIndexOp = TopKXLIndexOp.RowMajor
+    group_id: int = 0
+    group_shift: int = 16
+    core_id: int = 0
+    sort_direction: TopKSortDirection = TopKSortDirection.Descending
+    fused_reduce: bool = False
+    chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
+    chunk_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_K = {self.k};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.num_chunks};",
+            f"constexpr std::uint32_t TOPK_XL_TAIL_ELEMENTS = {self.tail_elements};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_ROWS = {self.num_rows};",
+            f"constexpr std::uint32_t TOPK_XL_INDEX_OP = {self.index_op.value};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_ID = {self.group_id};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_SHIFT = {self.group_shift};",
+            f"constexpr std::uint32_t TOPK_XL_CORE_ID = {self.core_id};",
+            f"constexpr bool TOPK_XL_ASCENDING = {str(self.sort_direction == TopKSortDirection.Ascending).lower()};",
+            f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass
@@ -597,6 +794,33 @@ class SFPU_TILE_INDICES(RuntimeParameter):
 
 
 @dataclass
+class ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of the quant-family zero-point, passed to the binary SFPU
+    init at runtime. DEQUANT expects the bits of -zero_point (the init negates the
+    contract by loading these bits directly). Ignored by non-quant binary ops."""
+
+    zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t ZERO_POINT = {self.zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
+    """Quant-family SMAG32 datapath toggle; read only by the quant binary ops."""
+
+    sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
+        )
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 
@@ -664,19 +888,6 @@ class REDUCE_TO_ONE(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool IS_REDUCE_TO_ONE;", "?"
-
-
-@dataclass
-class NUM_TILES_IN_BLOCK(RuntimeParameter):
-    num_tiles_in_block: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
-        )
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t NUM_TILES_IN_BLOCK;", "I"
 
 
 @dataclass

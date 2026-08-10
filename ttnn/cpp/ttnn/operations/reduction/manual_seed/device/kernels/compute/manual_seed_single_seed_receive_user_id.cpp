@@ -6,6 +6,7 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
@@ -13,13 +14,12 @@
 
 void kernel_main() {
     // Compile time args
-    constexpr uint32_t kernel_communication_dfb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t seed = get_compile_time_arg_val(1);
+    constexpr auto seed = get_arg(args::seed);
 
     // Constants
     constexpr uint32_t one_tile = 1;
 
-    DataflowBuffer kernel_communication_dfb(kernel_communication_dfb_index);
+    DataflowBuffer kernel_communication_dfb(dfb::kernel_communication);
 
     // Get message from reader
     kernel_communication_dfb.wait_front(one_tile);

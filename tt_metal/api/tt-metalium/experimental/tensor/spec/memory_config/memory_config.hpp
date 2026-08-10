@@ -47,21 +47,20 @@ public:
     bool is_dram() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
+        "memory_layout",
+        "buffer_type",
+        "shard_spec",
+        "nd_shard_spec",
+        "created_with_nd_shard_spec",
+        "per_core_allocation");
     std::tuple<
         const TensorMemoryLayout&,
         const BufferType&,
         const std::optional<ShardSpec>&,
         const std::optional<NdShardSpec>&,
+        const bool&,
         const bool&>
     attribute_values() const;
-
-    static MemoryConfig create_with_prepopulated_shard_specs(
-        TensorMemoryLayout memory_layout,
-        BufferType buffer_type,
-        std::optional<ShardSpec> shard_spec,
-        std::optional<NdShardSpec> nd_shard_spec,
-        bool created_with_nd_shard_spec);
 
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
@@ -70,6 +69,13 @@ public:
     const MemoryConfigImpl& impl() const;
 
 private:
+    friend MemoryConfig create_memory_config_with_prepopulated_shard_specs(
+        TensorMemoryLayout memory_layout,
+        BufferType buffer_type,
+        std::optional<ShardSpec> shard_spec,
+        std::optional<NdShardSpec> nd_shard_spec,
+        bool created_with_nd_shard_spec);
+
     MemoryConfig(
         TensorMemoryLayout memory_layout,
         BufferType buffer_type,

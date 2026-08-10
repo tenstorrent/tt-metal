@@ -26,6 +26,22 @@ def test_dump_and_load(tmp_path, height, width, layout):
     assert torch.allclose(torch_tensor, loaded_torch_tensor)
 
 
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [128])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_dump_and_load_int8(tmp_path, height, width, layout):
+    file_name = tmp_path / pathlib.Path("tensor.tensorbin")
+
+    torch_tensor = torch.randint(-128, 128, (height, width), dtype=torch.int8)
+    tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.int8, layout=layout)
+    ttnn.dump_tensor(file_name, tensor)
+
+    loaded_tensor = ttnn.load_tensor(file_name)
+    assert loaded_tensor.dtype == ttnn.int8
+    loaded_torch_tensor = ttnn.to_torch(loaded_tensor)
+    assert torch.equal(torch_tensor, loaded_torch_tensor)
+
+
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

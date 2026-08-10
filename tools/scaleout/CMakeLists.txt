@@ -49,6 +49,7 @@ target_sources(
             cabling_generator/cabling_generator.hpp
             cabling_generator/regen_descriptors.hpp
             connector/connector.hpp
+            factory_system_descriptor/query.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
     PRIVATE
@@ -58,6 +59,7 @@ target_sources(
         cabling_generator/cabling_generator.cpp
         cabling_generator/regen_descriptors.cpp
         connector/connector.cpp
+        factory_system_descriptor/query.cpp
         factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
 )
@@ -270,6 +272,18 @@ target_link_libraries(
 )
 
 if(ENABLE_DISTRIBUTED)
+    # MPI stress test: ring-based sendrecv packet validation across all ranks
+    add_executable(run_mpi_stress_test validation/run_mpi_stress_test.cpp)
+
+    set_target_properties(
+        run_mpi_stress_test
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${Metalium_BINARY_DIR}/tools/scaleout
+    )
+
+    target_link_libraries(run_mpi_stress_test PRIVATE OpenMPI::MPI)
+
     # Generate rank bindings tool
     add_executable(generate_rank_bindings src/generate_rank_bindings.cpp)
 

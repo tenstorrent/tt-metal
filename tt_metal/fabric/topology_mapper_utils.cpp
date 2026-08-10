@@ -58,6 +58,7 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
     // Get all 4 possible corner ASIC positions
     std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.reserve(4);
     corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
     corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
     corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
@@ -65,6 +66,7 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
     // Generate corner fabric node IDs for this mesh
     std::vector<FabricNodeId> corner_fabric_node_ids;
+    corner_fabric_node_ids.reserve(4);
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
     corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
@@ -1627,6 +1629,7 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
 
     // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
     std::vector<std::set<MeshId>> global_mesh_groups;
+    global_mesh_groups.reserve(physical_graph.mesh_adjacency_graphs_.size());
     std::map<std::string, std::size_t> host_group_index;
     for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
         if (adj.get_nodes().empty()) {
@@ -1838,6 +1841,7 @@ void add_rank_binding_constraints(
         // Per-host: classify as explicitly bound (has rank) or UNSET (all ASICs have MESH_HOST_RANK_UNSET).
         std::set<MeshHostRankId> claimed_ranks;
         std::vector<std::set<tt::tt_metal::AsicID>> unset_hosts;
+        unset_hosts.reserve(config.hostname_to_asics.size());
 
         for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
             std::set<tt::tt_metal::AsicID> host_asics_in_mesh;
@@ -1884,6 +1888,7 @@ void add_rank_binding_constraints(
         // -----------------------------------------------------------------------
         if (!unset_hosts.empty()) {
             std::vector<MeshHostRankId> unclaimed_ranks;
+            unclaimed_ranks.reserve(rank_to_fabric_nodes.size());
             for (const auto& [r, fn_set] : rank_to_fabric_nodes) {
                 if (!fn_set.empty() && !claimed_ranks.contains(r)) {
                     unclaimed_ranks.push_back(r);
@@ -1907,6 +1912,7 @@ void add_rank_binding_constraints(
             // are not part of this host↔rank matching. Solver assigns target groups to distinct UNSET partitions
             // (not index-aligned).
             std::vector<std::set<FabricNodeId>> target_groups;
+            target_groups.reserve(unclaimed_ranks.size());
             for (const auto& r : unclaimed_ranks) {
                 auto it = rank_to_fabric_nodes.find(r);
                 if (it != rank_to_fabric_nodes.end() && !it->second.empty()) {
@@ -2443,9 +2449,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
     std::vector<MeshId> physical_meshes;
 
     // Collect logical and physical mesh IDs for error reporting
+    logical_meshes.reserve(mesh_logical_graph.get_nodes().size());
     for (const auto& mesh_id : mesh_logical_graph.get_nodes()) {
         logical_meshes.push_back(mesh_id);
     }
+    physical_meshes.reserve(mesh_physical_graph.get_nodes().size());
     for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
         physical_meshes.push_back(mesh_id);
     }

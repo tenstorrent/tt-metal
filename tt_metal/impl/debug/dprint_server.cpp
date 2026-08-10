@@ -574,7 +574,8 @@ bool DPrintServer::Impl::poll_print_buffer(
     auto from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
 
-    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC || wpos == rpos) {
+    if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
+        rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC || wpos == rpos) {
         return false;
     }
 
@@ -617,6 +618,12 @@ bool DPrintServer::Impl::poll_print_buffer(
             from_dev = cluster.read_core(device_id, virtual_core, read_write_pointer_address, eightbytes);
             wpos = from_dev[0];
             rpos = from_dev[1];
+
+            // Device should be much faster than host, but in case we are running simulation,
+            // we should check if device has reset buffer and we have caught up to it.
+            if (rpos == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+                return false;
+            }
             continue;
         }
 
@@ -1086,6 +1093,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
+    print_cores_sanitized.reserve(all_cores.size() + dispatch_cores.size());
     const auto& hal = env_.get_hal();
     std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {

@@ -10,6 +10,7 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import is_format_combination_outlier
 from .format_config import (
     DataFormat,
@@ -653,8 +654,11 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
+    is_outlier = (
+        is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        )
+        and get_chip_architecture() != ChipArchitecture.QUASAR
     )
 
     capacity_divisor = (

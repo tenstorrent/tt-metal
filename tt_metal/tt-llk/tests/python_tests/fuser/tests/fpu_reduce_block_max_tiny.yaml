@@ -6,6 +6,8 @@
 # Exercises the num_faces=2 unpack + math (2-face MOP/replay) path for
 # reduce_block_max_row. Source B is all ones as the identity scale.
 
+supported_archs: ["wormhole", "blackhole"]
+
 dest_acc: false
 
 operands:

@@ -122,6 +122,8 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
+std::vector<FabricType> get_all_mgd_fabric_types();
+
 tt::tt_fabric::Topology get_fabric_topology();
 
 struct FabricEriscDatamoverKernelConfig {

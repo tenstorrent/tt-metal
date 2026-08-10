@@ -20,19 +20,25 @@ def assert_uniform_per_core_addresses(tensor: ttnn.Tensor, cores: list[tuple[int
     address.  The overlap system relies on CB setup broadcasting a single base
     address to all cores, so addresses *must* be uniform.  This holds when the
     tensor is the first per-core allocation on the device.
+
+    The address is per (device, core), so this checks every device the tensor spans.
+    A fused overlap buffer is built with a mesh mapper, so on a multi-device run
+    ``tensor`` covers the whole mesh and uniformity has to hold on each device
+    independently -- each device allocates from its own L1 frontier.
     """
     if not cores:
         return
     first = ttnn.CoreCoord(*cores[0])
-    addr0 = tensor.experimental_per_core_buffer_address(first)
-    for x, y in cores[1:]:
-        cc = ttnn.CoreCoord(x, y)
-        addr = tensor.experimental_per_core_buffer_address(cc)
-        assert addr == addr0, (
-            f"Per-core overlap buffer has non-uniform L1 addresses: "
-            f"core ({first.x},{first.y})=0x{addr0:x} vs core ({x},{y})=0x{addr:x}. "
-            f"Ensure this is the first per-core allocation on the device."
-        )
+    for coord in tensor.device_coords():
+        addr0 = tensor.experimental_per_core_buffer_address(coord, first)
+        for x, y in cores[1:]:
+            cc = ttnn.CoreCoord(x, y)
+            addr = tensor.experimental_per_core_buffer_address(coord, cc)
+            assert addr == addr0, (
+                f"Per-core overlap buffer has non-uniform L1 addresses on device {coord}: "
+                f"core ({first.x},{first.y})=0x{addr0:x} vs core ({x},{y})=0x{addr:x}. "
+                f"Ensure this is the first per-core allocation on the device."
+            )
 
 
 def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedTensorSpec) -> bytes:

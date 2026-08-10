@@ -70,7 +70,7 @@ def test_kv_cache_address_table(mesh_device, seq_len):
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        kvpe_cache=tt_kvpe_cache,
         chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 

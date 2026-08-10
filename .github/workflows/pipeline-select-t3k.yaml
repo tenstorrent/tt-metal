@@ -60,7 +60,6 @@ on:
           - qwen25
           - qwen25_vl
           - gemma3
-          - wan22
           - mochi
       t3000-perf:
         description: "Perf tests: Select 'all', specific model or 'disabled'"
@@ -73,7 +72,6 @@ on:
           - sentence_bert
           - stable_diffusion_35_large
           - mochi
-          - wan22
           - flux1-dev
           - motif
       t3000-integration:
@@ -90,7 +88,6 @@ on:
           - sd35_large
           - flux1
           - motif
-          - wan2.2
           - mochi
           - deepseek-modules
       t3000-e2e:
@@ -182,7 +179,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
   t3000-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}

@@ -224,6 +224,7 @@ public:
 
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
+    static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
     // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
     // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).

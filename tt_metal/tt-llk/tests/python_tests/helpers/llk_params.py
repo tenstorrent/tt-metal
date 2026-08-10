@@ -725,6 +725,7 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.L1_CONGESTION,
     ],
 ]
+PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
@@ -752,6 +753,18 @@ class ReluConfig(Enum):
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
+
+
+class TopKXLIndexOp(Enum):
+    RowMajor = 0
+    Separate = 1
+    RemoveMsb = 2
+
+
+class TopKXLChunkBaseMode(Enum):
+    Static = 0
+    UpperStatic = 1
+    Runtime = 2
 
 
 class VectorMode(Enum):

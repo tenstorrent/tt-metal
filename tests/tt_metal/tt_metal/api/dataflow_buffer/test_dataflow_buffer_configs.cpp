@@ -16,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -270,6 +271,184 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
+}
+
+// Host-only: validates Quasar L1 packing (96B header + per-hart blobs + producer-ready region).
+TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u);
+
+    std::vector<uint8_t> buf(8192, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    EXPECT_EQ(ghdr->num_dfbs, 1u);
+    EXPECT_EQ(sizeof(dfb_global_header_t), 96u);  // new 96B header
+    EXPECT_EQ(dfb_config_header_size(), 96u);
+
+    // Header is at offset 0; DM1 blob starts immediately after.
+    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, dfb_config_header_size());
+    EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
+    // No implicit sync → has_dm0_isr=0, dm0_isr_blob_region_size=0.
+    EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
+    EXPECT_EQ(ghdr->has_dm0_isr, 0u);
+    EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
+    EXPECT_EQ(sizeof(dfb_dm0_isr_txn_threshold_t), 4u);
+
+    // hart_blob_offset[] must be set for the two participating harts (0=producer, 4=consumer).
+    EXPECT_GT(ghdr->hart_blob_offset[0], 0u);
+    EXPECT_GT(ghdr->hart_blob_offset[4], 0u);
+    // Non-participating harts must also have a valid (minimal) blob offset.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        EXPECT_GT(ghdr->hart_blob_offset[h], 0u) << "hart " << static_cast<int>(h);
+    }
+
+    // Signal region: per-producer byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
+    EXPECT_GT(ghdr->dfb_signal_region_off, 0u);
+    EXPECT_LT(static_cast<size_t>(ghdr->dfb_signal_region_off), nbytes);
+    // Slot for producer 0 of DFB 0 must be zero (not yet written by producer at runtime).
+    constexpr uint32_t kMaxProd = ::dfb::MAX_PRODUCERS_PER_DFB;
+    EXPECT_EQ(buf[ghdr->dfb_signal_region_off + 0 * kMaxProd + 0], 0u);
+    // dfb_expected_signal[0] must be 1 (single producer, bit 0).
+    constexpr uint32_t kExpectedOff = ::dfb::NUM_DFBS * kMaxProd;
+    const auto* dfb_expected = reinterpret_cast<const uint32_t*>(
+        buf.data() + ghdr->dfb_signal_region_off + kExpectedOff);
+    EXPECT_EQ(dfb_expected[0], 1u);
+
+    // DFB 0 init entry for hart 0 (producer): participation_mask bit set, one init entry.
+    EXPECT_EQ(ghdr->participation_mask[0], 1u);
+    const auto* entry0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
+        buf.data() + ghdr->hart_blob_offset[0]);
+    EXPECT_EQ(entry0->logical_dfb_id, 0u);
+    EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry0->entry_size, 1024u);
+    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
+    EXPECT_EQ(entry0->_reserved0, 0u);
+    EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
+
+    // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
+    EXPECT_EQ(ghdr->participation_mask[4], 1u);
+    const auto* entry4 = reinterpret_cast<const dfb_hart_init_entry_t*>(
+        buf.data() + ghdr->hart_blob_offset[4]);
+    EXPECT_EQ(entry4->logical_dfb_id, 0u);
+    EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
+    EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
+
+    // participation_mask drives device init entry count; non-participating harts are zero.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        if (h != 0 && h != 4) {
+            EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+        }
+    }
+
+    experimental::dfb::detail::verify_dfb_global_header_participation(*ghdr, dfbs);
+    experimental::dfb::detail::verify_dfb_hart_blobs(
+        std::span<const uint8_t>(buf.data(), nbytes), dfbs);
+    EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
+}
+
+TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u);
+
+    std::vector<uint8_t> buf(4096, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    const uint32_t dm0_region = experimental::dfb::detail::dm0_isr_blob_region_size(dfbs);
+    ASSERT_GT(dm0_region, 0u);
+    EXPECT_EQ(ghdr->has_dm0_isr, 1u);
+    // dfb_signal_region_off is after per-hart blobs, which are after the DM0 blob.
+    EXPECT_GT(ghdr->dfb_signal_region_off, ghdr->dm0_isr_blob_offset + dm0_region);
+
+    const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
+        buf.data() + ghdr->dm0_isr_blob_offset);
+    uint32_t expected_prod_mask = 0;
+    uint32_t expected_cons_mask = 0;
+    for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
+        expected_prod_mask |= 1u << dfbs[0]->producer_txn_descriptor.txn_ids[i];
+    }
+    for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
+        expected_cons_mask |= 1u << dfbs[0]->consumer_txn_descriptor.txn_ids[i];
+    }
+    EXPECT_EQ(dm0_core_hdr->producer_txn_id_mask, expected_prod_mask);
+    EXPECT_EQ(dm0_core_hdr->consumer_txn_id_mask, expected_cons_mask);
+
+    const uint32_t txn_hw_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
+    const uint32_t txn_hw_bytes = dm0_isr_txn_hw_pool_byte_size(expected_prod_mask, expected_cons_mask);
+    const uint32_t desc_pool_bytes = dm0_isr_txn_desc_pool_byte_size(expected_prod_mask, expected_cons_mask);
+    // DM0 blob ends before hart blobs; verify txn pool + desc pool fits inside the DM0 blob region.
+    EXPECT_EQ(txn_hw_off + txn_hw_bytes + desc_pool_bytes,
+              ghdr->dm0_isr_blob_offset + dm0_region);
+
+    const auto* txn_threshold_table =
+        reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + txn_hw_off);
+    const uint32_t all_mask = expected_prod_mask | expected_cons_mask;
+    // Pools hold one slot per used txn id, so the threshold for an id lives at its dense slot.
+    EXPECT_EQ(
+        txn_hw_bytes,
+        dm0_isr_txn_slot_count(expected_prod_mask, expected_cons_mask) * sizeof(dfb_dm0_isr_txn_threshold_t));
+    uint32_t pending = expected_prod_mask;
+    while (pending) {
+        const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+        EXPECT_EQ(
+            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
+            dfbs[0]->producer_txn_descriptor.num_entries_to_process_threshold);
+        pending &= (pending - 1u);
+    }
+    pending = expected_cons_mask;
+    while (pending) {
+        const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+        EXPECT_EQ(
+            txn_threshold_table[dm0_isr_txn_slot_index(all_mask, txn_id)].threshold,
+            dfbs[0]->consumer_txn_descriptor.num_entries_to_process_threshold);
+        pending &= (pending - 1u);
+    }
 }
 
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
@@ -907,12 +1086,17 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
 
 // Validates an intra-tensix DFB (pack TRISC producer → unpack TRISC consumer, same Neo):
 //   - Exactly one per-risc config entry (shared Neo bit) marked is_producer=true.
-//   - The tensix-only TC (id ≥ TC_TENSIX_POOL_START) is assigned to Neo tensix_id derived from producer_risc_mask.
+//   - STRIDED producer → STRIDED consumer (INTRA never uses ALL / remapper fan-out patterns).
+//   - RemapperProgrammer::TENSIX_PACKER with Tensix-only ClientL + distinct shadow TC.
+//   - Remapper pair drawn from the top-down 1-to-1 pool.
 void validate_intra_tensix_dfb(
     Program& program,
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config) {
     program.impl().finalize_dataflow_buffer_configs();
+
+    ASSERT_EQ(config.pap, dfb::AccessPattern::STRIDED);
+    ASSERT_EQ(config.cap, dfb::AccessPattern::STRIDED);
 
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u) << "Expected exactly 1 DFB on core";
@@ -920,7 +1104,10 @@ void validate_intra_tensix_dfb(
 
     ASSERT_EQ(dfb->risc_mask, config.producer_risc_mask)
         << "Intra-tensix risc_mask should equal producer_risc_mask (same Neo bit)";
-    ASSERT_FALSE(dfb->use_remapper) << "Intra-tensix DFB must not use the remapper";
+    ASSERT_TRUE(dfb->use_remapper) << "Intra-tensix DFB must use remapper for the Tensix-only TC alias workaround";
+    ASSERT_EQ(dfb->remapper_programmer, experimental::dfb::detail::RemapperProgrammer::TENSIX_PACKER)
+        << "Intra-tensix remapper pairs are programmed by the Neo packer, not DM1";
+    EXPECT_EQ(dfb->dm1_remapper_slot_count(), 0u) << "Packer-programmed pairs must not appear in the DM1 blob";
     ASSERT_FALSE(dfb->groups.empty()) << "DFB has no groups (configs not finalized?)";
 
     const auto& hw_risc_configs = dfb->groups[0].hw_risc_configs;
@@ -942,11 +1129,20 @@ void validate_intra_tensix_dfb(
     EXPECT_EQ(actual_tensix_id, expected_tensix_id) << "TC tensix_id must match Neo";
     EXPECT_GE(tc_id, ::dfb::TC_TENSIX_POOL_START)
         << "Intra-tensix DFB must use a Tensix-only TC (id ≥ " << (int)::dfb::TC_TENSIX_POOL_START << ")";
+    EXPECT_GE(rc.config.intra_shadow_tc_id, ::dfb::TC_TENSIX_POOL_START);
+    EXPECT_NE(rc.config.intra_shadow_tc_id, tc_id)
+        << "Shadow TC must be a distinct Tensix-only id that absorbs the remapper HW update copy";
+    EXPECT_GE(rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START)
+        << "Packer pairs must come from the 1-to-1 remapper pool";
+    EXPECT_LT(rc.config.remapper_pair_index, ::dfb::NUM_REMAPPER_PAIRINGS);
 
     log_info(
         tt::LogTest,
-        "Intra-tensix DFB: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
-        expected_tensix_id, (int)actual_tensix_id, (int)tc_id);
+        "Intra-tensix DFB: Neo{} ClientL tc_id={} shadow={} remapper_pair={}",
+        expected_tensix_id,
+        (int)tc_id,
+        (int)rc.config.intra_shadow_tc_id,
+        (int)rc.config.remapper_pair_index);
 }
 
 TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
@@ -1371,7 +1567,11 @@ static inline void validate_intra_tensix_dfb_2_0(Program& program, const CoreCoo
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
     const auto& dfb = dfbs[0];
-    ASSERT_FALSE(dfb->use_remapper) << "INTRA DFB must not use the remapper";
+    ASSERT_EQ(dfb->config.pap, dfb::AccessPattern::STRIDED);
+    ASSERT_EQ(dfb->config.cap, dfb::AccessPattern::STRIDED);
+    ASSERT_TRUE(dfb->use_remapper) << "INTRA DFB must use remapper for the Tensix-only TC alias workaround";
+    ASSERT_EQ(dfb->remapper_programmer, experimental::dfb::detail::RemapperProgrammer::TENSIX_PACKER);
+    EXPECT_EQ(dfb->dm1_remapper_slot_count(), 0u);
     ASSERT_FALSE(dfb->groups.empty());
     const auto& hw_risc_configs = dfb->groups[0].hw_risc_configs;
     ASSERT_EQ(hw_risc_configs.size(), 1u) << "INTRA DFB should have exactly 1 per-risc entry (shared Neo)";
@@ -1381,6 +1581,10 @@ static inline void validate_intra_tensix_dfb_2_0(Program& program, const CoreCoo
     uint8_t tc_id = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
     EXPECT_GE(tc_id, ::dfb::TC_TENSIX_POOL_START)
         << "INTRA DFB must use Tensix-only TC (id >= " << (int)::dfb::TC_TENSIX_POOL_START << ")";
+    EXPECT_GE(rc.config.intra_shadow_tc_id, ::dfb::TC_TENSIX_POOL_START);
+    EXPECT_NE(rc.config.intra_shadow_tc_id, tc_id);
+    EXPECT_GE(rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
+    EXPECT_LT(rc.config.remapper_pair_index, ::dfb::NUM_REMAPPER_PAIRINGS);
 }
 
 // Multicore-group probe.
@@ -1559,6 +1763,40 @@ CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4BConfig, DM, DM, 2, 4, STRIDED, ALL, 4, 2)
 // Group 2 M2: B2 (txn-id allocator) + B4 (cached threshold) + B10 (divisibility)
 // =====================================================================================
 
+// Host-only: DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down in ascending blocks.
+TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
+    using tt::tt_metal::experimental::dfb::detail::TxnIdAllocator;
+    TxnIdAllocator alloc;
+
+    auto first = alloc.allocate(2);
+    ASSERT_EQ(first.size(), 2u);
+    EXPECT_EQ(first[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 1));
+    EXPECT_EQ(first[1], HW_TXN_ID_MAX);
+
+    auto second = alloc.allocate(3);
+    ASSERT_EQ(second.size(), 3u);
+    EXPECT_EQ(second[0], static_cast<uint8_t>(HW_TXN_ID_MAX - 4));
+    EXPECT_EQ(second[1], static_cast<uint8_t>(HW_TXN_ID_MAX - 3));
+    EXPECT_EQ(second[2], static_cast<uint8_t>(HW_TXN_ID_MAX - 2));
+
+    // Drain the rest of the pool, then the next allocate must fail.
+    const uint8_t used = 5;
+    const uint8_t leftover = static_cast<uint8_t>(NUM_DFB_POOL_TXN_IDS - used);
+    auto rest = alloc.allocate(leftover);
+    ASSERT_EQ(rest.size(), leftover);
+    EXPECT_EQ(rest.front(), DFB_TXN_ID_BASE);
+    EXPECT_EQ(rest.back(), static_cast<uint8_t>(DFB_TXN_ID_BASE + leftover - 1));
+
+    EXPECT_THAT(
+        [&]() { alloc.allocate(1); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TxnIdAllocator exhausted")));
+
+    alloc.reset();
+    auto after_reset = alloc.allocate(1);
+    ASSERT_EQ(after_reset.size(), 1u);
+    EXPECT_EQ(after_reset[0], HW_TXN_ID_MAX);
+}
+
 // B2: For num_entries in {16, 15, 7}, producer_txn_descriptor.num_txn_ids should
 // land on {2, 3, 1} (divisibility-based selection).
 TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
@@ -1594,14 +1832,24 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
         EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, c.expected_num_txn_ids);
-        // Txn id 0 is reserved for untagged NoC traffic; DFB assignment starts at 1.
+        // DFB ids come from the runtime pool [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], never 0 or the user pool.
+        auto expect_in_dfb_pool = [](uint8_t txn_id, const char* side, int index) {
+            EXPECT_NE(txn_id, 0) << side << " txn_ids[" << index << "] must not be 0 (NOC_V2_TRID_STATIC)";
+            EXPECT_GE(txn_id, DFB_TXN_ID_BASE)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " collides with user pool [0, "
+                << static_cast<int>(USER_TXN_ID_MAX) << "]";
+            EXPECT_LE(txn_id, HW_TXN_ID_MAX)
+                << side << " txn_ids[" << index << "]=" << static_cast<int>(txn_id) << " exceeds HW max";
+        };
         for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
-            EXPECT_NE(dfbs[0]->producer_txn_descriptor.txn_ids[i], 0)
-                << "producer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+            expect_in_dfb_pool(dfbs[0]->producer_txn_descriptor.txn_ids[i], "producer", i);
         }
         for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
-            EXPECT_NE(dfbs[0]->consumer_txn_descriptor.txn_ids[i], 0)
-                << "consumer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+            expect_in_dfb_pool(dfbs[0]->consumer_txn_descriptor.txn_ids[i], "consumer", i);
+        }
+        // First DFB on a program draws from the top of the pool.
+        if (c.expected_num_txn_ids > 0) {
+            EXPECT_EQ(dfbs[0]->producer_txn_descriptor.txn_ids[c.expected_num_txn_ids - 1], HW_TXN_ID_MAX);
         }
     }
 }
@@ -1741,13 +1989,15 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
 
     auto compute = make_compute_kernel(
         COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", /*num_threads=*/1);
+    // Accessor names must be distinct and match what dfb_t6_intra_2_0.cpp references (dfb::out);
+    // both bindings still resolve to the same DFB, which is what makes M2 infer INTRA scope.
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .accessor_name = "self",
+         .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
-         .accessor_name = "self",
+         .accessor_name = "in",
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
@@ -1837,6 +2087,219 @@ TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
 // direct equivalent.
 TEST_F(MeshDeviceFixture, B9_InterTensixScope_Rejected_2_0) {
     GTEST_SKIP() << "Not applicable: M2 DataflowBufferSpec has no tensix_scope field";
+}
+
+// Host-only: packer INTRA pairs allocate top-down from 63; DM1 1:m pairs stay in [0,16).
+TEST_F(MeshDeviceFixture, IntraPackerRemapperPairsTopDownConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only remapper pool split";
+    }
+
+    Program program = CreateProgram();
+    CoreCoord logical_core(0, 0);
+
+    // Two INTRA DFBs on Neo0 → ClientL 16 then 18; contiguous packer remapper block [62,64).
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::DataflowBufferConfig intra{
+            .entry_size = 1024,
+            .num_entries = 4,
+            .producer_risc_mask = 0x100,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = false,
+            .enable_consumer_implicit_sync = false,
+            .tensix_scope = experimental::dfb::TensixScope::INTRA};
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, intra);
+    }
+
+    // DM→Tensix ALL remapper on same core (producer STRIDED, consumer ALL).
+    experimental::dfb::DataflowBufferConfig remapper{
+        .entry_size = 1024,
+        .num_entries = 8,
+        .producer_risc_mask = 0x4,  // DM2
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0xF00,  // Neo0-3
+        .num_consumers = 4,
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, remapper);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 3u);
+
+    std::vector<uint8_t> packer_pairs;
+    std::vector<uint8_t> packer_tcs;
+    uint8_t dm1_pair = 0xFF;
+    for (const auto& dfb : dfbs) {
+        if (dfb->remapper_programmer == experimental::dfb::detail::RemapperProgrammer::TENSIX_PACKER) {
+            ASSERT_FALSE(dfb->groups.empty());
+            const auto& rc = dfb->groups[0].hw_risc_configs[0];
+            packer_pairs.push_back(rc.config.remapper_pair_index);
+            packer_tcs.push_back(::dfb::get_counter_id(rc.config.packed_tile_counter[0]));
+            EXPECT_EQ(dfb->dm1_remapper_slot_count(), 0u);
+        } else if (dfb->remapper_programmer == experimental::dfb::detail::RemapperProgrammer::DM1) {
+            ASSERT_FALSE(dfb->groups.empty());
+            for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+                if (rc.is_producer) {
+                    dm1_pair = rc.config.remapper_pair_index;
+                }
+            }
+        }
+    }
+    ASSERT_EQ(packer_pairs.size(), 2u);
+    ASSERT_EQ(packer_tcs.size(), 2u);
+    EXPECT_EQ(packer_tcs[0], 16);
+    EXPECT_EQ(packer_tcs[1], 18);
+    // Contiguous top-down block of size 2 starts at 62: [62, 64).
+    EXPECT_EQ(packer_pairs[0], 62);
+    EXPECT_EQ(packer_pairs[1], 63);
+    EXPECT_NE(dm1_pair, 0xFF);
+    EXPECT_LT(dm1_pair, ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS);
+    EXPECT_LT(dm1_pair, packer_pairs[0]);
+}
+
+// T7: one INTRA DFB past what a Neo's Tensix-only TC pool can back must fail. The limit is per Neo:
+// each INTRA DFB spends a ClientL + shadow pair out of that Neo's 16 Tensix-only TCs, so 8 fit and the
+// 9th exhausts the pool (and its packer remapper pair).
+TEST_F(MeshDeviceFixture, MaxEightIntraPerNeoConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only INTRA TC pool limit";
+    }
+
+    constexpr uint32_t max_intra_dfbs_per_neo =
+        ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB;
+
+    Program program = CreateProgram();
+    CoreCoord logical_core(0, 0);
+    for (uint32_t i = 0; i < max_intra_dfbs_per_neo + 1; i++) {
+        experimental::dfb::DataflowBufferConfig intra{
+            .entry_size = 1024,
+            .num_entries = 4,
+            .producer_risc_mask = 0x100,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = false,
+            .enable_consumer_implicit_sync = false,
+            .tensix_scope = experimental::dfb::TensixScope::INTRA};
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, intra);
+    }
+
+    EXPECT_THROW(program.impl().finalize_dataflow_buffer_configs(), std::exception);
+}
+
+
+// =====================================================================================
+// Device slot assignment
+// =====================================================================================
+
+namespace {
+
+experimental::dfb::DataflowBufferConfig make_minimal_dfb_config() {
+    return experimental::dfb::DataflowBufferConfig{
+        .entry_size = 1024,
+        .num_entries = 2,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+}
+
+// The safety property behind slot reuse: a slot indexes a per-core config table, so two DFBs may
+// share a slot only when no core hosts both of them.
+void expect_no_slot_collision_on_any_core(Program& program, const CoreRange& cores) {
+    for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
+        for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
+            const CoreCoord core(x, y);
+            std::set<uint32_t> slots_on_core;
+            for (const auto& dfb : program.impl().dataflow_buffers_on_core(core)) {
+                EXPECT_TRUE(slots_on_core.insert(dfb->device_slot).second)
+                    << "Core (" << x << "," << y << ") has two DFBs at device slot " << dfb->device_slot;
+            }
+        }
+    }
+}
+
+}  // namespace
+
+// A DFB created late (high program-wide id) that shares no core with the earlier DFBs should reuse a
+// low slot instead of extending the per-core config table. This is the shape that overflowed the
+// dispatch payload when the slot was just a creation counter (issue #51409).
+TEST_F(MeshDeviceFixture, DFBDeviceSlotsReusedAcrossDisjointCores) {
+    auto& mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    // Coordinator at (0,0) plus workers spanning (1,0)..(4,0).
+    if (grid.x < 5) {
+        GTEST_SKIP() << "Needs at least 5 worker cores in a row (got " << grid.x << "x" << grid.y << ")";
+    }
+    const CoreCoord coordinator(0, 0);
+    const CoreRange workers(CoreCoord(1, 0), CoreCoord(4, 0));
+    const CoreRange all_cores(CoreCoord(0, 0), CoreCoord(4, 0));
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    // Spans every core, so it conflicts with everything below.
+    uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    // Worker-only DFBs, then a coordinator-only DFB created last.
+    std::vector<uint32_t> worker_ids;
+    worker_ids.reserve(3);
+    for (int i = 0; i < 3; i++) {
+        worker_ids.push_back(experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(workers), config));
+    }
+    uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->id, 4u) << "expected creation order to give this the last id";
+
+    expect_no_slot_collision_on_any_core(program, all_cores);
+
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 0u);
+    for (uint32_t i = 0; i < worker_ids.size(); i++) {
+        EXPECT_EQ(impl.get_dataflow_buffer(worker_ids[i])->device_slot, i + 1)
+            << "worker DFB " << i << " conflicts with the wide DFB and its worker peers";
+    }
+    // Conflicts only with the wide DFB, so it reuses slot 1 rather than taking slot 4.
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 1u);
+}
+
+// The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
+// DFBs on disjoint cores all fit at slot 0.
+TEST_F(MeshDeviceFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
+    auto& mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const uint32_t max_slots =
+        is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_arch_num_circular_buffers();
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t num_dfbs = max_slots + 4;
+    if (grid.x * grid.y < num_dfbs) {
+        GTEST_SKIP() << "Needs at least " << num_dfbs << " cores to place one DFB per core";
+    }
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+    for (uint32_t i = 0; i < num_dfbs; i++) {
+        const CoreCoord core(i % grid.x, i / grid.x);
+        uint32_t id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(core)), config);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(id)->device_slot, 0u)
+            << "DFB " << i << " is alone on core (" << core.x << "," << core.y << ")";
+    }
 }
 
 }  // end namespace tt::tt_metal

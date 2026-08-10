@@ -584,6 +584,8 @@ _IRREGULAR_SHAPES = [
     ((2, 3, 71, 79), (0, 1, 3, 2)),
     ((1, 13, 47, 64), (0, 2, 1, 3)),
     ((3, 5, 32, 64), (1, 0, 2, 3)),
+    # Sub-NoC-aligned stick (W·E % 16 != 0) — guards HEIGHT-sh RM native path (#47299).
+    ((1, 1, 32, 97), (0, 1, 3, 2)),
 ]
 
 
@@ -601,6 +603,8 @@ def test_permute_irregular_shapes_interleaved(shape, dims, input_layout, device)
         pytest.param((2, 3, 71, 79), (0, 1, 3, 2), _height_shard_config, id="71x79_height"),
         pytest.param((1, 13, 47, 64), (0, 2, 1, 3), _width_shard_config, id="47x64_width"),
         pytest.param((3, 5, 32, 64), (1, 0, 2, 3), _block_shard_config, id="32x64_block"),
+        # HEIGHT-sh route for the sub-NoC-aligned stick (native RM after #47299).
+        pytest.param((1, 1, 32, 97), (0, 1, 3, 2), _height_shard_config, id="32x97_height"),
     ],
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -611,6 +615,19 @@ def test_permute_irregular_shapes_sharded(shape, dims, shard_factory, input_layo
         device,
         input_layout=input_layout,
         input_mem_config=shard_factory(shape, device, layout=input_layout),
+    )
+
+
+# f32 sibling for the newly-native RM HEIGHT-sh sub-NoC-aligned stick (#47299).
+def test_permute_rm_height_sharded_sub_noc_aligned_stick_float32(device):
+    shape = (1, 1, 32, 49)  # W·E = 49·4 = 196 bytes → 196 % 16 = 4
+    run_permute_test(
+        shape,
+        (0, 1, 3, 2),
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        dtype=ttnn.float32,
     )
 
 
@@ -904,6 +921,95 @@ def test_permute_dram_sharded_fallback(device):
         result.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     ), f"Expected INTERLEAVED, got {result.memory_config().memory_layout}"
 
+    ref = x.permute(0, 1, 3, 2)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _permute_and_assert_shrink(device, shape, dims, out_layout, expected_grid_factory, n_expected):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < n_expected:
+        pytest.skip(f"Device grid too small for shrink test (need >= {n_expected} cores)")
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=L1_INTERLEAVED
+    )
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    result = ttnn.permute(ttnn_in, dims, memory_config=out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == n_expected, f"Expected {n_expected} populated cores, got {grid.num_cores()}"
+    expected = expected_grid_factory(compute_grid)
+    assert grid == expected, f"Expected grid {expected}, got {grid}"
+    ref = x.permute(dims)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(ref, got, ulp_threshold=0)
+
+
+def test_permute_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: expect ceil(tensor_h / shard_h) populated cores.
+    permute (2,2,32,64) (0,1,3,2) → out=(2,2,64,32); tensor_h=256, shard_h=32 → 8 populated cores."""
+    _permute_and_assert_shrink(
+        device,
+        shape=(2, 2, 32, 64),
+        dims=(0, 1, 3, 2),
+        out_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        expected_grid_factory=lambda grid: ttnn.num_cores_to_corerangeset(8, grid, True),
+        n_expected=8,
+    )
+
+
+def test_permute_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: expect ceil(tensor_w / shard_w) populated cores.
+    permute (2,2,64,32) (0,1,3,2) → out=(2,2,32,64); tensor_w=64, shard_w=32 → 2 populated cores."""
+    _permute_and_assert_shrink(
+        device,
+        shape=(2, 2, 64, 32),
+        dims=(0, 1, 3, 2),
+        out_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        expected_grid_factory=lambda grid: ttnn.num_cores_to_corerangeset(2, grid, True),
+        n_expected=2,
+    )
+
+
+def test_permute_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: expect rectangular 2x2 populated grid.
+    permute (1,1,64,64) (0,1,3,2) → out=(1,1,64,64); shard=32x32 → 2x2 rectangle = 4 cores."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 2x2 BLOCK shrink test")
+    _permute_and_assert_shrink(
+        device,
+        shape=(1, 1, 64, 64),
+        dims=(0, 1, 3, 2),
+        out_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        expected_grid_factory=lambda _grid: ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}
+        ),
+        n_expected=4,
+    )
+
+
+def test_permute_specless_sharded_output_grid_shrinks_block_col_major(device):
+    """BLOCK+COL_MAJOR (input-inherited) shrink: shard=(32,32), n_h=2/n_w=3 → COL_MAJOR rect 2x3=6 cores."""
+    shape = (1, 1, 96, 64)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 3:
+        pytest.skip("Device grid too small for COL_MAJOR 2x3 BLOCK shrink test")
+    in_mc = _block_shard_config(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.permute(ttnn_in, (0, 1, 3, 2), memory_config=out_mc)
+    ss = result.memory_config().shard_spec
+    assert ss.orientation == ttnn.ShardOrientation.COL_MAJOR, f"Expected COL_MAJOR, got {ss.orientation}"
+    assert ss.grid.num_cores() == 6, f"Expected 2x3=6 populated cores, got {ss.grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))})
+    assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(1,2), got {ss.grid}"
     ref = x.permute(0, 1, 3, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(ref, got, ulp_threshold=0)

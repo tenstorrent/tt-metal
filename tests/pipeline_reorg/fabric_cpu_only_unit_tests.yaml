@@ -17,7 +17,7 @@
       timeout: 15
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-slices
   name: fabric cpu unit tests (bh-slices)
@@ -31,7 +31,7 @@
       timeout: 25
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 # bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 38 per-host-sliced pod combos
 # across 4 single-pod mocks. The four 40-host llama_8b pods dominate wall-clock (they alone need ~40 min),
@@ -51,7 +51,7 @@
       timeout: 15
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-pod-pipeline-revc
   name: fabric cpu unit tests (bh-pod-pipeline-revC)
@@ -62,7 +62,7 @@
       timeout: 15
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-pod-pipeline-llama
   name: fabric cpu unit tests (bh-pod-pipeline-llama)
@@ -75,7 +75,7 @@
       timeout: 55
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-sp4-glx
   name: fabric cpu unit tests (bh-sp4-glx)
@@ -85,7 +85,7 @@
       timeout: 15
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-subtorus
   name: fabric cpu unit tests (bh-subtorus)
@@ -97,7 +97,7 @@
       timeout: 15
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-subtorus-sc20
   name: fabric cpu unit tests (bh-subtorus-sc20)
@@ -109,7 +109,7 @@
       timeout: 40
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-blitz-decode
   name: fabric cpu unit tests (bh-blitz-decode)
@@ -121,7 +121,7 @@
       timeout: 30
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-ring-stress
   name: fabric cpu unit tests (bh-ring-stress)
@@ -134,4 +134,4 @@
       timeout: 10
   team: scaleout
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
