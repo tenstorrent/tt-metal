@@ -4,11 +4,14 @@
 
 """Value-level parity tests: ttml DeepSeek vs torch GPU baseline.
 
-Builds a tiny DeepSeek-V3 configuration, creates both the torch reference
-(from ``ttml.models.deepseek.gpu_baseline``) and the ttml implementation
-(``ttml.models.deepseek.DeepSeek``), copies the torch weights into the
-ttml model, and then verifies that forward logits and per-parameter
-weight gradients match up to bf16 precision.
+Builds a tiny DeepSeek-V3 configuration with ``moe_type="dense"``, creates
+both the torch reference (from ``ttml.models.deepseek.torch_baseline``) and
+the ttml implementation (``ttml.models.deepseek.DeepSeek``), copies the torch
+weights into the ttml model, and then verifies that forward logits and
+per-parameter weight gradients match up to bf16 precision.
+
+Sparse MoE (``sparse_ep``) is covered by ``test_deepseek_sparse_moe.py`` and
+``test_deepseek_sparse_ep.py``.
 
 Both models run in bf16 to mirror the training configuration used in
 ``tt-train_nanoGPT-gpu-baseline/train_deepseek_torch.py``.
@@ -75,6 +78,7 @@ def make_torch_args() -> ModelArgs:
 def make_ttml_config() -> DeepSeekConfig:
     return DeepSeekConfig(
         runner_type=RunnerType.Default,
+        moe_type="dense",
         **TINY_KWARGS,
     )
 
