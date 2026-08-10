@@ -127,7 +127,7 @@ ttnn:
     bh_p150b_civ2_viommu: 30
   profiler:
     wh_llmbox: 90
-    wh_galaxy: 50
+    wh_galaxy: 60
     wh_n150_civ2: 60
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60

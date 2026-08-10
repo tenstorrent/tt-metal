@@ -21,11 +21,19 @@ run_realtime_profiler_cross_reference_tg_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_realtime_profiler.py::test_cross_reference_tg --timeout 2400
 }
 
+# Temporary: replicate WH N150 didt sync-error failure on Galaxy and log
+# frequency + probe/nonlinearity breakdown (see test_sync_error_under_didt_load).
+run_realtime_profiler_didt_sync_error_test() {
+    remove_default_log_locations
+    pytest tests/ttnn/tracy/test_realtime_profiler.py::test_sync_error_under_didt_load -k galaxy --timeout 600
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
     run_device_profiler_test
     run_realtime_profiler_cross_reference_tg_test
+    run_realtime_profiler_didt_sync_error_test
 }
 
 main() {

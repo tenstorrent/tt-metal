@@ -45,8 +45,12 @@ void DeviceClockSync::Mapping::add_probe(const Anchor& probe) {
     const Anchor& closing = probe;
     const double span_ns = static_cast<double>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(closing.host_timestamp - open.host_timestamp).count());
+    const auto probe_error = std::max(open.error, closing.error);
+    const auto nonlinearity = chord_nonlinearity(close_index);
     chords_[slot] = Chord{
-        .error = std::max(open.error, closing.error) + chord_nonlinearity(close_index),
+        .error = probe_error + nonlinearity,
+        .probe_error = probe_error,
+        .nonlinearity = nonlinearity,
         .frequency = static_cast<double>(closing.device_timestamp - open.device_timestamp) / span_ns,
         .open_device_timestamp = open.device_timestamp,
         .open_host_ns = static_cast<double>(open.host_timestamp.time_since_epoch().count()),
@@ -130,6 +134,8 @@ void DeviceClockSync::Mapping::pin_start(uint64_t device_timestamp) {
             std::chrono::nanoseconds(std::llround(host_ns_on(*chord, device_timestamp)))),
         .device_timestamp = device_timestamp,
         .error = chord->error,
+        .probe_error = chord->probe_error,
+        .nonlinearity = chord->nonlinearity,
     };
 }
 
@@ -138,6 +144,16 @@ std::optional<DeviceClockSync::RecordMapping> DeviceClockSync::Mapping::map_reco
     if (!active_chord_.has_value() || start_device_timestamp > active_chord_->close_device_timestamp) {
         active_chord_ = chord_around(start_device_timestamp);
     }
+
+    // Prefer the worse chord's claim split so probe_error/nonlinearity sum to the published error.
+    const auto claim_from = [](const Chord& chord) {
+        return RecordMapping{
+            .error = chord.error,
+            .probe_error = chord.probe_error,
+            .nonlinearity = chord.nonlinearity,
+        };
+    };
+    const auto worse_claim = [&](const Chord& a, const Chord& b) { return claim_from(a.error >= b.error ? a : b); };
 
     RecordMapping mapping;
     if (!active_chord_.has_value()) {
@@ -152,11 +168,23 @@ std::optional<DeviceClockSync::RecordMapping> DeviceClockSync::Mapping::map_reco
             const double start_host_ns = static_cast<double>(pinned_start_->host_timestamp.time_since_epoch().count());
             const double frequency =
                 static_cast<double>(end_device_timestamp - start_device_timestamp) / (end_host_ns - start_host_ns);
-            mapping = RecordMapping{
-                .device_cycle_offset =
-                    std::llround(static_cast<double>(start_device_timestamp) - frequency * start_host_ns),
-                .error = std::max(pinned_start_->error, end_chord->error),
-                .frequency = frequency};
+            if (pinned_start_->error >= end_chord->error) {
+                mapping = RecordMapping{
+                    .device_cycle_offset =
+                        std::llround(static_cast<double>(start_device_timestamp) - frequency * start_host_ns),
+                    .error = pinned_start_->error,
+                    .probe_error = pinned_start_->probe_error,
+                    .nonlinearity = pinned_start_->nonlinearity,
+                    .frequency = frequency};
+            } else {
+                mapping = RecordMapping{
+                    .device_cycle_offset =
+                        std::llround(static_cast<double>(start_device_timestamp) - frequency * start_host_ns),
+                    .error = end_chord->error,
+                    .probe_error = end_chord->probe_error,
+                    .nonlinearity = end_chord->nonlinearity,
+                    .frequency = frequency};
+            }
         } else {
             // No pinned start: estimate frequency from the whole probe ring.
             const Anchor& ring_oldest = probe_at(oldest_probe());
@@ -173,6 +201,8 @@ std::optional<DeviceClockSync::RecordMapping> DeviceClockSync::Mapping::map_reco
                 .device_cycle_offset =
                     std::llround(static_cast<double>(end_device_timestamp) - frequency * end_host_ns),
                 .error = end_chord->error + ride_noise,
+                .probe_error = end_chord->probe_error + ride_noise,
+                .nonlinearity = end_chord->nonlinearity,
                 .frequency = frequency};
         }
     } else if (const Chord& chord = *active_chord_; end_device_timestamp <= chord.close_device_timestamp) {
@@ -182,6 +212,8 @@ std::optional<DeviceClockSync::RecordMapping> DeviceClockSync::Mapping::map_reco
             .device_cycle_offset =
                 std::llround(static_cast<double>(start_device_timestamp) - chord.frequency * start_host_ns),
             .error = chord.error,
+            .probe_error = chord.probe_error,
+            .nonlinearity = chord.nonlinearity,
             .frequency = chord.frequency};
     } else {
         // Record spans more than one probe gap.
@@ -191,10 +223,13 @@ std::optional<DeviceClockSync::RecordMapping> DeviceClockSync::Mapping::map_reco
         const double end_host_ns = host_ns_on(*end_chord, end_device_timestamp);
         const double frequency =
             static_cast<double>(end_device_timestamp - start_device_timestamp) / (end_host_ns - start_host_ns);
+        const RecordMapping claim = worse_claim(chord, *end_chord);
         mapping = RecordMapping{
             .device_cycle_offset =
                 std::llround(static_cast<double>(start_device_timestamp) - frequency * start_host_ns),
-            .error = std::max(chord.error, end_chord->error),
+            .error = claim.error,
+            .probe_error = claim.probe_error,
+            .nonlinearity = claim.nonlinearity,
             .frequency = frequency};
     }
     if (pinned_start_.has_value() && start_device_timestamp >= pinned_start_->device_timestamp) {

@@ -16,6 +16,9 @@ struct ProgramRealtimeClockSync {
     int64_t device_cycle_offset;          // A device timestamp maps to std::chrono::steady_clock host time as
                                           // host_ns = (timestamp - device_cycle_offset) / frequency
     std::chrono::nanoseconds error;       // Estimated error in a host time derived from this mapping
+                                          // (= probe_error + nonlinearity)
+    std::chrono::nanoseconds probe_error;   // MMIO half-bracket contribution (max of chord endpoint probes)
+    std::chrono::nanoseconds nonlinearity;  // Leftover mid-probe departure after subtracting probe-read noise
 };
 
 struct ProgramRealtimeRecord {
