@@ -664,6 +664,111 @@ class IS_MAX_OP(TemplateParameter):
         return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
 
 
+@dataclass
+class SFPU_SCALE_EN(TemplateParameter):
+    """Compile-time SCALE_EN flag for SFPU kernels that optionally pre-scale their input.
+
+    Pairs with ``SFPU_UNARY_SCALAR``, which carries the scale itself. Kernels in the
+    exp family take the scale as a *bfloat16* bit pattern (e.g. 0x3F80 for 1.0f,
+    ``p_sfpu::kCONST_1_FP16B``), not an fp32 one.
+    """
+
+    scale_en: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SCALE_EN = {str(self.scale_en).lower()};"
+
+
+@dataclass
+class SOFTMAX_K(TemplateParameter):
+    """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
+
+    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
+    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    """
+
+    softmax_k: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SOFTMAX_K = {self.softmax_k};"
+
+
+@dataclass
+class SAMPLING_OP(TemplateParameter):
+    """Select which ckernel_sfpu_sampling.h entry point the sampling test drives.
+
+    Emits ``#define SAMPLING_OP_<NAME>`` consumed by ``sfpu_sampling_test.cpp``.
+    """
+
+    sampling_op: str = "recip_scalar"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
+
+
+@dataclass
+class SAMPLING_LEGACY_COMPAT(TemplateParameter):
+    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
+
+    legacy_compat: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
+
+
+@dataclass
+class MOE_GATE_TOPK(TemplateParameter):
+    """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
+
+    Mirrors the first five template parameters of
+    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
+    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
+    dataclass defaults are the compute-API wrapper's
+    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
+    template parameter carrying a C++ default is the sixth, ``generate_indices``.
+
+    ``generate_indices`` is deliberately not modelled: the driver instantiates with
+    five arguments, so it is pinned to true and the kernel always numbers the experts
+    itself. The caller-supplied index-mapping path (generate_indices = false) is
+    therefore untested.
+    """
+
+    num_selected_experts: int = 8
+    num_total_experts: int = 256
+    normalize: bool = False
+    zero_tail: bool = False
+    full_sort: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int MOE_GATE_NUM_SELECTED_EXPERTS = {self.num_selected_experts};",
+            f"constexpr int MOE_GATE_NUM_TOTAL_EXPERTS = {self.num_total_experts};",
+            f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
+            f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
+            f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
+    """``eps`` / ``scale`` for the MoE-gate normalize step, as raw fp32 bit patterns.
+
+    Both are decoded on device via ``Converter::as_float``, so emitting the bit
+    patterns keeps the kernel and the torch golden exactly aligned.
+    """
+
+    eps_bits: int = 0x00000000  # 0.0f
+    scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
