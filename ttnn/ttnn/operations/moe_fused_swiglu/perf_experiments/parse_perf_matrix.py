@@ -166,7 +166,11 @@ def table_groups(recs, counts, by_cell):
     for gk in sorted(groups):
         emb, hidden, fmt, wdt, grid, cap = gk
         pairs = sorted(groups[gk], key=col_rank)
-        cores = next(r["cores"] for r in recs if cfg_of(r)[:2] == (emb, hidden))
+        cores = next(
+            r["cores"]
+            for r in recs
+            if (r["emb"], r["hidden"], r["format"], r["weight_dtype"], r["grid"], r["capacity"]) == gk
+        )
         title = f"K {emb} · N {hidden} · {fmt} activations · {wdt} weights (capacity {cap}, {cores} cores, grid {grid})"
 
         #: Placements measured for BOTH ops — the only ones where an op ratio is meaningful.
@@ -307,8 +311,8 @@ def main():
                 "spread_pct": 100.0 * (ns[-1] - ns[0]) / med,
                 "read_MB": p["m"]["read_bytes"] / 1e6,
                 "dram_util": p["m"]["read_bytes"] / (DRAM_BW * med / 1e9),
-                "tokens_per_s": rec["count"] / (med / 1e9),
-                "ns_per_token": med / rec["count"],
+                "tokens_per_s": rec["count"] / (med / 1e9) if rec["count"] else 0.0,
+                "ns_per_token": med / rec["count"] if rec["count"] else None,
                 "cores": p["cores"],
             }
         )
@@ -334,9 +338,10 @@ def main():
         )
         print(f"{'M':>6} {'us':>9} {'spread%':>8} {'read_MB':>8} {'util':>6} {'ns/token':>9} {'Mtok/s':>8} {'reps':>5}")
         for r in sub:
+            ns_per_token = f"{r['ns_per_token']:.1f}" if r["ns_per_token"] is not None else "-"
             print(
                 f"{r['count']:>6} {r['us_median']:>9.2f} {r['spread_pct']:>8.2f} {r['read_MB']:>8.2f} "
-                f"{r['dram_util']:>6.3f} {r['ns_per_token']:>9.1f} {r['tokens_per_s'] / 1e6:>8.2f} {r['reps']:>5}"
+                f"{r['dram_util']:>6.3f} {ns_per_token:>9} {r['tokens_per_s'] / 1e6:>8.2f} {r['reps']:>5}"
             )
 
     # ---- the requested shape: one table per (K, N, format, weight dtype), placement as COLUMNS ---

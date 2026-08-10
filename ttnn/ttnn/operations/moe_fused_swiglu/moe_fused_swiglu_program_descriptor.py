@@ -418,13 +418,28 @@ def create_program_descriptor(
     input_m_tiles,
     compute_kernel_config,
     core_grid=None,
+    transpose_grid_axes=False,
     expert_region_offsets=None,
     read_x_at_offset=False,
 ):
     device = input_tensor.device()
-    hgroups, kgroups = worker_grid(device, core_grid)
+    physical_columns, physical_rows = worker_grid(device, core_grid)
+    hgroups, kgroups = (physical_rows, physical_columns) if transpose_grid_axes else (physical_columns, physical_rows)
     num_cores = hgroups * kgroups
-    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(hgroups - 1, kgroups - 1))])
+    all_cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(physical_columns - 1, physical_rows - 1))]
+    )
+
+    # The kernels consume logical (hidden-group, K-group) coordinates exclusively through runtime
+    # arguments.  Keeping that contract separate from physical placement lets the generic path
+    # test whether a wide physical grid is better spent on the K reduction than on hidden groups.
+    # The production C++ path intentionally remains unchanged until this experiment earns it.
+    def physical_core(x, y):
+        return ttnn.CoreCoord(y, x) if transpose_grid_axes else ttnn.CoreCoord(x, y)
+
+    def logical_virt(x, y):
+        core = physical_core(x, y)
+        return _virt(device, int(core.x), int(core.y))
 
     emb = int(input_tensor.shape[-1])
     hidden = int(w_gate.shape[-1])
@@ -514,7 +529,7 @@ def create_program_descriptor(
     x_mcast = ttnn.Mcast1D(
         device,
         all_cores,
-        ttnn.Mcast1DShape.PerRow,
+        ttnn.Mcast1DShape.PerColumn if transpose_grid_axes else ttnn.Mcast1DShape.PerRow,
         0,
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_0, handshake=handshake, data_ready=flag, rotating_sender=True, base_sem_id=geo.SEM_X_BASE
@@ -543,6 +558,19 @@ def create_program_descriptor(
             f"moe_fused_swiglu: mcast sender counts {x_mcast.num_senders()}/{h_mcast.num_senders()} "
             f"do not match the {hgroups}x{kgroups} grid"
         )
+
+    def h_mcast_runtime_args(core):
+        args = list(h_mcast.runtime_args(core))
+        if not transpose_grid_axes:
+            return args
+        # Mcast2D emits its rotating-sender table in physical row-major order, while the kernels'
+        # sender index is logical row-major: y * HGROUPS + x.  Preserve the helper-owned rectangle
+        # words and replace only that coordinate table.
+        logical_senders = []
+        for logical_y in range(kgroups):
+            for logical_x in range(hgroups):
+                logical_senders.extend(logical_virt(logical_x, logical_y))
+        return args[:4] + logical_senders
 
     # Runtime-selectable large-M phase 2 uses two disjoint 11x4 rectangles. The existing h helper
     # still owns the semaphores and full-grid sender-coordinate table used by the ordinary path;
@@ -686,7 +714,7 @@ def create_program_descriptor(
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for y in range(kgroups):
         for x in range(hgroups):
-            core = ttnn.CoreCoord(x, y)
+            core = physical_core(x, y)
             i = y * hgroups + x
             kr, kstart = blk.kr_sizes[y], blk.kr_starts[y]
             hn, hstart = blk.hn_sizes[x], blk.hn_starts[x]
@@ -717,11 +745,11 @@ def create_program_descriptor(
             # gather destinations). Row r is at index r on every core in the column, which is what
             # makes "worker r owns tiles [r*a, (r+1)*a)" agree grid-wide.
             for r in range(kgroups):
-                args.extend(_virt(device, x, r))
+                args.extend(logical_virt(x, r))
             args.extend(x_mcast.runtime_args(core))
-            args.extend(h_mcast.runtime_args(core))
+            args.extend(h_mcast_runtime_args(core))
             args.extend(h_group_rect_args[y // blk.mgroup_rows])
-            reader_rt[x][y] = args
+            reader_rt[int(core.x)][int(core.y)] = args
 
             wargs = [
                 mailbox_addr,
@@ -742,13 +770,13 @@ def create_program_descriptor(
             ]
             # Full-M eight-round W_down: row y gathers every hidden-column fragment onto the
             # diagonal core (y, y).  Appended before the existing column peer table.
-            wargs.extend(_virt(device, y, y))
+            wargs.extend(logical_virt(y, y) if blk.wd_mrow_rounds else logical_virt(0, 0))
             for r in range(kgroups):
-                wargs.extend(_virt(device, x, r))
+                wargs.extend(logical_virt(x, r))
             wargs.extend(list(h_mcast_noc1.runtime_args(core))[:4])
-            writer_rt[x][y] = wargs
+            writer_rt[int(core.x)][int(core.y)] = wargs
 
-            compute_rt[x][y] = [mailbox_addr, kr, hn, ec, ec_group, x, y]
+            compute_rt[int(core.x)][int(core.y)] = [mailbox_addr, kr, hn, ec, ec_group, x, y]
 
     # ---- defines: the ablation hook, plus the h-mcast posted switch -----------------------------
     dm_defines = [("ABLATE_" + a.upper(), "1") for a in _ablations(geo.ABLATE, geo.DM_ABLATIONS)]
