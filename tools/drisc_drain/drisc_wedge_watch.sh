@@ -73,23 +73,6 @@ CSV=$OUT/runs.csv
 
 log(){ echo "$*" | tee -a "$SUM"; }
 
-# Refuse to append to an existing sweep. Reusing a TAG used to silently concatenate sweeps into one
-# runs.csv with restarting k values and different ARMED/DISPATCH settings -- which makes any rate
-# computed off that file wrong, and is unrecoverable after the fact because the settings are not in
-# the rows. Pick a new TAG, or opt in with APPEND=1 if you really are continuing the same sweep.
-if [ -f "$CSV" ] && [ "${APPEND:-0}" != "1" ]; then
-    echo "FATAL: $CSV already exists -- that sweep's rows would be mixed with this one's."
-    echo "  use a fresh TAG=...   (or APPEND=1 to deliberately continue the same sweep)"
-    exit 1
-fi
-[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class" > "$CSV"
-# Settings live next to the rows, so a csv is still interpretable months later.
-{ echo "date=$(date -Is) host=$(hostname) tag=$TAG"
-  echo "N=$N DELAY=$DELAY ITERS=$ITERS GX=$GX GY=$GY ARMED=$ARMED"
-  echo "DISPATCH=$DISPATCH DRAINER=$DRAINER STOP_ON_WEDGE=$STOP_ON_WEDGE ALLOW_REBOOT=$ALLOW_REBOOT"
-  echo "MAX_CONSEC_FAIL=$MAX_CONSEC_FAIL RUN_TIMEOUT=$RUN_TIMEOUT BIN=$BIN"
-} >> "$OUT/params.txt"
-
 [ -x "$BIN" ] || { log "FATAL: workload not found: $BIN"; log "  build it first: ./build_metal.sh --release --build-programming-examples"; exit 1; }
 [ -c /dev/tenstorrent/0 ] || log "WARN: /dev/tenstorrent/0 missing -- is this the host, and is the driver loaded?"
 [ -x "$TT_SMI" ] || log "WARN: tt-smi not found at '$TT_SMI' -- recovery will be manual"
@@ -109,6 +92,24 @@ else
     [ "${ALLOW_NO_DEVSTA:-0}" = "1" ] || exit 1
     log "  ALLOW_NO_DEVSTA=1 -> continuing; the devsta column will read 'unavail', not a value."
 fi
+
+# Refuse to append to an existing sweep. Reusing a TAG used to silently concatenate sweeps into one
+# runs.csv with restarting k values and different ARMED/DISPATCH settings -- which makes any rate
+# computed off that file wrong, and is unrecoverable after the fact because the settings are not in
+# the rows. Pick a new TAG, or opt in with APPEND=1 if you really are continuing the same sweep.
+if [ -f "$CSV" ] && [ "${APPEND:-0}" != "1" ]; then
+    echo "FATAL: $CSV already exists -- that sweep's rows would be mixed with this one's."
+    echo "  use a fresh TAG=...   (or APPEND=1 to deliberately continue the same sweep)"
+    exit 1
+fi
+[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class" > "$CSV"
+# Settings live next to the rows, so a csv is still interpretable months later.
+{ echo "date=$(date -Is) host=$(hostname) tag=$TAG"
+  echo "N=$N DELAY=$DELAY ITERS=$ITERS GX=$GX GY=$GY ARMED=$ARMED"
+  echo "DISPATCH=$DISPATCH DRAINER=$DRAINER STOP_ON_WEDGE=$STOP_ON_WEDGE ALLOW_REBOOT=$ALLOW_REBOOT"
+  echo "MAX_CONSEC_FAIL=$MAX_CONSEC_FAIL RUN_TIMEOUT=$RUN_TIMEOUT BIN=$BIN"
+} >> "$OUT/params.txt"
+
 
 # Endpoint config space reads ALL-ONES once wedged, so its own sysfs cannot tell you anything: an
 # all-ones link speed surfaces as "Unknown". That is the wedge signature, not downtraining -- always
