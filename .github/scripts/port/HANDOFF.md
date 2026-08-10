@@ -100,6 +100,12 @@ silently passing -- that is what the emitted test is for.
   in-cluster egress path makes Garage reachable is untested. Budget for a full build.
 - **Hugepages are mounted conditionally**, because the viommu runners do not all expose
   `/dev/hugepages-1G`.
+- **The viommu image has no `net-tools`, and gh-aw needs `netstat`.** Its own health check for the
+  MCP scripts server shells out to `netstat`, so the server started, the check could not see it, and
+  the job failed on a step that is gh-aw's rather than ours. A `netstat` shim over `ss` goes onto
+  `PATH` before that step, in `RUNNER_TEMP` so nothing outlives the job. Our own port probes were
+  never affected because they already use `ss`. Expect more of this class from the image: the runner
+  is leaner than the CIv1 pool, and the failure surfaces late, after the build has been paid for.
 
 ## If the run fails
 

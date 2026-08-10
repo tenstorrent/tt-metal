@@ -99,6 +99,71 @@ pre-steps:
   # learning that in seconds beats learning it after a 25-minute build. Removing another job's
   # gateway container is not a new hazard: gh-aw removes it by name unconditionally itself, and a
   # card runner hosts one job at a time because the card is exclusive.
+  # gh-aw's own health check for the MCP scripts server calls `netstat`, and the viommu image does
+  # not ship net-tools. The server starts fine and then the check cannot see it:
+  #
+  #   start_mcp_scripts_server.sh: line 121: netstat: command not found
+  #   Port 3000 not listening
+  #   ##[error]Process completed with exit code 1
+  #
+  # That step belongs to gh-aw and is not ours to edit, so it gets a `netstat` that works. A shim
+  # over `ss` rather than `apt-get install net-tools`, because egress here goes through the
+  # restricted proxy and a package install is a network dependency for something the image already
+  # has the information to answer. Written under RUNNER_TEMP, which the runner discards with the
+  # job, so nothing persists on the host.
+  - name: Make the runner's netstat work for gh-aw
+    run: |
+      if command -v netstat >/dev/null; then
+        echo "netstat is present; no shim needed"
+        exit 0
+      fi
+      if ! command -v ss >/dev/null; then
+        echo "::error::neither netstat nor ss is available, so gh-aw cannot verify its own server"
+        exit 1
+      fi
+      mkdir -p "${RUNNER_TEMP}/shims"
+      cat > "${RUNNER_TEMP}/shims/netstat" <<'SHIM'
+      #!/usr/bin/env bash
+      # Enough of netstat(8) for a listening-port check: the header lines and one `tcp ... LISTEN`
+      # row per listening socket, in netstat's column order, so a grep for ":<port> " or for LISTEN
+      # matches what it would have matched before.
+      echo "Active Internet connections (only servers)"
+      echo "Proto Recv-Q Send-Q Local Address           Foreign Address         State"
+      ss -tlnH | awk '{printf "tcp        0      0 %-23s %-23s LISTEN\n", $4, $5}'
+      SHIM
+      chmod +x "${RUNNER_TEMP}/shims/netstat"
+      echo "${RUNNER_TEMP}/shims" >> "$GITHUB_PATH"
+
+      # Prove it answers the question gh-aw asks, rather than trusting that it does. Checked against
+      # a port this step opens itself where possible, since that is the actual question; otherwise
+      # against `ss`, so the step still fails loudly if the shim cannot run at all.
+      export PATH="${RUNNER_TEMP}/shims:$PATH"
+      if command -v python3 >/dev/null; then
+        python3 -m http.server 3999 --bind 127.0.0.1 >/dev/null 2>&1 &
+        probe=$!
+        for _ in $(seq 1 10); do
+          netstat -tln | grep -q ':3999 ' && break
+          sleep 1
+        done
+        seen=$(netstat -tln | grep -c ':3999 ' || true)
+        kill "$probe" 2>/dev/null || true
+        if [ "$seen" = "0" ]; then
+          echo "::error::the netstat shim cannot see a port that is listening"
+          netstat -tln || true
+          exit 1
+        fi
+        echo "the netstat shim sees a port it was pointed at"
+      else
+        shim_rows=$(netstat -tln | grep -c '^tcp ' || true)
+        ss_rows=$(ss -tlnH | grep -c . || true)
+        if [ "$shim_rows" != "$ss_rows" ]; then
+          echo "::error::the netstat shim reports $shim_rows listening sockets and ss reports $ss_rows"
+          netstat -tln || true
+          exit 1
+        fi
+        echo "the netstat shim agrees with ss on $ss_rows listening socket(s)"
+      fi
+
   - name: Clear leftover state from earlier runs on this runner
     run: |
       docker rm -f awmg-mcpg portdev 2>/dev/null || true
