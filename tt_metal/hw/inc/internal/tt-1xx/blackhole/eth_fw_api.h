@@ -457,10 +457,17 @@ constexpr uint32_t WAS_RETRAINED_FREEZE_AFTER_N_ITERS = 0xFFFFFFFF;
 // the slot base -> [resume_phase, tx_count]) to see whether TX is actually flowing after a retrain:
 // a changing value = packets going out, a frozen value = TX stalled. ERISC0-only; single L1 store.
 constexpr uint32_t MEM_AERISC_TX_PKT_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 4;
+// Declared here (not with the other word[23] helpers further down) because
+// fabric_dbg_inc_tx_pkt_count below resets this latch and must see the constant.
+constexpr uint32_t MEM_AERISC_SYNC_MIN_FREE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 92;  // word[23]
+
 inline void fabric_dbg_inc_tx_pkt_count() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
     *p = *p + 1;
+    // A packet just went out -> open a fresh min-free window. After the last data packet this latch
+    // therefore accumulates over the barrier only, where the sync packet is the sole possible doorbell.
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR) = 0xFFFFFFFFu;
 #endif
 }
 
@@ -652,7 +659,6 @@ constexpr uint32_t MEM_AERISC_SYNC_RX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE 
 constexpr uint32_t MEM_AERISC_SLOT_ADDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 80;  // word[20]
 constexpr uint32_t MEM_AERISC_SLOT_HDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 84;   // word[21]
 constexpr uint32_t MEM_AERISC_SYNC_SEEN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 88;  // word[22]
-constexpr uint32_t MEM_AERISC_SYNC_MIN_FREE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 92;  // word[23]
 
 // Offset of PacketHeaderBase::payload_size_bytes within the packet header (see comment above).
 constexpr uint32_t FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET = 40;
@@ -672,6 +678,29 @@ constexpr uint32_t FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET = 40;
 //   [31:16] stream id polled by the router   [15:0] low 16 bits of the next-read slot address
 // The full slot address is still recoverable: the region is well under 64KB and the high bits are
 // fixed, and word[21] carries the header word read from it.
+// [DOORBELL CROSS-CHECK] The router's OWN view of the doorbell, recorded so it can be compared against
+// an independent host-side read of the same hardware register.
+//
+//   word[24] = the stream id the router actually polls (measured, not assumed -- lets us verify it
+//              matches the worker's target, stream 22, without relying on recollection)
+//   word[25] = the raw free_slots value from get_ptr_val (NOC_STREAM_READ_REG, UNCACHED -- so unlike
+//              the L1 header probes this is not subject to data-cache staleness)
+//
+// Pair with the host's STREAMREG dump of stream 22 AVAILABLE (0xFFB564A4):
+//   both 32          -> counter genuinely never moved; worker's write acked but never applied
+//   host 31, w25 32  -> router's read is stale (would be surprising: this is an uncached reg read)
+//   both 31          -> doorbell DID fire; the bug is downstream of notification
+constexpr uint32_t MEM_AERISC_POLLED_STREAM_ID_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 96;    // word[24]
+constexpr uint32_t MEM_AERISC_POLLED_FREE_SLOTS_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 100;  // word[25]
+
+inline void fabric_dbg_set_polled_doorbell(
+    [[maybe_unused]] uint32_t free_slots_stream_id, [[maybe_unused]] uint32_t free_slots) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_POLLED_STREAM_ID_ADDR) = free_slots_stream_id;
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_POLLED_FREE_SLOTS_ADDR) = free_slots;
+#endif
+}
+
 inline void fabric_dbg_set_next_slot_content(
     [[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] uint32_t free_slots_stream_id) {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
@@ -680,6 +709,7 @@ inline void fabric_dbg_set_next_slot_content(
     // low 16 match (0x6ad0) but SLOT_HDR here reads DATA while the sync is in L1 at 0x16ad0. polled_id is a
     // confirmed constant (22), so dropping it costs nothing.
     *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_ADDR_ADDR) = slot_addr;
+    invalidate_l1_cache();  // see note above: header is NoC-written, must fence before reading
     *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_HDR_ADDR) =
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
 #endif
@@ -701,6 +731,11 @@ inline void fabric_dbg_latch_sync_ready([[maybe_unused]] uint32_t slot_addr, [[m
     if (!has_unsent) {
         return;
     }
+    // Fence before reading the header: this L1 line was written by the WORKER over NoC, so without
+    // it we read a stale cached copy. Proven: the host L1 scan found 0x00020000 at this exact
+    // address while this read returned 0x1000. Matches what the router does elsewhere --
+    // router_invalidate_l1_cache("Make sure we have the latest packet header in L1").
+    invalidate_l1_cache();
     uint32_t hdr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
     if (hdr == 0x00020000u) {
         volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_SEEN_ADDR);
@@ -718,17 +753,43 @@ inline void fabric_dbg_latch_sync_ready([[maybe_unused]] uint32_t slot_addr, [[m
 // reflects only the current (round-1, stuck) sync window, not round 0's brief forwarded window.
 //   final == 32  -> free_slots never dipped while round-1's sync sat in the slot -> decrement NEVER landed.
 //   final <  32  -> free_slots was seen below num_buffers -> decrement DID land, then got reset.
-inline void fabric_dbg_track_sync_min_free([[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] uint32_t free_slots) {
+// REPURPOSED (same word[23], no base move): minimum free_slots seen SINCE THE LAST TRANSMITTED PACKET.
+//
+// Why the previous version was useless: it gated on reading the slot header from L1 WITHOUT
+// invalidate_l1_cache(), so it saw stale cache contents -- the host scan proved the sync header sat at
+// slot+40 while this same read returned 0x1000. Its sentinel-reset branch then fired constantly and the
+// probe was effectively blind. It also snapshotted a value that is 32 almost all the time.
+//
+// Why a bare min() is also useless: the doorbell is SHARED with the 100M-packet data path, so a latched
+// minimum hits 31 in the first millisecond and stays there forever, on every core, regardless of sync.
+//
+// The fix uses ordering rather than packet type: each sender completes ALL its data packets, THEN closes
+// its connection, THEN the barrier runs. So the latch is reset on every TX increment (see
+// fabric_dbg_inc_tx_pkt_count) and only accumulates afterwards -- meaning it holds "min free_slots since
+// the last packet actually went out". Once traffic stops, the ONLY thing that can ring the doorbell is
+// the sync packet. Config-independent: no hardcoded 100M threshold, and no dependence on num_packets or
+// on round-0's sync inflating TX to 100,000,001.
+//
+// Reads no L1, so it is immune to the data-cache staleness that broke the header-based probes.
+//
+// Interpretation at the hang, paired with syncTX (word[18]):
+//   syncTX==1, min==32 -> doorbell NEVER rang after the last packet -> the write never took effect
+//   syncTX==1, min< 32 -> doorbell DID ring and the router saw it, yet never sent -> fault is downstream
+//   syncTX==2, min==32 -> core sent its round-1 sync fine (healthy control, e.g. 4/8) -- the latch was
+//                         reset by that very transmission, so 32 here means success, not failure.
+inline void fabric_dbg_track_min_free_since_tx([[maybe_unused]] uint32_t free_slots) {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    uint32_t hdr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
     volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR);
-    if (hdr == 0x00020000u) {
-        if (free_slots < *p) {
-            *p = free_slots;
-        }
-    } else {
-        *p = 0xFFFFFFFFu;  // sentinel: reset between sync-in-slot windows so we isolate the stuck one
+    if (free_slots < *p) {
+        *p = free_slots;
     }
+#endif
+}
+
+// Reset the min-free latch: a packet just went out, so start a fresh window.
+inline void fabric_dbg_reset_min_free_latch() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR) = 0xFFFFFFFFu;
 #endif
 }
 

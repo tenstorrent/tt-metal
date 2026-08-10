@@ -832,6 +832,23 @@ constexpr uint32_t SYNC_DBG_TAG_WRADDR = 0xBE;
 // itself the finding.
 constexpr uint32_t SYNC_DBG_TAG_CREDITREG = 0xBF;
 
+// [DOORBELL READ-BACK] Does the worker's own decrement actually take effect on the router's counter?
+//
+// Everything so far measures this from the ROUTER side, minutes later, at teardown. This reads it from
+// the WORKER, microseconds after writing it, over NoC -- an independent vantage point at the moment it
+// matters. Motivated by the asymmetry in update_edm_buffer_free_slots(): the worker's own free-slot
+// view does NOT depend on this remote write (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE is false for this
+// connection), so nothing on either side ever verifies the doorbell rang.
+//
+// The connection stores the UPDATE address (stream reg idx 270). The AVAILABLE counter the router polls
+// is idx 297 in the same stream, i.e. +((297-270)*4) = +108 bytes.
+//
+//   value < num_buffers -> decrement DID apply; the router's later read of 32 is the anomaly
+//   value == num_buffers -> decrement did NOT apply, right at the source
+constexpr uint32_t SYNC_DBG_TAG_DOORBELL = 0xC1;
+constexpr uint32_t STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET = (297u - 270u) * 4u;
+constexpr uint32_t STREAM_FREE_SLOTS_MASK = (1u << 17) - 1u;  // MEM_WORD_ADDR_WIDTH, same mask get_ptr_val uses
+
 FORCE_INLINE void sync_dbg_push_addr([[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t addr) {
     WATCHER_RING_BUFFER_PUSH((tag << 24) | (addr & 0xFFFFFF));
 }
@@ -937,7 +954,7 @@ struct LineSyncConfig {
         packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
     }
 
-    void global_sync_start(uint8_t sync_iter = 0) {
+    void global_sync_start(uint8_t sync_iter = 0, uint32_t debug_scratch_addr = 0) {
         connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         // [WRITE-POINTER PROBE] Capture the slot we are ABOUT to write into, before the send advances
         // the pointer. Compared against the router's read slot (debug word[20]) to detect a desync.
@@ -982,6 +999,21 @@ struct LineSyncConfig {
             SYNC_DBG_TAG_NOC_POST,
             sync_iter,
             noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
+
+        // [DOORBELL READ-BACK] Read the router's free-slots counter back over NoC, from here, now.
+        // See SYNC_DBG_TAG_DOORBELL above for why this vantage point is the one we are missing.
+        if (debug_scratch_addr != 0) {
+            auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
+            const uint32_t available_addr = static_cast<uint32_t>(conn->edm_buffer_remote_free_slots_update_addr) +
+                                            STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET;
+            const uint64_t doorbell_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, noc);
+            noc_async_read(doorbell_noc_addr, debug_scratch_addr, sizeof(uint32_t), noc);
+            noc_async_read_barrier(noc);
+            invalidate_l1_cache();
+            const uint32_t free_slots =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(debug_scratch_addr) & STREAM_FREE_SLOTS_MASK;
+            sync_dbg_push(SYNC_DBG_TAG_DOORBELL, sync_iter, free_slots);
+        }
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -1684,6 +1716,11 @@ struct SenderKernelMemoryMap {
         return SenderKernelMemoryMap(common_map, rt_args_idx);
     }
 
+    // [DEBUG SCRATCH] Aligned, non-overlapping L1 word reserved by the host memory map purely as a NoC
+    // read destination. Unlike the packet-header/payload regions it is never handed to the fabric, so
+    // reading into it cannot perturb in-flight traffic.
+    uint32_t get_debug_scratch_address() const { return debug_scratch_address_; }
+
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
         ASSERT(addr + sizeof(PACKET_HEADER_TYPE) < payload_buffer_region_base_);
@@ -1714,6 +1751,7 @@ private:
         packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
+        debug_scratch_address_ = get_arg_val<uint32_t>(rt_args_idx++);  // [DEBUG SCRATCH]
 
         // set the current addresses to the base
         curr_packet_header_address_ = packet_header_region_base_;
@@ -1724,6 +1762,7 @@ private:
     uint32_t packet_header_region_base_;
     uint32_t payload_buffer_region_base_;
     uint32_t highest_usable_address_;
+    uint32_t debug_scratch_address_;  // [DEBUG SCRATCH] NoC read destination for the doorbell read-back
     uint32_t curr_packet_header_address_;
     uint32_t curr_payload_buffer_address_;
     uint32_t curr_mux_local_address_;
@@ -2442,7 +2481,7 @@ struct SyncKernelConfig {
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            line_sync_configs()[i].global_sync_start(sync_iter);
+            line_sync_configs()[i].global_sync_start(sync_iter, memory_map.get_debug_scratch_address());
             sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 
