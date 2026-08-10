@@ -8,12 +8,14 @@ import torch
 
 if TYPE_CHECKING:
     from .block_data import BlockData
-    from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
+    from .l1_operation import L1Operation
     from .sfpu_node import SfpuNode
 
+from .golden import Golden
 
-class Sfpu:
+
+class Sfpu(Golden):
     """Base class for fused test SFPU code generators.
 
     Subclasses represent specific SFPU operations (e.g. UnarySfpu, BinarySfpu)
@@ -33,12 +35,13 @@ class Sfpu:
         1. Subclass Sfpu
         2. Override get_headers() with the required LLK header files
         3. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        4. Override golden() to compute the expected SFPU result
+        4. Override golden() to compute the expected SFPU result, calling
+           self.unary_sfpu_golden() or self.binary_sfpu_golden() as needed
     """
 
     def init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -52,7 +55,7 @@ class Sfpu:
 
     def calculate(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -66,7 +69,7 @@ class Sfpu:
 
     def uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -81,7 +84,7 @@ class Sfpu:
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         batch_dims: tuple,
