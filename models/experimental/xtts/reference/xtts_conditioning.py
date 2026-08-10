@@ -55,13 +55,19 @@ GPT_COND_LEN_SEC = 30  # gpt_cond_len / max_ref_len
 GPT_COND_CHUNK_SEC = 4  # gpt_cond_chunk_len
 COND_CHUNK_FRAMES = int(round(GPT_COND_CHUNK_SEC * MEL_SR / MEL_HOP))  # ~344 mel frames / chunk
 COND_MIN_CHUNK_FRAMES = 32  # drop a tiny trailing chunk (also keeps lengths tile-sane)
+COND_MAX_FRAMES = int(round(GPT_COND_LEN_SEC * MEL_SR / MEL_HOP))  # gpt_cond_len as mel frames
+
+# Single-speaker LJSpeech clips shipped as test data in the upstream coqui repo, already at MEL_SR.
+COQUI_TESTS_WAV_URL = "https://raw.githubusercontent.com/coqui-ai/TTS/dev/tests/data/ljspeech/wavs"
 
 
-def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUNK_FRAMES):
+def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUNK_FRAMES, max_frames=COND_MAX_FRAMES):
     """Split a log-mel ``[b, 80, s]`` along time into ``gpt_cond_chunk_len`` windows for
     coqui-style style-embedding averaging. Returns a list of ``[b, 80, <=chunk_frames]``
-    mels. A trailing window shorter than ``min_frames`` is dropped; a mel already shorter
-    than one chunk is returned as-is (single window == the previous behaviour, no change)."""
+    mels. Anything past ``max_frames`` (``gpt_cond_len``) is dropped first, as coqui clips
+    the audio before chunking it; a trailing window shorter than ``min_frames`` is dropped;
+    a mel already shorter than one chunk is returned as-is (single window)."""
+    mel = mel[..., :max_frames]
     s = mel.shape[-1]
     if s <= chunk_frames:
         return [mel]
@@ -72,13 +78,16 @@ def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUN
 
 COND_CHUNK_SAMPLES = int(round(GPT_COND_CHUNK_SEC * MEL_SR))  # 88200 samples / 4 s window
 COND_MIN_CHUNK_SAMPLES = COND_MIN_CHUNK_FRAMES * MEL_HOP  # drop a tiny trailing chunk
+COND_MAX_SAMPLES = int(round(GPT_COND_LEN_SEC * MEL_SR))  # gpt_cond_len: 30 s of reference audio
 
 
-def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_SAMPLES):
+def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_SAMPLES, max_samples=COND_MAX_SAMPLES):
     """Split a waveform ``[1, L]`` (22.05 kHz) into ``gpt_cond_chunk_len`` windows — the
     on-device analogue of :func:`chunk_cond_mel` (coqui chunks the audio, then mels each
-    chunk). Returns a list of ``[1, <=chunk_samples]`` wavs; a trailing window shorter than
-    ``min_samples`` is dropped; a wav already under one chunk is returned as-is."""
+    chunk). Returns a list of ``[1, <=chunk_samples]`` wavs; audio past ``max_samples``
+    (``gpt_cond_len``, coqui's ``audio[:, : 22050 * length]``) is dropped; a trailing window
+    shorter than ``min_samples`` is dropped; a wav already under one chunk is returned as-is."""
+    wav = wav[..., :max_samples]
     length = wav.shape[-1]
     if length <= chunk_samples:
         return [wav]
@@ -293,6 +302,44 @@ def load_reference_audio(sample="en_sample.wav", max_seconds=COND_CHUNK_SEC):
         audio = resample_poly(audio, MEL_SR // g, sr // g)  # e.g. 24000 -> 22050
     audio = audio[: MEL_SR * max_seconds]
     return torch.from_numpy(audio.astype("float32")).unsqueeze(0)
+
+
+def load_coqui_test_audio(samples=("LJ001-0001.wav",), max_seconds=GPT_COND_LEN_SEC):
+    """Download coqui-ai/TTS LJSpeech test clips, load mono @ 22050 Hz, clip.
+
+    The XTTS-v2 HF samples are all ~3 s, too short to exercise more than one
+    ``gpt_cond_chunk_len`` window. These clips are ~2-10 s each and all one
+    speaker, so several of them concatenate into a realistic long reference
+    (as opposed to repeating a short one, which gives 8 identical windows).
+
+    Returns waveform ``[1, samples]``.
+    """
+    import math
+    import os
+
+    import numpy as np
+    import soundfile as sf
+    import torch.hub
+    from scipy.signal import resample_poly
+
+    cache = os.path.join(torch.hub.get_dir(), "xtts_coqui_ref")
+    os.makedirs(cache, exist_ok=True)
+
+    parts = []
+    for sample in samples:
+        path = os.path.join(cache, sample)
+        if not os.path.exists(path):
+            torch.hub.download_url_to_file(f"{COQUI_TESTS_WAV_URL}/{sample}", path)
+        audio, sr = sf.read(path, dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        if sr != MEL_SR:
+            g = math.gcd(MEL_SR, sr)
+            audio = resample_poly(audio, MEL_SR // g, sr // g)
+        parts.append(audio.astype("float32"))
+
+    audio = np.concatenate(parts)[: MEL_SR * max_seconds]
+    return torch.from_numpy(audio).unsqueeze(0)
 
 
 # ---------------------------------------------------------------------------

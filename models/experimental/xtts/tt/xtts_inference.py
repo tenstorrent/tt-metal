@@ -59,19 +59,47 @@ class TtXtts(LightweightModule):
     def _style_from_mel(self, mel_dev):  # device fp32 mel [1, 80, s] -> conditioning style [1, 1024, 32]
         return self.conditioning.forward_dev(ttnn.typecast(mel_dev, ttnn.bfloat16))
 
+    def _style_window(self, wav_dev):  # ttnn [1, Lc] -> ttnn [1, 1024, 32] in DRAM
+        """One conditioning window's style embedding, parked in DRAM.
+
+        DRAM is not incidental. The mel frontend's ROW_MAJOR reshape sizes its circular buffers by
+        the whole padded signal (one page), which is ~1.48 MB of the 1.5 MB L1 — see the L1 note in
+        ``xtts_mel``. A style embedding left in L1 across a window boundary therefore kills the NEXT
+        window's mel with "statically allocated circular buffers clash with L1 buffers" (measured:
+        an 8-window 30 s reference, an L1 buffer at 1350272 against a CB region ending at 1555664).
+        64 KB round-tripped to DRAM per window is the price of conditioning on long audio at all."""
+        style = self._style_from_mel(self.cond_mel_fe(wav_dev))  # [1, 1024, 32], L1
+        out = ttnn.to_memory_config(style, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(style)
+        return out
+
+    def _style_mean(self, wav_devs):  # list of ttnn [1, Lc] -> ttnn [1, 32, 1024]
+        """coqui ``get_gpt_cond_latents``: mel + ``get_style_emb`` per conditioning window, then
+        AVERAGE the ``[1, 1024, 32]`` style embeddings. One window = single pass, no averaging.
+
+        TRACE-SAFE, which is why it takes already-placed device wavs rather than the host waveform:
+        the whole thing runs inside the SETUP trace, where a host->device write would be fatal. The
+        windows are summed as they are computed rather than stacked, so only the DRAM accumulator
+        and the current window's style are live (a 30 s reference is 8 windows)."""
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        acc = self._style_window(wav_devs[0])
+        for w in wav_devs[1:]:
+            part = self._style_window(w)
+            nxt = ttnn.add(acc, part, memory_config=dram)
+            ttnn.deallocate(part)
+            ttnn.deallocate(acc)
+            acc = nxt
+        if len(wav_devs) > 1:
+            mean = ttnn.multiply(acc, 1.0 / len(wav_devs), memory_config=dram)
+            ttnn.deallocate(acc)
+            acc = mean
+        # Back to L1 for the prefill, which is where the single-window path always handed it over.
+        out = ttnn.permute(acc, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)  # [1, 1024, 32] -> [1, 32, 1024]
+        ttnn.deallocate(acc)
+        return out
+
     def _cond_latents(self, cond_wav):  # torch [1, L] @ 22050 -> ttnn [1, 32, 1024]
-        # coqui get_gpt_cond_latents: chunk the AUDIO into gpt_cond_chunk_len windows, compute the
-        # 80-mel ON DEVICE per chunk, encode each (get_style_emb -> [1, 1024, 32]) and average the
-        # style embeddings. A wav shorter than one chunk yields a single window (single-pass).
-        parts = [self._style_from_mel(self.cond_mel_fe(self._wav_chunk_to_device(c))) for c in chunk_wav(cond_wav)]
-        if len(parts) == 1:
-            style = parts[0]
-        else:
-            acc = parts[0]
-            for p in parts[1:]:
-                acc = ttnn.add(acc, p)
-            style = ttnn.multiply(acc, 1.0 / len(parts))
-        return ttnn.permute(style, (0, 2, 1))  # [1, 1024, 32] -> [1, 32, 1024]
+        return self._style_mean([self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)])
 
     def _decode_wav(self, latents_tt, ref_wav_spk):
         # bf16 GPT latents -> fp32 ROW_MAJOR for the fp32 HiFi-GAN decoder.
@@ -133,23 +161,28 @@ class TtXtts(LightweightModule):
           2. DECODE : one static-KV decode step, captured once and replayed per token,
           3. VOCODER: HiFi-GAN on the generated latents.
         Only the host tokenizer / per-token sampling stay eager (the conditioning mel is now
-        computed on device, inside the SETUP trace). Assumes a single conditioning chunk (ref wav
-        <= one chunk); returns ``(waveform [1, T_out, 1], codes, perf)`` where ``perf`` has
-        ``replay_s`` (execute_trace only — final inference) and ``compile_s`` (warmup + capture).
+        computed on device, inside the SETUP trace). Returns ``(waveform [1, T_out, 1], codes,
+        perf)`` where ``perf`` has ``replay_s`` (execute_trace only — final inference) and
+        ``compile_s`` (warmup + capture).
         NOTE: all host->device writes are done BEFORE any capture — writes are fatal inside a
-        trace, so the raw wav is pre-placed and the mel-frontend index cache is warmed by the
-        first _setup() call before capture."""
+        trace, so the raw wav is pre-placed and the mel-frontend / conditioning constant caches
+        (framer reversal matrices, per-length matmul program configs) are warmed by the first
+        _setup() call before capture."""
         dev = self.device
         gpt = self.gpt
         t_all0 = time.perf_counter()
 
         # Pre-place every host input on device up front (no host->device write inside a capture).
-        wav_dev = self._wav_chunk_to_device(chunk_wav(cond_wav)[0])  # single conditioning chunk
+        # ALL gpt_cond_chunk_len windows of the reference audio, not just the first: coqui averages
+        # the style embedding over up to gpt_cond_len (30 s), and a long reference is what that is
+        # for. The windows differ in length only in the trailing one, so the capture sees at most
+        # two distinct conditioning shapes.
+        wav_devs = [self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)]
         text_dev = gpt.text_ids_to_device(text_ids)
         gpt.alloc_static_kv(max_seq)  # persistent zero caches, seeded by the setup trace
 
         def _setup():  # cond mel (on device) -> cond_latents ; speaker -> g ; prefill -> seed caches
-            cl = ttnn.permute(self._style_from_mel(self.cond_mel_fe(wav_dev)), (0, 2, 1))  # [1, 32, 1024]
+            cl = self._style_mean(wav_devs)  # [1, 32, 1024], averaged over the windows
             g = self.decoder.speaker_embedding(ref_wav_spk)  # [1, 1, 512]
             return g, gpt.prefill_on_device(text_dev, cl)
 

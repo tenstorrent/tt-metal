@@ -38,7 +38,15 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio, wav_to_mel
+from models.experimental.xtts.reference.xtts_conditioning import (
+    GPT_COND_CHUNK_SEC,
+    GPT_COND_LEN_SEC,
+    MEL_SR,
+    chunk_wav,
+    load_coqui_test_audio,
+    load_reference_audio,
+    wav_to_mel,
+)
 from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE
@@ -50,9 +58,14 @@ from models.experimental.xtts.tt.xtts_inference import TtXtts
 TILE = 32
 
 
+COQUI_CLIP_RE = re.compile(r"^LJ\d{3}-\d{4}\.wav$")  # coqui-ai/TTS tests/data/ljspeech/wavs
+
+
 def _load_audio_22k(ref_audio, max_seconds):
     """Reference audio as ``[1, samples]`` @ 22.05 kHz — a local WAV path if it
-    exists, else an HF ``coqui/XTTS-v2`` sample name (e.g. ``en_sample.wav``)."""
+    exists, else a coqui-ai/TTS test clip name (e.g. ``LJ001-0001.wav``, or a
+    ``+``-joined list of them for a long reference), else an HF
+    ``coqui/XTTS-v2`` sample name (e.g. ``en_sample.wav``)."""
     if os.path.exists(ref_audio):
         import soundfile as sf
         from scipy.signal import resample_poly
@@ -65,6 +78,9 @@ def _load_audio_22k(ref_audio, max_seconds):
             audio = resample_poly(audio, MEL_SR // g, sr // g)
         audio = audio[: MEL_SR * max_seconds]
         return torch.from_numpy(audio.astype("float32")).unsqueeze(0)
+    clips = ref_audio.split("+")
+    if all(COQUI_CLIP_RE.match(c) for c in clips):
+        return load_coqui_test_audio(samples=clips, max_seconds=max_seconds)
     return load_reference_audio(sample=ref_audio, max_seconds=max_seconds)
 
 
@@ -270,8 +286,11 @@ def main():
     )
     ap.add_argument(
         "--ref-audio",
-        default="reference.wav",
-        help="local WAV path or HF sample name (e.g. en_sample.wav) that sets the voice.",
+        default="422-122949-0013.wav",
+        # default="LJ025-0076.wav",
+        help="voice to clone: local WAV path, coqui-ai/TTS test clip name (LJ001-0001.wav, or "
+        "'LJ001-0001.wav+LJ001-0003.wav+...' to concatenate clips into a longer reference), "
+        "or HF sample name (en_sample.wav).",
     )
     ap.add_argument(
         "--min-tokens",
@@ -287,7 +306,12 @@ def main():
     # XTTS-v2 defaults so the demo runs full-model-traced with no other knobs.
     args.lang = "en"
     args.ref_seconds = 30  # conditioning window (coqui gpt_cond_len)
-    args.spk_seconds = 8  # speaker-embedding window (device mel frontend caps long audio)
+    # Speaker-embedding window. coqui uses the whole reference (max_ref_length=30 s) here, but the
+    # speaker ENCODER does not fit one: 30 s clashes L1 ("circular buffers ... end at 1184832"
+    # against a buffer at 986496) in the ResNet, not in the mel frontend, which now chunks its
+    # framing and takes any length. 8 s runs, and a speaker embedding is pooled over time anyway,
+    # so it saturates well before this. The GPT conditioning below uses the FULL 30 s.
+    args.spk_seconds = 8
     # Cap on audio codes. This is NOT a "stop earlier if you can" budget: the traced decode loop
     # replays a fixed max_tokens steps and treats STOP as a post-loop trim (a captured trace cannot
     # branch), so every step above what the text actually needs is ~9.4 ms of pure waste — 400 cost
@@ -322,6 +346,15 @@ def main():
     # Speaker path is capped independently — the device mel frontend can't reshape very long audio.
     spk_src = wav[0].numpy()[: MEL_SR * args.spk_seconds]
     spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+    # The GPT is conditioned on the WHOLE reference (coqui get_gpt_cond_latents): every
+    # gpt_cond_chunk_len window up to gpt_cond_len is encoded and the style embeddings averaged.
+    cond_windows = chunk_wav(wav)
+    logger.info(
+        f"reference audio: {wav.shape[-1] / MEL_SR:.2f}s loaded | conditioning on "
+        f"{sum(c.shape[-1] for c in cond_windows) / MEL_SR:.2f}s as {len(cond_windows)} window(s) "
+        f"(gpt_cond_len {GPT_COND_LEN_SEC}s, chunk {GPT_COND_CHUNK_SEC}s) | speaker embedding on "
+        f"{spk_wav.shape[-1] / SPK_SR:.2f}s"
+    )
 
     # Strip trailing sentence-final punctuation: the final "." is its own token (id 9) and the
     # model tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
