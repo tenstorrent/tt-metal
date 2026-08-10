@@ -62,6 +62,7 @@ inline void llk_unpack_tilize_init(
  */
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -139,15 +140,17 @@ inline void llk_unpack_tilizeA_B_init(
 
     // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires the following buffer descriptor configuration:
     // Overwrite the buffer descriptor configuration from llk_unpack_hw_configure for operandA.
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = get_local_dfb_interface(operandA_id).tc_slots[0].base_addr;
-    bd_val.f.format = static_cast<std::uint8_t>(unpack_src_format[operandA_id]);
-    bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-    bd_val.f.y_dim = 1;
-    bd_val.f.z_dim = 1;
-    ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
+    const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+        tensor_shape_A,
+        get_local_dfb_interface(operandA_id).tc_slots[0].base_addr,
+        unpack_src_format[operandA_id],
+        operandA_id,
+        unpack_dst_format[operandA_id]);
+    ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-    _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#if defined(REDUCE_OP)
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#endif
 }
 
 /**
@@ -185,6 +188,8 @@ inline void llk_unpack_tilizeA_B(
         reload_srcB,
         "reload_srcB has to be true for tilizeA_B on Quasar, due to the compatibility with the math reduce kernel.");
 
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

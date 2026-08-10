@@ -66,6 +66,9 @@ void kernel_main() {
     const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
+    const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t ready_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-direction core
+    const uint8_t ready_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -145,6 +148,12 @@ void kernel_main() {
                 UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
                 sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
         };
+
+        // Announce that this device has reached the collective program. Its
+        // earlier command-queue entries, including output initialization, are
+        // complete, so the neighbor can safely write into this output. Target
+        // the opposite-direction reader paired with the writer returning here.
+        atomic_inc(safe_get_noc_addr(ready_sem_noc_x, ready_sem_noc_y, ready_sem, 0), 1);
 
         const uint64_t downstream_data_valid_addr =
             safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);

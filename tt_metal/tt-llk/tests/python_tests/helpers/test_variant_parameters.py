@@ -136,11 +136,11 @@ class SFPU_INT_OP(TemplateParameter):
     falls through to its default (add_int) path.
     """
 
-    op: str = ""
+    int_op: str = ""
 
     def convert_to_cpp(self) -> str:
-        if self.op:
-            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        if self.int_op:
+            return f"#define SFPU_INT_OP_{self.int_op.upper()}"
         return ""
 
 
@@ -224,14 +224,14 @@ class SFPU_TERNARY_OP(TemplateParameter):
     """Select the ternary SFPU op at compile time.
 
     Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``mathop.cpp_enum_value`` must match the
+    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
     ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
     """
 
-    mathop: MathOperation = None
+    ternary_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.mathop.cpp_enum_value};"
+        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -242,10 +242,10 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
     the SFPU. Emit the bit pattern so the C++ and torch golden agree exactly.
     """
 
-    value_bits: int = 0x40000000  # 2.0f
+    ternary_scalar_bits: int = 0x40000000  # 2.0f
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.value_bits}u;"
+        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.ternary_scalar_bits}u;"
 
 
 @dataclass
@@ -260,12 +260,10 @@ class SFPU_BINOP_MODE(TemplateParameter):
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
     _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
 
-    mathop: MathOperation = None
+    binop_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.mathop.cpp_enum_value]};"
-        )
+        return f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.binop_mathop.cpp_enum_value]};"
 
 
 @dataclass
@@ -507,10 +505,10 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 @dataclass
 class SDPA_OP(TemplateParameter):
-    op: SdpaOp = SdpaOp.RecipLegacy
+    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int SDPA_OP = {self.op.value};"
+        return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
 
 
 @dataclass
@@ -523,25 +521,25 @@ class SDPA_EXP_SCALE(TemplateParameter):
 
 @dataclass
 class SDPA_SOFTPLUS_PARAMS(TemplateParameter):
-    beta_bits: int = 0x3F800000  # 1.0f
-    beta_reciprocal_bits: int = 0x3F800000  # 1.0f
-    threshold_bits: int = 0x41A00000  # 20.0f
+    softplus_beta_bits: int = 0x3F800000  # 1.0f
+    softplus_beta_reciprocal_bits: int = 0x3F800000  # 1.0f
+    softplus_threshold_bits: int = 0x41A00000  # 20.0f
 
     def convert_to_cpp(self) -> str:
         lines = [
-            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.beta_bits}u;",
-            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.beta_reciprocal_bits}u;",
-            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.threshold_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.softplus_beta_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.softplus_beta_reciprocal_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.softplus_threshold_bits}u;",
         ]
         return "\n".join(lines)
 
 
 @dataclass
 class SDPA_FW_OP(TemplateParameter):
-    op: SdpaFwOp = SdpaFwOp.Recip
+    sdpa_fw_op: SdpaFwOp = SdpaFwOp.Recip
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int SDPA_FW_OP = {self.op.value};"
+        return f"constexpr int SDPA_FW_OP = {self.sdpa_fw_op.value};"
 
 
 @dataclass
@@ -570,6 +568,82 @@ class TOPK(TemplateParameter):
             "bool TOPK_STABLE_SORT;",
         ]
         return "\n".join(lines), "IIII?"
+
+
+@dataclass
+class GENERALIZED_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the generalized_moe_gate test.
+
+    ``read_base``/``from_*``/``to_*`` are SFPU column offsets; a run occupies the pair ``{lo, hi}``.
+    ``row_src``/``row_dst``/``srcb`` name copy4rows' 4-row DEST blocks and its SrcB scratch window.
+    ``eps`` and ``scale`` are float bit patterns, as the LLK takes them.
+    ``sections`` is how many DEST sections the kernel runs; 2 puts the second in the upper
+    half under DstSync::Half and packs it to buffer_Res[4..7].
+    ``sigmoid`` selects the op's enable_sigmoid front-end: transpose, sigmoid, then a RELOAD
+    binary reading SrcA back out of DEST.
+    """
+
+    mode: int = 0
+    sub_op: int = 0
+    grouped: bool = False
+    topk: int = 8
+    softmax: bool = False
+    produce_run: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+    read_base: int = 0
+    from_lo: int = 0
+    from_hi: int = 2
+    to_lo: int = 0
+    to_hi: int = 2
+    field: int = 0
+    idx_offset: int = 0
+    row_src: int = 0
+    row_dst: int = 4
+    srcb: int = 16
+    second_copy: bool = False
+    pre_copy4rows: bool = False
+    row_src_2: int = 0
+    row_dst_2: int = 8
+    srcb_2: int = 20
+    d2b_dst: int = 0
+    b2d_base: int = 0
+    sections: int = 1
+    sigmoid: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int GMG_MODE = {self.mode};",
+            f"constexpr int GMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool GMG_GROUPED = {str(self.grouped).lower()};",
+            f"constexpr std::uint32_t GMG_TOPK = {self.topk};",
+            f"constexpr bool GMG_SOFTMAX = {str(self.softmax).lower()};",
+            f"constexpr bool GMG_PRODUCE_RUN = {str(self.produce_run).lower()};",
+            f"constexpr bool GMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t GMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t GMG_SCALE = {self.scale};",
+            f"constexpr std::uint32_t GMG_READ_BASE = {self.read_base};",
+            f"constexpr std::uint32_t GMG_FROM_LO = {self.from_lo};",
+            f"constexpr std::uint32_t GMG_FROM_HI = {self.from_hi};",
+            f"constexpr std::uint32_t GMG_TO_LO = {self.to_lo};",
+            f"constexpr std::uint32_t GMG_TO_HI = {self.to_hi};",
+            f"constexpr std::uint32_t GMG_FIELD = {self.field};",
+            f"constexpr std::uint32_t GMG_IDX_OFFSET = {self.idx_offset};",
+            f"constexpr std::uint32_t GMG_ROW_SRC = {self.row_src};",
+            f"constexpr std::uint32_t GMG_ROW_DST = {self.row_dst};",
+            f"constexpr std::uint32_t GMG_SRCB = {self.srcb};",
+            f"constexpr bool GMG_SECOND_COPY = {str(self.second_copy).lower()};",
+            f"constexpr bool GMG_PRE_COPY4ROWS = {str(self.pre_copy4rows).lower()};",
+            f"constexpr std::uint32_t GMG_ROW_SRC_2 = {self.row_src_2};",
+            f"constexpr std::uint32_t GMG_ROW_DST_2 = {self.row_dst_2};",
+            f"constexpr std::uint32_t GMG_SRCB_2 = {self.srcb_2};",
+            f"constexpr std::uint32_t GMG_D2B_DST = {self.d2b_dst};",
+            f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
+            f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
+            f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass
@@ -855,19 +929,6 @@ class REDUCE_TO_ONE(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool IS_REDUCE_TO_ONE;", "?"
-
-
-@dataclass
-class NUM_TILES_IN_BLOCK(RuntimeParameter):
-    num_tiles_in_block: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
-        )
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t NUM_TILES_IN_BLOCK;", "I"
 
 
 @dataclass

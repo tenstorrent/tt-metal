@@ -215,9 +215,9 @@ def _templates(variant: Variant):
         DEST_SYNC(variant.dest_sync),
         SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
         SDPA_SOFTPLUS_PARAMS(
-            beta_bits=_f32_bits(variant.softplus.beta),
-            beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
-            threshold_bits=_f32_bits(variant.softplus.threshold),
+            softplus_beta_bits=_f32_bits(variant.softplus.beta),
+            softplus_beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
+            softplus_threshold_bits=_f32_bits(variant.softplus.threshold),
         ),
     ]
 
