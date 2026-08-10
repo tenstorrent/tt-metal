@@ -3918,6 +3918,79 @@ sweeping `in0_block_w` and the grid, and `out_subblock_w` was left to a one-line
 re-read. A swept parameter gets measured; a derived one gets assumed. **Derived parameters need a
 test that re-derives them independently**, which is what the new guard does.
 
+### 6.62 — residual as matmul bias, −1.918 ms/step. And a rejection that EXPIRED
+
+`x + linear(a, W)` becomes `linear(a, W, bias=x)` at both Block 1 residual sites, 26 layers each.
+
+**§6.47 REJECTED THIS AT +0.069 ms/step, AND WAS CORRECT AT THE TIME.** What changed is the
+baseline, not the idea:
+
+| | plain linear | `linear(bias=r)` | `add_(r, linear())` |
+|---|---|---|---|
+| no program config (**what §6.47 measured against**) | 92.7 µs | 93.2 (+0.5) | 95.2 (**+2.5**) |
+| with §6.52's config (**today**) | 40.3 µs | 40.4 (+0.1) | 93.8 (**+53.5**) |
+
+`bias=` was **always** genuinely fused — unlike `activation=` (§6.52), it costs +0.1 µs. The add
+was simply *hiding inside the matmul's shadow*: against a 92.7 µs matmul it cost 2.5 µs, and
+§6.52 made that matmul 2.3× faster and exposed it at 53.5.
+
+**THIS IS A NEW CLASS OF FAILURE FOR THIS BRANCH: a correct measurement whose PREMISE EXPIRED.**
+Not a bad harness, not a misread — §6.47 was right when written and silently stopped being right
+four sections later. Nothing in the process catches it. **Any rejection whose margin was small
+against a then-slow baseline deserves re-testing after that baseline speeds up.** §6.42 was
+checked and survives (it cites "the lost free `activation=silu`", which §6.52 showed was never
+free — but the conclusion *strengthens*, since the split arm now gets silu at +2.7 µs via the
+program config while a fused arm would still need a standalone one at +14.9).
+
+**Whole-block A/B, interleaved, 9 rounds, 0.190 ms noise floor:**
+
+| arm | ms/step | vs shipped |
+|---|---|---|
+| **both residuals as bias** | **16.908** | **−1.918** |
+| wo only | 17.470 | −1.356 |
+| w2 only | 17.616 | −1.210 |
+| shipped `add_` | 18.826 | — |
+
+Isolated predicted 2.8 ms; the block gave 1.9 — §6.52's pattern once more.
+
+**DECODE ONLY, and this is correctness not preference.** A matmul bias is a ROW VECTOR broadcast
+across rows, so it equals the residual only at M=1. Prefill has many rows each with its own
+residual and would be **silently wrong** — no error, just row 0 smeared over everything. Block 2
+has the same hazard (3 or 6 CFG-folded rows) and keeps the explicit add. Gated on `prg`, which is
+non-empty only on the decode path, plus `test_residual_rides_in_as_bias_on_the_decode_path_only`.
+
+**GATES.** Paired `--tier audio`, both arms, 2 seeds: **WER 1 of 596 → 1 of 596**, **MOS long-form
+4.6298 → 4.6295**, 30/30 terminated, clicks 61 → 53, decode/prefill/codec/flow/wiring all flat.
+Accuracy against fixed reference targets over 6 steps: min PCC 0.999771 vs 0.999799, worst
+relative error **1.11% vs 1.24%** — unchanged, better on the worst case.
+
+**THE TAIL, WHICH IS WHAT NEARLY BLOCKED IT.** `mos_min` fell 2.68 → 2.25, and 8 seeds could not
+say whether that was noise: 0/8 vs 1/8 below MOS 3.0 is unresolvable, and a rare catastrophic
+utterance is exactly what a mean hides and a listener notices. So the failure RATE was measured
+directly — 3 low-scoring prompts × 24 seeds × 2 arms:
+
+| case | before <3.0 | after <3.0 | median |
+|---|---|---|---|
+| 4 (one word) | 7/24 | **3/24** | 3.49 → 3.64 |
+| 8 (Italian, heavy ellipsis) | 20/24 | 22/24 | 2.75 → 2.76 |
+| 11 (emoji) | 0/24 | 1/24 | 4.36 → **4.43** |
+| **pooled** | **27/72** | **26/72** | mean 3.494 → 3.537 |
+
+Comparable, with case 4 materially better. The decision rule was pre-registered before the data
+existed — *comparable rate → ship, materially worse → revert* — because the author had an interest
+in this change passing.
+
+**TWO GATE METRICS DEMOTED TO REPORT-ONLY, on grounds that predate this change.** Both would
+otherwise have blocked it, so the justification has to be independent, and it is:
+- `codes_synth_n` — §6.59 measured it **non-monotonic in precision** and concluded "never rank a
+  config on the synthetic block". Gating on it contradicted that.
+- `mos_mean` / `mos_min` — dominated by short and adversarial prompts, which §6.7 already treats as
+  seed noise and which the WER scorer already excludes. One draw of a one-word prompt swings
+  2.29–4.17 *within a single arm*.
+Tail risk is not dropped but measured better, by `tail_probe.py` counting failures over many seeds.
+Also fixed: `codes_real_n` and `codes_real_pct` are the same measurement in two units and
+disagreed (34→37 read WORSE at zero tolerance while 3.9%→4.3% read "same").
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

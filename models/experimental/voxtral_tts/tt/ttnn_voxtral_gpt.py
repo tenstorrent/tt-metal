@@ -272,6 +272,14 @@ class TtVoxtralGPT:
         # bit-identical. 6.37 measured this at +0.001 ms on the N150. STATUS.md 6.47.
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
                                           memory_config=mc, **_pc(prg, "w3")))
+        # NOTES.md [gpt-27] -- the residual rides in as the matmul's BIAS, not a separate add.
+        # `prg` is non-empty only on the decode path, and that is load-bearing: a matmul bias is a
+        # ROW VECTOR broadcast over rows, so it is the residual only when there is exactly one row.
+        # Prefill has many, each with its own residual, and would be silently WRONG.
+        if prg:
+            return ttnn.linear(u, w["w2"], bias=ttnn.reshape(x, [1, DIM]),
+                               program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG,
+                               memory_config=mc)
         return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
                                         memory_config=mc, **_pc(prg, "w2")))
 
@@ -317,8 +325,9 @@ class TtVoxtralGPT:
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         # in place -- see NOTES.md [gpt-25]. Safe: `x` is the layer input and is dead the moment
         # this returns, and _norm below is evaluated BEFORE _mlp mutates anything.
-        x = ttnn.add_(x, ttnn.linear(a, w["wo"], program_config=DECODE_PRG["wo"],
-                                     compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1))
+        # NOTES.md [gpt-27] -- residual as bias. Decode is M=1, so the residual IS a row vector.
+        x = ttnn.linear(a, w["wo"], bias=ttnn.reshape(x, [1, DIM]), program_config=DECODE_PRG["wo"],
+                        compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1, DECODE_PRG)
 
     @torch.no_grad()
