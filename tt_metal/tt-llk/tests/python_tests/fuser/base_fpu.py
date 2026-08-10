@@ -7,16 +7,17 @@ from typing import TYPE_CHECKING, List, Tuple
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
 
-from .fused_loop import FusedLoop
+from .golden import Golden
+from .tile_loop import TileLoop
 
 
-class Fpu:
+class Fpu(Golden):
     """Base class for fused test FPU (math) code generators.
 
     Subclasses represent specific math operations (e.g. MatmulFpu, DatacopyFpu, etc.)
@@ -26,7 +27,7 @@ class Fpu:
     The lifecycle called by the pipeline is:
         init() -> loop.math_loop() [which calls calculate()] -> uninit()
 
-    Override `loop` with an appropriate FusedLoop subclass to control
+    Override `loop` with an appropriate TileLoop subclass to control
     the tile iteration pattern used by the math phase.
 
     Set `per_block_init = True` if init() needs block dimensions and must
@@ -34,19 +35,20 @@ class Fpu:
 
     To create a new FPU:
         1. Subclass Fpu
-        2. Set `loop` to the desired FusedLoop variant
+        2. Set `loop` to the desired TileLoop variant
         3. Override get_headers() with the required LLK header files
         4. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        5. Override golden() to compute the expected math result
+        5. Override golden() to compute the expected math result, calling
+           self.eltwise_golden(), self.matmul_golden(), etc.
     """
 
     # Controls the tile iteration pattern for the math loop.
-    loop: FusedLoop = FusedLoop()
+    loop: TileLoop = TileLoop()
     per_block_init: bool = False
 
     def init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -62,14 +64,14 @@ class Fpu:
 
     def calculate(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that performs the math operation on a single tile.
 
-        Called inside the tile loop by FusedLoop.math_loop(). Use block.tile_id_block
+        Called inside the tile loop by TileLoop.math_loop(). Use block.tile_id_block
         for the dest register index. Override to emit the _llk_math_*_<>() call
         that executes the FPU operation on data in the source register files.
         """
@@ -77,7 +79,7 @@ class Fpu:
 
     def uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -96,7 +98,7 @@ class Fpu:
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
         tensor_dst: torch.Tensor,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
