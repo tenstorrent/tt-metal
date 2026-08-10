@@ -24,12 +24,18 @@ Bands:
   device       run under `python3 -m tracy -p -r`; emits a dispatch-order sidecar that gate.py
                joins against the profiler CSV
 
+The perf bands measure a subset, because each case costs seconds of card time, and `strata.py`
+chooses it -- see there for why a flat prefix of the ledger was the reason a whole class of inputs
+went unmeasured. The chosen plan is written into the payload so gate.py grades within the same
+classes rather than re-deriving them.
+
 This script never decides pass or fail. It reports numbers; gate.py applies the thresholds.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -39,6 +45,12 @@ from pathlib import Path
 import torch
 
 import ttnn
+
+# The device band runs this file under `python3 -m tracy`, which execs it with a `sys.path[0]` of its
+# own choosing rather than this directory. Tracy happens to insert the script's directory too, but
+# depending on that would trade a two-line guard for a `blocked` verdict an hour into a run.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import strata  # noqa: E402 - must follow the path insertion above
 
 USE_TRACY = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
@@ -80,18 +92,35 @@ def random_torch_tensor(dtype: str, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def _golden_pad(torch_input, kwargs):
-    """ttnn gives (front, back) per trailing dim; torch wants a flat list, last dim first."""
-    padding = kwargs["padding"]
-    flat = []
-    for i in range(len(padding) - 1, -1, -1):
-        flat.extend(padding[i])
-    return torch.nn.functional.pad(torch_input, flat, mode="constant", value=kwargs.get("value", 0))
+def resolve_golden(op: str, manifest: dict | None):
+    """Find a host reference for `op`, preferring the most specific source available.
 
+    The correctness band wants a host golden rather than native output, because native is sometimes
+    the thing that is wrong -- that is what the manifest's `known_bad_golden` entries record. What it
+    must not have is a table of per-op goldens living in this file: one entry per ported op in the
+    shared harness is how a pipeline grows a maintenance surface proportional to its own success.
 
-# Per-op torch references. The correctness band prefers a host golden over native output, because
-# native is sometimes the thing that is wrong (see the manifest's known_bad_golden entries).
-GOLDENS = {"pad": _golden_pad}
+    So op-specific knowledge is resolved from where op-specific knowledge belongs:
+
+      1. the manifest's `golden_callable`, a dotted path, for an op whose reference is neither of the
+         below;
+      2. `ttnn.get_golden_function`, which returns the reference ttnn itself already registers for
+         the op -- note it returns the *raw* golden, without the pre/postprocessing that
+         `get_fallback_function` layers on, so it takes a torch tensor and the op's own kwargs;
+      3. nothing, in which case the caller compares against native and says so.
+
+    Returns `(callable(torch_input, **kwargs), source)`, or `(None, "native")`.
+    """
+    path = (manifest or {}).get("golden_callable")
+    if path:
+        module_name, _, attr = str(path).replace(":", ".").rpartition(".")
+        return getattr(importlib.import_module(module_name), attr), f"manifest:{path}"
+
+    try:
+        return ttnn.get_golden_function(getattr(ttnn, op)), f"ttnn.get_golden_function(ttnn.{op})"
+    except (AttributeError, RuntimeError) as exc:
+        print(f"measure: no host golden for {op!r} ({exc}); comparing against native", file=sys.stderr)
+        return None, "native"
 
 
 # --------------------------------------------------------------------------------------------
@@ -183,8 +212,7 @@ def make_input(case, device):
     return torch_input, tt_input
 
 
-def run_correctness(op: str, cases: list[dict], device) -> list[dict]:
-    golden_fn = GOLDENS.get(op)
+def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
     results = []
     for case in cases:
         record = {"case_id": case["case_id"], "scope": case["scope"]}
@@ -195,8 +223,8 @@ def run_correctness(op: str, cases: list[dict], device) -> list[dict]:
             if case["scope"] == "in":
                 got = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "codegen"))
                 if golden_fn is not None:
-                    want = golden_fn(torch_input, kwargs)
-                    source = "torch"
+                    want = golden_fn(torch_input, **kwargs)
+                    source = golden_source
                 else:
                     want = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
                     source = "native"
@@ -207,19 +235,62 @@ def run_correctness(op: str, cases: list[dict], device) -> list[dict]:
                 )
             else:
                 # Out of scope: `auto` must route to native, and routing must not compile a new
-                # codegen program. A flat cache across the routed call is what proves it.
+                # codegen program. A flat cache across the routed call is what proves it, and both
+                # halves of that sentence were wrong here for the life of the harness.
+                #
+                # The order first. Native runs *before* the snapshot so that its program is already
+                # compiled and cached; only then does `auto` have something to reuse. Called the
+                # other way round, `auto` is the first dispatch of this configuration either way --
+                # a correct fallback compiles the native program, a mis-route compiles the codegen
+                # one, both add exactly one entry, and the check cannot tell them apart.
+                #
+                # Then the comparison. This asked `after >= before`, and a program cache never
+                # shrinks, so it was true unconditionally: the routing gate that is supposed to be
+                # the whole check on `is_demoted()` and `supported_by_codegen()` falling back has
+                # never once failed. `==` is the assertion that was meant, and it is the same one
+                # the emitted routing test makes.
+                native = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
                 before = program_cache_entries(device)
                 routed = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "auto"))
                 after = program_cache_entries(device)
-                native = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
                 record.update(
                     equal=bool(torch.equal(native, routed)),
                     cache_before=before,
                     cache_after=after,
-                    routing_ok=(before < 0 or after >= before),
+                    # A build without the cache-entry query cannot answer this. Say so rather than
+                    # reporting a pass, which is how the tautology above went unnoticed.
+                    routing_probe=("unavailable" if before < 0 else "program_cache"),
+                    routing_ok=(None if before < 0 else after == before),
                 )
             record["error"] = None
         except Exception as exc:  # noqa: BLE001 - a failing case is data, not a crash
+            record.update(equal=False, error=f"{type(exc).__name__}: {exc}")
+        results.append(record)
+    return results
+
+
+def run_golden_check(op: str, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
+    """Check the resolved golden against native, before there is a port to blame.
+
+    Resolving the golden generically is only safe if something checks that what came back is actually
+    this op's reference. Native is the right thing to check it against: these cases are in scope, so
+    `known_bad_golden` slices have already been dropped from the ledger, and native and the golden
+    disagreeing here means the harness would have graded the port against the wrong answer. Finding
+    that out in the baseline costs seconds; finding it out afterwards looks like a broken port.
+    """
+    results = []
+    for case in cases:
+        record = {"case_id": case["case_id"], "golden": golden_source, "dtype": case["dtype"]}
+        try:
+            torch_input, tt_input = make_input(case, device)
+            native = ttnn.to_torch(call_ttnn(op, tt_input, case["kwargs"], "native"))
+            want = golden_fn(torch_input, **case["kwargs"])
+            record.update(
+                equal=bool(torch.equal(want.to(native.dtype), native)),
+                max_abs_diff=float((want.to(torch.float32) - native.to(torch.float32)).abs().max()),
+                error=None,
+            )
+        except Exception as exc:  # noqa: BLE001
             record.update(equal=False, error=f"{type(exc).__name__}: {exc}")
         results.append(record)
     return results
@@ -233,6 +304,21 @@ def run_wall(op: str, cases: list[dict], device, generic, iters: int) -> list[di
             _, tt_input = make_input(case, device)
             kwargs = case["kwargs"]
             record["native_us"] = bench_sync(device, lambda: call_ttnn(op, tt_input, kwargs, "native"), iters=iters)
+
+            # Which way `auto` actually routes this case, observed rather than assumed. The native
+            # timing above has already compiled and cached the native program, so a flat cache across
+            # one `auto` call means `auto` reused it -- and for an in-scope case, the only thing that
+            # sends an in-scope case to native is `is_demoted()` claiming it. Growth means codegen.
+            #
+            # This sits between the two timings on purpose. It has to happen before anything caches a
+            # codegen program for this configuration, and it costs exactly one dispatch on cases the
+            # band was going to run anyway. gate.py uses it to decide which cases the port has taken
+            # responsibility for and which it has handed back to native.
+            before = program_cache_entries(device)
+            call_ttnn(op, tt_input, kwargs, "auto")
+            after = program_cache_entries(device)
+            record["routes_to"] = None if before < 0 else ("native" if after == before else "codegen")
+
             record["ported_us"] = bench_sync(device, lambda: call_ttnn(op, tt_input, kwargs, "codegen"), iters=iters)
             if generic is not None:
                 record["generic_us"] = bench_sync(
@@ -300,22 +386,53 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--op", required=True)
     ap.add_argument("--ledger", required=True, help="JSON from ledger.py")
-    ap.add_argument("--band", required=True, choices=["correctness", "wall", "device"])
+    ap.add_argument("--band", required=True, choices=["correctness", "wall", "device", "golden"])
+    ap.add_argument("--manifest", default=None, help="port manifest; supplies `golden_callable` if set")
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0, help="cap the number of cases (perf bands)")
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--no-generic", action="store_true", help="skip the tt-dm-codegen prototype leg")
+    ap.add_argument(
+        "--select",
+        default="stratified",
+        choices=["stratified", "prefix"],
+        help="how the perf bands spend their case budget; `prefix` is the old flat slice",
+    )
     args = ap.parse_args()
 
     ledger = json.loads(Path(args.ledger).read_text())
     cases = ledger["cases"]
+    selection: dict | None = None
     if args.band == "correctness":
+        # Never capped. Correctness is cheap per case and the routing check only means something
+        # over the whole out-of-scope set, so there is no budget to spend here.
         selected = [c for c in cases if c["scope"] in ("in", "out")]
+    elif args.band == "golden":
+        # Stratified like the perf bands, and for the same reason: a golden that is right for one
+        # dtype and wrong for another is exactly the failure this band exists to catch, so a flat
+        # prefix would defeat it.
+        pool = [c for c in cases if c["scope"] == "in"]
+        selection = strata.plan_selection(pool, args.limit)
+        selected = selection["cases"]
+        selection = {k: v for k, v in selection.items() if k != "cases"}
     else:
-        selected = [c for c in cases if c["scope"] == "in"]
-    if args.limit:
-        selected = selected[: args.limit]
+        pool = [c for c in cases if c["scope"] == "in"]
+        if args.select == "prefix":
+            selected = pool[: args.limit] if args.limit else pool
+            selection = {"select": "prefix", "coverage_complete": False}
+        else:
+            selection = strata.plan_selection(pool, args.limit)
+            selected = selection["cases"]
+            # The plan travels to gate.py, which grades per stratum and reports coverage; the cases
+            # themselves would just duplicate the results list.
+            selection = {k: v for k, v in selection.items() if k != "cases"}
+
+    manifest = None
+    if args.manifest:
+        import yaml
+
+        manifest = yaml.safe_load(Path(args.manifest).read_text()) or {}
 
     device = ttnn.open_device(device_id=0)
     generic = None
@@ -326,8 +443,26 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - the prototype leg is informative, not required
                 print(f"measure: generic_op leg unavailable: {exc}", file=sys.stderr)
 
+        if args.band in ("correctness", "golden"):
+            golden_fn, golden_source = resolve_golden(args.op, manifest)
+
         if args.band == "correctness":
-            payload = {"band": "correctness", "results": run_correctness(args.op, selected, device)}
+            payload = {
+                "band": "correctness",
+                "golden": golden_source,
+                "results": run_correctness(args.op, selected, device, golden_fn, golden_source),
+            }
+        elif args.band == "golden":
+            if golden_fn is None:
+                # Nothing to check. The correctness band will compare against native, which is a
+                # weaker oracle but an honest one, and it records that it did so.
+                payload = {"band": "golden", "golden": "native", "results": []}
+            else:
+                payload = {
+                    "band": "golden",
+                    "golden": golden_source,
+                    "results": run_golden_check(args.op, selected, device, golden_fn, golden_source),
+                }
         elif args.band == "wall":
             payload = {
                 "band": "wall",
@@ -345,6 +480,8 @@ def main() -> int:
 
     payload["op"] = args.op
     payload["case_count"] = len(selected)
+    if selection is not None:
+        payload["selection"] = selection
     Path(args.out).write_text(json.dumps(payload, indent=2, default=str))
     print(json.dumps({"band": payload["band"], "cases": len(selected), "out": args.out}, indent=2))
     return 0
