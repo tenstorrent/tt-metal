@@ -12,6 +12,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <ostream>
 
 // forward declarations
 namespace tt::tt_metal {
@@ -60,6 +61,9 @@ public:
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
+
+    GlobalSemaphoreImpl& impl();
+    const GlobalSemaphoreImpl& impl() const;
 
 private:
     std::unique_ptr<GlobalSemaphoreImpl> pimpl_;

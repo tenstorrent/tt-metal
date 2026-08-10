@@ -47,6 +47,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/arch.hpp>
@@ -868,7 +869,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Bfp8_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb.buffer_address());
+                global_cb.impl().buffer_address());
 
         } else {
             // output
@@ -882,7 +883,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Float16_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb.buffer_address());
+                global_cb.impl().buffer_address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
