@@ -52,7 +52,6 @@ void kernel_main() {
 
         dfb_in0.reserve_back(single_block_size * has_rows);
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-        const uint32_t entry_base = l1_write_addr;
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
@@ -70,14 +69,8 @@ void kernel_main() {
                 uint32_t this_block_size = unpadded_X_size - prev_size;
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
-                    if (pad_value == 0) {
-                        noc.async_write_zeros(
-                            dfb_in0, to_pad, {.offset_bytes = l1_write_addr + this_block_size - entry_base});
-                        noc.write_zeros_l1_barrier();
-                    } else {
-                        dataflow_kernel_lib::fill_l1_range<element_size>(
-                            l1_write_addr + this_block_size, to_pad, pad_value);
-                    }
+                    dataflow_kernel_lib::fill_l1_range<element_size>(
+                        l1_write_addr + this_block_size, to_pad, pad_value);
                 }
             } else {
                 // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
@@ -117,16 +110,9 @@ void kernel_main() {
             l1_write_addr += width_size;
         }
 
-        if (pad_value == 0 && padding_rows > 0) {
-            noc.async_write_zeros(dfb_in0, padding_rows * width_size, {.offset_bytes = l1_write_addr - entry_base});
-            noc.write_zeros_l1_barrier();
-            l1_write_addr += padding_rows * width_size;
-        } else {
-            for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-                dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, width_size, pad_value);
-                l1_write_addr += width_size;
-            }
-        }
+        const uint32_t row_pad_bytes = padding_rows * width_size;
+        dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, row_pad_bytes, pad_value);
+        l1_write_addr += row_pad_bytes;
 
         dfb_in0.push_back(single_block_size * has_rows);
     };

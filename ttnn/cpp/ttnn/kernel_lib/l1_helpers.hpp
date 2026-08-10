@@ -97,7 +97,16 @@ FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>>;
 
     const uint32_t end_addr = start_addr + n_bytes;
+    // The 4-byte-aligned interior [start_addr_4B, end_addr_4B) must stay inside
+    // [start_addr, end_addr), so the start rounds up and the end rounds down.
+    // Masking with ~0x3 clears the low 2 bits, which always rounds down; that is
+    // correct for the end but would pull the start before start_addr. Adding 0x3
+    // first turns the mask into a round-up (e.g. start_addr 5 -> 5+3=8 -> 8, the
+    // first aligned address >= 5), while masking the end alone rounds it down.
     const uint32_t aligned_start = (start_addr + 0x3) & 0xFFFFFFFC;
+    // Clamp so short, unaligned ranges (no complete aligned word) yield an empty
+    // interior instead of start_addr_4B > end_addr_4B, which would corrupt
+    // neighbouring bytes via the head/tail loops below.
     const uint32_t start_addr_4B = aligned_start < end_addr ? aligned_start : end_addr;
     const uint32_t aligned_end = end_addr & 0xFFFFFFFC;
     const uint32_t end_addr_4B = aligned_end > start_addr_4B ? aligned_end : start_addr_4B;

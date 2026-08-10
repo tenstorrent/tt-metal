@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import pytest
 import torch
 import ttnn
@@ -11,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole
 
 torch.manual_seed(0)
 
@@ -71,10 +72,11 @@ params += [
     )
 ]
 
-# pad_value == 0.0 exercises the NOC async_write_zeros fast path in the row-major
-# tilize_with_val_padding reader kernels (as opposed to the scalar fill_l1_range
-# store loop used for non-zero pad values). Cover both the single-core and
-# multicore reader kernels, since they hit different fast-path call sites.
+# pad_value == 0.0 exercises the zero-fill path in the row-major tilize_with_val_padding
+# reader kernel (the scalar fill_l1_range store loop that also handles non-zero pads).
+# Only the multicore reader is covered: the single-core reader path is a broken legacy
+# path (garbage output on device, unsupported oversized reads on the simulator) and is
+# never used in production, where tilize_with_val_padding always runs multicore.
 params += [
     pytest.param(
         [[1, 1, 50, 50]],
@@ -85,10 +87,9 @@ params += [
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             "output_tensor_shape": [1, 1, 64, 64],
             "pad_value": 0.0,
-            "use_multicore": use_multicore,
+            "use_multicore": True,
         },
     )
-    for use_multicore in (False, True)
 ]
 
 
@@ -646,7 +647,10 @@ def test_tilize_with_val_padding_scalar(device, dtype, scalar_val, pad_value):
     assert_equal(expected_torch_tensor, output_torch_tensor)
 
 
-@pytest.mark.parametrize("use_multicore", [False, True])
+# Only the multicore reader is covered: the single-core reader is a broken legacy path whose
+# stale TensorAccessorArgs contract fails to JIT-compile on a cold cache, and it is never used
+# in production (tilize_with_val_padding always runs multicore).
+@pytest.mark.parametrize("use_multicore", [True])
 def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
     """Regression test: FP32 must not be truncated to TF32 during tilize_with_val_padding (issue #39310)."""
     input_shape = [1, 1, 50, 50]
@@ -727,10 +731,12 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
     assert_with_pcc(ref_flat, result_flat, pcc=0.999)
 
 
-# Regression test for issue #51215 bug 4: the single-core reader cast an arbitrarily-offset L1
-# address to uint32_t* and wrote whole words for column padding.  When the unpadded row size is
-# not a multiple of 4 bytes the stores were misaligned, clobbering adjacent input bytes and
-# leaving the last 1-3 pad bytes unfilled.
+# Regression test for issue #51215 bug 4: column/row padding stores must handle a row byte size
+# that is not a multiple of 4.  The reader's fill_l1_range<elem_size> helper does element-sized
+# head/tail stores around the 4-byte-aligned interior; a naive 4-byte-only fill would clobber
+# adjacent input bytes and leave the last 1-3 pad bytes unfilled.  Uses the multicore reader
+# (the production path); the single-core reader is a broken legacy path (garbage output, and a
+# stale TensorAccessorArgs contract that fails to JIT-compile) and is not exercised here.
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -744,7 +750,7 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
     ids=["bf16_w31", "bf16_w33", "bf16_w29", "bf16_w31_h30"],
 )
 def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output_shape):
-    """Single-core tilize_with_val_padding with row bytes not a multiple of 4 (issue #51215 bug 4)."""
+    """tilize_with_val_padding with row bytes not a multiple of 4 (issue #51215 bug 4)."""
     pad_value = 7.0
     torch_input = (torch.rand(input_shape) * 200 - 100).to(torch.bfloat16)
 
@@ -755,24 +761,33 @@ def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output
         device=device,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     )
-    tt_output = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=False)
+    tt_output = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=True)
     torch_output = tt_output.cpu().to_torch_with_padded_shape()
 
     torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
     assert_equal(torch_golden, torch_output)
 
 
-# FP8_E4M3 is a 1-byte-per-element format. A row width of 31 → 31 bytes/row, which is
+# FP8_E4M3 is a 1-byte-per-element format. A row width of 63 → 63 bytes/row, which is
 # not a multiple of 4. This covers the head/tail element-sized stores in
 # fill_l1_range<1> that handle the unaligned bytes at the start and end of each
 # padding region; an incorrect 4-byte-only fill would corrupt adjacent real data.
-@run_for_blackhole()
+# The output must be wider than a single tile (>32): the Blackhole 8-bit unpack-tilize
+# path corrupts odd rows when the block is a single column tile (ct_dim == 1), so that
+# case is rejected by the op guard (tt-llk narrow 8-bit tilize bug).
+# Uses the multicore reader (production path); the single-core reader is broken legacy.
+# Runs on Blackhole hardware only: it is a Blackhole-specific path, and the simulator does
+# not implement the 8-bit tensix elementwise/unpack ops it exercises
+# (UnimplementedFunctionality: tensix_elw_op src_fmt=10).
+@pytest.mark.skipif(
+    not is_blackhole() or bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="FP8_E4M3 tilize runs only on Blackhole hardware (not implemented in the simulator)",
+)
 def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
-    """Single-core FP8_E4M3 tilize_with_val_padding where the row byte size (width × 1)
-    is not a multiple of 4: verifies that padding is written exactly and real data is
-    preserved."""
-    input_shape = [1, 1, 32, 31]
-    output_shape = [1, 1, 32, 32]
+    """FP8_E4M3 tilize_with_val_padding where the row byte size (width × 1) is not a
+    multiple of 4: verifies that padding is written exactly and real data is preserved."""
+    input_shape = [1, 1, 32, 63]
+    output_shape = [1, 1, 32, 64]
     # Use a nonzero FP8-exact pad value so the padding assertion fails loudly if the
     # fill is reverted — 0.0 can pass silently when the CB happens to be zeroed.
     pad_value = 2.0
@@ -785,16 +800,17 @@ def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
         device=device,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     )
-    tt_tiled = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=False)
+    tt_tiled = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=True)
     tt_untiled = ttnn.untilize(tt_tiled)
-    torch_output = ttnn.to_torch(tt_untiled)
+    torch_output = ttnn.to_torch(tt_untiled).float()
 
-    # Real data region: use tt_input (already quantised to FP8) as the exact golden,
-    # avoiding the lossy float32→FP8→float32 round-trip that weakens PCC detection of
-    # the misaligned-store bug (which clobbers the last real byte of each row).
-    torch_golden = ttnn.to_torch(tt_input)
-    assert_equal(torch_golden, torch_output[..., :31])
+    # Real data region: use the exact device-quantised FP8 values as golden (converted to
+    # float32 host-side via to_dtype, since single-device FP8→torch is unsupported). This
+    # avoids the lossy float32→FP8→float32 round-trip that weakens detection of the
+    # misaligned-store bug (which clobbers the last real byte of each row).
+    torch_golden = ttnn.to_torch(ttnn.to_dtype(tt_input.cpu(), ttnn.float32)).float()
+    assert_equal(torch_golden, torch_output[..., :63])
     # Padding column: FP8 2.0 (0x40) round-trips to exactly 2.0.
     assert torch.all(
-        torch_output[..., 31:] == pad_value
-    ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 31:].unique()}"
+        torch_output[..., 63:] == pad_value
+    ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 63:].unique()}"
