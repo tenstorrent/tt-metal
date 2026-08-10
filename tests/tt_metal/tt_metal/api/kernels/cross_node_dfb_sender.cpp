@@ -9,8 +9,9 @@
 //   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
 //   [2] num_entries        - number of entries to push per receiver
 //   [3] write_primitive    - 0=write_broadcast, 1=write_strided,
-//                            2=write_to_receiver+push_back (receiver-contiguous),
-//                            3=write_to_receiver+push_back_to_receiver (per-receiver credit)
+//                            2=write_to_receiver(r)+push_back (1:1 uses r=0),
+//                            3=write_to_receiver+push_back_to_receiver (per-receiver credit),
+//                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n)
 //   [4] data_pattern       - 0=multicast counter layout, 1=strided per-receiver layout,
 //                            2=per-receiver constant layout (see cross_node_dfb_test_utils.hpp)
 //   [5] do_barrier         - 1 to call barrier() after pushing all entries
@@ -59,6 +60,9 @@ void kernel_main() {
     static_assert(
         write_primitive != 3 || data_pattern == pattern_per_receiver_constant,
         "push_back_to_receiver expects per-receiver staging");
+    static_assert(
+        write_primitive != 4 || data_pattern == pattern_multicast_counter,
+        "decoupled write_broadcast expects multicast counter staging");
 
     if constexpr (write_primitive == 0) {
         for (uint32_t i = 0; i < num_entries; ++i) {
@@ -101,6 +105,14 @@ void kernel_main() {
                 gdfb.push_back_to_receiver(r, 1, noc);
             }
         }
+    } else if constexpr (write_primitive == 4) {
+        // Layered contract: all payload writes land before any pages_sent credit.
+        // write_* does not advance fifo_wr_ptr, so one write_broadcast(n) covers the slot;
+        // a single push_back(n) then publishes credit for the whole batch.
+        gdfb.reserve_back(num_entries);
+        gdfb.write_broadcast(staging_base, num_entries, noc);
+        gdfb.flush_writes(noc);
+        gdfb.push_back(num_entries, noc);
     }
 
     if constexpr (do_barrier) {

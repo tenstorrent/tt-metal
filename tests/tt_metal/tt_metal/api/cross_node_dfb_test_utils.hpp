@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -49,9 +51,10 @@ inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
     if (write_primitive == 1) {
         return static_cast<uint32_t>(SenderDataPattern::StridedPerReceiver);
     }
-    if (write_primitive >= 2) {
+    if (write_primitive == 2 || write_primitive == 3) {
         return static_cast<uint32_t>(SenderDataPattern::PerReceiverConstant);
     }
+    // 0 (per-entry broadcast) and 4 (decoupled broadcast batch) use counter staging.
     return static_cast<uint32_t>(SenderDataPattern::MulticastCounter);
 }
 
@@ -256,6 +259,16 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
     return bytes;
 }
 
+// CreateCrossNodeDFB does not zero the data ring; clear L1 before "untouched" checks.
+inline void zero_receiver_ring(
+    IDevice* device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
+    IDevice* physical_device = local_physical_device(device);
+    const uint32_t ring_size = static_cast<uint32_t>(gdfb.dfb_buffer().page_size());
+    const uint32_t aligned_words = (ring_size + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    std::vector<uint32_t> zeros(aligned_words, 0);
+    detail::WriteToDeviceL1(physical_device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);
+}
+
 inline bool verify_receiver_ring(
     IDevice* device,
     const experimental::CrossNodeDFB& gdfb,
@@ -279,6 +292,61 @@ inline bool verify_receiver_ring(
         num_entries_after);
     const auto received = read_receiver_ring_bytes(device, gdfb, receiver_core, static_cast<uint32_t>(expected.size()));
     return received == expected;
+}
+
+// Read pages_sent / pages_acked from a core's sharded config page at the given slot.
+inline std::pair<uint32_t, uint32_t> read_credit_pair(
+    IDevice* device, const CoreCoord& core, uint32_t pages_sent_addr) {
+    IDevice* physical_device = local_physical_device(device);
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    std::vector<uint8_t> bytes(2 * l1_alignment, 0);
+    detail::ReadFromDeviceL1(
+        physical_device, core, pages_sent_addr, std::span<uint8_t>(bytes.data(), bytes.size()), CoreType::WORKER);
+    uint32_t sent = 0;
+    uint32_t acked = 0;
+    std::memcpy(&sent, bytes.data(), sizeof(uint32_t));
+    std::memcpy(&acked, bytes.data() + l1_alignment, sizeof(uint32_t));
+    return {sent, acked};
+}
+
+// After a full drain, every receiver slot must have pages_sent == pages_acked == expected units
+// on both the sender and that receiver's config page.
+inline bool verify_credits_drained(
+    IDevice* device,
+    const experimental::CrossNodeDFB& gdfb,
+    const CoreCoord& sender_core,
+    const CoreRangeSet& receiver_cores,
+    uint32_t entry_size,
+    uint32_t num_entries_pushed_per_receiver) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    TT_FATAL(entry_size % l1_alignment == 0, "entry_size must be L1-aligned for credit accounting");
+    const uint32_t expected_units = (num_entries_pushed_per_receiver * entry_size) / l1_alignment;
+    const uint32_t credit_base = gdfb.credit_reset_address();
+    const auto receivers = corerange_to_cores(receiver_cores);
+
+    bool ok = true;
+    for (uint32_t ri = 0; ri < receivers.size(); ++ri) {
+        const uint32_t slot_addr = credit_base + 2 * ri * l1_alignment;
+        const auto [sent_s, acked_s] = read_credit_pair(device, sender_core, slot_addr);
+        const auto [sent_r, acked_r] = read_credit_pair(device, receivers[ri], slot_addr);
+        if (sent_s != expected_units || acked_s != expected_units || sent_r != expected_units ||
+            acked_r != expected_units) {
+            log_error(
+                tt::LogTest,
+                "credits drained FAIL receiver[{}] core=({},{}): expected={}, "
+                "sender(sent={},acked={}), receiver(sent={},acked={})",
+                ri,
+                receivers[ri].x,
+                receivers[ri].y,
+                expected_units,
+                sent_s,
+                acked_s,
+                sent_r,
+                acked_r);
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 }  // namespace tt::tt_metal::cross_node_dfb_test
