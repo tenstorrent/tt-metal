@@ -24,6 +24,7 @@ from models.common.llm_runtime.prefill.runtime import (
     PrefillPersistentInputs,
     PrefillPositionInputs,
     PrefillRuntime,
+    _fit_prefill_sampling_logits,
     _process_output_tokens,
 )
 from models.common.sampling import SamplingParams
@@ -948,24 +949,42 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
         last_token_index=None,
     ):
         seen.append(((hidden_states, last_token_idx), {}))
-        return "logits"
+        return hidden_states
 
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: logits)
-    monkeypatch.setattr(runtime, "_sample_device", lambda logits, kpt, sampled_output=None: sampled_output)
+    sliced = []
+
+    def slice_logits(value, start, end):
+        sliced.append((start, end))
+        return value[:, :, start[2] : end[2], :]
+
+    sampled = []
+    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_logits)
+    monkeypatch.setattr(
+        runtime,
+        "_sample_device",
+        lambda logits, kpt, sampled_output=None: sampled.append((logits, sampled_output)) or sampled_output,
+    )
 
     assert runtime._sampling_output_rows(prepared) == 32
     assert (
         runtime._finish_regular_prefill(
             prepared,
-            "hidden",
+            torch.zeros(1, 1, 128, runtime.config.model.vocab_size),
             "kpt",
             PrefillPositionInputs("dynamic-start", "dynamic-end", "dynamic-row"),
             sampled_output="sampled",
         )
         == "sampled"
     )
-    assert seen == [(("hidden", 79), {})]
+    assert len(seen) == 1
+    assert seen[0][0][0].shape == (1, 1, 128, runtime.config.model.vocab_size)
+    assert seen[0][0][1] == 79
+    assert seen[0][1] == {}
+    assert sliced == [((0, 0, 0, 0), (1, 1, 32, runtime.config.model.vocab_size))]
+    assert len(sampled) == 1
+    assert sampled[0][0].shape == (1, 1, 32, runtime.config.model.vocab_size)
+    assert sampled[0][1] == "sampled"
 
     host_tokens = torch.zeros(1, 1, 32, 1, dtype=torch.int64)
     host_tokens[0, 0, 15, 0] = 123
@@ -1013,6 +1032,40 @@ def test_static_q128_output_sizing_does_not_change_chunked_or_non_q128_paths():
     non_q128 = prepare(runtime, 129)
     assert runtime._sampling_output_rows(cached) == 1
     assert runtime._sampling_output_rows(non_q128) == 1
+
+
+def test_prefill_sampling_logits_are_fit_to_runtime_sampling_rows(monkeypatch):
+    runtime = _runtime()
+    too_many = torch.ones(1, 1, 128, runtime.config.model.vocab_size)
+    too_few = torch.ones(1, 1, 1, runtime.config.model.vocab_size)
+    exact = torch.ones(1, 1, 32, runtime.config.model.vocab_size)
+    sliced = []
+    padded = []
+
+    def slice_logits(value, start, end):
+        sliced.append((start, end))
+        return value[:, :, start[2] : end[2], :]
+
+    def pad_logits(tensor, padding, **kwargs):
+        fill = kwargs["value"]
+        padded.append((padding, fill))
+        pad_rows = padding[2][1]
+        return torch.cat(
+            [
+                tensor,
+                torch.full((1, 1, pad_rows, tensor.shape[3]), fill, dtype=tensor.dtype),
+            ],
+            dim=2,
+        )
+
+    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_logits)
+    monkeypatch.setattr(prefill_module.ttnn, "pad", pad_logits)
+
+    assert _fit_prefill_sampling_logits(exact, 32) is exact
+    assert _fit_prefill_sampling_logits(too_many, 32).shape[2] == 32
+    assert sliced == [((0, 0, 0, 0), (1, 1, 32, runtime.config.model.vocab_size))]
+    assert _fit_prefill_sampling_logits(too_few, 32).shape[2] == 32
+    assert padded == [([(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)]
 
 
 @pytest.mark.parametrize(
@@ -1369,8 +1422,8 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
     monkeypatch.setattr(
         prefill_module,
-        "_pad_prefill_logits",
-        lambda logits, sampler: events.append("pad") or "padded",
+        "_fit_prefill_sampling_logits",
+        lambda logits, target_batch: events.append("pad") or "padded",
     )
     monkeypatch.setattr(
         runtime,
@@ -1619,7 +1672,11 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
         return raw_regular
 
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: padded_regular)
+    monkeypatch.setattr(
+        prefill_module,
+        "_fit_prefill_sampling_logits",
+        lambda logits, target_batch: padded_regular,
+    )
     monkeypatch.setattr(
         runtime,
         "_sample_device",
@@ -1646,7 +1703,11 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     )
     raw_chunked, padded_chunked, sampled_chunked = object(), object(), object()
     chunked_owned = [raw_chunked]
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: padded_chunked)
+    monkeypatch.setattr(
+        prefill_module,
+        "_fit_prefill_sampling_logits",
+        lambda logits, target_batch: padded_chunked,
+    )
     monkeypatch.setattr(
         runtime,
         "_sample_device",
@@ -1668,7 +1729,11 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
 
     alias_owned = []
     runtime.config.model.post_process_prefill_output = post_process_prefill_output
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: raw_regular)
+    monkeypatch.setattr(
+        prefill_module,
+        "_fit_prefill_sampling_logits",
+        lambda logits, target_batch: raw_regular,
+    )
     monkeypatch.setattr(
         runtime,
         "_sample_device",
@@ -1815,7 +1880,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
             raise RuntimeError("postprocess failed")
         return raw
 
-    def pad(logits, sampler):
+    def pad(logits, target_batch):
         if failure_point == "pad":
             raise RuntimeError("pad failed")
         return padded
@@ -1832,7 +1897,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
         return object()
 
     runtime.config.model.post_process_prefill_output = postprocess
-    monkeypatch.setattr(prefill_module, "_pad_prefill_logits", pad)
+    monkeypatch.setattr(prefill_module, "_fit_prefill_sampling_logits", pad)
     monkeypatch.setattr(runtime, "_sample_device", sample)
     monkeypatch.setattr(prefill_module.ttnn, "untilize", untilize)
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda values: released.append(values) or [])

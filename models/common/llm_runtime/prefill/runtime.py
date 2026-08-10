@@ -723,7 +723,10 @@ class PrefillRuntime:
                 owned=owned,
             )
         if prepared.sampling_params is not None:
-            selected = _pad_prefill_logits(final_step_output, self.config.model.sampling)
+            selected = _fit_prefill_sampling_logits(
+                final_step_output,
+                self._sampling_output_rows(prepared),
+            )
             _retain_owned(owned, selected)
             output = self._sample_device(selected, kpt)
         else:
@@ -833,7 +836,10 @@ class PrefillRuntime:
             )
         _retain_owned(owned, logits)
         if prepared.sampling_params is not None:
-            selected = _pad_prefill_logits(logits, self.config.model.sampling)
+            selected = _fit_prefill_sampling_logits(
+                logits,
+                self._sampling_output_rows(prepared),
+            )
             _retain_owned(owned, selected)
             output = self._sample_device(selected, kpt, sampled_output)
         else:
@@ -1150,11 +1156,19 @@ def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
     return device_tensors
 
 
-def _pad_prefill_logits(logits, sampler):
-    target_batch = int(sampler.config.max_batch_size)
+def _fit_prefill_sampling_logits(logits, target_batch: int):
+    target_batch = int(target_batch)
+    if target_batch <= 0:
+        raise ValueError("prefill sampling target batch must be positive")
     current_batch = int(logits.shape[2])
-    if current_batch >= target_batch:
+    if current_batch == target_batch:
         return logits
+    if current_batch > target_batch:
+        return ttnn.slice(
+            logits,
+            (0, 0, 0, 0),
+            (logits.shape[0], logits.shape[1], target_batch, logits.shape[3]),
+        )
     return ttnn.pad(logits, [(0, 0), (0, 0), (0, target_batch - current_batch), (0, 0)], value=0.0)
 
 

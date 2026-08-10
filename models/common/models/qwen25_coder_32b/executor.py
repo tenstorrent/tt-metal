@@ -25,6 +25,7 @@ from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinato
 from models.common.models.qwen25_coder_32b.hf_adaptor import Qwen25Coder32BForCausalLM
 from models.common.models.qwen25_coder_32b.model import _slice_last_token_tile
 from models.common.modules.sampling.sampling_1d import Sampling1D
+from models.common.sampling import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class Qwen25Coder32BExecutor:
         self._cleaned_up = False
         self._sampling_buffers_loaded = False
         self._runtime_configuration_sealed = False
+        self._q128_greedy_tile_ends_warmed: set[bool] = set()
 
         sampling = getattr(model, "sampling", None)
         if config.device_sampling_enabled:
@@ -92,7 +94,9 @@ class Qwen25Coder32BExecutor:
                 device_sampling_enabled=config.device_sampling_enabled,
                 can_enable_trace=runtime_config.can_enable_trace,
                 supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
-                disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
+                disable_batched_prefill=(
+                    bool(runtime_config.disable_batched_prefill) or config.device_sampling_enabled
+                ),
                 max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
             )
@@ -330,11 +334,23 @@ class Qwen25Coder32BExecutor:
 
     def warmup_model_prefill(self, *, kv_cache: Any, can_sample_on_device: bool, enable_trace: bool) -> None:
         self._ensure_active()
-        return self.warmup.warmup_prefill(
+        if enable_trace:
+            self._warmup_q128_greedy_tile_ends(
+                kv_cache=kv_cache,
+                can_sample_on_device=can_sample_on_device,
+                enable_trace=True,
+            )
+        self.warmup.warmup_prefill(
             kv_cache=kv_cache,
-            can_sample_on_device=can_sample_on_device,
+            can_sample_on_device=False,
             enable_trace=enable_trace,
         )
+        if not enable_trace:
+            self._warmup_q128_greedy_tile_ends(
+                kv_cache=kv_cache,
+                can_sample_on_device=can_sample_on_device,
+                enable_trace=False,
+            )
 
     def warmup_model_decode(
         self,
@@ -346,13 +362,20 @@ class Qwen25Coder32BExecutor:
         enable_trace: bool,
     ) -> None:
         self._ensure_active()
-        return self.warmup.warmup_decode(
+        self.warmup.warmup_decode(
             kv_cache=kv_cache,
             max_batch_size=max_batch_size,
             num_blocks=num_blocks,
             can_sample_on_device=can_sample_on_device,
             enable_trace=enable_trace,
         )
+        if (
+            enable_trace
+            and self.config.trace.prefill_enabled
+            and self.trace_compiler is not None
+            and not self.trace_compiler.trace_active
+        ):
+            self.trace_compiler.capture_all()
 
     def cleanup(self) -> None:
         self._terminal = True
@@ -379,6 +402,43 @@ class Qwen25Coder32BExecutor:
         if failures:
             _raise_cleanup_failures(failures, "Qwen25Coder32BExecutor")
         self._cleaned_up = True
+
+    def _warmup_q128_greedy_tile_ends(
+        self,
+        *,
+        kv_cache: Any,
+        can_sample_on_device: bool,
+        enable_trace: bool,
+    ) -> None:
+        """Prime Coder's supported greedy Q128 prefill postprocessing."""
+
+        if (
+            enable_trace in self._q128_greedy_tile_ends_warmed
+            or not can_sample_on_device
+            or (enable_trace and self.traced_executor is None)
+            or 128 not in self.warmup.config.prefill_sequence_lengths
+        ):
+            return
+        sampling = SamplingParams(
+            temperature=torch.zeros(1),
+            top_k=torch.ones(1, dtype=torch.int32),
+            top_p=torch.ones(1),
+        )
+        execution = self.traced_executor if enable_trace else self.eager_executor
+        for sequence_length in (32, 64, 96, 128):
+            page_table_width = (
+                sequence_length + self.page_table_layout.block_size - 1
+            ) // self.page_table_layout.block_size
+            self.compile_prefill(
+                tokens=torch.zeros((1, sequence_length), dtype=torch.long),
+                page_table=torch.zeros((1, page_table_width), dtype=torch.int32),
+                prompt_lens=torch.full((1,), sequence_length, dtype=torch.long),
+                empty_slots=[0],
+                kv_cache=kv_cache,
+                sampling_params=sampling,
+                execution=execution,
+            )
+        self._q128_greedy_tile_ends_warmed.add(enable_trace)
 
     def _resolve_page_table_layout(self) -> PageTableLayout:
         kv_config = self.kv_cache_manager.config

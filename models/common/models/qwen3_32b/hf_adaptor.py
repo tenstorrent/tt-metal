@@ -191,7 +191,7 @@ def _validate_checkpoint_config(hf_config, *, num_devices: int) -> None:
         "hidden_size": 5120,
         "num_attention_heads": 64,
         "num_key_value_heads": 8,
-        "intermediate_size": 27648,
+        "intermediate_size": 25600,
         "vocab_size": 151936,
         "head_dim": 128,
     }

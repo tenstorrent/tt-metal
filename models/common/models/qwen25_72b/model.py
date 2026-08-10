@@ -820,11 +820,9 @@ class Qwen25_72B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1's decision: default_sampling_force_argmax.allow_force_argmax=False
-                # for all non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The greedy
-                # recipe (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path,
-                # never the full-vocab force-argmax all-gather. See model_config.py:1007.
-                allow_force_argmax=False,
+                # Qwen72's LM head exposes 128 padded rows, beyond the top-k sampling
+                # kernel's 32-user limit. Route greedy requests through force-argmax.
+                allow_force_argmax=True,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

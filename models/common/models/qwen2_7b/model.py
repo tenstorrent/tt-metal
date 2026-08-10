@@ -952,8 +952,8 @@ class Qwen2_7B(LightweightModule):
         last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
-        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
-        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
+        # returns the full hidden state when no runtime last-token slice is supplied; the executor does
+        # per-slot last-token extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -967,7 +967,7 @@ class Qwen2_7B(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
 
-        if get_last_token == -1:
+        if get_last_token == -1 and last_token_slice is None:
             return x
 
         # Slice + deallocate the full-sequence buffer before norm/LM head reduces peak L1.

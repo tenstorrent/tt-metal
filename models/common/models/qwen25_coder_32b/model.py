@@ -892,11 +892,8 @@ class Qwen25Coder32B(LightweightModule):
         # default). Qwen2.5-Coder-32B is a T3K-only port (8 devices), where Sampling1D's all-gather
         # uses a barrier-free Ring and is trace-capture-safe.
         #
-        # Clone TTTv1's decision: ``default_sampling_force_argmax.allow_force_argmax=False`` for all
-        # non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The PERF.md recipe
-        # (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path -- per-device
-        # ttnn.topk -> all-gather of the [*,32] tuples -> ttnn.sampling -- never the full-vocab
-        # argmax all-gather. See models/tt_transformers/tt/model_config.py.
+        # Coder's LM head exposes 128 padded rows, beyond the top-k sampling
+        # kernel's 32-user limit. Route greedy requests through force-argmax.
         self.supports_on_device_sampling = self.num_devices >= 1
         self.sampling = (
             Sampling1D(
@@ -904,7 +901,7 @@ class Qwen25Coder32B(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),
-                allow_force_argmax=False,
+                allow_force_argmax=True,
                 pad_to_power_of_2=True,
             )
             if self.supports_on_device_sampling

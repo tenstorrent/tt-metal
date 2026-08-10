@@ -131,7 +131,17 @@ class Qwen25Coder32BGenerator:
         )
 
     def allocate_kv_cache(self, kv_cache_shape=None, dtype=None, num_layers=None):
-        return self.target.allocate_kv_cache(kv_cache_shape=kv_cache_shape, dtype=dtype, num_layers=num_layers)
+        """Resolve the late vLLM capacity, then allocate a borrowed cache handle."""
+
+        supplied = (kv_cache_shape is not None, dtype is not None, num_layers is not None)
+        if not any(supplied):
+            return self.target.allocate_kv_cache()
+        if not all(supplied):
+            raise TypeError("kv_cache_shape, dtype, and num_layers must be supplied together")
+
+        resolved = self._adapter.resolve_legacy_kv_cache_config(kv_cache_shape, dtype, num_layers)
+        self.target.configure_paged_kv_cache(resolved)
+        return self.target.allocate_kv_cache()
 
     def prefill_forward(
         self,

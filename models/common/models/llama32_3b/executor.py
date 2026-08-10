@@ -23,6 +23,7 @@ from models.common.llm_runtime.trace_compiler import TraceCompiler
 from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
 from models.common.models.llama32_3b.hf_adaptor import Llama32_3BForCausalLM
 from models.common.modules.sampling.sampling_1d import Sampling1D
+from models.common.sampling import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class Llama32_3BExecutor:
         self._cleaned_up = False
         self._sampling_buffers_loaded = False
         self._runtime_configuration_sealed = False
+        self._q128_topk_tile_ends_warmed: set[bool] = set()
 
         sampling = getattr(model, "sampling", None)
         if config.device_sampling_enabled:
@@ -110,7 +112,9 @@ class Llama32_3BExecutor:
                 device_sampling_enabled=config.device_sampling_enabled,
                 can_enable_trace=runtime_config.can_enable_trace,
                 supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
-                disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
+                disable_batched_prefill=(
+                    bool(runtime_config.disable_batched_prefill) or config.device_sampling_enabled
+                ),
                 max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
             )
@@ -146,7 +150,7 @@ class Llama32_3BExecutor:
         self._prefill_execution = self.traced_prefill_execution or self.eager_executor
         self._decode_execution = self.traced_decode_execution or self.eager_executor
 
-        prefill_sequence_lengths = getattr(runtime_config, "trace_prefill_supported_seq_lens", (128,))
+        prefill_sequence_lengths = getattr(runtime_config, "trace_prefill_supported_seq_lens", ()) or (128,)
         self.warmup = WarmupCoordinator(
             config=WarmupCoordinatorConfig.resolve(
                 warmup=config.warmup,
@@ -388,6 +392,11 @@ class Llama32_3BExecutor:
         enable_trace: bool,
     ) -> None:
         self._ensure_active()
+        self._warmup_q128_topk_tile_ends(
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=enable_trace,
+        )
         return self.warmup.warmup_prefill(
             kv_cache=kv_cache,
             can_sample_on_device=can_sample_on_device,
@@ -443,6 +452,45 @@ class Llama32_3BExecutor:
         self._cleaned_up = True
 
     # Private implementation
+
+    def _warmup_q128_topk_tile_ends(
+        self,
+        *,
+        kv_cache: Any,
+        can_sample_on_device: bool,
+        enable_trace: bool,
+    ) -> None:
+        """Prime Llama-3.2-3B's single-user Q128 top-k slice programs."""
+
+        if (
+            enable_trace in self._q128_topk_tile_ends_warmed
+            or not can_sample_on_device
+            or (enable_trace and self.traced_executor is None)
+            or 128 not in self.warmup.config.prefill_sequence_lengths
+            or not self.prefill_runtime.config.static_q128_topk_supported
+            or self.warmup.config.prime_q128_tile_ends
+        ):
+            return
+        sampling = SamplingParams(
+            temperature=torch.ones(1),
+            top_k=torch.full((1,), 32, dtype=torch.int32),
+            top_p=torch.full((1,), 0.08),
+        )
+        execution = self.traced_executor if enable_trace else self.eager_executor
+        for sequence_length in (32, 64, 96):
+            page_table_width = (
+                sequence_length + self.page_table_layout.block_size - 1
+            ) // self.page_table_layout.block_size
+            self.compile_prefill(
+                tokens=torch.zeros((1, sequence_length), dtype=torch.long),
+                page_table=torch.zeros((1, page_table_width), dtype=torch.int32),
+                prompt_lens=torch.full((1,), sequence_length, dtype=torch.long),
+                empty_slots=[0],
+                kv_cache=kv_cache,
+                sampling_params=sampling,
+                execution=execution,
+            )
+        self._q128_topk_tile_ends_warmed.add(enable_trace)
 
     def _resolve_page_table_layout(self) -> PageTableLayout:
         kv_config = self.kv_cache_manager.config

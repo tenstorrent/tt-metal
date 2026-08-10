@@ -902,6 +902,106 @@ def test_late_capacity_failure_is_atomic(binding, expect_error):
     assert executor.model.layers[0].attention.config.paged_attention_config is original_model_paged
 
 
+def test_generator_resolves_configures_then_allocates_vllm_kv_shape(binding):
+    events = []
+    resolved = object()
+    cache = object()
+    shape = (129, 8, 64, 128)
+    dtype = object()
+    target = SimpleNamespace(
+        configure_paged_kv_cache=lambda config: events.append(("configure", config)),
+        allocate_kv_cache=lambda: events.append(("allocate",)) or cache,
+    )
+    adapter = SimpleNamespace(
+        resolve_legacy_kv_cache_config=lambda *args: events.append(("resolve", args)) or resolved,
+    )
+    generator = binding.generator_class(target, adapter)
+
+    assert generator.allocate_kv_cache(shape, dtype, 32) is cache
+    assert events == [
+        ("resolve", (shape, dtype, 32)),
+        ("configure", resolved),
+        ("allocate",),
+    ]
+
+
+def test_generator_allocates_model_owned_kv_without_reconfiguration(binding):
+    events = []
+    cache = object()
+    target = SimpleNamespace(
+        configure_paged_kv_cache=lambda config: events.append(("configure", config)),
+        allocate_kv_cache=lambda: events.append(("allocate",)) or cache,
+    )
+    adapter = SimpleNamespace(
+        resolve_legacy_kv_cache_config=lambda *args: events.append(("resolve", args)),
+    )
+    generator = binding.generator_class(target, adapter)
+
+    assert generator.allocate_kv_cache() is cache
+    assert events == [("allocate",)]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ((64, 8, 32, 128), None, None),
+        (None, object(), None),
+        (None, None, 32),
+        ((64, 8, 32, 128), object(), None),
+    ),
+)
+def test_generator_rejects_partial_vllm_kv_shape_atomically(binding, arguments, expect_error):
+    events = []
+    target = SimpleNamespace(
+        configure_paged_kv_cache=lambda config: events.append(("configure", config)),
+        allocate_kv_cache=lambda: events.append(("allocate",)),
+    )
+    adapter = SimpleNamespace(
+        resolve_legacy_kv_cache_config=lambda *args: events.append(("resolve", args)),
+    )
+    generator = binding.generator_class(target, adapter)
+
+    with expect_error(TypeError, "must be supplied together"):
+        generator.allocate_kv_cache(*arguments)
+
+    assert events == []
+
+
+def test_generator_does_not_configure_or_allocate_after_vllm_kv_resolution_failure(binding, expect_error):
+    events = []
+
+    def fail_resolution(*args):
+        events.append(("resolve", args))
+        raise ValueError("invalid vLLM KV geometry")
+
+    target = SimpleNamespace(
+        configure_paged_kv_cache=lambda config: events.append(("configure", config)),
+        allocate_kv_cache=lambda: events.append(("allocate",)),
+    )
+    generator = binding.generator_class(
+        target,
+        SimpleNamespace(resolve_legacy_kv_cache_config=fail_resolution),
+    )
+
+    with expect_error(ValueError, "invalid vLLM KV geometry"):
+        generator.allocate_kv_cache((129, 8, 64, 128), object(), 32)
+
+    assert tuple(name for name, *_ in events) == ("resolve",)
+
+
+def test_generator_reports_unmultiplied_per_submesh_token_capacity(binding):
+    assert (
+        binding.generator_class.get_max_tokens_all_users(
+            model_name="ignored",
+            num_devices=8,
+            tt_data_parallel=4,
+            max_model_len=32768,
+            max_num_seqs=64,
+        )
+        == 32768
+    )
+
+
 def test_generator_rejects_unavailable_traced_execution(binding, expect_error):
     target = binding.make_recording_target()
     target.traced_decode_execution = None
