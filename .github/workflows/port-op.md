@@ -210,20 +210,36 @@ steps:
         --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
         --ttmetal-home /work --codegen-root /codegen
 
-  # Diagnostic, and deliberately allowed to fail. Run 31218783110 built with credentials present
-  # and still reported `Errors: 1395` against remote storage -- every request failed, which is a
-  # transport problem, not the cache-key mismatch it was first read as. `garage.…svc.cluster.local`
-  # is cluster-internal DNS and this runner pool may sit outside that cluster, which would also
-  # explain why the 2.6-minute warm build only ever reproduced on the in-cluster `civ2` pool.
-  # Resolving and connecting here records the answer next to the build instead of leaving it to be
-  # inferred from hit rates.
-  - name: Probe the remote ccache endpoint
+  # `garage.garage.svc.cluster.local` is cluster-internal DNS and does not resolve on this runner
+  # pool: `getent hosts` exits 2 here, in runs 31398278036 and 31402361412. That is the whole
+  # explanation for the `Errors: 1395` against remote storage -- the endpoint was never reachable,
+  # so no cache-key theory was needed -- and it is why the 2.6-minute warm build only ever
+  # reproduced on the in-cluster `civ2` pool.
+  #
+  # This step is also a lesson in reading CI. The first version ran under `bash -e`, so `getent`
+  # exiting 2 aborted it before `curl` ran and it printed nothing at all; and because the step is
+  # `continue-on-error`, the API reports `conclusion: success` whether it passed or not. Silence
+  # plus a green tick read as a pass and sent the diagnosis the wrong way for an afternoon. Hence
+  # the explicit branches, the warning annotations, and the honest non-zero exit.
+  - name: Resolve the remote ccache endpoint
     continue-on-error: true
     run: |
-      docker exec portdev getent hosts garage.garage.svc.cluster.local
-      docker exec portdev curl -sS -m 10 -o /dev/null \
-        -w 'ccache endpoint: HTTP %{http_code} in %{time_total}s\n' \
-        http://garage.garage.svc.cluster.local:3900/
+      if docker exec portdev getent hosts garage.garage.svc.cluster.local; then
+        echo "PORT_CCACHE_REMOTE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+        docker exec portdev curl -sS -m 10 -o /dev/null \
+          -w 'ccache endpoint: HTTP %{http_code} in %{time_total}s\n' \
+          http://garage.garage.svc.cluster.local:3900/ \
+          || echo "::warning::The ccache endpoint resolves but did not answer; this build will be cold."
+      else
+        echo "::warning::garage.garage.svc.cluster.local does not resolve on this runner, so the build runs without the remote ccache and takes about 25 minutes."
+        if docker exec portdev getent hosts github.com >/dev/null 2>&1; then
+          echo "github.com resolves, so DNS works generally and it is cluster-internal DNS specifically -- i.e. this is the runner pool, not the container."
+        fi
+        docker exec portdev cat /etc/resolv.conf || true
+        # Fail honestly. The step is non-fatal, but a green tick here would be a lie, and the
+        # previous green tick cost more than this build ever will.
+        exit 1
+      fi
 
   # The remote ccache credentials are bound to this step alone and never written to $GITHUB_ENV.
   # Only this full build needs them; the agent's rebuilds recompile three translation units
@@ -238,20 +254,27 @@ steps:
       if [ -z "$AWS_ACCESS_KEY_ID" ]; then
         echo "::warning::Garage S3 credentials missing; this build will be cold."
       fi
+      # The remote is configured only when the step above could actually resolve it. Pointing ccache
+      # at an unresolvable endpoint cost 1395 failed lookups per build and taught us nothing the
+      # probe does not say in one line.
+      if [ -n "$PORT_CCACHE_REMOTE" ]; then
+        remote=(-e "CCACHE_REMOTE_STORAGE=$PORT_CCACHE_REMOTE")
+      else
+        remote=()
+      fi
       docker exec portdev ccache -z || true
       # Tracy is on by default and there is no --enable-profiler flag; passing one makes
       # build_metal.sh exit immediately on an unknown argument. The build is deliberately the last
       # command so its status is the step's -- a trailing `ccache -sv || true` masked a failed
       # build behind a green step on the first shakedown run.
-      # CCACHE_REMOTE_ONLY is off: while the remote is erroring on every request, it would leave
-      # ccache doing nothing at all, and local storage still pays for itself across the rebuilds
-      # the agent triggers within this job. CCACHE_LOGFILE is what turns the next remote failure
-      # into a readable cause rather than an error count.
+      # CCACHE_REMOTE_ONLY is off so that local storage still pays for itself across the rebuilds
+      # the agent triggers within this job, and CCACHE_LOGFILE turns any future remote failure into
+      # a readable cause rather than an error count.
       docker exec \
         -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
         -e AWS_DEFAULT_REGION=garage \
         -e CCACHE_COMPRESS=true -e CCACHE_LOGFILE=/tmp/ccache.log \
-        -e "CCACHE_REMOTE_STORAGE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" \
+        "${remote[@]}" \
         portdev ./build_metal.sh --build-dir build --build-type Release --enable-ccache
 
   - name: ccache summary

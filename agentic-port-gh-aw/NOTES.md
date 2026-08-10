@@ -839,7 +839,7 @@ a previous job's containers are still there when the next one starts. `port-op` 
 workflow in the repo with a self-hosted `runs-on` — the other four default to `ubuntu-slim` — so
 nothing else was competing for the port; the runner simply carries state between jobs.
 
-### 14.3 The ccache remote is *erroring*, not missing — 12.9 corrected
+### 14.3 The ccache remote is *erroring*, not missing — 12.9 corrected (**confirmed in 14.8**)
 
 Same run, credentials present (no `::warning::Garage S3 credentials missing` anywhere in the log):
 
@@ -863,7 +863,8 @@ the host itself cannot resolve the name, so sharing its namespace cannot help.
 
 Not yet proven, which is why the workflow now probes DNS and TCP to that endpoint explicitly and
 sets `CCACHE_LOGFILE` — an error count with no reason is what caused the misreading in the first
-place.
+place. **Proven in 14.8: the name does not resolve.** The remote was never reachable from this pool,
+so the build is cold by construction and no cache-key or credential theory was ever needed.
 
 ### 14.4 The workflow was leaking `portdev`
 
@@ -943,13 +944,62 @@ straight after the baseline that fails there (after clearing a stray server, whi
 UI) rather than letting a gh-aw step 16 steps later take the blame. The pre-step guard stays as a
 precondition check; it was never the fix.
 
-**Corollary for 14.3, and it is a real one:** the ccache probe *succeeded*, so the DNS theory is
-wrong too, or at least incomplete — `garage.garage.svc.cluster.local` resolves from this pool and
-the endpoint answers. Whatever produces `Errors: 1395` is therefore above the transport: most likely
-credentials rejected, or a ccache S3 configuration mismatch with what `build-artifact.yaml` uses.
-The `CCACHE_LOGFILE` grep in the ccache summary step is the next place to look, and it now runs.
+**~~Corollary for 14.3, and it is a real one:~~ this corollary was wrong — see 14.8.** It read the
+ccache probe as a success because the API said `conclusion: success`. The step's log ends in
+`##[error]Process completed with exit code 2`, and 14.8 explains why the two disagree. 14.3's DNS
+theory is confirmed, not refuted.
 
 **Lesson worth keeping.** Two diagnoses in one day (12.9 and 14.2) were confident, mechanically
 plausible, and wrong, and both were built on evidence that was consistent with the story but did not
 establish it — an error count read as a miss count, and a 1.3 ms interval read as a race. Both were
 cheap to disprove with one deliberate probe. Prefer the probe.
+
+---
+
+### 14.8 Run #12: the gateway starts, the agent runs, and the ccache probe was never green
+
+Run [31402361412](https://github.com/tenstorrent/tt-metal/actions/runs/31402361412), first run with
+the 14.7 fixes:
+
+| Step | Result |
+|---|---|
+| `Clear leftover state from earlier runs on this runner` | port 8080 free |
+| `Build tt-metal` | success |
+| `Native baseline` | success — the assertion held again |
+| `Assert the profiler left the gateway port alone` | **success — 8080 still free after the profiler ran** |
+| `Start MCP Gateway` | **success** |
+| `Execute GitHub Copilot CLI` | **running — the agent is executing in CI for the first time** |
+
+`TRACY_WASM_HTTP_PORT=18080` closes 14.2. The tripwire passed without needing to kill anything, so
+tracy honoured the variable rather than merely losing the race, and the collision that blocked runs
+#10 and #11 is gone.
+
+**The probe, and how a failing step reported success.** The `Probe the remote ccache endpoint` step
+exited 2 in this run *and in run #11*. Two mechanics combined to hide it:
+
+1. `getent hosts` exits **2** when the name is not found, and prints nothing. Under the compiled
+   `shell: /usr/bin/bash -e`, that aborted the step before `curl` ran — so a step written to produce
+   evidence produced an empty log.
+2. For a `continue-on-error: true` step, the REST API reports `conclusion: success` regardless of
+   what the step did. Only `outcome` carries the truth, and `gh api .../jobs/<id>` does not expose
+   it. In the log, the same step ends `##[error]Process completed with exit code 2`.
+
+An empty log plus a green tick read as "resolved and answered", which is how 14.7 talked itself out
+of the correct answer. **Read the step's output, not its colour** — and for `continue-on-error`
+steps, the API's colour is not evidence of anything.
+
+So `garage.garage.svc.cluster.local` does not resolve on `[N150, in-service,
+cloud-virtual-machine]`, exactly as 14.3 and section 6 predicted. `Errors: 1395` was 1395 failed
+name lookups. Every build on this pool is cold by construction, which is the ~25 minutes we have
+been paying, and no credential or cache-key work will change that. **The 14.6 pool decision is now
+the only lever on build time**, which raises its value: `wh_n150_civ2` is in-cluster (warm ccache,
+2.6 minutes per 12.1) *and* ephemeral (no leftover state), against the ARC/DinD risk of
+[#34896](https://github.com/github/gh-aw/issues/34896).
+
+Changes on the branch, not yet pushed — deliberately, so as not to queue a run behind the agent leg
+in flight:
+
+| Change | Why |
+|---|---|
+| Probe rewritten as explicit `if`/`else`, renamed `Resolve the remote ccache endpoint`, ends `exit 1` when the name does not resolve | Says the answer in one warning line instead of dying silently; still non-fatal, but no longer green when it fails. Also checks `github.com` to separate "cluster DNS specifically" from "DNS broken", and prints `/etc/resolv.conf`. |
+| The remote is configured only when the probe resolved it, via `PORT_CCACHE_REMOTE` | Stops 1395 futile lookups per build. Auto-enables again if the pool changes, so nothing needs remembering. |
