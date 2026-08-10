@@ -22,31 +22,22 @@ namespace {
 // Metal 2.0 semaphore-binding hygiene (source lint; no device needed).
 // ============================================================================
 //
-// WHY THIS EXISTS
-// ---------------
 // The AUTO scope classifier (ResolveSemaphoreScope) picks each semaphore's physical mechanism
 // from a census of the kernels that DECLARE a binding to it (KernelSpec::semaphore_bindings).
 // A raw access -- get_semaphore(id), noc_semaphore_inc(addr, 1), ... -- is an UNDECLARED
-// writer the host cannot see: the census undercounts and AUTO may pick a non-atomic
-// mechanism for a semaphore that actually has concurrent writers.
+// writer the host cannot see: AUTO may then pick a non-atomic mechanism for a semaphore
+// that actually has concurrent writers. Worse under DM_LOCAL_CACHED: a cached semaphore is
+// RELOCATED into the cached-only pool (noc_semaphore.h sem_l1_offset()), so a declared binder
+// and an undeclared toucher address two DIFFERENT words -- the semaphore splits and a wait()
+// never completes. Keeping this lint green is load-bearing for the cached pick.
 //
-// Worse under DM_LOCAL_CACHED: a cached semaphore is RELOCATED into the cached-only pool
-// (noc_semaphore.h sem_l1_offset()), so a declared binder and an undeclared toucher address
-// two DIFFERENT words -- the semaphore splits and a wait() never completes. Keeping this
-// lint green is load-bearing for the cached pick.
-//
-// The tree is clean today; this test fails if a Metal 2.0 kernel source goes raw.
-//
-// SCOPE / LIMITS (deliberate):
-//  - LEGACY kernels are not checked and do not matter: they never reach the AUTO path
-//    (it lives in MakeProgramFromSpec), and they manage their own CreateSemaphore words.
-//  - This is a source lint, not a proof. It can be defeated by macros, helper functions,
-//    or an address handed in as a plain runtime arg, so it is a regression guard rather
-//    than a soundness proof. The cached pick does not rest on it alone: the classifier
-//    independently requires Gen2, a single-cell semaphore, every binder on that node, and
-//    exactly ONE binder kernel.
-//  - The detector itself is covered by DetectorFlagsKnownViolations below; without that
-//    positive control this sweep could go silently vacuous.
+// LIMITS (deliberate):
+//  - LEGACY kernels are not checked: they never reach the AUTO path and manage their own
+//    CreateSemaphore words.
+//  - This is a regression guard, not a soundness proof: macros, helper functions, or an
+//    address handed in as a runtime arg defeat it. The cached pick does not rest on it alone.
+//  - DetectorFlagsKnownViolations below is the positive control; without it this sweep
+//    could go silently vacuous.
 // ============================================================================
 
 // A Metal 2.0 kernel is one that uses the generated accessors/args. All five generated
@@ -58,10 +49,8 @@ bool looks_like_metal2_kernel(const std::string& text) {
            text.find("scratch::") != std::string::npos;
 }
 
-// Strip comments so prose mentioning a banned pattern is not flagged as code. Tracks /* */ state
-// properly, so a statement starting with '*' (e.g. `*(volatile uint32_t*)get_semaphore(3) += 1;`)
-// still reaches the scanner. String/char literal contents are stripped too: a "//" or "/*" inside
-// a string must not start a comment, and a banned pattern inside a string is not code.
+// Strip comments and string/char literal contents so a banned pattern in prose or a string is
+// not flagged as code, and a "//" or "/*" inside a string does not start a comment.
 // LIMIT: raw string literals (R"(...)" ) are not modeled; kernels use none today.
 std::string strip_comments(const std::string& text) {
     std::string out;
@@ -124,10 +113,9 @@ std::string strip_comments(const std::string& text) {
     return out;
 }
 
-// A sem:: token must be constructed with NO template argument list, so CTAD adopts the baked scope
-// and access rights. `Semaphore<> s(sem::x)` (or any explicit <...>) pins the class defaults
-// instead: it compiles while the baked values happen to match the defaults, then turns into a JIT
-// compile failure (token-ctor static_assert) once the host bakes something else. Not a raw access,
+// A sem:: token must be constructed with NO template argument list, so CTAD adopts the baked
+// scope and access rights. An explicit <...> pins the class defaults instead: it compiles until
+// the host bakes something else, then fails at JIT (token-ctor static_assert). Not a raw access,
 // so the pattern list below cannot see it; detected separately here.
 std::vector<std::string> find_pinned_scope_constructions(const std::string& code) {
     std::vector<std::string> found;
@@ -139,13 +127,11 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
         if (close == std::string::npos) {
             break;
         }
-        // Only a construction over a sem:: token matters; `Semaphore<> s(raw_id)` uses the unaffected
-        // uint32_t ctor (find_unbound_semaphore_constructions covers it), and a `Semaphore<...>&`
-        // parameter is fine as long as it is scope-generic. Discriminate by the first
-        // non-whitespace character after '>': a reference/pointer/list-position marker means a
-        // PARAMETER (skip -- it must not borrow sem:: text from the function body); anything else
-        // is a potential construction, scanned to the statement's ';' so brace-init and
-        // line-wrapped spellings stay covered.
+        // Only a construction over a sem:: token matters: raw-id ctors are covered by
+        // find_unbound_semaphore_constructions, and a scope-generic `Semaphore<...>&` parameter
+        // is fine. Discriminate by the first non-whitespace character after '>': a reference/
+        // pointer/list-position marker means a PARAMETER (skip); anything else is a potential
+        // construction, scanned to the ';' so brace-init and line-wrapped spellings stay covered.
         size_t after = close + 1;
         while (after < code.size() && std::isspace(static_cast<unsigned char>(code[after]))) {
             after++;
@@ -170,12 +156,10 @@ std::vector<std::string> find_pinned_scope_constructions(const std::string& code
 }
 
 // Raw-id Semaphore construction: `Semaphore s(x)` / `Semaphore<...> s{x}` where the constructor
-// argument is not a sem:: token. LIMITS: unnamed forms (`auto s = Semaphore(x)`, `new Semaphore(x)`,
-// expression temporaries) are not modeled, and a function DECLARATION returning Semaphore would
-// over-flag -- neither shape exists in kernel sources today. The wrapper is not a raw primitive, but it is still an
-// UNDECLARED census participant: the host cannot see it, so AUTO can pick a non-atomic
-// mechanism out from under it. (A cached-pinned raw construction is additionally rejected at
-// compile time on Quasar DM -- noc_semaphore.h raw-id ctor -- but the lint covers every arch.)
+// argument is not a sem:: token. Still an UNDECLARED census participant: the host cannot see it,
+// so AUTO can pick a non-atomic mechanism out from under it. LIMITS: unnamed forms
+// (`auto s = Semaphore(x)`, `new Semaphore(x)`, temporaries) are not modeled -- no kernel
+// source uses them today.
 std::vector<std::string> find_unbound_semaphore_constructions(const std::string& code) {
     std::vector<std::string> found;
     size_t pos = 0;
@@ -230,10 +214,9 @@ std::vector<std::string> find_unbound_semaphore_constructions(const std::string&
     return found;
 }
 
-// Raw (undeclared) semaphore access patterns. Each is matched on its OWN, not as a literal pair,
-// to catch the common two-statement form where the address is computed on a previous line. A
-// declared binding never needs any of these: Semaphore(sem::<name>)'s up()/down() call these
-// primitives from the framework header, not from kernel source.
+// Raw (undeclared) semaphore access patterns, each matched on its own to catch the two-statement
+// form where the address is computed on a previous line. A declared binding never needs these:
+// up()/down() call them from the framework header, not from kernel source.
 std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
     static const char* kPatterns[] = {
         "get_semaphore(",                             // turning a semaphore id into a raw address
@@ -269,61 +252,52 @@ std::vector<std::string> find_raw_semaphore_uses(const std::string& code) {
 // mask a real regression in that file.
 // Entries are anchored on '/' so a file merely CONTAINING an entry's name is not exempt.
 bool is_allowlisted(const std::string& path) {
-    // Hardware keystone probes: these deliberately issue raw NoC atomics at SCRATCH L1 addresses
-    // (never at a declared semaphore) in order to MEASURE hardware behaviour -- the
-    // self-targeted-atomic keystone (noc_self_atomic), the DM cache-line-width probe
-    // (dm_cacheline_probe), the NoC atomic-opcode probe (noc_atomic_ops_probe), and the NoC
-    // CAS-lock drain keystone (noc_self_cas_drain). Raw access is the thing under test.
-    // Entries carry their directory so a same-named file elsewhere cannot inherit the exemption.
+    // Hardware keystone probes: deliberately issue raw NoC atomics at SCRATCH L1 addresses
+    // (never at a declared semaphore) to measure hardware behaviour -- raw access is the thing
+    // under test.
     if (path.find("test_kernels/dataflow/dm_cacheline_probe.cpp") != std::string::npos ||
         path.find("test_kernels/dataflow/noc_self_atomic.cpp") != std::string::npos ||
         path.find("test_kernels/dataflow/noc_atomic_ops_probe.cpp") != std::string::npos ||
         path.find("test_kernels/dataflow/noc_self_cas_drain.cpp") != std::string::npos) {
         return true;
     }
-    // Residency instrumentation: sem_census_probe deliberately reads its OWN declared semaphore's
-    // kernel_config RING slot (read-only, via the uncached alias) so a test can prove that a cached
-    // semaphore's count really lives in the pool. It adds no undeclared writer.
+    // Residency instrumentation: reads its OWN declared semaphore's kernel_config ring slot
+    // (read-only, uncached alias) to prove a cached count lives in the pool; no undeclared writer.
     if (path.find("test_kernels/dataflow/sem_census_probe.cpp") != std::string::npos) {
         return true;
     }
     // Legacy sdpa_decode helper header, classified only via includer propagation: the Metal 2.0
-    // sampling writer includes it for its tile-fill helpers and never instantiates the mcast
-    // function that raw-constructs Semaphore<>(mcast_sem_id) (legacy sdpa_decode kernels do; their
-    // semaphores are not ProgramSpec-declared, so no census exists to bypass). If a Metal 2.0
-    // kernel ever calls that mcast path, its op must declare a SemaphoreBinding instead.
+    // sampling writer includes it for tile-fill helpers and never instantiates the mcast function
+    // that raw-constructs Semaphore<>(mcast_sem_id). A Metal 2.0 kernel that ever calls that
+    // mcast path must declare a SemaphoreBinding instead.
     if (path.find("sdpa_decode/device/kernels/dataflow/dataflow_common.hpp") != std::string::npos) {
         return true;
     }
-    // Watcher fault injection: this kernel issues a raw multicast atomic at an INVALID range,
-    // targeting a data-buffer address, specifically to trip the watcher's sanitizer. Its host test
-    // (debug_tools/watcher/test_sanitize.cpp) declares no SemaphoreSpec at all, so no semaphore --
-    // declared or otherwise -- is involved; the malformed op is the thing under test.
+    // Watcher fault injection: issues a raw multicast atomic at an INVALID data-buffer range to
+    // trip the watcher's sanitizer; no semaphore is involved, the malformed op is the thing
+    // under test.
     if (path.find("test_kernels/dataflow/dram_copy_to_noc_coord_2_0.cpp") != std::string::npos) {
         return true;
     }
     return false;
 }
 
-// Kernel sources worth scanning: the metal test kernels and the TT-NN op kernels.
-// Headers included: kernel helper .hpp/.h can carry the same raw primitives (a Metal 2.0 .cpp
-// could otherwise hide a violation in an #include). A header is scanned when it is Metal 2.0
-// by its own markers OR when a Metal 2.0 file #includes it (transitive includer propagation in
-// the sweep below); legacy headers included only by legacy kernels stay out.
+// Kernel sources worth scanning: the metal test kernels and the TT-NN op kernels. Headers are
+// included too -- a Metal 2.0 .cpp could otherwise hide a violation in an #include. A header is
+// scanned when it self-classifies as Metal 2.0 OR when a Metal 2.0 file #includes it (includer
+// propagation in the sweep below); legacy-only headers stay out.
 bool is_kernel_source(const std::filesystem::path& p) {
     const auto ext = p.extension();
     if (ext != ".cpp" && ext != ".hpp" && ext != ".h") {
         return false;
     }
-    // Any directory whose name ends in "kernels": kernels/, test_kernels/, <op>_kernels/ --
-    // real TT-NN Metal 2.0 kernels live under all three spellings.
+    // Any directory whose name ends in "kernels": kernels/, test_kernels/, <op>_kernels/.
     return p.string().find("kernels/") != std::string::npos;
 }
 
-// The paths a source #includes, from RAW text (include lines are not comments, and quoted
-// include paths must not be stripped as string literals). Full include strings are kept:
-// resolution is path-aware (see the sweep), because bare-basename matching over-scans --
-// two unrelated ops can both have a "dataflow_common.hpp".
+// The paths a source #includes, from RAW text (quoted include paths must not be stripped as
+// string literals). Full include strings are kept: resolution is path-aware (see the sweep)
+// because bare-basename matching over-scans.
 std::vector<std::string> include_paths(const std::string& raw_text) {
     std::vector<std::string> out;
     size_t pos = 0;
@@ -385,7 +359,7 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
         {"templated_get_semaphore",
          "void kernel_main() { uint32_t a = get_semaphore<ProgrammableCoreType::TENSIX>(0); }",
          true},
-        // Previously-uncovered kPatterns entries: each must trip the detector on its own.
+        // Each remaining kPatterns entry must trip the detector on its own.
         {"remote_set", "void kernel_main() { noc_semaphore_set_remote(a, b); }", true},
         {"multicast_loopback_src", "void kernel_main() { noc_semaphore_set_multicast_loopback_src(a, b, 1); }", true},
         {"multicast_inc", "void kernel_main() { noc_semaphore_inc_multicast(a, 1, 2); }", true},
@@ -439,9 +413,8 @@ TEST(Metal2SemaphoreHygiene, DetectorFlagsKnownViolations) {
 TEST(Metal2SemaphoreHygiene, FileGatesAndDetectorDiscrimination) {
     // is_kernel_source: all three kernel-directory spellings, and extension filtering.
     EXPECT_TRUE(is_kernel_source("tests/tt_metal/tt_metal/test_kernels/dataflow/foo.cpp"));
-    // Synthetic paths: the predicate keys on extension + a *kernels/ component, not the tree root
-    // (the real op-tree root stays out of these literals -- the CI forbidden-imports counter
-    // budgets word occurrences of it under tests/tt_metal).
+    // Synthetic paths: the predicate keys on extension + a *kernels/ component. The real op-tree
+    // root is kept out of these literals (CI forbidden-imports word budget).
     EXPECT_TRUE(is_kernel_source("op_tree/operations/x/device/kernels/dataflow/foo.cpp"));
     EXPECT_TRUE(is_kernel_source("op_tree/operations/moreh/moreh_getitem_kernels/writer.cpp"));
     EXPECT_TRUE(is_kernel_source("op_tree/operations/x/device/kernels/helper.hpp"));
@@ -468,9 +441,8 @@ TEST(Metal2SemaphoreHygiene, FileGatesAndDetectorDiscrimination) {
 }
 
 TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
-    // Locate the repo WITHOUT depending on the environment: skipping when TT_METAL_HOME is unset
-    // would let this lint pass while scanning nothing. __FILE__ is this source's own path, so the
-    // root is derivable from it; TT_METAL_HOME is only a fallback for an out-of-tree layout.
+    // Locate the repo from __FILE__ so the lint cannot pass vacuously when TT_METAL_HOME is
+    // unset; the env var is only a fallback for an out-of-tree layout.
     std::filesystem::path root;
     {
         const std::string self{__FILE__};
@@ -489,9 +461,8 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         root = std::filesystem::path{home};
     }
     ASSERT_TRUE(std::filesystem::exists(root / "tests")) << "derived repo root has no tests/ dir: " << root;
-    // Broad roots: "tests" (not just tests/tt_metal -- the TT-NN test tree also holds Metal 2.0
-    // kernels, e.g. under unit_tests/gtests/accessor/kernels/) and the whole op tree. The per-file
-    // predicate below narrows to kernel sources.
+    // Broad roots: all of tests/ (the TT-NN test tree also holds Metal 2.0 kernels) plus the
+    // whole op tree; is_kernel_source narrows per file.
     const std::vector<std::filesystem::path> scan_roots = {
         root / "tests",
         root / "ttnn",
@@ -501,11 +472,9 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
     uint32_t metal2_scanned = 0;
     uint32_t files_scanned = 0;
 
-    // Retained kernel-dir headers, keyed by lexically-normal path, for includer propagation: a
-    // helper header with no Metal 2.0 markers of its own is still scanned when a Metal 2.0 file
-    // includes it. Resolution is PATH-AWARE (includer's directory first, then a path-suffix
-    // match for repo-rooted include strings); bare basenames are never matched -- two unrelated
-    // ops can both own a "dataflow_common.hpp", and classifying a legacy twin is a false positive.
+    // Retained kernel-dir headers, keyed by lexically-normal path, for includer propagation.
+    // Resolution is PATH-AWARE (includer's directory first, then a path-suffix match); bare
+    // basenames never match -- two unrelated ops can both own a "dataflow_common.hpp".
     struct HeaderInfo {
         std::string path;
         std::string code;  // stripped
@@ -569,11 +538,10 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         }
     }
 
-    // Includer propagation to a fixed point: any retained header included from a classified file
+    // Includer propagation to a fixed point: a retained header included from a classified file
     // becomes classified, is scanned, and its own includes propagate in turn. Resolution: the
-    // includer's own directory first (the dominant kernel-helper form), then a '/'-anchored
-    // path-suffix match (repo-rooted include strings); unresolved includes (system/api headers
-    // outside the kernel dirs) are skipped.
+    // includer's own directory first, then a '/'-anchored path-suffix match; unresolved includes
+    // (system/api headers outside the kernel dirs) are skipped.
     while (!pending_includes.empty()) {
         const auto [includer, inc] = std::move(pending_includes.back());
         pending_includes.pop_back();

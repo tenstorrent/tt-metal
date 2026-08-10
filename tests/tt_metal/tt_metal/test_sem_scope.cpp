@@ -35,9 +35,8 @@ using experimental::SemaphoreScope;
 // Exercises the scoped device Semaphore class (noc_semaphore.h) end-to-end
 // across all three mechanisms -- LOCAL_NONATOMIC (plain L1 RMW),
 // DM_LOCAL_CACHED (32-bit AMO on the cached alias), EXTERNAL (self-targeted
-// NoC atomic) -- plus the AUTO classifier that picks between them. Raw
-// multi-writer atomicity of the underlying hardware mechanisms is covered by
-// the keystone tests (NocSelfAtomicFixture).
+// NoC atomic) -- plus the AUTO classifier. Raw hardware atomicity is covered
+// by the keystone tests (NocSelfAtomicFixture).
 // ============================================================================
 class SemScopeFixture : public MeshDispatchFixture {
 protected:
@@ -57,7 +56,6 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // Every spec here uses DataMovementGen2Config, so the suite is Gen2 (Quasar) only.
         if (arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
         }
@@ -149,17 +147,14 @@ protected:
         return result.empty() ? 0u : result[0];
     }
 
-    // Multi-DM concurrency proof (Quasar-only; roles gated by mhartid in the kernel).
-    // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP,
-    // PRODUCER_CONSUMER or MULTI_CONSUMER. counter_access labels the counter binding for the
-    // census (modes that really down() pass CONSUME). Returns the value()
-    // the reporter/consumer read back.
+    // Multi-DM concurrency proof (roles gated by mhartid in the kernel). num_dms threads
+    // share one bound Semaphore<scope>; mode picks CONCURRENT_UP, PRODUCER_CONSUMER or
+    // MULTI_CONSUMER (down()-ing modes pass CONSUME). Returns the reporter's value() readback.
     uint32_t run_concurrent(
         SemaphoreScope scope,
         const std::string& mode_define,
         experimental::SemaphoreAccessType counter_access = experimental::SemaphoreAccessType::INCREMENT) {
-        // Sentinel prefill: the producer-consumer tests expect 0, so a zero prefill would pass
-        // even if the reporter thread never ran.
+        // Sentinel prefill: see run_scope.
         std::vector<uint32_t> sentinel(1, kNoReport);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
@@ -296,8 +291,7 @@ protected:
     // skip-guard on has_second_node().
     std::pair<uint32_t, uint32_t> run_remote(SemaphoreScope scope, uint32_t sender_threads, uint32_t iters) {
         const uint32_t expected = sender_threads * iters;
-        // Sentinel prefill (same discipline as run_census): a zero prefill could hide a receiver
-        // that never reported.
+        // Sentinel prefill: see run_scope.
         std::vector<uint32_t> sentinel(2, kNoReport);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
@@ -394,8 +388,7 @@ protected:
         const experimental::Nodes& sem_target,
         const std::vector<CensusKernel>& kernels,
         SemaphoreScope scope = SemaphoreScope::AUTO) {
-        // Sentinel prefill (LOCAL_NONATOMIC == 0, so a zero prefill would hide "never reported").
-        // Prefill/read at the REPORTER's node: the probe writes its local L1.
+        // Sentinel prefill (see run_scope), at the REPORTER's node: the probe writes its local L1.
         experimental::NodeCoord reporter_node = core;
         for (const auto& k : kernels) {
             if (k.reporter) {
@@ -416,15 +409,13 @@ protected:
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
         // Each kernel gets barrier slot = its index; only NUM_KERNEL_BARRIERS(3) slots exist and
-        // wait_threads() does not bounds-check. All 3 slots are free HERE: census kernels use no
-        // DFBs (whose runtime claims slots 0/1), and the injected cached-pool seeder rendezvouses
-        // on its own dedicated barrier, not an array slot.
+        // wait_threads() does not bounds-check. All 3 are free here: census kernels use no DFBs
+        // (whose runtime claims slots 0/1) and the cached-pool seeder uses its own dedicated barrier.
         EXPECT_LE(kernels.size(), 3u) << "run_census supports at most 3 kernels (barrier slots)";
         if (kernels.size() > 3u) {
             return {kNoReport, 0u};
         }
-        // WorkUnitSpecs must have DISJOINT target nodes, so kernels sharing a node go into ONE work
-        // unit (a work unit holds a Group of kernels). Grouped here by node, preserving order.
+        // WorkUnitSpecs must have DISJOINT target nodes -> group kernels by node into one WU each.
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
@@ -513,10 +504,9 @@ protected:
     // "a binder runs outside the semaphore's node" case for the cached-pool guard.
     experimental::Nodes kernel_target_{core};
 
-    // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
-    // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
-    // Throws (TT_FATAL) on a contradiction before compiling. Nothing runs on the device, but the
-    // accepted scopes do JIT-compile (MakeProgramFromSpec builds the program).
+    // Build (but do not run) a minimal ProgramSpec with the given scope on the given target,
+    // so ValidateProgramSpec's ResolveSemaphoreScope runs. Throws (TT_FATAL) on a contradiction
+    // before compiling; accepted scopes still JIT-compile.
     void make_program_with_forced_scope(SemaphoreScope scope, const experimental::Nodes& sem_target) {
         experimental::SemaphoreSpec sem{
             .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
@@ -558,9 +548,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
 }
 
 // LOCAL_NONATOMIC scope: the legacy default (plain L1 read-modify-write). Single writer ->
-// value() == iterations. This also confirms the default path (used by existing DFB/CCL/SDPA
-// callers, and by Gen1 / Gen2-single-writer AUTO resolutions) still compiles + works after the
-// token flip.
+// value() == iterations. Also covers the default path existing DFB/CCL/SDPA callers use.
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     const uint32_t observed = run_scope(SemaphoreScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
@@ -636,9 +624,8 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
 }
 
 // G3: ONE producer feeds single credits while (num_dms-1) consumers CONCURRENTLY down(iters).
-// Exact 0 proves the cached down()'s CAS retry loop never double-spends a credit (an overdraw
-// wraps unsigned -> huge nonzero report; a lost credit blocks a consumer -> 'done' never fills
-// -> RunProgram timeout). The counter binding is honestly labelled CONSUME.
+// Exact 0 proves the cached down()'s CAS retry loop never double-spends a credit
+// (an overdraw wraps unsigned; a lost credit hangs the run).
 TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs for one producer plus at least one consumer";
@@ -681,10 +668,10 @@ TEST_F(SemScopeFixture, TestAutoMultiConsumerDown) {
 
 // ---- Cached-pool / EXTERNAL coexistence ----
 
-// A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs in one
-// program. The pool is physically disjoint from the NoC-written ring (MEM_DM_CACHED_SEM_BASE <
-// MEM_MAP_END <= kernel_config ring base), so the cached AMO's 64B-line write-back cannot clobber
-// the external sem's ring word (nor vice versa). Both counts exact => coexistence works.
+// A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs.
+// The pool is physically disjoint from the NoC-written ring (MEM_DM_CACHED_SEM_BASE <
+// MEM_MAP_END <= kernel_config ring base), so the cached AMO's 64B dirty-line write-back
+// cannot clobber the ring word. Both counts exact => coexistence works.
 TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
     const auto [cached_val, external_val] = run_coexist();
     const uint32_t expected = num_dms_ * concurrent_iterations;
@@ -719,12 +706,9 @@ TEST_F(SemScopeFixture, TestAutoSingleWriterEndToEnd) {
     EXPECT_EQ(observed, iterations) << "AUTO on a single-writer semaphore did not produce the expected count.";
 }
 
-// ---- Remote up() proofs: the first exact-count tests of Semaphore::up(noc, x, y, v). ----
-// Every earlier test drives the semaphore from its own node; these drive it from a SECOND node,
-// through the class's remote up() (a NoC atomic under every non-cached scope).
-// FAILURE DIRECTIONS: the receiver wait_min()s for the expected total before reporting, so a LOST
-// increment manifests as a RunProgram hang, not a failed EXPECT; the exact-count EXPECTs catch
-// overshoot and wrong-word landings.
+// ---- Remote up() proofs: Semaphore::up(noc, x, y, v) driven from a SECOND node. ----
+// The receiver wait_min()s for the expected total before reporting, so a LOST increment
+// manifests as a hang; the exact-count EXPECTs catch overshoot and wrong-word landings.
 
 // One off-node sender thread. Exact count proves remote up() reaches the semaphore's word and
 // loses nothing; the scope report proves it went through the forced mechanism.
@@ -780,10 +764,8 @@ TEST_F(SemScopeFixture, TestAutoRemoteWriterExternalExactCount) {
 // ============================================================================
 // AUTO-classifier / census stress suite.
 // ============================================================================
-// Each test builds a distinct census shape and asserts the scope the host ACTUALLY baked into the
-// kernel (read back from the device), so a regression in the classifier or the census arithmetic
-// fails loudly instead of hiding behind counts that look right under any correct mechanism.
-// Off-node shapes use second_node() and skip only on a single-node 1x1 grid.
+// Each test builds a census shape and asserts the scope the host ACTUALLY baked
+// (read back from the device) -- counts alone look right under any correct mechanism.
 // ============================================================================
 
 // 1 writer instance on a single-cell semaphore -> nothing can race -> cheapest path.
@@ -846,10 +828,10 @@ TEST_F(SemScopeFixture, TestRingResidencyProbePositiveControl) {
            "not see it -- the residency check could pass vacuously";
 }
 
-// TWO cached-eligible semaphores, each with its own single binder kernel, on one node: the injected
-// pool seeders rendezvous on ONE node-wide dedicated barrier, so caching both would mix rendezvous
-// groups (unequal thread counts hang at entry; equal counts let a seed land after an increment).
-// Both must be demoted to EXTERNAL. Uses different thread counts -- the hanging variant.
+// TWO cached-eligible semaphores, each with its own binder kernel, on one node: the injected
+// pool seeders share ONE node-wide rendezvous, so caching both would mix rendezvous groups
+// (unequal thread counts hang at entry). Both must be demoted to EXTERNAL. Uses different
+// thread counts -- the hanging variant.
 TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
     // threads_b = num_dms_ - 2 must be >= 2 (so BOTH kernels are cached candidates) and != 2
     // (unequal counts, the hanging variant). num_dms_ >= 5 guarantees both.
@@ -928,11 +910,10 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodePicksExternal) {
     EXPECT_EQ(result[1], threads_a * concurrent_iterations);
 }
 
-// Regression: the injected cached-pool seeder must be IMMUNE to a co-resident kernel's barrier-slot
-// choice. KA is the sole cached binder (seeder injected at its entry); KB binds a forced-EXTERNAL
-// semaphore (so KA stays cached) and syncs on slot 2 with a DIFFERENT thread count. If the seeder
-// ever moved back onto g_kernel_barrier[2], the mixed participant groups would hang KA at entry or
-// release a hart before the seed store lands -- so this must complete, stay cached, and count exactly.
+// The injected cached-pool seeder must be IMMUNE to a co-resident kernel's barrier-slot choice.
+// KA is the sole cached binder; KB (forced EXTERNAL, so KA stays cached) syncs on slot 2 with a
+// DIFFERENT thread count. A seeder on g_kernel_barrier[2] would hang KA at entry -- so this
+// must complete, stay cached, and count exactly.
 TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     // Same geometry as TestCensusTwoCachedSemsOneNodePicksExternal: threads_b >= 2 and != threads_a.
     if (num_dms_ < 5) {
@@ -1085,10 +1066,9 @@ TEST_F(SemScopeFixture, TestCensusObserverNotCountedAsWriter) {
     EXPECT_EQ(count, iterations);
 }
 
-// POSITIVE CONTROL for the AccessType->SemAccess plumbing: every other assertion here still
-// passes if the host silently stops baking the access, so it is read back off the device (report
-// word 3). The OBSERVE kernel must be the REPORTER: access is a property of a BINDING, so a
-// writer kernel reporting on the same semaphore would correctly bake INCREMENT. Count unasserted.
+// POSITIVE CONTROL for the AccessType->SemAccess plumbing: the baked access is read back off
+// the device (report word 3). The OBSERVE kernel must be the REPORTER -- access is a property
+// of a BINDING. Count unasserted.
 TEST_F(SemScopeFixture, TestObserveBindingBakesReadOnlyAccess) {
     const auto [scope, count] = run_census(
         core,
@@ -1121,9 +1101,8 @@ TEST_F(SemScopeFixture, TestWriterBindingBakesDeclaredAccess) {
 }
 
 // ...and an off-node OBSERVE reader also blocks the cached path: it would read that node's pool
-// copy. The single-binder rule alone already forces EXTERNAL here too (a reader can't share the
-// writer's kernel: double bindings are rejected), so this pins the reader rule end-to-end rather
-// than in isolation.
+// copy. (The single-binder rule alone already forces EXTERNAL here too, so this pins the reader
+// rule end-to-end rather than in isolation.)
 TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -1143,10 +1122,8 @@ TEST_F(SemScopeFixture, TestCensusOffNodeObserverBlocksCached) {
 }
 
 // A CONSUME binder off the semaphore's node would build and then hang (down() spins on its LOCAL
-// word), so EVERY scope rejects it at build time (the FATAL sits before the scope switch); the
-// three legs below cover AUTO plus the two forced escapes. increments stays 0: with
-// EXPECT_ANY_THROW the program never runs. (make_program_with_forced_scope cannot express a
-// CONSUME binding, so the forced legs reuse the census shape.)
+// word), so EVERY scope rejects it at build time (the FATAL sits before the scope switch).
+// increments stays 0: with EXPECT_ANY_THROW the program never runs.
 TEST_F(SemScopeFixture, TestCensusOffNodeConsumerFatal) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes to place a consumer off the semaphore's node";
@@ -1247,15 +1224,14 @@ TEST_F(SemScopeFixture, TestForcedCachedNodeConflictFatal) {
 }
 
 // ---- CONSUME / SET census behavior ----
-// The multi-consumer FATAL is gone: down() is multi-consumer-safe on both atomic tiers (cached
-// CAS retry loop; EXTERNAL NoC-CAS lock), so those shapes resolve freely and these tests pin the
-// RESOLUTIONS instead. An off-node consumer still FATALs (see TestCensusOffNodeConsumerFatal),
-// and the SET guard stays mechanism-independent (no scope can make a destructive store atomic).
-// Nothing in the tree labels CONSUME/SET today, so these tests are the rot protection.
+// down() is multi-consumer-safe on both atomic tiers (cached CAS retry loop; EXTERNAL NoC-CAS
+// lock), so multi-CONSUME shapes resolve freely and these tests pin the RESOLUTIONS. An off-node
+// consumer still FATALs (TestCensusOffNodeConsumerFatal); the SET guard is mechanism-independent
+// (no scope makes a destructive store atomic). Nothing in the tree labels CONSUME/SET today, so
+// these tests are the rot protection.
 
-// The 2-thread single-kernel CONSUME shape passes cached_geometry_ok, so only the old
-// pre-decision FATAL could have blocked it: it must now BUILD and resolve DM_LOCAL_CACHED
-// (whose CAS down() is multi-consumer-safe).
+// The 2-thread single-kernel CONSUME shape passes cached geometry: it must BUILD and
+// resolve DM_LOCAL_CACHED (whose CAS down() is multi-consumer-safe).
 TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -1271,9 +1247,8 @@ TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
     EXPECT_EQ(count, 2u) << "the cached AMO lost an update, or the pool was not initialised";
 }
 
-// A >=2-CONSUME shape that FAILS cached geometry (two 1-thread CONSUME kernels on one node ->
-// two binder kernels) resolves to EXTERNAL -- whose down() is now the NoC-CAS lock, so the
-// shape BUILDS and runs instead of FATALing.
+// A >=2-CONSUME shape that FAILS cached geometry (two CONSUME binder kernels on one node)
+// resolves to EXTERNAL, whose NoC-CAS-lock down() handles it.
 TEST_F(SemScopeFixture, TestCensusMultiConsumerExternalShapeResolves) {
     const auto [scope, count] = run_census(
         core,
@@ -1301,9 +1276,7 @@ TEST_F(SemScopeFixture, TestCensusSetHonestyFatal) {
         {{.num_threads = 1, .access = experimental::SemaphoreAccessType::CONSUME, .increments = 0, .reporter = true}}))
         << "a single consumer is safe and must not be rejected";
 
-    // The guards are AUTO-only: an explicitly forced scope is the user's call to make. Probed with
-    // the SET+writer shape -- the multi-CONSUME cached shape no longer throws under AUTO, so it can
-    // no longer demonstrate the bypass.
+    // The guards are AUTO-only: an explicitly forced scope is the user's call to make.
     EXPECT_NO_THROW(run_census(
         core,
         {{.num_threads = 1, .access = experimental::SemaphoreAccessType::SET, .increments = 1, .reporter = true},

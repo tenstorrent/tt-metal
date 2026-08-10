@@ -28,16 +28,9 @@ namespace tt::tt_metal {
 // ============================================================================
 // PROBE: NoC atomic operations beyond plain increment.
 // ============================================================================
-// Verifies that cross-domain atomic DECREMENT and compare-and-swap work on Quasar
-// via NoC atomics. Historically tt-metal SW emitted only INCR_GET; this branch adds
-// the production 4-bit CAS (noc_fast_atomic_cas4, the EXTERNAL down() lock) whose
-// hardware semantics these tests pin.
-//   - TestAtomicDecrementIncrGet : decrement via the EXISTING INCR_GET path
-//     (noc_semaphore_inc with incr=-1, wrap=31). Highest-confidence.
-//   - TestAtomicDecrementAmo     : decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD).
-//   - TestAtomicCas              : 4-bit compare-and-swap via a raw NOC_AT_INS_CAS.
-//   - TestAtomicCasReturnsPreOpValue : noc_fast_atomic_cas4 return path -- the response
-//     delivers the PRE-OP word (on success AND failure) to a caller-supplied slot.
+// Pins the hardware semantics of cross-domain atomic DECREMENT and the 4-bit
+// compare-and-swap (noc_fast_atomic_cas4, the EXTERNAL down() lock) on
+// Blackhole/Quasar.
 // ============================================================================
 class NocAtomicOpsFixture : public MeshDispatchFixture {
 protected:
@@ -53,7 +46,6 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // These probes exercise the Blackhole/Quasar atomic behaviors this feature relies on.
         if (arch_ == tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Probes target Blackhole/Quasar (Wormhole lacks RISC-V AMOs)";
         }
@@ -170,10 +162,8 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
 
 // CAS return-value keystone: noc_fast_atomic_cas4 with program_ret_addr=true must deliver the
 // PRE-OP word to the caller-supplied slot on success AND on failure -- what lets a CAS loser
-// learn the current value (the multi-consumer EXTERNAL down() upgrade builds on this). Word
-// starts at 5: CAS(5->9) succeeds returning 5; CAS(5->2) fails (word is 9) returning 9 and
-// leaving 9; word2=0x15 has upper-28 bits set, so CAS(cmp=5) must fail (success requires
-// word[31:4]==0) yet still return 0x15. The kernel also records the slot value read right
+// learn the current value (the EXTERNAL down() lock builds on this). word2 (upper-28 bits set)
+// checks the word[31:4]==0 success condition. The kernel also records the slot value read right
 // after noc_async_atomic_barrier (no poll) to show whether the barrier orders the return write.
 TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     if (!is_quasar) {
@@ -222,10 +212,9 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
            "the 4-bit CAS is NOT safe next to words that can exceed 15.";
 
-    // ORDERING gate: production down() does not RELY on this (sentinel pre-write + poll
-    // covers an unordered return), but the perf note in noc_semaphore.h ("polls exit on
-    // their first check") does -- a red here means that claim went stale, not that down()
-    // is broken.
+    // ORDERING gate: production down() does not RELY on this (sentinel pre-write + poll),
+    // but the perf note in noc_semaphore.h ("polls exit on their first check") does --
+    // a red here means that claim went stale, not that down() is broken.
     EXPECT_EQ(result[0], result[1])
         << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
            "any consumer of cas4 returns is REQUIRED, not optional.";

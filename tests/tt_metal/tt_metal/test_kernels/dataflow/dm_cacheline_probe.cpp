@@ -10,21 +10,13 @@
 //
 // Controls (a platform that does not model the write-back cache would read "safe"
 // everywhere and yield a bogus small width; the host rejects such runs):
-//   CONTROL A (residency): a cached write must stay invisible via the uncached alias
-//     until flushed (write-back cache exists; uncached alias bypasses it).
+//   CONTROL A (residency): a cached write must stay invisible via the uncached alias until flushed.
 //   CONTROL B (landed): wn is read via the uncached alias BEFORE the flush and must
 //     equal NOC_ADD, so a post-flush 0 is a genuine clobber, not "never landed".
-//   POSITIVE CONTROL (host): sep=4 (guaranteed same line) must read CLOBBERED, else
-//     the clobber mechanism is not live and the width is INVALID.
+//   POSITIVE CONTROL (host): sep=4 (guaranteed same line) must read CLOBBERED, else the width is INVALID.
 //
-// Per sub-test i:  wc = base + i*STRIDE  (cached-AMO word),  wn = wc + sep[i]  (NoC word)
-//   1. zero wc, wn via cached alias; flush both lines           -> TL1=0, lines clean
-//   2. cached AMO wc += CACHED_ADD                              -> wc's line dirty; wn's
-//                                                                 OLD (0) cached if same line
-//   3. NoC atomic wn += NOC_ADD; atomic barrier                 -> TL1 wn = NOC_ADD
-//   4. read wn via uncached (pre-flush)                         -> Control B: must be NOC_ADD
-//   5. flush wc's line                                          -> clobbers TL1 wn iff same line
-//   6. read wc, wn via uncached                                 -> report
+// Per sub-test i:  wc = base + i*STRIDE  (cached-AMO word),  wn = wc + sep[i]  (NoC word);
+// steps 1-6 are commented inline in the loop body.
 //
 // Ceiling: flush_l2_cache_line = FLUSH64 (fixed 64B window), so a width > 64B is not
 // detectable here; 64B matches the documented L1 D$ / L2 line. Quasar-only.

@@ -128,10 +128,9 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         .data_format_metadata = cb_data_format,
     });
 
-    // Semaphore used by the controller core to coordinate multicast. The binding is honestly
-    // SET-labeled (set_multicast + remote up through one binding), which AUTO's racing-SET check
-    // would reject -- correctly: this is the documented forced-scope shape. EXTERNAL preserves the
-    // multi-node resolution AUTO picks today (and upgrades a degenerate 1-core run to atomic).
+    // Semaphore used by the controller core to coordinate multicast. The SET-labeled binding
+    // trips AUTO's racing-SET check; forced EXTERNAL is the documented escape and matches
+    // what AUTO resolves today.
     spec.semaphores.push_back(m2::SemaphoreSpec{
         .unique_id = SEM,
         .target_nodes = all_cores,

@@ -159,28 +159,21 @@ struct KernelSpec {
         //   CONSUME:   down()
         //   SET:       set() / set_multicast() / relay_* destination
         //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
-        // A binding using SEVERAL mutators: anything that down()s is CONSUME (down() only
-        // compiles under it -- the off-node hang rejection keys on that label); otherwise
-        // anything that set()s is SET (set() only compiles under it -- the racing-SET rejection
-        // keys on it; up() stays legal under both). OBSERVE only for a pure reader. Every
-        // non-OBSERVE label counts as a writer, so the label never changes the mechanism --
-        // only which hazard checks apply. A single binding cannot both down() and set(); use
-        // two bindings (or restructure) if a kernel genuinely needs both.
+        // Mixed use: anything that down()s is CONSUME, else anything that set()s is SET (up()
+        // stays legal under both); a single binding cannot both down() and set() -- use two
+        // bindings. The label picks hazard checks, never the mechanism.
         // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
         // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
         enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
 
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
-        // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only raise the
-        // writer count, pushing AUTO toward an atomic mechanism, never onto the non-atomic path.
-        // Mark OBSERVE to opt a read-only binding out of the writer census.
-        // The WHOLE label is compile-time enforced through the emitted sem:: token: down()
-        // compiles only under CONSUME, set()/set_multicast() only under SET, up() under any
-        // writer label, reads always -- so the labels the census trusts (the off-node-CONSUME
-        // and racing-SET rejections key on them) are exactly what the kernel can exercise.
-        // The raw-id Semaphore(uint32_t) ctor sits outside this (device-only RAW access, no
-        // census); the hygiene lint flags it in Metal 2.0 sources.
+        // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only push AUTO
+        // toward an atomic mechanism. Mark OBSERVE to opt a read-only binding out of the census.
+        // The label is compile-time enforced through the emitted sem:: token (down() needs
+        // CONSUME, set() needs SET), so the census trusts only what the kernel can exercise.
+        // The raw-id Semaphore(uint32_t) ctor bypasses this; the hygiene lint flags it in
+        // Metal 2.0 sources.
         AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;

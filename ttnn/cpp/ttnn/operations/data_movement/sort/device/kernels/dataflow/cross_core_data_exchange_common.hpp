@@ -45,10 +45,8 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * @param other_core_x                 Physical X coordinate of the peer core.
  * @param other_core_y                 Physical Y coordinate of the peer core.
  */
-// Generic in the baked Scope: the caller's Semaphore is CTAD-deduced from its binding, so
-// accept whatever mechanism the host picked. The access is deduced too, but the body mutates
-// (up/set), so only a SET-labeled binding instantiates -- an OBSERVE binding is rejected at
-// compile time by the mutator asserts.
+// Generic in the baked scope/access: the caller's Semaphore is CTAD-deduced from its binding.
+// The body mutates (up/set), so only a SET-labeled binding instantiates.
 template <SemScope SemS, SemAccess SemA>
 FORCE_INLINE void sort_noc_exchange_Wt_tiles(
     Noc& noc,
