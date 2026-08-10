@@ -109,12 +109,14 @@ class Semaphore {
 
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
     // This EXTERNAL semaphore's lock word on THIS node (firmware-zeroed at boot; only ever 0/1).
-    // Recovered from l1_offset_ so the instance stays one word for every scope.
+    // Recovered from l1_offset_ so the instance stays one word for every scope. One lock per
+    // 16B row: the 4-bit NoC-CAS then always addresses lane 0 of its row, the keystone-proven
+    // lane (see MEM_NOC_SEM_LOCK_SIZE in dev_mem_map.h for the lane-2 emu anomaly this avoids).
     uint32_t external_lock_l1_offset() const {
         const uint32_t id =
             (static_cast<uint32_t>(l1_offset_) - static_cast<uint32_t>(get_semaphore<core_type>(0))) / L1_ALIGNMENT;
-        ASSERT(id * 4 < MEM_NOC_SEM_LOCK_SIZE);
-        return MEM_NOC_SEM_LOCK_BASE + id * 4;
+        ASSERT(id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE);
+        return MEM_NOC_SEM_LOCK_BASE + id * L1_ALIGNMENT;
     }
     // This hart's private CAS-return slot (R_SRC_ADDR is per-hart sticky).
     static uint32_t cas_ret_slot() {
@@ -158,7 +160,7 @@ public:
         // external_lock_l1_offset(), hit on the first down() -- ids must be < 16.
         if constexpr (Scope == SemScope::EXTERNAL) {
             static_assert(
-                Id * 4 < MEM_NOC_SEM_LOCK_SIZE,
+                Id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE,
                 "semaphore id does not fit the EXTERNAL lock region (grow MEM_NOC_SEM_LOCK_SIZE)");
         }
 #endif

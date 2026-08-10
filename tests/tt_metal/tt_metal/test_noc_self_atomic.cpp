@@ -207,8 +207,8 @@ protected:
     uint32_t run_cas_lock(uint32_t mode, uint32_t pairs, uint32_t sem_init, uint32_t lock_offset = 16) {
         const uint32_t sem_addr = l1_unreserved_base;
         // lock_offset picks the CAS LANE: the 4-bit CAS acts on the 32-bit lane (addr>>2)&3 of a
-        // 16B row, and production lock words are 4B-packed (lane = id & 3) -- offsets 16/20/24/28
-        // exercise lanes 0..3.
+        // 16B row. Production lock words are 16B-SPACED (always lane 0); offsets 20/24/28 exist
+        // to characterize the other lanes of the primitive.
         const uint32_t lock_addr = l1_unreserved_base + lock_offset;
         const uint32_t ret_base = l1_unreserved_base + 32;
         std::vector<uint32_t> init(16, 0);  // sem word + lock word + 8 ret slots
@@ -566,25 +566,40 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
            "down() cannot be enabled.";
 }
 
-// (6b) Same drain, lock word at each of the three remaining 4B offsets within its 16B row.
-// Production EXTERNAL lock words are 4B-packed (MEM_NOC_SEM_LOCK_BASE + id*4), so a semaphore
-// with id % 4 != 0 locks through CAS lane 1..3 -- an encoding leg (6a)'s 16B-aligned word never
-// touches. A lane-encoding bug would double-grant or never-grant: exact 0 catches both.
-TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes123) {
+// (6b) Same drain, lock word at 16B-row offsets 4 and 12 (CAS lanes 1 and 3). Production lock
+// words are 16B-SPACED (one per row, always lane 0 -- see MEM_NOC_SEM_LOCK_SIZE), so these lanes
+// are not production paths; they pin the 4-bit CAS primitive's lane encoding, which is public.
+TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes13) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
     }
-    for (uint32_t lane = 1; lane <= 3; lane++) {
+    for (const uint32_t lane : {1u, 3u}) {
         const uint32_t start = num_dms_ * iterations;
         const uint32_t observed = run_cas_lock(0 /*mode: pure drain*/, 0, start, /*lock_offset=*/16 + lane * 4);
         log_info(LogTest, "CAS-lock drain lane {}: {} (expected 0; started at {})", lane, observed, start);
         EXPECT_EQ(observed, 0u) << "CAS lane " << lane << " (lock word at 16B-row offset " << lane * 4
-                                << ") lost or double-granted -- the 4-bit CAS lane encoding is wrong for "
-                                   "non-16B-aligned lock words, which production down() uses for id % 4 != 0";
+                                << ") lost or double-granted";
     }
 }
 
-// (6b) Producer/consumer hart pairs on one word starting at 0: even user harts do
+// (6c) LANE 2 ANOMALY, characterization only (DISABLED_): the same drain with the lock at
+// 16B-row offset 8 (CAS lane 2) fails on the emulator RTL -- the drain makes no progress and
+// the INCR_GET target word comes back as 0x80000000 | initial_count, i.e. the CAS return path
+// misbehaves for lane 2 specifically (lanes 0/1/3 are clean). THIS IS WHY production lock words
+// are 16B-spaced (always lane 0). Run manually (--gtest_also_run_disabled_tests) to
+// re-characterize on silicon; if all lanes prove clean there, the lock region can shrink back
+// to 4B packing.
+TEST_F(NocSelfAtomicFixture, DISABLED_TestSelfCasLockLane2Anomaly) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
+    }
+    const uint32_t start = num_dms_ * iterations;
+    const uint32_t observed = run_cas_lock(0 /*mode: pure drain*/, 0, start, /*lock_offset=*/16 + 8);
+    log_info(LogTest, "CAS-lock drain lane 2: {} (expected 0; started at {})", observed, start);
+    EXPECT_EQ(observed, 0u) << "lane-2 CAS anomaly reproduced (observed " << observed << ")";
+}
+
+// (6d) Producer/consumer hart pairs on one word starting at 0: even user harts do
 // PLAIN up()-style INCR_GET(+1)s (no lock); odd user harts do lock-protected
 // decrements, blocking on >=1. Exact 0 proves the CAS lock traffic and plain
 // INCR_GET traffic serialize mutually at the NIU -- the real up()/down() mix, since
