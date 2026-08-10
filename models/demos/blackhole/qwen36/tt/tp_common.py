@@ -197,8 +197,30 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
 
 def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
-    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
-    x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep.
+
+    WORMHOLE ONLY: compares memory_config BY VALUE (matches sharded_decode_matmul's already_sharded
+    check) instead of by object identity. ttnn.to_memory_config can return a tensor that aliases the
+    same underlying buffer as `x` even when it is a distinct Python object, so the original `is not`
+    check can pass and then deallocate() the caller's live input out from under it -- reproduced as
+    a hard segfault on a real WH device when `x` was already ttnn.L1_MEMORY_CONFIG. No current
+    caller passes an already-interleaved x here (they all pass sharded activations, making this a
+    real copy either way), so this is a no-op in practice on both architectures; kept WH-only rather
+    than touching the BH code path, which is left exactly as measured/shipped there."""
+    if is_blackhole():
+        x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.linear(
+            x_il,
+            weight,
+            compute_kernel_config=compute_cfg,
+            program_config=decode_1d_progcfg,
+            memory_config=out_memory_config,
+        )
+        if x_il is not x:
+            ttnn.deallocate(x_il)
+        return out
+    already_il = x.memory_config() == ttnn.L1_MEMORY_CONFIG
+    x_il = x if already_il else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     out = ttnn.linear(
         x_il,
         weight,
@@ -206,7 +228,7 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
         program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
     )
-    if x_il is not x:
+    if not already_il:
         ttnn.deallocate(x_il)
     return out
 
