@@ -13,7 +13,7 @@ jobs:
     if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9.1.0
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           days-before-pr-stale: 32
@@ -31,5 +31,9 @@ jobs:
             to reopen it or open a new PR whenever you're ready to continue.
           stale-pr-label: "stale"
           exempt-draft-pr: false
-          operations-per-run: 100
+          # Each closed PR costs ~5 operations (fetch events, fetch comments,
+          # label, comment, close), so 450 closes roughly 85 PRs per run. Closing
+          # a PR issues 3 content-generating API requests, and GitHub's secondary
+          # rate limit allows ~500 of those per hour -- 450 keeps us under it.
+          operations-per-run: 450
           remove-stale-when-updated: true
