@@ -74,7 +74,6 @@
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;
@@ -917,7 +916,6 @@ bool program_targets_only_dram_cores(const Program& program) {
 
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
-        py_log_here();
         ZoneScoped;
         /// This function is shared between FD and SD.
         // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
@@ -947,12 +945,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
 #endif
         {
-            py_log_here();
             detail::CompileProgram(device, program);
         }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
-            py_log_here();
             program.impl().finalize_offsets(device);
         }
 
@@ -989,7 +985,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                 HalProgrammableCoreType programmable_core_type =
                     hal.get_programmable_core_type(programmable_core_type_index);
                 for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                    KernelGroup* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                    auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                     // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
                     kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
@@ -1019,9 +1015,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             }
         }
     }  // Profiler scope end
-    py_log_here();
     if (wait_until_cores_done) {
-        py_log_here();
         detail::ReadDeviceProfilerResults(device);
     }
 }

@@ -20,7 +20,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-// #include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 class Buffer;

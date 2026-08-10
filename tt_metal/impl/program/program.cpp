@@ -59,7 +59,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"

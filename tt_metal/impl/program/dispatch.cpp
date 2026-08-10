@@ -12,7 +12,6 @@
 #include <sub_device_types.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>

@@ -9,7 +9,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/dprint.h"
 
 // This function is templated to choose the pointer data-type based on 'val' size
 // to avoid unaligned addresses and out-of-bounds access.
@@ -85,20 +84,6 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-
-    // [tilize-hang-debug] Stage 1 per-core reader identity/config dump. ncrisc runs down to
-    // reserve_back even on the stuck cores, so this prints for them too; compare against a
-    // finishing neighbor core to spot any per-core config/arg divergence.
-    DPRINT(
-        __FILE__ ":{} R ntpr={} nbr={} nd={} nm={} np={} t={} rc={}\n",
-        __LINE__,
-        (uint32_t)num_tiles_per_row,
-        (uint32_t)n_block_reps,
-        (uint32_t)get_arg_val<uint32_t>(5),
-        (uint32_t)get_arg_val<uint32_t>(6),
-        (uint32_t)get_arg_val<uint32_t>(7),
-        (uint32_t)get_arg_val<uint32_t>(8),
-        (uint32_t)get_arg_val<uint32_t>(9));
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {

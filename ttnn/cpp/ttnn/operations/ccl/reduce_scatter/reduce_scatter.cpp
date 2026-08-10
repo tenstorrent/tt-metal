@@ -14,7 +14,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;

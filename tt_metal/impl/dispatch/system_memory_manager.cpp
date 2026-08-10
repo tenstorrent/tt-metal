@@ -36,7 +36,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/device/device_manager.hpp>
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 
@@ -777,7 +776,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         exit_condition.store(true);
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
-        py_log_here("timeout detected");
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 

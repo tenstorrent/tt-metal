@@ -449,7 +449,6 @@ def device(request, device_params):
         return
 
     device_id = request.config.getoption("device_id")
-    logger.info(f"device id {device_id}")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
     # When initializing a single device on a TG system, we want to
@@ -468,14 +467,11 @@ def device(request, device_params):
 
     device.cache_entries_counter = CacheEntriesCounter(device)
 
-    logger.info("execute test with device")
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
     ttnn.SetDefaultDevice(original_default_device)
-    logger.info("closing device")
     ttnn.close_device(device)
-    logger.info("closed device")
 
 
 # Reset fabric config to DISABLED if not None, and do nothing otherwise

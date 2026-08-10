@@ -25,7 +25,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <unordered_map>
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 using namespace tt::tt_metal;
 

@@ -8,7 +8,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;

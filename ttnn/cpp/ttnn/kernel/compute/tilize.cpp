@@ -7,10 +7,9 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-#include "api/debug/dprint.h"
+// #include "api/debug/dprint.h"
 
 void kernel_main() {
-    DPRINT(__FILE__ ":{} tilize compute start\n", __LINE__);
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
@@ -29,6 +28,4 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode>(per_core_block_cnt);
-
-    DPRINT(__FILE__ ":{} tilize compute end\n", __LINE__);
 }

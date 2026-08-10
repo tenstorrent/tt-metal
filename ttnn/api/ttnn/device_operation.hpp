@@ -28,7 +28,6 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation_detail.hpp"
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace ttnn::device_operation {
 

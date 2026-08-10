@@ -20,7 +20,6 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <ttnn/distributed/types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 using namespace tt::tt_metal;
 
@@ -35,7 +34,6 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids,
     size_t worker_l1_size) {
-    py_log_here();
     return MeshDevice::create(
         MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
         l1_small_size,
@@ -65,11 +63,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         worker_l1_size);
 }
 
-void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) {
-    py_log_here();
-    mesh_device->close();
-    py_log_here();
-}
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (is_cpu_tensor(tensor)) {
