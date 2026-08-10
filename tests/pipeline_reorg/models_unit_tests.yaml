@@ -234,17 +234,11 @@
 - name: Mistral-Small-3.1-24B vision unit tests
   cmd: |
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-3.1-24B-Instruct-2503
-    # ==== TEMPORARY -- REVERT BEFORE MERGE ====
-    # The five tests below are already validated green (run 31200725259). They are
-    # commented out only to get test_vision_model and test_vision_tower to the front of
-    # the queue: neither has ever executed in CI, because the job aborted before reaching
-    # them for the last two months. Restore all five once those two have a verdict.
-    # pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
-    # pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
-    # pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py
-    # pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py
-    # pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py
-    # ==========================================
+    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
+    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
+    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py
+    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py
   model: mistral-small-3.1-24b
