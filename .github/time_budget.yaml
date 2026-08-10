@@ -160,15 +160,11 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
   unit:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 160
-    wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
     bh_galaxy_perf: 180
@@ -340,7 +336,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
-    bh_sc1: 230
+    bh_sc1: 140
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -425,13 +421,9 @@ models:
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430
-    # +55 for Gemma4-12B/31B product path on QB2 (256k + B=32 chunked prefill;
-    # prior 40/35 min budgets were for max_model_len 128k/32k B=1).
-    bh_quietbox_2: 365
+    bh_quietbox_2: 310
     wh_llmbox: 297
-    # +130 for new Gemma4-12B/31B LoudBox (P150x8) 256k B=32 legs; prior budget
-    # only covered Llama-3.1-8B sampling (75).
-    bh_loudbox: 205
+    bh_loudbox: 75
     wh_n150: 65
 umd:
   unit:
