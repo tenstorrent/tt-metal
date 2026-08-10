@@ -1,0 +1,83 @@
+name: "(Single-card) Profiler tests"
+
+# Manual, single-purpose repro workflow for issue #44472.
+#
+# This filename is what workflow_dispatch resolves against (GitHub only
+# dispatches workflows whose file path exists on the repo's default branch,
+# and then runs whichever version of that file exists on the requested ref).
+# The real "(Single-card) Profiler tests" pipeline on `main` is a much
+# larger matrix-driven workflow that didn't exist yet at this commit
+# (2026-05-14) — this is a minimal stand-in, assembled from this commit's
+# own profiler-ci-selector.yaml / profiler-tests-impl.yaml /
+# run-profiler-regression.yaml chain, solely to get a real N150 CI run of
+# the new mesh-device-teardown repro test against this historical commit.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      platform: "Ubuntu 22.04"
+      build-type: "Release"
+
+  n150-profiler-repro:
+    needs: build-artifact-profiler
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: >-
+        ${{ needs.build-artifact-profiler.outputs.dev-docker-image &&
+            format('harbor.ci.tenstorrent.net/{0}', needs.build-artifact-profiler.outputs.dev-docker-image) ||
+            'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        PROFILER_SCRIPTS_ROOT: /work/tools/tracy
+        PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
+        PROFILER_ARTIFACTS_DIR: /work/generated/profiler
+        PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
+        DONT_USE_VIRTUAL_ENVIRONMENT: 1
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      - name: Run mesh-device teardown repro (issue #44472)
+        timeout-minutes: 20
+        run: |
+          source python_env/bin/activate
+          pytest tests/ttnn/tracy/test_realtime_profiler.py -k test_mesh_device_teardown_no_segfault -v
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
