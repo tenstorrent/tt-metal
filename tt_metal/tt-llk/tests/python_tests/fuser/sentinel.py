@@ -15,7 +15,7 @@ from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from .fpu_node import FpuNode
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
     from .pack_node import PackNode
 
@@ -68,7 +68,7 @@ class FuserSentinel:
 
     @staticmethod
     def _find_format_node(
-        operation: "FusedOperation",
+        operation: "L1Operation",
     ) -> Optional["FpuNode"]:
         """Find the first FpuNode for format inference.
 
@@ -185,7 +185,7 @@ class FuserSentinel:
     def _resolve_pack_formats(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         pack_node: "PackNode",
     ) -> Tuple[DataFormat, DataFormat]:
         """Infer pack_src and pack_dst formats for a given pack node."""
@@ -233,7 +233,7 @@ class FuserSentinel:
     def hw_configure_unpack(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
     ) -> str:
         """Emit _llk_unpack_hw_configure_ once for the first operation in the pipeline.
 
@@ -280,7 +280,7 @@ class FuserSentinel:
     def configure_unpack(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         compute_node: "FpuNode",
     ) -> str:
         """Emit unpack reconfig calls when formats or tile shapes change between compute nodes.
@@ -354,7 +354,7 @@ class FuserSentinel:
     def hw_configure_math(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
     ) -> str:
         """Emit _llk_math_hw_configure_ once for the first operation in the pipeline.
 
@@ -380,7 +380,7 @@ class FuserSentinel:
     def configure_math(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         compute_node: "FpuNode",
     ) -> str:
         """Emit math reconfig when the math format changes between compute nodes.
@@ -408,7 +408,7 @@ class FuserSentinel:
     def hw_configure_pack(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         pack_nodes: List["PackNode"],
     ) -> str:
         """Emit _llk_pack_hw_configure_ once for the first operation in the pipeline.
@@ -440,7 +440,7 @@ class FuserSentinel:
     def configure_pack(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         pack_node: "PackNode",
     ) -> str:
         """Update pack format state for a specific pack node and emit reconfig if needed.
@@ -467,7 +467,7 @@ class FuserSentinel:
     def configure_golden(
         self,
         config: "GlobalConfig",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         compute_node=None,
         output_format: DataFormat = DataFormat.Float16_b,
     ):
