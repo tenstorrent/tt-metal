@@ -197,8 +197,10 @@ static inline void mop_dest_reset()
 }
 
 // Determinism sanitize (test-only). The gate's answer is row 0, columns 0..7 of the SCORES and IDS
-// tiles -- the only thing _gate_output reads. Every other packed lane (row 0 cols 8..15, rows 1..15,
-// the KEYS/intermediate scratch tiles, faces 1..3) holds uninitialized-SFPU-LReg residue: the sort
+// tiles -- the op's documented output (generalized_moe_gate_nanobind.cpp: "Only the first k entries of
+// row 0 are valid ... the rest of the tile is padding"), and all _gate_output reads. Every other
+// packed lane (row 0 cols 8..15, rows 1..15, the KEYS/intermediate scratch tiles, faces 1..3) holds
+// uninitialized-SFPU-LReg residue: the sort
 // and the sum_top2 "replicate down the column" broadcast SFPSTORE full 32-lane rows whose non-rank
 // lanes were never written this run, so they carry whatever the previous kernel left in the LReg file
 // (see the op's own "junk lanes ... harmless" note). That residue is bit-reproducible run-to-run only
