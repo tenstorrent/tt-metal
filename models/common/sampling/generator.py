@@ -463,20 +463,17 @@ def format_sampling_params(sampling_params, max_batch_size):
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
     # Pad core sampling fields. When temperature is supplied per-user (a list)
-    # but a companion field is a scalar / single-element list, broadcast that
-    # scalar across the active (temperature-length) lanes so it applies
-    # uniformly, then pad the remaining inactive lanes with the field default.
-    # (A scalar top_k alongside a per-user temperature must not leave lanes
-    # 1..N-1 on the k=1 default, which would silently force them greedy.)
+    # but a companion field is a *scalar*, broadcast that scalar across the
+    # active (temperature-length) lanes so it applies uniformly, then pad the
+    # remaining inactive lanes with the field default. (A scalar top_k
+    # alongside a per-user temperature must not leave lanes 1..N-1 on the k=1
+    # default, which would silently force them greedy.) Explicit lists —
+    # including single-element lists — keep the historical lane-scoped
+    # semantics (padded with defaults), matching penalties/seeds below.
     active_len = len(sampling_params.temperature)
 
     def _pad_core(value, name):
-        if not isinstance(value, List):
-            lst = [value] * active_len
-        elif len(value) == 1:
-            lst = list(value) * active_len
-        else:
-            lst = list(value)
+        lst = [value] * active_len if not isinstance(value, List) else list(value)
         return _pad(lst, name)
 
     temperature = _pad_core(sampling_params.temperature, "temperature")
@@ -698,8 +695,9 @@ class SeedManager:
     Tracks which users have explicit seeds set (``_seed_active``) and avoids
     unnecessary host-to-device copies during decode when no seeds are active.
 
-    On the first call after a reset with no active seeds, pushes MAX_UINT32
-    (SKIP) values so the device skips ``rand_tile_init``, then skips all
+    On the first call after a reset with no active seeds, pushes varied
+    per-user entropy-derived seed values; the next call pushes MAX_UINT32
+    (SKIP) so the device advances via ``rand_tile`` on its own, then skips all
     subsequent decode pushes until the next ``reset_seed``.
 
     `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and

@@ -937,7 +937,7 @@
     bh_galaxy:
       timeout: 20  # BH Galaxy: [1] + (4,8)
       tier: 1
-  owner_id: U03PUAKE719 # TODO: replace with Filip Butić's Slack ID
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: TT-DiT common unit tests, shared amongst all models.

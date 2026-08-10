@@ -971,12 +971,14 @@ class TestSeededSamplingPerRequest:
             mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_b
         )[0]
 
+        # A functioning RNG path must change at least one of the 32 independently
+        # seeded lanes for this flat-ish top-8 distribution. Assert it (rather than
+        # xfail) so a regression to argmax-only sampling actually fails CI.
         changed_indices = [i for i, (a, b) in enumerate(zip(out_a1, out_b)) if a != b]
-        if len(changed_indices) == 0:
-            pytest.xfail(
-                "Different seed vector produced identical outputs for this stochastic config; "
-                f"backend appears argmax-only here. out_a1={out_a1}, out_b={out_b}"
-            )
+        assert len(changed_indices) > 0, (
+            "Different seed vector produced identical outputs for this stochastic config; "
+            f"backend appears argmax-only (seed/RNG regression). out_a1={out_a1}, out_b={out_b}"
+        )
 
         # Sanity checks: valid token range and no sampling outside the hot set.
         for outputs in (out_a1, out_a2, out_b):
