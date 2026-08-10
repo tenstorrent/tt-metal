@@ -91,6 +91,14 @@ def main():
     lines = []
     lines.append(f"allocationType: {allocation['type']}")
 
+    if "explicit" in allocation:
+        lines.append("explicit:")
+        for host in allocation["explicit"]:
+            lines.append(f"- {host}")
+
+    if "topologySource" in allocation:
+        lines.append(f"topologySource: {allocation['topologySource']}")
+
     if "count" in allocation:
         lines.append(f"count: {allocation['count']}")
 

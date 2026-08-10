@@ -199,6 +199,16 @@ skus:
       match_labels:
         exabox.tenstorrent.com/power: "14kw"
 
+  # Explicit single-galaxy allocation targeting bh-glx-b08u02 directly (for branch-based debugging).
+  bh_sc1_high_power_explicit:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: Explicit
+      explicit:
+        - bh-glx-b08u02
+      topologySource: FSD
+
   bh_sc4:
     runs_on:
       - exabox-multihost-with-nfs

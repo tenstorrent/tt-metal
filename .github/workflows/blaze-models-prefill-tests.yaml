@@ -43,6 +43,9 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  push:
+    branches:
+      - jjtest-high-power
   schedule:
     - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
 
@@ -66,7 +69,7 @@ jobs:
         # Pass the user input via env (not direct ${{ }} interpolation) to avoid
         # shell injection from the workflow_dispatch input.
         env:
-          TEST_TYPE: ${{ inputs.test-type }}
+          TEST_TYPE: ${{ github.event_name == 'push' && 'minimax_prefill_perf' || inputs.test-type }}
         run: |
           python3 .github/scripts/utils/validate_test_type_selection.py \
             "${{ env.TESTS_YAML_PATH }}" \
@@ -103,7 +106,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_sc1,bh_sc1_high_power
+      enabled-skus: ${{ github.event_name == 'push' && 'bh_sc1_high_power_explicit' || 'bh_sc1,bh_sc1_high_power' }}
       sp-config: sc1
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
