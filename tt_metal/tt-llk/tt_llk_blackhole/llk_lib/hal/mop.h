@@ -36,6 +36,31 @@ enum class Template1Field : std::uint8_t
     LastOpOnNonfinalOuterIteration = 8, // ISA name: Loop1Last
 };
 
+/**
+ * @brief Hold one runtime count replacement for a compile-time Template 1 configuration.
+ *
+ * @tparam Field: Template 1 count field replaced by value.
+ */
+template <Template1Field Field>
+struct RuntimeField
+{
+    std::uint32_t value;
+};
+
+/**
+ * @brief Select one Template 1 count field whose value is supplied at runtime.
+ *
+ * @tparam Field: Template 1 count field replaced by value.
+ * @param value: Final resolved MopCfg word written for Field.
+ */
+template <Template1Field Field>
+constexpr RuntimeField<Field> runtime_field(const std::uint32_t value)
+{
+    static_assert(
+        Field == Template1Field::OuterLoopCount || Field == Template1Field::InnerLoopCount, "Only Template 1 loop counts may be supplied with runtime_field");
+    return {.value = value};
+}
+
 namespace detail
 {
 struct OptionalMopInstruction
@@ -193,6 +218,44 @@ constexpr bool triggers_outer_count_bug(const ResolvedTemplate1Config &config)
            !is_plain_nop(config.end_op0);
 }
 
+template <Template1Field... Fields>
+struct RuntimeFieldsAreUnique;
+
+template <>
+struct RuntimeFieldsAreUnique<>
+{
+    static constexpr bool value = true;
+};
+
+template <Template1Field First, Template1Field... Rest>
+struct RuntimeFieldsAreUnique<First, Rest...>
+{
+    static constexpr bool value = ((First != Rest) && ...) && RuntimeFieldsAreUnique<Rest...>::value;
+};
+
+template <Template1Field Target, Template1Field... Fields>
+inline constexpr bool has_runtime_field = ((Target == Fields) || ...);
+
+template <Template1Field Target>
+inline __attribute__((always_inline)) std::uint32_t select_runtime_field(const std::uint32_t fallback)
+{
+    return fallback;
+}
+
+template <Template1Field Target, Template1Field First, Template1Field... Rest>
+inline __attribute__((always_inline)) std::uint32_t select_runtime_field(
+    const std::uint32_t fallback, const RuntimeField<First> first, const RuntimeField<Rest>... rest)
+{
+    if constexpr (Target == First)
+    {
+        return first.value;
+    }
+    else
+    {
+        return select_runtime_field<Target>(fallback, rest...);
+    }
+}
+
 inline __attribute__((always_inline)) void program(const ResolvedTemplate1Config &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
@@ -270,6 +333,59 @@ inline __attribute__((always_inline)) void program()
     static_assert(!detail::triggers_outer_count_bug(resolved_config), "Template 1 MOP configuration triggers the OuterCount += 128 hardware bug");
 
     detail::program(resolved_config);
+}
+
+/**
+ * @brief Program a compile-time Template 1 configuration with selected runtime counts.
+ *
+ * @tparam Config: Structural Template 1 configuration providing all operations and default counts.
+ * @tparam FirstField: First Template 1 count field replaced at runtime.
+ * @tparam RestFields: Additional Template 1 count fields replaced at runtime.
+ * @param first: Runtime replacement for FirstField.
+ * @param rest: Runtime replacements for RestFields.
+ * @note Call only after the preceding MOP expansion has completed; this function waits for
+ *       that condition before replacing the write-only configuration.
+ */
+template <MopConfig<MopTemplate::Template1> Config, Template1Field FirstField, Template1Field... RestFields>
+inline __attribute__((always_inline)) void program(const RuntimeField<FirstField> first, const RuntimeField<RestFields>... rest)
+{
+    constexpr detail::ResolvedTemplate1Config resolved_config = detail::resolve(Config);
+    static_assert(detail::RuntimeFieldsAreUnique<FirstField, RestFields...>::value, "Template 1 runtime fields must be unique");
+    static_assert(
+        ((FirstField == Template1Field::OuterLoopCount || FirstField == Template1Field::InnerLoopCount) && ... &&
+         (RestFields == Template1Field::OuterLoopCount || RestFields == Template1Field::InnerLoopCount)),
+        "Only Template 1 loop counts may be supplied at runtime");
+
+    constexpr bool outer_count_may_match = detail::has_runtime_field<Template1Field::OuterLoopCount, FirstField, RestFields...> ||
+                                           detail::effective_template1_count(resolved_config.outer_count) == 1;
+    constexpr bool start_op_matches      = detail::is_plain_nop(resolved_config.start_op);
+    constexpr bool inner_count_may_match = detail::has_runtime_field<Template1Field::InnerLoopCount, FirstField, RestFields...> ||
+                                           detail::effective_template1_count(resolved_config.inner_count) == 0;
+    constexpr bool end_op_matches = !detail::is_plain_nop(resolved_config.end_op0);
+
+    const std::uint32_t outer_count = detail::select_runtime_field<Template1Field::OuterLoopCount>(resolved_config.outer_count, first, rest...);
+    const std::uint32_t inner_count = detail::select_runtime_field<Template1Field::InnerLoopCount>(resolved_config.inner_count, first, rest...);
+
+    if constexpr (outer_count_may_match && start_op_matches && inner_count_may_match && end_op_matches)
+    {
+        LLK_ASSERT(
+            !(detail::effective_template1_count(outer_count) == 1 && detail::effective_template1_count(inner_count) == 0),
+            "Template 1 MOP configuration triggers the OuterCount += 128 hardware bug");
+    }
+
+    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+
+    ckernel::mop_sync();
+
+    mop_cfg[0] = outer_count;
+    mop_cfg[1] = inner_count;
+    mop_cfg[2] = resolved_config.start_op;
+    mop_cfg[3] = resolved_config.end_op0;
+    mop_cfg[4] = resolved_config.end_op1;
+    mop_cfg[5] = resolved_config.loop_op;
+    mop_cfg[6] = resolved_config.loop_op1;
+    mop_cfg[7] = resolved_config.loop0_last;
+    mop_cfg[8] = resolved_config.loop1_last;
 }
 
 /**

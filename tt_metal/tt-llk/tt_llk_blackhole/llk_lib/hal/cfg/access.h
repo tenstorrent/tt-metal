@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include "access_types.h"
-#include "ckernel.h" // cfg_read, get_cfg_pointer, cfg_rmw, cfg_reg_rmw_tensix, RDCFG, SETC16
+#include "ckernel.h" // cfg_read, get_cfg_pointer, cfg_rmw, RDCFG, SETC16
 #include "composition.h"
 #include "detail/gpr_operand.h"
 #include "detail/mmio_read.h"
@@ -31,8 +31,7 @@ namespace hal::cfg
 template <std::uint32_t Index, GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Completion = WrcfgCompletion::Wait>
 inline constexpr auto gpr()
 {
-    static_assert(Index != detail::DynamicGprIndex, "GPR index is reserved by cfg::gpr()");
-    return detail::GprOperand<Index, Size, Completion> {};
+    return detail::with_cfg_policy<Size, Completion>(hal::gpr<Index>());
 }
 
 /**
@@ -41,7 +40,7 @@ inline constexpr auto gpr()
 template <GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Completion = WrcfgCompletion::Wait>
 inline constexpr auto gpr(const std::uint32_t index)
 {
-    return detail::GprOperand<detail::DynamicGprIndex, Size, Completion> {index};
+    return detail::with_cfg_policy<Size, Completion>(hal::gpr(index));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -134,7 +133,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word(const volatile std
 template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Size, Completion>)
 {
-    static_assert(A == Access::Tensix, "RDCFG requires Access::Tensix");
+    static_assert(A == Access::TensixCfgUnit, "RDCFG requires Access::TensixCfgUnit");
     static_assert(GprIndex != detail::DynamicGprIndex, "RDCFG requires a compile-time GPR index: use gpr<Index>()");
     static_assert(Size == GprTransferSize::Bits32, "RDCFG supports 32-bit reads only");
     static_assert(F.file == RegisterFile::State, "RDCFG cannot read thread CFG (SETC16) fields");
@@ -146,38 +145,107 @@ inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Siz
 }
 
 /**
- * @brief Issue WRCFG through the common write() entry point.
+ * @brief Issue a default 32-bit RDCFG using a common GPR operand.
  *
- * @p F identifies the first containing CFG word. WRCFG replaces that complete
- * word (or four consecutive words for a 128-bit transfer), so no field mask is
- * applied. Hardware writes the bank selected by the current thread's
- * CFG_STATE_ID. The helper emits the required completion NOP unless the source
- * operand explicitly selects @ref WrcfgCompletion::Deferred.
+ * @tparam A: Access path, values = <TensixCfgUnit>.
+ * @tparam F: Field identifying the source CFG word.
+ * @tparam S: Repeated descriptor section.
+ * @tparam GprIndex: Compile-time destination GPR index.
+ * @param destination: Common GPR operand receiving the CFG word.
+ */
+template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex>
+inline __attribute__((always_inline)) void read(const hal::Gpr<GprIndex> destination)
+{
+    read<A, F, S>(detail::with_cfg_policy<GprTransferSize::Bits32, WrcfgCompletion::Wait>(destination));
+}
+
+/**
+ * @brief Move one or four GPR words to state CFG through the selected Tensix unit.
+ *
+ * @tparam A: Access path, values = <TensixCfgUnit/TensixScalarUnit>.
+ * @tparam F: Field identifying the first destination CFG word.
+ * @tparam S: Repeated descriptor section.
+ * @tparam GprIndex: Compile-time GPR index or the runtime-index sentinel.
+ * @tparam Size: Transfer width, values = <Bits32/Bits128>.
+ * @tparam Completion: WRCFG completion policy used by TensixCfgUnit.
+ * @param source: GPR operand supplying one or four complete words.
+ * @note TensixCfgUnit emits WRCFG and its requested completion NOP. TensixScalarUnit
+ *       emits REG2FLOP without a completion NOP and accepts only THCON destinations.
  */
 template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write(const detail::GprOperand<GprIndex, Size, Completion> source)
 {
-    static_assert(A == Access::Tensix, "WRCFG requires Access::Tensix");
-    static_assert(F.file == RegisterFile::State, "WRCFG cannot write thread CFG (SETC16) fields");
+    static_assert(
+        A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
+    static_assert(F.file == RegisterFile::State, "GPR-backed cfg::write cannot write thread CFG (SETC16) fields");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) == 0, "GPR cfg::write must start at the beginning of a CFG word");
     if constexpr (Size == GprTransferSize::Bits128)
     {
-        static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit WRCFG destination must be four-word aligned");
+        static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
     }
 
-    if constexpr (GprIndex == detail::DynamicGprIndex)
+    if constexpr (A == Access::TensixScalarUnit)
     {
-        TT_WRCFG(source.index, Size == GprTransferSize::Bits128, F.addr32(S));
+        constexpr std::uint32_t address = F.addr32(S);
+        static_assert(
+            address >= THCON_CFGREG_BASE_ADDR32 && address < GLOBAL_CFGREG_BASE_ADDR32, "Access::TensixScalarUnit supports THCON CFG destinations only");
+        if constexpr (Size == GprTransferSize::Bits128)
+        {
+            static_assert(address + 3u < GLOBAL_CFGREG_BASE_ADDR32, "128-bit REG2FLOP transfer crosses the THCON CFG range");
+        }
+
+        constexpr std::uint32_t size_sel   = Size == GprTransferSize::Bits128 ? 0u : 1u;
+        constexpr std::uint32_t flop_index = address - THCON_CFGREG_BASE_ADDR32;
+        if constexpr (GprIndex == detail::DynamicGprIndex)
+        {
+            LLK_ASSERT(source.index < 64u, "REG2FLOP GPR index must be in [0, 63]");
+            if constexpr (Size == GprTransferSize::Bits128)
+            {
+                LLK_ASSERT((source.index & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
+            }
+            TT_REG2FLOP(size_sel, 0, 0, 0, flop_index, source.index);
+        }
+        else
+        {
+            static_assert(GprIndex < 64u, "REG2FLOP GPR index must be in [0, 63]");
+            if constexpr (Size == GprTransferSize::Bits128)
+            {
+                static_assert((GprIndex & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
+            }
+            TTI_REG2FLOP(size_sel, 0, 0, 0, flop_index, GprIndex);
+        }
     }
     else
     {
-        TTI_WRCFG(GprIndex, Size == GprTransferSize::Bits128, F.addr32(S));
+        if constexpr (GprIndex == detail::DynamicGprIndex)
+        {
+            TT_WRCFG(source.index, Size == GprTransferSize::Bits128, F.addr32(S));
+        }
+        else
+        {
+            TTI_WRCFG(GprIndex, Size == GprTransferSize::Bits128, F.addr32(S));
+        }
+        if constexpr (Completion == WrcfgCompletion::Wait)
+        {
+            TTI_NOP;
+        }
     }
-    if constexpr (Completion == WrcfgCompletion::Wait)
-    {
-        TTI_NOP;
-    }
+}
+
+/**
+ * @brief Issue a default 32-bit CFG or THCON write using a common GPR operand.
+ *
+ * @tparam A: Access path, values = <TensixCfgUnit/TensixScalarUnit>.
+ * @tparam F: Field identifying the destination CFG word.
+ * @tparam S: Repeated descriptor section.
+ * @tparam GprIndex: Compile-time or runtime source GPR index.
+ * @param source: Common GPR operand supplying one complete word.
+ */
+template <Access A, const Field& F, Sec S = Sec::S0, std::uint32_t GprIndex>
+inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source)
+{
+    write<A, F, S>(detail::with_cfg_policy<GprTransferSize::Bits32, WrcfgCompletion::Wait>(source));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -224,10 +292,16 @@ class WriteBatch
 public:
     inline __attribute__((always_inline)) WriteBatch()
     {
+        static_assert(A != Access::TensixScalarUnit, "Access::TensixScalarUnit supports only GPR-backed cfg::write");
         if constexpr (A == Access::MMIO)
         {
             cfg_ = ckernel::get_cfg_pointer();
         }
+    }
+
+    inline __attribute__((always_inline)) explicit WriteBatch(volatile std::uint32_t* tt_reg_ptr cfg) : cfg_(cfg)
+    {
+        static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
     }
 
     template <typename First, typename... Rest, std::enable_if_t<detail::is_config_word_v<First>, int> = 0>
@@ -284,6 +358,22 @@ inline __attribute__((always_inline)) void write(Configure&& configure)
 }
 
 /**
+ * @brief Perform a group of RISC MMIO writes through an already-resolved CFG bank.
+ *
+ * @tparam A Access path, values = <MMIO>.
+ * @tparam Configure Callable accepting a @ref WriteBatch.
+ * @param cfg Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param configure Callable receiving a @ref WriteBatch.
+ */
+template <Access A, typename Configure, std::enable_if_t<std::is_invocable_v<Configure, WriteBatch<A>&>, int> = 0>
+inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_ptr cfg, Configure&& configure)
+{
+    static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
+    WriteBatch<A> batch(cfg);
+    configure(batch);
+}
+
+/**
  * @brief Write a fixed-size array of consecutive prepacked CFG words.
  */
 template <Access A, const Field& F, std::uint32_t Count, Sec S = Sec::S0, std::size_t ArrayCount>
@@ -297,7 +387,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[A
  * @brief Combine and write fields from one physical CFG word.
  *
  * @code
- * write<Access::Tensix>(
+ * write<Access::TensixCfgUnit>(
  *     set<AluFormatSpecReg0::SrcA>(src_a),
  *     set<AluFormatSpecReg1::SrcB>(src_b),
  *     set<AluAccCtrl::Fp32_enabled>(fp32));
@@ -327,13 +417,16 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  * @tparam F  reference to a generated `static constexpr Field` (e.g. Reg::Field).
  * @tparam S  section (@ref Sec), defaults to S0.
  *
- * @note SETC16 (Access::Tensix on the Thread file) writes a whole 16-bit thread
+ * @note SETC16 (Access::TensixCfgUnit on the Thread file) writes a whole 16-bit thread
  *       word and has no per-field RMW; for a word packing several fields,
  *       compose the value and write it whole (as addr_mod_t does).
  */
 template <Access A, const Field& F, Sec S = Sec::S0>
 inline __attribute__((always_inline)) void write(const std::uint32_t value)
 {
+    static_assert(
+        A == Access::MMIO || A == Access::TensixCfgUnit,
+        "value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
     static_assert(F.width <= 32, "field wider than 32b cannot be written through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
@@ -341,7 +434,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
 
     if constexpr (A == Access::MMIO)
     {
-        static_assert(F.file == RegisterFile::State, "RISC writes target state CFG; use Access::Tensix for thread CFG");
+        static_assert(F.file == RegisterFile::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
         if constexpr (F.width >= 32)
         {
             ckernel::get_cfg_pointer()[a] = value; // whole 32-bit word
@@ -351,7 +444,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
             ckernel::cfg_rmw(a, F.shamt(S), F.mask(S), value); // read-modify-write
         }
     }
-    else // Access::Tensix
+    else // Access::TensixCfgUnit
     {
         if constexpr (F.file == RegisterFile::Thread)
         {
@@ -359,7 +452,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
         }
         else
         {
-            ckernel::cfg_reg_rmw_tensix<F.addr32(S), F.shamt(S), F.mask(S)>(value);
+            detail::cfg_reg_rmw_tensix<F.addr32(S), F.shamt(S), F.mask(S)>(value);
         }
     }
 }
@@ -369,7 +462,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
  *        data) is embedded into the instruction stream via .ttinsn (TTI_*),
  *        so nothing is composed or pushed at runtime.
  *
- * @tparam A      must be @ref Access::Tensix (RISC MMIO is a runtime store).
+ * @tparam A      must be @ref Access::TensixCfgUnit (RISC MMIO is a runtime store).
  * @tparam F      reference to a generated `static constexpr Field`.
  * @tparam Value  compile-time value to place in the field.
  * @tparam S      section, defaults to S0.
@@ -380,7 +473,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
 template <Access A, const Field& F, std::uint32_t Value, Sec S = Sec::S0>
 inline __attribute__((always_inline)) void write()
 {
-    static_assert(A == Access::Tensix, "compile-time instruction emission requires Access::Tensix");
+    static_assert(A == Access::TensixCfgUnit, "compile-time instruction emission requires Access::TensixCfgUnit");
     static_assert(F.width <= 32, "field wider than 32b cannot be written through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");

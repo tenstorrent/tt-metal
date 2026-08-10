@@ -24,7 +24,7 @@ namespace hal::cfg
 template <Access A, const Field& F>
 inline __attribute__((always_inline)) void write(const std::uint32_t section, const std::uint32_t value)
 {
-    static_assert(A == Access::Tensix, "runtime-section thread CFG writes require Access::Tensix");
+    static_assert(A == Access::TensixCfgUnit, "runtime-section thread CFG writes require Access::TensixCfgUnit");
     static_assert(F.file == RegisterFile::Thread, "SETC16 targets thread CFG only");
     static_assert(F.shamt(Sec::S0) == 0, "prepacked thread CFG anchor must begin at bit zero");
 

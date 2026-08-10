@@ -14,10 +14,33 @@
 namespace hal::cfg::detail
 {
 
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
+inline __attribute__((always_inline)) void cfg_reg_rmw_tensix(const std::uint32_t value)
+{
+    const std::uint32_t write_data = value << Shamt;
+
+    if constexpr ((Mask & 0x000000ffu) != 0u)
+    {
+        TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, CfgAddr32);
+    }
+    if constexpr ((Mask & 0x0000ff00u) != 0u)
+    {
+        TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, CfgAddr32);
+    }
+    if constexpr ((Mask & 0x00ff0000u) != 0u)
+    {
+        TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, CfgAddr32);
+    }
+    if constexpr ((Mask & 0xff000000u) != 0u)
+    {
+        TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, CfgAddr32);
+    }
+}
+
 template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
 inline __attribute__((always_inline)) void write_word_mmio(const ConfigWord<File, Addr, Mask>& word, volatile std::uint32_t* tt_reg_ptr cfg)
 {
-    static_assert(File == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::Tensix for thread CFG (SETC16)");
+    static_assert(File == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
     if constexpr (Mask == 0xffffffffu)
     {
         cfg[Addr] = word.data;
@@ -32,7 +55,7 @@ inline __attribute__((always_inline)) void write_word_mmio(const ConfigWord<File
 template <typename Assignment>
 inline __attribute__((always_inline)) void write_word_mmio(const SingleFieldWord<Assignment>& word, volatile std::uint32_t* tt_reg_ptr cfg)
 {
-    static_assert(Assignment::file == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::Tensix for thread CFG (SETC16)");
+    static_assert(Assignment::file == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
     const std::uint32_t data = encode(word.assignment);
     if constexpr (Assignment::mask == 0xffffffffu)
     {
@@ -48,6 +71,9 @@ inline __attribute__((always_inline)) void write_word_mmio(const SingleFieldWord
 template <Access A, RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
 inline __attribute__((always_inline)) void write_word(const ConfigWord<File, Addr, Mask>& word)
 {
+    static_assert(
+        A == Access::MMIO || A == Access::TensixCfgUnit,
+        "composed CFG writes require Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
     if constexpr (A == Access::MMIO)
     {
         write_word_mmio(word, ckernel::get_cfg_pointer());
@@ -62,13 +88,16 @@ inline __attribute__((always_inline)) void write_word(const ConfigWord<File, Add
     {
         // One logical word update. Only byte lanes touched by the combined
         // mask produce RMWCIB instructions.
-        ckernel::cfg_reg_rmw_tensix<Addr, 0, Mask>(word.data);
+        cfg_reg_rmw_tensix<Addr, 0, Mask>(word.data);
     }
 }
 
 template <Access A, typename Assignment>
 inline __attribute__((always_inline)) void write_word(const SingleFieldWord<Assignment>& word)
 {
+    static_assert(
+        A == Access::MMIO || A == Access::TensixCfgUnit,
+        "composed CFG writes require Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
     if constexpr (A == Access::MMIO)
     {
         write_word_mmio(word, ckernel::get_cfg_pointer());
@@ -79,7 +108,7 @@ inline __attribute__((always_inline)) void write_word(const SingleFieldWord<Assi
     }
     else
     {
-        ckernel::cfg_reg_rmw_tensix<Assignment::addr, Assignment::shift, Assignment::mask>(word.assignment.value);
+        cfg_reg_rmw_tensix<Assignment::addr, Assignment::shift, Assignment::mask>(word.assignment.value);
     }
 }
 
@@ -146,7 +175,7 @@ inline __attribute__((always_inline)) void write_constant_word()
 template <Access A, typename First, typename... Rest>
 inline __attribute__((always_inline)) void write_constant_assignments()
 {
-    static_assert(A == Access::Tensix, "compile-time CFG assignment emission requires Access::Tensix");
+    static_assert(A == Access::TensixCfgUnit, "compile-time CFG assignment emission requires Access::TensixCfgUnit");
     static_assert(First::file == RegisterFile::Thread || First::file == RegisterFile::State, "unsupported CFG register file");
     static_assert(((First::file == Rest::file) && ...), "all assignments must use the same register file");
     static_assert(((First::addr == Rest::addr) && ...), "all assignments must resolve to the same physical CFG word");

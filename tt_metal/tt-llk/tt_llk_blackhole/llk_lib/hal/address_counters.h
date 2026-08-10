@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h" // ckernel::instrn_buffer
+#include "utils/gpr.h"
 
 namespace hal
 {
@@ -58,6 +59,135 @@ enum class GetOpType : std::uint8_t
 };
 
 /**
+ * @brief Selects how many bits REG2FLOP extracts from its source GPR.
+ */
+enum class AddressCounterGprWidth : std::uint8_t
+{
+    Bits32 = 1,
+    Bits16 = 2,
+    Bits8  = 3
+};
+
+/**
+ * @brief Selects the first source byte used by an address-counter REG2FLOP.
+ */
+enum class GprByteOffset : std::uint8_t
+{
+    Byte0 = 0,
+    Byte1 = 1,
+    Byte2 = 2,
+    Byte3 = 3
+};
+
+/**
+ * @brief Selects the Tensix thread whose address counter receives REG2FLOP data.
+ */
+enum class AddressCounterThread : std::uint8_t
+{
+    T0      = 0,
+    T1      = 1,
+    T2      = 2,
+    Current = 0xff
+};
+
+/**
+ * @brief Selects the live counter or its carry/reset shadow as the REG2FLOP destination.
+ */
+enum class AddressCounterValue : std::uint8_t
+{
+    Counter = 0,
+    Carry   = 1
+};
+
+template <std::uint32_t Operation>
+struct AdcGprOperation
+{
+    static constexpr std::uint32_t get_operation()
+    {
+        return Operation;
+    }
+
+    inline __attribute__((always_inline)) void apply() const
+    {
+        INSTRUCTION_WORD(Operation);
+    }
+};
+
+/**
+ * @brief Attach one GPR source to an already-selected address-counter destination.
+ *
+ * @tparam ClientMask: Previously selected singleton @ref AddressCounterClient.
+ * @tparam ChannelMask: Cumulative channel selection from @ref ADC.
+ * @tparam CurrentChannel: Previously selected singleton @ref AddressChannel.
+ * @tparam Dimension: Encoded X/Y/Z/W destination.
+ * @tparam Value: Select the live counter or its carry/reset shadow.
+ * @tparam Thread: Destination thread, or Current to leave override disabled.
+ */
+template <
+    std::uint8_t ClientMask,
+    std::uint8_t ChannelMask,
+    std::uint8_t CurrentChannel,
+    std::uint8_t Dimension,
+    AddressCounterValue Value,
+    AddressCounterThread Thread = AddressCounterThread::Current>
+struct AdcGprTarget
+{
+    static_assert(ClientMask == 0x1 || ClientMask == 0x2 || ClientMask == 0x4, "REG2FLOP accepts exactly one address-counter client");
+    static_assert(CurrentChannel == 0x1 || CurrentChannel == 0x2, "REG2FLOP requires exactly one address-counter channel");
+    static_assert(ChannelMask == CurrentChannel, "REG2FLOP cannot follow a multi-channel selection");
+    static_assert(Dimension < 4, "invalid REG2FLOP address-counter dimension");
+    static_assert(Value == AddressCounterValue::Counter || Value == AddressCounterValue::Carry, "invalid REG2FLOP address-counter value selector");
+
+    template <AddressCounterThread SelectedThread>
+    constexpr auto thread() const
+    {
+        static_assert(Thread == AddressCounterThread::Current, "REG2FLOP destination thread already selected");
+        static_assert(
+            SelectedThread == AddressCounterThread::T0 || SelectedThread == AddressCounterThread::T1 || SelectedThread == AddressCounterThread::T2,
+            "REG2FLOP destination thread must be T0, T1, or T2");
+        return AdcGprTarget<ClientMask, ChannelMask, CurrentChannel, Dimension, Value, SelectedThread> {};
+    }
+
+    /**
+     * @brief Finish the destination-first builder with one common GPR operand.
+     *
+     * @tparam Width: Source slice width, values = <Bits32/Bits16/Bits8>.
+     * @tparam ByteOffset: First source byte selected by REG2FLOP.
+     * @tparam GprIndex: Compile-time source GPR index, values = <0..63>.
+     * @param source: Common GPR identity created by @ref hal::gpr.
+     * @note REG2FLOP updates either the live counter or its carry/reset shadow. Unlike SETADC,
+     *       it does not update both values in one instruction.
+     */
+    template <AddressCounterGprWidth Width = AddressCounterGprWidth::Bits32, GprByteOffset ByteOffset = GprByteOffset::Byte0, std::uint32_t GprIndex>
+    constexpr auto from_gpr(const hal::Gpr<GprIndex> source) const
+    {
+        static_assert(GprIndex != hal::detail::DynamicGprIndex, "address-counter REG2FLOP requires hal::gpr<Index>()");
+        static_assert(GprIndex < 64u, "REG2FLOP source GPR index must be in [0, 63]");
+        static_assert(
+            Width == AddressCounterGprWidth::Bits32 || Width == AddressCounterGprWidth::Bits16 || Width == AddressCounterGprWidth::Bits8,
+            "address-counter REG2FLOP supports only 32-bit, 16-bit, or 8-bit GPR slices");
+        static_assert(
+            (Width == AddressCounterGprWidth::Bits32 && ByteOffset == GprByteOffset::Byte0) ||
+                (Width == AddressCounterGprWidth::Bits16 && (ByteOffset == GprByteOffset::Byte0 || ByteOffset == GprByteOffset::Byte2)) ||
+                (Width == AddressCounterGprWidth::Bits8 && ckernel::to_underlying(ByteOffset) < 4u),
+            "invalid REG2FLOP byte offset for the selected GPR width");
+
+        constexpr std::uint32_t channel    = CurrentChannel == ckernel::to_underlying(AddressChannel::Channel1) ? 1u : 0u;
+        constexpr std::uint32_t adc        = ClientMask == ckernel::to_underlying(AddressCounterClient::Unpacker0)   ? 0u
+                                             : ClientMask == ckernel::to_underlying(AddressCounterClient::Unpacker1) ? 1u
+                                                                                                                     : 2u;
+        constexpr bool override_thread     = Thread != AddressCounterThread::Current;
+        constexpr std::uint32_t thread     = override_thread ? ckernel::to_underlying(Thread) : 0u;
+        constexpr std::uint32_t flop_index = (channel << 5) | (adc << 3) | (ckernel::to_underlying(Value) << 2) | Dimension;
+        constexpr std::uint32_t operation =
+            TT_OP_REG2FLOP(ckernel::to_underlying(Width), 2u + override_thread, ckernel::to_underlying(ByteOffset), thread, flop_index, GprIndex);
+
+        (void)source;
+        return AdcGprOperation<operation> {};
+    }
+};
+
+/**
  * @brief Compile-time builder for the Tensix address counters (SETADC / INCADC family).
  *
  * Drive it as a fluent chain starting from the global @ref address_counters instance. Each
@@ -78,6 +208,10 @@ enum class GetOpType : std::uint8_t
  *   - increment()                  — emit the matching INCADC* sequence instead of absolute SETs.
  *   - get_operation<GetOpType>()   — return a single encoded instruction word (e.g. to embed in a MOP
  *                                    or replay buffer) rather than issuing it inline.
+ *
+ * To source one counter from a GPR instead, select one client, channel, and X/Y/Z/W
+ * destination, then finish with from_gpr(hal::gpr<Index>()). That path emits REG2FLOP and
+ * leaves the constant SETADC builder unchanged.
  *
  * @code
  *   // Program Unpacker0's X and Y counters on both channels, one channel at a time:
@@ -189,10 +323,24 @@ struct ADC
         return _set_counter<Counter::X, value>();
     }
 
+    template <AddressCounterValue Value = AddressCounterValue::Counter>
+    constexpr auto X() const
+    {
+        static_assert(SetMask == 0, "REG2FLOP cannot share a builder with pending constant assignments; apply them first, then start a new builder");
+        return AdcGprTarget<ClientMask, ChannelMask, CurrentChannel, 0, Value> {};
+    }
+
     template <std::uint32_t value>
     constexpr auto Y() const
     {
         return _set_counter<Counter::Y, value>();
+    }
+
+    template <AddressCounterValue Value = AddressCounterValue::Counter>
+    constexpr auto Y() const
+    {
+        static_assert(SetMask == 0, "REG2FLOP cannot share a builder with pending constant assignments; apply them first, then start a new builder");
+        return AdcGprTarget<ClientMask, ChannelMask, CurrentChannel, 1, Value> {};
     }
 
     template <std::uint8_t value>
@@ -201,10 +349,24 @@ struct ADC
         return _set_counter<Counter::Z, value>();
     }
 
+    template <AddressCounterValue Value = AddressCounterValue::Counter>
+    constexpr auto Z() const
+    {
+        static_assert(SetMask == 0, "REG2FLOP cannot share a builder with pending constant assignments; apply them first, then start a new builder");
+        return AdcGprTarget<ClientMask, ChannelMask, CurrentChannel, 2, Value> {};
+    }
+
     template <std::uint8_t value>
     constexpr auto W() const
     {
         return _set_counter<Counter::W, value>();
+    }
+
+    template <AddressCounterValue Value = AddressCounterValue::Counter>
+    constexpr auto W() const
+    {
+        static_assert(SetMask == 0, "REG2FLOP cannot share a builder with pending constant assignments; apply them first, then start a new builder");
+        return AdcGprTarget<ClientMask, ChannelMask, CurrentChannel, 3, Value> {};
     }
 
 private:

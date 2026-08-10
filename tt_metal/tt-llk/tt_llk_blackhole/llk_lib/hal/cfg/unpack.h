@@ -435,11 +435,11 @@ public:
  * runtime.
  *
  * @code{.cpp}
- * write<Access::Tensix,
+ * write<Access::TensixCfgUnit,
  *       Unpacker[0].AddrCtrl[UnpackerReg::Reg0].Xstride>(x_stride);
- * write<Access::Tensix,
+ * write<Access::TensixCfgUnit,
  *       Unpacker[1].AddrBase[UnpackerReg::Reg1]>(base);
- * write<Access::Tensix,
+ * write<Access::TensixCfgUnit,
  *       Unpacker[0].BlobsYStart[BlobContext::Context01]>(blobs_y_start);
  *
  * Unpacker.forEach([&](auto U) {
