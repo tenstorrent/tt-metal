@@ -162,30 +162,6 @@ _DEMOTED = [
         ttnn.float32,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
-    (
-        [4, 12, 96, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [6, 11, 64, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [6, 11, 64, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [63, 32, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
 ]
 _DEMOTED_IDS = [
     "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
@@ -210,10 +186,6 @@ _DEMOTED_IDS = [
     "[3, 2, 128, 32]|memory_config=l1|float32|row_major",
     "[3, 2, 64, 32]|memory_config=dram|float32|row_major",
     "[3, 2, 64, 32]|memory_config=l1|float32|row_major",
-    "[4, 12, 96, 96]|memory_config=dram|bfloat16|row_major",
-    "[6, 11, 64, 96]|memory_config=dram|bfloat16|row_major",
-    "[6, 11, 64, 96]|memory_config=l1|bfloat16|row_major",
-    "[63, 32, 96]|memory_config=dram|bfloat16|row_major",
 ]
 
 

@@ -110,68 +110,6 @@ bool supported_by_codegen(const TilizeCodegenParams& operation_attributes, const
     return true;
 }
 
-namespace {
-
-// One measured-slow configuration, keyed on the normalized cache-key attributes. NC/Ht/Wt rather
-// than the logical shape because that is what every builder's split and CB plan reads: shapes with
-// the same tile geometry ([1, 4, 96, 32] and [4, 96, 32]) produce the same program.
-struct DemotedCase {
-    uint32_t nc;
-    uint32_t ht;
-    uint32_t wt;
-    DataType dtype;
-    BufferType output_buffer_type;
-};
-
-// UNGENERALIZED exact matches: no mechanism was identified for these, so each row is one measured
-// configuration rather than a condition. This is the floor when analysis finds no predicate, not a
-// preferred form. A row leaves this table only when a measurement on the ported kernel clears it —
-// a demoted case still runs under implementation=codegen, so verify keeps measuring every row here.
-//
-// Wt == 1 (row_path_wt1_no_pipeline) is covered by a general predicate in is_demoted() below
-// rather than enumerated here, which is why no row in this table has Wt == 1. Wt == 3 without
-// the column split was probed for the same treatment and rejected (see the table's tail).
-//
-// Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
-// are one row, since they produce the same program. Placement is part of the key because the
-// ledger splits on it: [32, 64] uint16 is demoted on a DRAM output and cleared the gate on an L1
-// one, so the DRAM row cannot be widened to both.
-constexpr DemotedCase kUngeneralizedDemotedCases[] = {
-    // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row.
-    {1, 1, 2, DataType::UINT16, BufferType::DRAM},
-    // The following Wt == 2 / Wt == 5 tile geometries are deliberately absent from this table:
-    // on wormhole codegen beats native on every one of them, they only trail generic_op, so
-    // demoting would route a case that wins to the slower path. On blackhole they lose and are
-    // routed by the arch-calibrated column-concurrency predicate in is_demoted() above instead.
-    //   NC 2, Ht 6, Wt 7  ([2, 192, 224]) — both placements.
-    //   NC 4, Ht 7, Wt 5  ([4, 224, 160]) — L1 only; the DRAM twin is not in this class.
-    //   NC 7, Ht 3, Wt 5  ([7, 96, 160])  — L1 only; the DRAM twin is not in this class.
-    //
-    // [5, 8, 64, 64] — NC 40, Ht 2, Wt 2.
-    {40, 2, 2, DataType::BFLOAT16, BufferType::L1},
-    // [6, 10, 32, 64] — NC 60, Ht 1, Wt 2.
-    {60, 1, 2, DataType::BFLOAT16, BufferType::DRAM},
-    {60, 1, 2, DataType::BFLOAT16, BufferType::L1},
-    // [6, 224, 160] — NC 6, Ht 7, Wt 5.
-    {6, 7, 5, DataType::BFLOAT16, BufferType::DRAM},
-    {6, 7, 5, DataType::BFLOAT16, BufferType::L1},
-    // [6, 4, 96, 64] — NC 24, Ht 3, Wt 2.
-    {24, 3, 2, DataType::BFLOAT16, BufferType::L1},
-    // Wt == 3 without the column split (3 * total_ht > cores). A general no-split demotion was
-    // probed and rejected: wins and losses do not separate on any geometry scalar — total_ht 66
-    // beats native by up to 1.21 while total_ht 63 and 132 trail it ([5, 160, 96] wins at 25,
-    // [2, 12, 64, 96] at 48). Enumerated conclusive losers only:
-    // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3; DRAM loses (0.94-0.97), the L1 twin is a tie.
-    {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
-    // [63, 32, 96] — NC 63, Ht 1, Wt 3; DRAM loses (0.98-0.99), L1 ties.
-    {63, 1, 3, DataType::BFLOAT16, BufferType::DRAM},
-    // [6, 11, 64, 96] — NC 66, Ht 2, Wt 3; loses on both placements (0.89-0.95).
-    {66, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
-    {66, 2, 3, DataType::BFLOAT16, BufferType::L1},
-};
-
-}  // namespace
-
 bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
     // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
     // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
@@ -198,7 +136,7 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     //
     // The ledger agrees on every Wt == 1 configuration it covers — bfloat16, float32, uint32, int32
     // and uint16, DRAM and L1 outputs, total_Ht both under and over the core count — and holds no
-    // Wt == 1 counterexample, so this is a condition rather than another block of exact rows.
+    // Wt == 1 counterexample, so this is a condition, not an enumerated case.
     if (operation_attributes.Wt == 1) {
         return true;
     }
@@ -248,15 +186,6 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         }
     }
 
-    // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's
-    // dtype; output placement is the axis the ledger varies (vector_map's memory_config kwarg).
-    for (const auto& c : kUngeneralizedDemotedCases) {
-        if (c.nc == operation_attributes.NC && c.ht == operation_attributes.Ht && c.wt == operation_attributes.Wt &&
-            c.dtype == operation_attributes.input_dtype &&
-            c.output_buffer_type == operation_attributes.output_mem_config.buffer_type()) {
-            return true;
-        }
-    }
     return false;
 }
 
