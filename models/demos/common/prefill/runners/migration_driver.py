@@ -124,6 +124,7 @@ is warned about rather than honoured:
 
 import json
 import os
+import re
 import struct
 import sys
 import time
@@ -230,6 +231,20 @@ _RELAUNCH_FORWARD_VARS = (
 # jobs span the same hosts.
 _RELAUNCH_TCP_IFACE_DEFAULT = "ens5f0np0"
 
+# Every externally-sourced token that reaches the relaunch argv is matched against one of these first.
+#
+# The exec below takes an ARGUMENT VECTOR, not a command string, and never goes through a shell, so shell
+# metacharacters in a host name or interface are inert -- they would be passed to mpirun as literal
+# characters inside a single argv element. What validation buys is the next tier down: it keeps a
+# malformed or hostile value from being reinterpreted as an mpirun OPTION, keeps `-x` carrying a bare
+# NAME rather than a NAME=VALUE assignment, and turns the overwhelmingly more likely failure -- a typo or
+# a half-expanded variable in driver_hosts -- into a precise error instead of an opaque launcher one.
+#   host:  RFC-1123-ish label chars, plus mpirun's optional ":<slots>" suffix
+#   iface: a network interface name (also used for -x variable names, which are identifier-shaped)
+_HOST_TOKEN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(:[1-9][0-9]{0,3})?$")
+_IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
     """The rank-ordered host list this driver should span, or [] for a plain single-process run.
@@ -247,7 +262,10 @@ def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
 
     Entries are normalized to mpirun's ``host:slots`` form with one slot each: one driver process per
     host is the whole point (each reads its own host's chips), and a second process on the same host
-    would just duplicate reads while adding a rank to every collective."""
+    would just duplicate reads while adding a rank to every collective.
+
+    Every entry must match ``_HOST_TOKEN_RE`` before it can reach the relaunch argv; anything else exits
+    here, naming the offending token and where it came from."""
     spec = (cli_hosts or os.environ.get("PREFILL_DRIVER_HOSTS", "")).strip()
     source = "--hosts/PREFILL_DRIVER_HOSTS"
     if not spec and manifest_path:
@@ -268,7 +286,19 @@ def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
             "full-coverage run."
         )
         sys.exit(1)
-    return [h if ":" in h else f"{h}:1" for h in (e.strip() for e in expanded.split(",")) if h]
+    hosts = []
+    for entry in (e.strip() for e in expanded.split(",")):
+        if not entry:
+            continue
+        if not _HOST_TOKEN_RE.match(entry):
+            logger.error(
+                f"[migration_driver] driver host {entry!r} (from {source}) is not a valid "
+                "'host' or 'host:slots' token: expected letters, digits, '.', '-' and '_' only, with an "
+                "optional ':<slots>' suffix. Nothing is launched with it."
+            )
+            sys.exit(1)
+        hosts.append(entry if ":" in entry else f"{entry}:1")
+    return hosts
 
 
 def _maybe_relaunch_under_mpi(args) -> None:
@@ -277,7 +307,7 @@ def _maybe_relaunch_under_mpi(args) -> None:
         python3 -m models.demos.common.prefill.runners.migration_driver --manifest <manifest>
 
     validates EVERY rank's layers instead of only this host's. Returns (doing nothing) when there is
-    nothing to relaunch for; otherwise it never returns — os.execvp replaces this process with mpirun,
+    nothing to relaunch for; otherwise it never returns — os.execv replaces this process with mpirun,
     whose exit status is therefore the one the caller sees.
 
     Why a relaunch at all: both read-backs go over UMD, which reaches only the chips attached to the host
@@ -314,7 +344,19 @@ def _maybe_relaunch_under_mpi(args) -> None:
             "list the hosts in the SAME order you passed to run_pipeline_prefill.sh."
         )
 
-    launcher = shutil.which("mpirun-ulfm") or "mpirun"
+    # Resolve the launcher to an ABSOLUTE path here, and exec by that path below (os.execv, not execvp).
+    # PATH is consulted exactly once, in this lookup, instead of a second time inside the exec — so what
+    # runs is decided here and is visible in the log line, and a missing launcher is a clear error rather
+    # than a bare name handed to a PATH search at exec time.
+    launcher = shutil.which("mpirun-ulfm") or shutil.which("mpirun")
+    if not launcher:
+        logger.error(
+            "[migration_driver] migration.driver_hosts asks for a multi-host run but neither mpirun-ulfm "
+            "nor mpirun is on PATH. Install/activate the MPI launcher, or clear driver_hosts to run "
+            "single-process (this host's layers only)."
+        )
+        sys.exit(1)
+
     # Reuse ttrun's own MCA arguments rather than restating them: the runner these ranks read KV behind was
     # launched with exactly these (run_pipeline_prefill.sh --tcp-interface -> ttrun), and both jobs have to
     # agree on the network or MPI_Init hangs. Import is ~0.4 s here because ttnn is already loaded.
@@ -324,6 +366,13 @@ def _maybe_relaunch_under_mpi(args) -> None:
     iface = iface.strip()
     if iface.lower() in ("", "none", "auto"):  # opt out -> ttrun's exclude-docker0,lo variant
         iface = None
+    elif not _IFACE_RE.match(iface):
+        logger.error(
+            f"[migration_driver] --tcp-interface / PREFILL_DRIVER_TCP_IFACE {iface!r} is not a valid "
+            "interface name (letters, digits, '.', '-' and '_' only). Pass the NIC the runner was "
+            "launched with, e.g. 'ens5f0np0'."
+        )
+        sys.exit(1)
     mca_args = default_multihost_mpi_args(iface)
     # A peer rank inherits neither the shell that ran this nor its venv activation, so `python3 -m
     # models...` there resolves against whatever PYTHONPATH is forwarded. Default both to this clone's
@@ -332,9 +381,15 @@ def _maybe_relaunch_under_mpi(args) -> None:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 5))
     os.environ.setdefault("TT_METAL_HOME", repo_root)
     os.environ.setdefault("PYTHONPATH", repo_root)
-    forward = list(_RELAUNCH_FORWARD_VARS) + sorted(
-        k for k in os.environ if k.startswith(("PREFILL_", "MIGRATION_")) and k not in _RELAUNCH_FORWARD_VARS
-    )
+    # `-x NAME` forwards a variable BY NAME; mpirun also accepts `-x NAME=VALUE`, which assigns one. Only
+    # identifier-shaped names get through, so a variable whose name embedded an '=' (impossible from a
+    # shell, possible via execve) can never turn a forward into an assignment.
+    forward = [
+        k
+        for k in list(_RELAUNCH_FORWARD_VARS)
+        + sorted(k for k in os.environ if k.startswith(("PREFILL_", "MIGRATION_")) and k not in _RELAUNCH_FORWARD_VARS)
+        if _ENV_NAME_RE.match(k)
+    ]
     os.environ[_RELAUNCH_GUARD] = "1"
     cmd = [
         launcher,
@@ -361,7 +416,14 @@ def _maybe_relaunch_under_mpi(args) -> None:
         "to stay single-process.)"
     )
     logger.info(f"[migration_driver] exec: {' '.join(cmd)}")
-    os.execvp(cmd[0], cmd)  # replaces this process; mpirun's exit status becomes ours
+    # execv, NOT execvp or a shell: an argument VECTOR handed to an already-resolved absolute path. No
+    # shell is involved anywhere on this path, so nothing in `cmd` can be reinterpreted as a command,
+    # redirection or metacharacter -- each element arrives at mpirun as one literal argument. The three
+    # externally-sourced pieces are validated above (hosts: _HOST_TOKEN_RE, interface: _IFACE_RE,
+    # forwarded names: _ENV_NAME_RE); the rest is this module's own literals, sys.executable and
+    # sys.argv[1:], i.e. the operator's own command line. Replaces this process, so mpirun's exit status
+    # becomes ours.
+    os.execv(launcher, cmd)
 
 
 class MigrationDriver:
