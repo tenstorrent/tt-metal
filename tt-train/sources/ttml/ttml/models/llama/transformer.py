@@ -12,6 +12,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+from ttml.parallel import TPStrategy
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -67,9 +68,11 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
+
+        use_tp = tp_strategy.tensor_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
@@ -155,7 +158,7 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
@@ -163,7 +166,7 @@ class LlamaBlock(AbstractModuleBase):
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -174,7 +177,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
 
     def forward(

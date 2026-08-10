@@ -31,6 +31,7 @@ from ttml.models.llama.safetensors_loader import (
     _tp_axis,
     _unpermute_proj_rows,
 )
+from ttml.parallel import TPStrategy
 
 HEAD_DIM = 8  # even: RoPE splits each head into two halves
 HIDDEN = 16
@@ -362,9 +363,9 @@ class TestCoverage:
 # ── End-to-end: a synthetic HF checkpoint through the real loader ──
 
 
-def e2e_config(use_tp: bool, placement: EmbeddingPlacement, **overrides) -> LlamaConfig:
+def e2e_config(tp_strategy: TPStrategy, placement: EmbeddingPlacement, **overrides) -> LlamaConfig:
     return coverage_config(
-        use_tp=use_tp,
+        tp_strategy=tp_strategy,
         embedding_placement=placement,
         weight_tying=WeightTyingType.Disabled,
         **overrides,
@@ -470,24 +471,24 @@ class TestConsumerContract:
 @pytest.mark.usefixtures("tp_mesh")
 class TestCoverageAgainstRealModels:
     @pytest.mark.parametrize(
-        "use_tp,placement,tying",
+        "tp_strategy,placement,tying",
         [
-            (False, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
-            (False, EmbeddingPlacement.Replicated, WeightTyingType.Enabled),
-            (True, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
-            (True, EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
-            (True, EmbeddingPlacement.VocabParallel, WeightTyingType.Enabled),
-            (True, EmbeddingPlacement.FeatureParallel, WeightTyingType.Disabled),
+            (TPStrategy.NONE, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
+            (TPStrategy.NONE, EmbeddingPlacement.Replicated, WeightTyingType.Enabled),
+            (TPStrategy.TENSOR, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
+            (TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
+            (TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, WeightTyingType.Enabled),
+            (TPStrategy.TENSOR, EmbeddingPlacement.FeatureParallel, WeightTyingType.Disabled),
         ],
-        ids=lambda v: getattr(v, "name", str(v)),
+        ids=lambda v: v.name,
     )
-    def test_rules_cover_the_model(self, use_tp, placement, tying):
-        config = coverage_config(use_tp=use_tp, embedding_placement=placement, weight_tying=tying)
+    def test_rules_cover_the_model(self, tp_strategy, placement, tying):
+        config = coverage_config(tp_strategy=tp_strategy, embedding_placement=placement, weight_tying=tying)
         names = set(Llama(config).parameters())
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
     def test_biased_attention_is_coverable(self):
-        config = coverage_config(use_tp=True, attention_bias=True)
+        config = coverage_config(tp_strategy=TPStrategy.TENSOR, attention_bias=True)
         names = set(Llama(config).parameters())
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
@@ -502,7 +503,7 @@ class TestLoadIntoModel:
     )
     def test_tensor_parallel_layout(self, tmp_path, placement):
         hf = write_hf_checkpoint(tmp_path)
-        config = e2e_config(True, placement)
+        config = e2e_config(TPStrategy.TENSOR, placement)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
 
@@ -542,7 +543,7 @@ class TestLoadIntoModel:
     @pytest.mark.parametrize("dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32", "bf16"])
     def test_reports_a_clean_load(self, tmp_path, capsys, dtype):
         hf = write_hf_checkpoint(tmp_path, dtype=dtype)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
+        config = e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
 
@@ -557,13 +558,13 @@ class TestLoadIntoModel:
         tensors = {k: v for k, v in write_hf_checkpoint(tmp_path).items() if "v_proj" not in k}
         save_checkpoint(tmp_path, tensors)
 
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
+        config = e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel)
         with expect_error(RuntimeError, "the checkpoint has no"):
             load_from_safetensors(Llama(config), tmp_path, config)
 
     def test_without_tensor_parallelism_is_a_plain_concat(self, tmp_path):
         hf = write_hf_checkpoint(tmp_path)
-        config = e2e_config(False, EmbeddingPlacement.Replicated)
+        config = e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
 
@@ -588,7 +589,7 @@ class TestLoadIntoModel:
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
         vocab = VOCAB - 8
         hf = write_hf_checkpoint(tmp_path, vocab=vocab)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel, vocab_size=vocab)
+        config = e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, vocab_size=vocab)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
 
@@ -600,14 +601,14 @@ class TestLoadIntoModel:
     def test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config(self, tmp_path, expect_error):
         """A short checkpoint must not load with noise where its missing tokens should be."""
         write_hf_checkpoint(tmp_path, vocab=VOCAB - 8)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
+        config = e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel)
         with expect_error(RuntimeError, "does not match the config-implied shape"):
             load_from_safetensors(Llama(config), tmp_path, config)
 
     def test_forward_runs_on_loaded_weights(self, tmp_path):
         """Loaded weights must actually drive the fused ops, not just sit at the right shape."""
         write_hf_checkpoint(tmp_path)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
+        config = e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
         model.eval()

@@ -54,6 +54,8 @@ from . import fsdp
 
 from .sharding import Sharding
 
+from .parallel import TPStrategy
+
 
 def manual_seed(seed: int) -> None:
     """Seed all of ttml's RNGs from a single call."""

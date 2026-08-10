@@ -38,16 +38,15 @@ class LlamaRopeScalingConfig:
 class LlamaConfig:
     """Llama model hyper-parameters.
 
-    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
-    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
-    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
-    vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to a multiple of ``32 * tp_size``, exposed as
-    ``Llama.padded_vocab_size``.
+    When ``tp_strategy`` enables tensor parallelism the mesh must already be open and the
+    ``"tp"`` axis size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The vocab does
+    *not* need to be TP-divisible: the embedding and LM-head weights are padded internally
+    to a multiple of ``32 * tp_size``, exposed as ``Llama.padded_vocab_size``.
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
-    sharding) and is ignored when ``use_tp=False``.
+    sharding) and is ignored when tensor parallelism is disabled.
     """
 
     hidden_size: int = 384
@@ -64,7 +63,7 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
-    use_tp: bool = False
+    tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
 
     def __post_init__(self):
@@ -98,7 +97,7 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
-        if self.use_tp:
+        if self.tp_strategy.tensor_parallel:
             if (
                 self.weight_tying == WeightTyingType.Enabled
                 and self.embedding_placement != EmbeddingPlacement.VocabParallel
@@ -138,7 +137,7 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        if config.use_tp:
+        if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
@@ -224,7 +223,7 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
-                    use_tp=config.use_tp,
+                    tp_strategy=config.tp_strategy,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -282,7 +281,7 @@ class Llama(AbstractModuleBase):
         # padded columns are handled by vocab_parallel_cross_entropy_loss.
         # The non-TP path returns full-vocab logits, so we still need to drop
         # the tile-alignment padding before handing them off to the caller.
-        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
+        if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
