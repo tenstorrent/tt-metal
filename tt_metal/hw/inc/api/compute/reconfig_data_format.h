@@ -18,9 +18,9 @@ namespace ckernel {
 namespace detail {
 
 // Shared implementation for the reconfig_data_format family. The public entry points pick is_tile_dim_reconfig_en
-// (hardcoded per intent-named function: false for reconfig_data_format, true for reconfig_full_operand) and skip_int8
-// (false to re-derive the int8/unsigned state from the format, true for the _skip_int8 surface); every format-writing
-// public function funnels through these helpers so the primary, deprecated, and _skip_int8 surfaces stay in lockstep.
+// (false for reconfig_data_format, true for reconfig_full_operand) and skip_int8 (false to re-derive the
+// int8/unsigned state from the format, true for the _skip_int8 surface); every format-writing public function funnels
+// through these helpers so the primary, deprecated, and _skip_int8 surfaces stay in lockstep.
 
 // p_dim_stride_target is declared only on the unpack thread (via the unpack API header). This helper, and every other
 // reference to that type, therefore lives under TRISC_UNPACK and is called only inside UNPACK((...)) -- which expands to
@@ -78,20 +78,17 @@ ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, skip_int8>(srcb_old_operand, srcb_new_operand)));
 }
 
-// Dependent-false for the reconfig_tile_shape Quasar static_assert: keyed on the caller's template param so the
-// assertion is dependent and only fires when a Quasar kernel actually instantiates reconfig_tile_shape*.
-template <typename>
-inline constexpr bool tile_shape_unsupported_on_quasar = false;
-
-// Geometry-only helpers (UNPACK-only; no MATH half -- the math-side reconfig has no tile/face geometry). Defined only
-// off Quasar, where reconfig cannot reprogram tile geometry (buffer descriptors are programmed into the MOP at op init).
+// Shape-only helpers (UNPACK-only; no MATH half -- the math-side reconfig has no tile/face geometry). Named
+// reconfig_ts_* (not reconfig_tile_shape_*) so they do not collide with the public reconfig_tile_shape* functions,
+// mirroring the reconfig_df_* naming. Defined only off Quasar, where tile geometry is programmed at op init, not by
+// reconfig -- so the whole geometry surface (reconfig_full_operand / reconfig_tile_shape) is compiled out there.
 #ifndef ARCH_QUASAR
-ALWI void reconfig_tile_shape_both(const uint32_t src_a_operand, const uint32_t src_b_operand) {
+ALWI void reconfig_ts_both(const uint32_t src_a_operand, const uint32_t src_b_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(src_a_operand)));
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(src_b_operand)));
 }
 
-ALWI void reconfig_tile_shape_both(
+ALWI void reconfig_ts_both(
     const uint32_t src_a_old_operand,
     const uint32_t src_a_new_operand,
     const uint32_t src_b_old_operand,
@@ -100,36 +97,37 @@ ALWI void reconfig_tile_shape_both(
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(src_b_old_operand, src_b_new_operand)));
 }
 
-ALWI void reconfig_tile_shape_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_ts_srca(const uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(srca_new_operand)));
 }
 
-ALWI void reconfig_tile_shape_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_ts_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srca(srca_old_operand, srca_new_operand)));
 }
 
-ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_ts_srcb(const uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(srcb_new_operand)));
 }
 
-ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_tile_shape_srcb(srcb_old_operand, srcb_new_operand)));
 }
 #endif
 
 }  // namespace detail
 
-// The reconfig_data_format family expresses *what* is being reconfigured through three intent-named entry points,
-// instead of the old opaque is_tile_dim_reconfig_en bool (tt-metal#34499):
+// The reconfig_data_format family expresses *what* is being reconfigured through three intent-named entry points:
 //
-//   * reconfig_data_format  -- format + tile size (geometry unchanged). The common, cheap case.
-//   * reconfig_full_operand -- format + tile size + tile/face geometry. Use when the new operand's tile or face
-//                              shape differs from what is currently programmed (what is_tile_dim_reconfig_en = true did).
-//   * reconfig_tile_shape   -- tile/face geometry only, no format. Use when only the tile shape changes.
+//   * reconfig_data_format  -- data format + tile size (tile/face geometry unchanged). The common, cheap case.
+//   * reconfig_full_operand -- data format + tile size + tile/face geometry. Use when the new operand's tile or face
+//                              shape differs from what is currently programmed.
+//   * reconfig_tile_shape   -- tile size + tile/face geometry only, no format. Use when only the tile shape changes.
 //
-// All three always re-derive the int8/unsigned state from the new format (Src{A,B}Unsigned on unpack, INT8_math_enabled
-// on math), so a reconfig across an Int8/UInt8/Int32 boundary is handled automatically. The *_skip_int8 surface keeps
-// the old skip behavior for callers that know no int8 boundary is crossed and want to avoid the extra register write.
+// The two format-writing entry points (reconfig_data_format, reconfig_full_operand) always re-derive the int8/unsigned
+// state from the new format (Src{A,B}Unsigned on unpack, INT8_math_enabled on math), so a reconfig across an
+// Int8/UInt8/Int32 boundary is handled automatically. reconfig_tile_shape writes neither format nor int8 state. The
+// *_skip_int8 surface skips the int8 re-derivation for callers that know no int8 boundary is crossed and want to avoid
+// the extra register write.
 //
 // The two-source overloads take operands in natural (icb0, icb1) order; src_order selects how they map onto SrcA/SrcB
 // (SrcOrder::Reverse maps icb0 -> SrcB and icb1 -> SrcA, so matmul can pass its operands unswapped, matching
@@ -137,11 +135,11 @@ ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_old_operand, const uint32
 //
 // NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format
 // only reprograms THCON data formats (gasket), not the MOP. When operands or buffer descriptors change, call the op
-// init again for the new operand pair before the next unpack operation. reconfig_tile_shape has no Quasar form for the
-// same reason (geometry lives in the MOP); a Quasar use of it is a static_assert directing you to the op init.
+// init again for the new operand pair before the next unpack operation. Because tile geometry lives in the MOP,
+// reconfig_full_operand and reconfig_tile_shape do not exist on Quasar -- reprogram geometry by re-running the op init.
 
 // ------------------------------------------------------------------------------------------------------------------
-// reconfig_data_format -- format + tile size, geometry unchanged.
+// reconfig_data_format -- data format + tile size, tile/face geometry unchanged.
 // ------------------------------------------------------------------------------------------------------------------
 
 /**
@@ -158,8 +156,11 @@ ALWI void reconfig_data_format(const uint32_t icb0_new_operand, const uint32_t i
 }
 
 /**
- * Conditional variant of reconfig_data_format: reconfigures only the sources whose format differs between the old
- * and new operand. Operands are in natural (icb0, icb1) order and honor src_order as above.
+ * Conditional variant of reconfig_data_format: reconfigures only the sources whose format differs between the old and
+ * new operand. Operands are in natural (icb0, icb1) order and honor src_order as above.
+ *
+ * NOTE: like all conditional (old, new) reconfig overloads, this re-detects the operands' face geometry and updates it
+ * when it differs (long-standing auto-detect behavior). The unconditional overload above never touches geometry.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_data_format(
@@ -185,7 +186,8 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
 }
 
 /**
- * Reconfigures the srcA data format only if the new operand's format differs from the old one.
+ * Reconfigures the srcA data format only if the new operand's format differs from the old one. See the conditional
+ * geometry note on reconfig_data_format(old, new, ...).
  */
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
@@ -201,21 +203,23 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
 }
 
 /**
- * Reconfigures the srcB data format only if the new operand's format differs from the old one.
+ * Reconfigures the srcB data format only if the new operand's format differs from the old one. See the conditional
+ * geometry note on reconfig_data_format(old, new, ...).
  */
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<false, false>(srcb_old_operand, srcb_new_operand);
 }
 
+#ifndef ARCH_QUASAR
 // ------------------------------------------------------------------------------------------------------------------
-// reconfig_full_operand -- format + tile size + tile/face geometry (what is_tile_dim_reconfig_en = true did).
+// reconfig_full_operand -- data format + tile size + tile/face geometry. Wormhole/Blackhole only (see NOTE above).
 // ------------------------------------------------------------------------------------------------------------------
 
 /**
  * Reconfigures the srcA and srcB unpacker/math data formats AND tile/face geometry for new operands, always
- * re-deriving the int8/unsigned state from the new formats. Use when the new operands' tile or face shape differs
- * from what is currently programmed. Operands are in natural (icb0, icb1) order and honor src_order.
+ * re-deriving the int8/unsigned state from the new formats. Use when the new operands' tile or face shape differs from
+ * what is currently programmed. Operands are in natural (icb0, icb1) order and honor src_order.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_full_operand(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
@@ -226,8 +230,8 @@ ALWI void reconfig_full_operand(const uint32_t icb0_new_operand, const uint32_t 
 }
 
 /**
- * Conditional variant of reconfig_full_operand: reconfigures only the sources whose format differs between the old
- * and new operand, reprogramming their tile/face geometry. Operands are in natural (icb0, icb1) order.
+ * Conditional variant of reconfig_full_operand: reconfigures only the sources whose format differs between the old and
+ * new operand, reprogramming their tile/face geometry. Operands are in natural (icb0, icb1) order.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_full_operand(
@@ -277,125 +281,87 @@ ALWI void reconfig_full_operand_srcb(const uint32_t srcb_old_operand, const uint
 }
 
 // ------------------------------------------------------------------------------------------------------------------
-// reconfig_tile_shape -- tile/face geometry only, no format. UNPACK-only (the math reconfig has no geometry).
+// reconfig_tile_shape -- tile size + tile/face geometry only, no format. UNPACK-only. Wormhole/Blackhole only.
 // ------------------------------------------------------------------------------------------------------------------
 
 /**
- * Reprograms only the srcA and srcB unpacker tile/face geometry (dim/stride) for new operands, leaving the data
- * formats untouched. Use when only the tile shape changes. Operands are in natural (icb0, icb1) order and honor
- * src_order. Not available on Quasar (geometry is programmed at op init).
+ * Reprograms only the srcA and srcB unpacker tile size and face geometry (x-dim, num_faces) for new operands, leaving
+ * the data formats (and int8 state) untouched. Use when only the tile shape changes. Operands are in natural
+ * (icb0, icb1) order and honor src_order.
+ *
+ * @note The format-derived ch1 strides are unchanged (a shape-only change does not alter them). A face_r_dim change
+ *       additionally requires re-running the op init (it programs the unpacker ADC X-end); a num_faces-only change is
+ *       fully handled here.
  */
-template <SrcOrder src_order = SrcOrder::Regular, typename Dummy = void>
+template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_tile_shape(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape is not available on Quasar: tile/face geometry is programmed into the unpack MOP at op "
-        "init. Call the op init for the new operand instead.");
-#else
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_tile_shape_both(
+    detail::reconfig_ts_both(
         reverse ? icb1_new_operand : icb0_new_operand, reverse ? icb0_new_operand : icb1_new_operand);
-#endif
 }
 
 /**
- * Conditional variant of reconfig_tile_shape: reprograms srcA/srcB tile/face geometry only for the sources whose
- * geometry changed between the old and new operand. Operands are in natural (icb0, icb1) order.
+ * Conditional variant of reconfig_tile_shape: reprograms srcA/srcB tile size and face geometry only for the sources
+ * whose geometry (or CB) changed between the old and new operand. Operands are in natural (icb0, icb1) order.
  */
-template <SrcOrder src_order = SrcOrder::Regular, typename Dummy = void>
+template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_tile_shape(
     const uint32_t icb0_old_operand,
     const uint32_t icb0_new_operand,
     const uint32_t icb1_old_operand,
     const uint32_t icb1_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape is not available on Quasar: tile/face geometry is programmed into the unpack MOP at op "
-        "init. Call the op init for the new operand instead.");
-#else
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    detail::reconfig_tile_shape_both(
+    detail::reconfig_ts_both(
         reverse ? icb1_old_operand : icb0_old_operand,
         reverse ? icb1_new_operand : icb0_new_operand,
         reverse ? icb0_old_operand : icb1_old_operand,
         reverse ? icb0_new_operand : icb1_new_operand);
-#endif
 }
 
 /**
- * Reprograms only the srcA unpacker tile/face geometry for a new operand, leaving the format untouched.
+ * Reprograms only the srcA unpacker tile size and face geometry for a new operand, leaving the format untouched.
  */
-template <typename Dummy = void>
 ALWI void reconfig_tile_shape_srca(const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape_srca is not available on Quasar: tile/face geometry is programmed at op init.");
-#else
-    detail::reconfig_tile_shape_srca(srca_new_operand);
-#endif
+    detail::reconfig_ts_srca(srca_new_operand);
 }
 
 /**
- * Reprograms the srcA unpacker tile/face geometry only if the new operand's geometry differs from the old one.
+ * Reprograms the srcA unpacker tile size and face geometry only if the new operand's geometry (or CB) differs.
  */
-template <typename Dummy = void>
 ALWI void reconfig_tile_shape_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape_srca is not available on Quasar: tile/face geometry is programmed at op init.");
-#else
-    detail::reconfig_tile_shape_srca(srca_old_operand, srca_new_operand);
-#endif
+    detail::reconfig_ts_srca(srca_old_operand, srca_new_operand);
 }
 
 /**
- * Reprograms only the srcB unpacker tile/face geometry for a new operand, leaving the format untouched.
+ * Reprograms only the srcB unpacker tile size and face geometry for a new operand, leaving the format untouched.
  */
-template <typename Dummy = void>
 ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape_srcb is not available on Quasar: tile/face geometry is programmed at op init.");
-#else
-    detail::reconfig_tile_shape_srcb(srcb_new_operand);
-#endif
+    detail::reconfig_ts_srcb(srcb_new_operand);
 }
 
 /**
- * Reprograms the srcB unpacker tile/face geometry only if the new operand's geometry differs from the old one.
+ * Reprograms the srcB unpacker tile size and face geometry only if the new operand's geometry (or CB) differs.
  */
-template <typename Dummy = void>
 ALWI void reconfig_tile_shape_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
-#ifdef ARCH_QUASAR
-    static_assert(
-        detail::tile_shape_unsupported_on_quasar<Dummy>,
-        "reconfig_tile_shape_srcb is not available on Quasar: tile/face geometry is programmed at op init.");
-#else
-    detail::reconfig_tile_shape_srcb(srcb_old_operand, srcb_new_operand);
-#endif
+    detail::reconfig_ts_srcb(srcb_old_operand, srcb_new_operand);
 }
+#endif  // !ARCH_QUASAR
 
 // ------------------------------------------------------------------------------------------------------------------
-// reconfig_data_format_skip_int8 -- like reconfig_data_format, but skips re-deriving the int8/unsigned state (the old
-// to_from_int8 == false behavior). Use only when the caller knows the reconfig never crosses an Int8/UInt8/Int32
-// boundary and wants to avoid the extra register write. Geometry is left unchanged.
+// reconfig_data_format_skip_int8 -- like reconfig_data_format, but skips re-deriving the int8/unsigned state. Use only
+// when the caller knows the reconfig never crosses an Int8/UInt8/Int32 boundary and wants to avoid the extra register
+// write. Tile/face geometry is left unchanged.
 // ------------------------------------------------------------------------------------------------------------------
 
 /**
- * Same as reconfig_data_format, but skips re-deriving the int8/unsigned state (the old to_from_int8 == false
- * behavior). Use only when the caller knows the reconfig never crosses an Int8/UInt8/Int32 boundary and wants to
- * avoid the extra register write.
+ * Same as reconfig_data_format, but skips re-deriving the int8/unsigned state. Use only when the caller knows the
+ * reconfig never crosses an Int8/UInt8/Int32 boundary and wants to avoid the extra register write.
  */
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
@@ -460,9 +426,10 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 // Deprecated (tt-metal#34499). The is_tile_dim_reconfig_en bool is replaced by intent-named entry points:
 //   reconfig_data_format<SrcOrder, false> -> reconfig_data_format<SrcOrder>()
 //   reconfig_data_format<SrcOrder, true>  -> reconfig_full_operand<SrcOrder>() (or reconfig_tile_shape() for geometry-only)
-// These <SrcOrder, is_tile_dim> overloads preserve today's exact behavior and work until 2026-09-15. They coexist with
-// the older <to_from_int8, is_tile_dim> bool overloads (further down), disambiguated by first template arg type: a
-// SrcOrder first arg selects these; a bool first arg selects the older ones. The cleanup PR removes both.
+// (and the matching _srca / _srcb / _skip_int8 forms). These <SrcOrder, is_tile_dim> overloads preserve today's exact
+// behavior and work until 2026-09-15. They coexist with the older <to_from_int8, is_tile_dim> bool overloads (further
+// down), disambiguated by first template arg type: a SrcOrder first arg selects these; a bool first arg selects the
+// older ones. The cleanup PR removes both.
 // -------------------------------------------------------------------------------------------------------------------
 
 /// \cond DEPRECATED_RECONFIG_DATA_FORMAT_TILE_DIM (excluded from published docs; overloads the current API by template only)
@@ -541,6 +508,79 @@ RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_full_operand_srcb")
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     detail::reconfig_df_srcb<is_tile_dim_reconfig_en, false>(srcb_old_operand, srcb_new_operand);
+}
+
+// _skip_int8 shims: same is_tile_dim removal. <..., true> preserves format + geometry + skip-int8 until removal.
+/**
+ * @deprecated The is_tile_dim bool was removed. Use reconfig_data_format_skip_int8<SrcOrder>() (or, for geometry,
+ * reconfig_full_operand<SrcOrder>() which always derives int8). Kept until 2026-09-15. See tt-metal#34499.
+ */
+template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_skip_int8<SrcOrder>")
+ALWI void reconfig_data_format_skip_int8(const uint32_t icb0_new_operand, const uint32_t icb1_new_operand) {
+    LLK_SAN_FUNCTION();
+    constexpr bool reverse = (src_order == SrcOrder::Reverse);
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
+        reverse ? icb1_new_operand : icb0_new_operand, reverse ? icb0_new_operand : icb1_new_operand);
+}
+
+/**
+ * @deprecated See reconfig_data_format_skip_int8 above. Kept until 2026-09-15.
+ */
+template <SrcOrder src_order, bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_skip_int8<SrcOrder>")
+ALWI void reconfig_data_format_skip_int8(
+    const uint32_t icb0_old_operand,
+    const uint32_t icb0_new_operand,
+    const uint32_t icb1_old_operand,
+    const uint32_t icb1_new_operand) {
+    LLK_SAN_FUNCTION();
+    constexpr bool reverse = (src_order == SrcOrder::Reverse);
+    detail::reconfig_df_both<is_tile_dim_reconfig_en, true>(
+        reverse ? icb1_old_operand : icb0_old_operand,
+        reverse ? icb1_new_operand : icb0_new_operand,
+        reverse ? icb0_old_operand : icb1_old_operand,
+        reverse ? icb0_new_operand : icb1_new_operand);
+}
+
+/**
+ * @deprecated Use reconfig_data_format_srca_skip_int8(). Kept until 2026-09-15.
+ */
+template <bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srca_skip_int8")
+ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_new_operand) {
+    LLK_SAN_FUNCTION();
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_new_operand);
+}
+
+/**
+ * @deprecated Use reconfig_data_format_srca_skip_int8(). Kept until 2026-09-15.
+ */
+template <bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srca_skip_int8")
+ALWI void reconfig_data_format_srca_skip_int8(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+    LLK_SAN_FUNCTION();
+    detail::reconfig_df_srca<is_tile_dim_reconfig_en, true>(srca_old_operand, srca_new_operand);
+}
+
+/**
+ * @deprecated Use reconfig_data_format_srcb_skip_int8(). Kept until 2026-09-15.
+ */
+template <bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srcb_skip_int8")
+ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_new_operand);
+}
+
+/**
+ * @deprecated Use reconfig_data_format_srcb_skip_int8(). Kept until 2026-09-15.
+ */
+template <bool is_tile_dim_reconfig_en>
+RECONFIG_DF_TILE_DIM_DEPRECATED("reconfig_data_format_srcb_skip_int8")
+ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
+    detail::reconfig_df_srcb<is_tile_dim_reconfig_en, true>(srcb_old_operand, srcb_new_operand);
 }
 
 #undef RECONFIG_DF_TILE_DIM_DEPRECATED

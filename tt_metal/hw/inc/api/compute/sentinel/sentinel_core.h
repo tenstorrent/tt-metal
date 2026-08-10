@@ -185,8 +185,8 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
         }
         if (m_enabled) {
 #ifdef ARCH_QUASAR
-            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
-            reconfig_data_format_srca<false /* is_tile_dim_reconfig_en */>(m_srca_cb, cb);
+            // Quasar programs tile geometry at op init, so use the plain (geometry-off) reconfig here.
+            reconfig_data_format_srca(m_srca_cb, cb);
 #else
             reconfig_full_operand_srca(m_srca_cb, cb);
 #endif
@@ -200,8 +200,8 @@ ALWI void SentinelCore::inject_single_operand(uint32_t cb) {
         }
         if (m_enabled) {
 #ifdef ARCH_QUASAR
-            // Quasar unpack reconfig does not support stride/tile-dim changes; force is_tile_dim_reconfig_en=false.
-            reconfig_data_format_srcb<false /* is_tile_dim_reconfig_en */>(m_srcb_cb, cb);
+            // Quasar programs tile geometry at op init, so use the plain (geometry-off) reconfig here.
+            reconfig_data_format_srcb(m_srcb_cb, cb);
 #else
             reconfig_full_operand_srcb(m_srcb_cb, cb);
 #endif
