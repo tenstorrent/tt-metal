@@ -72,7 +72,6 @@ jobs:
       - name: Run mesh-device teardown repro (issue #44472)
         timeout-minutes: 20
         run: |
-          source python_env/bin/activate
           pytest tests/ttnn/tracy/test_realtime_profiler.py -k test_mesh_device_teardown_no_segfault -v
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
