@@ -1001,6 +1001,21 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "resolution_480p and t2v"
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4-mgd) ───────────────────
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
