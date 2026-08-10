@@ -13,13 +13,17 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
-from .counters import print_counters, read_counters
-from .device import BootMode
-from .format_config import FormatConfig
-from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
-from .logger import logger
-from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
-from .perf_schema import (
+from ..counters import print_counters, read_counters
+from ..device import BootMode
+from ..format_config import FormatConfig
+from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
+from ..logger import logger
+from ..metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from ..profiler import Profiler, ProfilerData
+from ..stimuli_config import StimuliConfig
+from ..test_config import BuildMode, ProfilerBuild, TestConfig
+from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
     LOOP_FACTOR_COLUMN,
@@ -33,10 +37,6 @@ from .perf_schema import (
     stat_prefix,
     text_size_column,
 )
-from .profiler import Profiler, ProfilerData
-from .stimuli_config import StimuliConfig
-from .test_config import BuildMode, ProfilerBuild, TestConfig
-from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the

@@ -60,7 +60,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .perf_wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
+from .wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
 
 _BOOL_MAP = {
     True: True,

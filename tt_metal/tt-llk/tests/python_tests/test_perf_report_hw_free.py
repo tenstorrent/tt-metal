@@ -21,9 +21,9 @@ from types import SimpleNamespace
 
 import pandas as pd
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
-from helpers.perf import PerfConfig, PerfReport
-from helpers.perf_schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
-from helpers.perf_wide_schema import DROPPED_COLUMNS, OUTPUT_SCHEMA
+from helpers.perf.core import PerfConfig, PerfReport
+from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.wide_schema import DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
