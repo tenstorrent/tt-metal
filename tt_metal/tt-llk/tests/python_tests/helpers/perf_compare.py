@@ -18,6 +18,7 @@ pyarrow + pandas; no device libraries.
 
 from statistics import median
 
+import pandas as pd
 import pyarrow.parquet as pq
 
 from .perf_wide_schema import DB_SCHEMA
@@ -38,13 +39,13 @@ def _point_key(row, sweep_columns):
     meaningless.
     """
     config = tuple(
-        sorted((c, row[c]) for c in sweep_columns if row[c] == row[c])  # skip NaN
+        sorted((c, row[c]) for c in sweep_columns if pd.notna(row[c]))  # skip NaN
     )
     return (row["test_name"], row["arch"], row["marker"], config)
 
 
 def compare_to_history(current_parquet, history_parquets, *, threshold=0.05):
-    """Compare current to history. Returns a dict:
+    """Compare current to history (from Parquet files). Returns a dict:
 
     {
       "records":    [ {test, marker, run_type, current, baseline, delta, regression} ],
@@ -55,7 +56,31 @@ def compare_to_history(current_parquet, history_parquets, *, threshold=0.05):
     """
     current = _load(current_parquet)
     history = [_load(p) for p in history_parquets]
+    return _compare_frames(current, history, threshold=threshold)
 
+
+def compare_run_to_history(
+    warehouse, run_id, *, pipeline="nightly", threshold=0.05, table="llk_perf"
+):
+    """Same comparison, but sourced from a PerfWarehouse instead of Parquet files.
+
+    Compares one run (by ``run_id``) to every other run of the same ``pipeline``
+    already in the warehouse. This is the seam that lets compare run against the
+    real table later with no logic change — swap ``PERF_WAREHOUSE=snowflake``.
+    """
+    current = warehouse.query(
+        f"SELECT * FROM {table} WHERE run_id = '{run_id}'"  # noqa: S608 - run_id from CI
+    )
+    history = warehouse.query(
+        f"SELECT * FROM {table} WHERE run_id <> '{run_id}' AND pipeline = '{pipeline}'"
+    )
+    # history is one frame holding all prior runs' rows; the baseline median over a
+    # point key is the same whether the values arrive split per run or together.
+    return _compare_frames(current, [history], threshold=threshold)
+
+
+def _compare_frames(current, history, *, threshold=0.05):
+    """Core comparison over DataFrames (shared by the file- and warehouse-based paths)."""
     mean_columns = [c for c in current.columns if c.startswith("mean(")]
     sweep_columns = [c for c in current.columns if c in _SWEEP_COLUMNS]
 
@@ -67,7 +92,7 @@ def compare_to_history(current_parquet, history_parquets, *, threshold=0.05):
             key = _point_key(row, frame_sweep)
             for col in mean_columns:
                 val = row.get(col)
-                if val is not None and val == val:
+                if pd.notna(val):
                     samples.setdefault((key, col), []).append(float(val))
     baseline = {k: median(v) for k, v in samples.items()}
 
@@ -76,7 +101,7 @@ def compare_to_history(current_parquet, history_parquets, *, threshold=0.05):
         key = _point_key(row, sweep_columns)
         for col in mean_columns:
             val = row.get(col)
-            if val is None or val != val:
+            if pd.isna(val):
                 continue
             run_type = col[len("mean(") : -1]
             base = baseline.get((key, col))

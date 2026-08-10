@@ -83,7 +83,7 @@ def test_factory_selects_snowflake_without_connecting(monkeypatch):
 
 def test_factory_rejects_unknown_backend(monkeypatch):
     monkeypatch.setenv("PERF_WAREHOUSE", "postgres")
-    with pytest.raises(
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="unknown"
-    ):  # allow-pytest.raises: no expect_error
+    ):
         get_warehouse()

@@ -26,13 +26,29 @@ _SWEEP_COLUMNS = {c.name for c in DB_SCHEMA if c.category in _SWEEP_CATEGORIES}
 
 
 def dashboard_from_parquet(parquet_path, out_dir):
-    """Write one ``<test_name>.html`` scatter plot per test in the batch.
+    """Write one ``<test_name>.html`` scatter plot per test in a Parquet batch."""
+    return _dashboard_from_frame(pq.read_table(parquet_path).to_pandas(), out_dir)
+
+
+def dashboard_from_warehouse(warehouse, out_dir, *, where=None, table="llk_perf"):
+    """Render the dashboard from a PerfWarehouse instead of a Parquet file.
+
+    Same output as ``dashboard_from_parquet``; the data comes from a warehouse
+    query, so the dashboard works against the real table later with no change
+    (swap ``PERF_WAREHOUSE=snowflake``). ``where`` optionally filters (e.g.
+    ``"arch='wormhole' AND pipeline='nightly'"``).
+    """
+    sql = f"SELECT * FROM {table}" + (f" WHERE {where}" if where else "")
+    return _dashboard_from_frame(warehouse.query(sql), out_dir)
+
+
+def _dashboard_from_frame(df, out_dir):
+    """Write one ``<test_name>.html`` scatter plot per test in the frame.
 
     x = sweep index (hover shows the sweep config), y = each ``mean(<run_type>)``
     column. A test with no populated mean column is skipped. Returns
     {test_name: html_path}.
     """
-    df = pq.read_table(parquet_path).to_pandas()
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
