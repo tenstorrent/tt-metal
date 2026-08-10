@@ -16,6 +16,7 @@
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -656,12 +657,15 @@ bool Device::initialize(
         // Register ShmTrackingProcessor globally once (when first device with SHM is created).
         // Verbose flag is captured here from this device's MetalContext for the same reason as
         // SharedMemoryStatsProvider above.
-        static bool shm_processor_registered = false;
-        if (!shm_processor_registered) {
-            tt::tt_metal::GraphTracker::instance().push_processor(
+        // Register process-wide, not on this thread's capture stack: buffers are allocated
+        // from many threads, and a thread-local processor would silently miss every
+        // allocation made on any other thread. Idempotent, so repeated device init is safe
+        // and tracking recovers rather than being lost forever behind a one-shot flag.
+        if (!tt::tt_metal::GraphTracker::instance().has_background_processor_of_type(
+                typeid(tt::tt_metal::ShmTrackingProcessor))) {
+            tt::tt_metal::GraphTracker::instance().push_background_processor(
                 std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
             log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
-            shm_processor_registered = true;
         }
     }
 
@@ -1099,74 +1103,90 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-// Program tracking for accurate CB memory reporting
-void Device::register_program(detail::ProgramImpl* program) {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.insert(program);
+uint64_t Device::get_total_cb_allocated() const { return total_cb_resident_.load(std::memory_order_relaxed); }
+
+void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
+    // Pure telemetry: when SHM tracking is off this must cost nothing on the dispatch path.
+    if (shm_stats_provider_ == nullptr) {
+        return;
+    }
+    std::map<CoreCoord, uint64_t> per_core;
+    compute_program_cb_bytes_per_core(program, per_core);
+    apply_cb_residency(per_core);
 }
 
-void Device::unregister_program(detail::ProgramImpl* program) {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.erase(program);
-}
-
-uint64_t Device::get_total_cb_allocated() const {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-
-    // For PHYSICAL CB tracking accounting for address reuse:
-    // Collect L1 regions per core and merge overlapping addresses
-    // This handles cached/traced programs that share the same physical L1 addresses on the same core
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
-
-    for (const auto* program : active_programs_) {
-        size_t num_devices = program->get_num_cb_devices();
-
-        // Get L1 regions per core for this program on this device
-        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
-
-        // Merge into device-wide map
-        for (const auto& [core, regions] : program_regions) {
-            auto& core_regions = device_regions_per_core[core];
-            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
+void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
+    if (shm_stats_provider_ == nullptr) {
+        return;
+    }
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(cb_residency_mutex_);
+        for (const auto& [core, bytes] : per_core) {
+            cb_bytes_per_core_[core] = bytes;
         }
+        uint64_t total = 0;
+        for (const auto& [core, bytes] : cb_bytes_per_core_) {
+            total += bytes;
+        }
+        changed = total != total_cb_resident_.exchange(total, std::memory_order_relaxed);
     }
 
-    // Merge overlapping regions per core to get actual physical usage
-    uint64_t total_physical = 0;
+    // Publish to shared memory only when the figure actually changed. Steady-state
+    // execution re-dispatches the same programs over and over, so the CB footprint is
+    // usually identical to the last dispatch and there is nothing to publish. Publishing
+    // unconditionally cost a measurable few percent of model warmup.
+    //
+    // This is deliberately NOT a rate limit: a rate limiter drops the final update and
+    // never retries it, leaving a stale figure in shared memory forever once a workload
+    // goes idle. Publishing on change is both cheaper and always eventually correct.
+    // Done outside the lock -- the provider never takes cb_residency_mutex_.
+    if (changed) {
+        shm_stats_provider_->update_from_allocator(this, getpid());
+    }
+}
 
-    for (auto& [core, regions] : device_regions_per_core) {
+void Device::compute_program_cb_bytes_per_core(
+    const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core) {
+    // Only locally-allocated CBs are counted here. Globally-allocated CBs are backed by
+    // real L1 Buffers and are already tracked through the buffer path (the L1 column).
+    for (const CoreRange& core_range : program.circular_buffers_unique_coreranges()) {
+        std::vector<std::pair<uint64_t, uint64_t>> regions;
+        for (const auto& cb : program.circular_buffers_on_corerange(core_range)) {
+            if (cb->globally_allocated()) {
+                continue;
+            }
+            const uint64_t start = cb->address();
+            regions.emplace_back(start, start + cb->size());
+        }
         if (regions.empty()) {
             continue;
         }
 
-        // Sort by start address
+        // Merge overlapping ranges: CBs sharing a core may reuse addresses, and we want
+        // physical bytes occupied, not the sum of CB sizes.
         std::sort(regions.begin(), regions.end());
-
-        // Merge overlapping ranges
-        std::vector<std::pair<uint64_t, uint64_t>> merged;
-        merged.push_back(regions[0]);
-
+        std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
         for (size_t i = 1; i < regions.size(); i++) {
             auto& last = merged.back();
-            const auto& current = regions[i];
-
-            if (current.first <= last.second) {
-                // Overlapping - merge
-                last.second = std::max(last.second, current.second);
+            if (regions[i].first <= last.second) {
+                last.second = std::max(last.second, regions[i].second);
             } else {
-                // Non-overlapping - add new region
-                merged.push_back(current);
+                merged.push_back(regions[i]);
             }
         }
-
-        // Sum merged regions for this core
+        uint64_t bytes = 0;
         for (const auto& [start, end] : merged) {
-            total_physical += (end - start);
+            bytes += end - start;
+        }
+
+        // Every core in this range holds this program's CB config once it is dispatched.
+        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                per_core[CoreCoord(x, y)] = bytes;
+            }
         }
     }
-
-    return total_physical;
 }
 
 }  // namespace tt::tt_metal

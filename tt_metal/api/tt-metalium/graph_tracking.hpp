@@ -15,6 +15,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <shared_mutex>
+#include <typeinfo>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -111,6 +113,14 @@ public:
 //     `push_processor` / capture / `pop_processor` sequence is scoped to the
 //     calling thread; ops dispatched on other threads are not observed by
 //     that capture.
+//   * `background_processors` is *process-wide* and guarded by
+//     `background_processors_mutex`. Background processors are registered once
+//     and observe events on EVERY thread. Per-thread storage is right for
+//     capture (a capture should only see the thread that started it) but wrong
+//     for always-on observers such as SHM memory tracking: registered from the
+//     thread that first initialized a device, they would silently miss every
+//     buffer allocated on any other thread. They are also unaffected by
+//     `clear()`, which ends a capture.
 //   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
 //     This is the only piece of GraphTracker state that is shared across
 //     threads.
@@ -125,6 +135,16 @@ public:
 
     void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
     void pop_processor();
+
+    // Register a permanently-active, process-wide processor. Unlike push_processor these
+    // are visible on all threads, are not popped, and survive clear(). Intended for
+    // is_capture_processor() == false observers; registering a capture processor here
+    // would make it observe unrelated threads' work.
+    void push_background_processor(const std::shared_ptr<IGraphProcessor>& processor);
+
+    // True if a background processor of the given type is already registered. Lets device
+    // init be idempotent without a static flag that cannot recover.
+    bool has_background_processor_of_type(const std::type_info& type) const;
 
     bool add_hook(const std::shared_ptr<IGraphHooks>& hook);
 
@@ -206,6 +226,10 @@ private:
     // Per-thread state. See the class-level threading contract above.
     static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
     static thread_local std::shared_ptr<IGraphHooks> hook;
+
+    // Process-wide, always-active observers. See the threading contract above.
+    mutable std::shared_mutex background_processors_mutex;
+    std::vector<std::shared_ptr<IGraphProcessor>> background_processors;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;

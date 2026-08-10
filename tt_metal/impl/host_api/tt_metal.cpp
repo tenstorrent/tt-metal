@@ -490,6 +490,14 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
     detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
 
+    // Telemetry: this path writes the CB config to L1 for every device after the first on a
+    // slow-dispatch mesh (SDMeshCommandQueue only calls LaunchProgram for local_devices[0]).
+    // Without recording here those devices would report zero CB usage while actually holding a
+    // program's circular buffers. No-op when SHM tracking is disabled.
+    if (auto* concrete_device = dynamic_cast<class Device*>(device)) {
+        concrete_device->record_dispatched_program_cbs(program.impl());
+    }
+
     MetalContext::instance().get_cluster().dram_barrier(device_id);
     MetalContext::instance().get_cluster().l1_barrier(device_id);
     const auto& hal = MetalContext::instance().hal();
@@ -960,6 +968,15 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // This allows us to allocate ephemeral scratchpad buffers, and pass their locations as implicit CRTAs.
         detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+
+        // Telemetry: ConfigureDeviceWithProgram has just written this program's circular
+        // buffer config into L1, so its CB footprint is now what is resident on those
+        // cores. Mirrors the fast-dispatch hook in fd_mesh_command_queue.cpp; without
+        // this, slow dispatch would report no CB usage at all. No-op when SHM tracking
+        // is disabled.
+        if (auto* concrete_device = dynamic_cast<Device*>(device)) {
+            concrete_device->record_dispatched_program_cbs(program.impl());
+        }
 
         auto device_id = device->id();
 

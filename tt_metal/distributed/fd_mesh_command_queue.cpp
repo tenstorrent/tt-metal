@@ -431,6 +431,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
                 program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+            // Telemetry: accumulate the CB footprint this trace will leave resident, keyed by
+            // the device range this program actually runs on. Capture itself dispatches
+            // nothing, so this is only recorded here and applied on replay.
+            auto& by_range = trace_ctx_->cb_bytes_per_core_by_range;
+            auto entry =
+                std::find_if(by_range.begin(), by_range.end(), [&](const auto& e) { return e.first == device_range; });
+            if (entry == by_range.end()) {
+                by_range.emplace_back(device_range, std::map<CoreCoord, uint64_t>{});
+                entry = std::prev(by_range.end());
+            }
+            Device::compute_program_cb_bytes_per_core(program.impl(), entry->second);
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -516,6 +527,18 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             static_cast<uint8_t>(this->id()));
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
+
+        // Telemetry: this program's circular buffer config is about to be written to L1,
+        // so record its CB footprint as what is now resident on those cores. Doing it here
+        // rather than at program registration is what makes the reported figure "in use
+        // now" instead of a high-water mark over every cached program -- and it costs
+        // O(CBs in this program) instead of O(all live programs). No-op when SHM tracking
+        // is disabled.
+        for_each_local(mesh_device_, device_range, [&](const MeshCoordinate& coord) {
+            if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+                device->record_dispatched_program_cbs(program.impl());
+            }
+        });
 
         this->write_program_cmds_to_subgrid(
             device_range,
@@ -1219,6 +1242,21 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
+
+    // Telemetry: replaying the trace rewrites the captured CB configs into L1, so the
+    // trace's footprint becomes what is resident. Without this, traced execution would
+    // keep reporting whatever was dispatched before the replay -- the host does no
+    // per-program pass here to hook, which is why the footprint is carried on the trace.
+    for (const auto& [range, per_core] : descriptor->cb_bytes_per_core_by_range) {
+        if (per_core.empty()) {
+            continue;
+        }
+        for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
+            if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+                device->apply_cb_residency(per_core);
+            }
+        });
+    }
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {

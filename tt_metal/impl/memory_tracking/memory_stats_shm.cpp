@@ -10,9 +10,12 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstring>
 #include <chrono>
+#include <thread>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -81,28 +84,65 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
         return;
     }
 
-    // Initialize if we're the creator
-    if (is_creator_) {
-        initialize_region();
-    } else if (region_->version != DEVICE_MEMORY_REGION_VERSION) {
-        const uint32_t existing_refcount = region_->reference_count.load(std::memory_order_acquire);
-        if (existing_refcount == 0) {
+    // Decide whether we are the one to initialize the region, or whether we must
+    // wait for somebody else to finish doing so.
+    //
+    // Winning the O_CREAT|O_EXCL race is NOT sufficient to make us the initializer
+    // in a race-free way: creation, ftruncate, mmap and initialization are separate
+    // steps, so another process can attach and start writing in between. Readiness
+    // is therefore published explicitly through init_state, and the right to
+    // initialize is claimed with a CAS.
+    bool must_initialize = false;
+    const uint32_t observed_state = region_->init_state.load(std::memory_order_acquire);
+
+    if (observed_state == SHM_INIT_READY &&
+        region_->version.load(std::memory_order_relaxed) == DEVICE_MEMORY_REGION_VERSION) {
+        // Fully initialized region of the expected layout: attach to it as-is.
+    } else if (observed_state == SHM_INIT_READY) {
+        // Ready, but a layout we do not understand. Reclaim it only if nobody is
+        // attached; otherwise leave it alone and disable tracking for this provider.
+        // Deliberately do NOT walk `processes` here: under a foreign layout those
+        // offsets may not be where we think they are. reference_count has held its
+        // offset since v2, which is the most we can safely rely on.
+        const uint32_t attached = region_->reference_count.load(std::memory_order_acquire);
+        uint32_t expected = SHM_INIT_READY;
+        if (attached == 0 &&
+            region_->init_state.compare_exchange_strong(
+                expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             log_info(
                 tt::LogMetal,
                 "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region",
                 asic_id_,
-                region_->version,
+                region_->version.load(std::memory_order_relaxed),
                 DEVICE_MEMORY_REGION_VERSION);
-            initialize_region();
+            must_initialize = true;
         } else {
             log_warning(
                 tt::LogMetal,
                 "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) with {} attached process(es); "
                 "disabling SHM tracking for this provider",
                 asic_id_,
-                region_->version,
+                region_->version.load(std::memory_order_relaxed),
                 DEVICE_MEMORY_REGION_VERSION,
-                existing_refcount);
+                attached);
+            munmap(region_, sizeof(DeviceMemoryRegion));
+            region_ = nullptr;
+            close(shm_fd_);
+            shm_fd_ = -1;
+            return;
+        }
+    } else {
+        // Zero-filled (brand new) or somebody is mid-initialization.
+        uint32_t expected = SHM_INIT_UNINITIALIZED;
+        if (region_->init_state.compare_exchange_strong(
+                expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            must_initialize = true;
+        } else if (!wait_for_region_ready()) {
+            log_warning(
+                tt::LogMetal,
+                "Timed out waiting for another process to initialize SHM region for asic_id=0x{:x}; "
+                "disabling SHM tracking for this provider",
+                asic_id_);
             munmap(region_, sizeof(DeviceMemoryRegion));
             region_ = nullptr;
             close(shm_fd_);
@@ -111,14 +151,28 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
         }
     }
 
-    // Increment reference count (this process is now attached)
-    region_->reference_count.fetch_add(1, std::memory_order_relaxed);
+    if (must_initialize) {
+        initialize_region();
+        // Publish last: everything written above must be visible to any process
+        // that observes READY.
+        region_->init_state.store(SHM_INIT_READY, std::memory_order_release);
+    }
+
+    // Reclaim slots belonging to processes that died without cleaning up, then claim
+    // our own. Attachment is represented by owning a ProcessStats slot, and
+    // reference_count is derived from the live slots, so a crashed process no longer
+    // pins the count above zero (which used to stop the region ever resetting).
+    if (per_pid_tracking_enabled_) {
+        reap_dead_processes();
+        claim_own_pid_entry(getpid());
+        recompute_aggregates();
+    }
 
     // ALWAYS update identifiers, even when reattaching to existing SHM
-    region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
-    region_->asic_id = asic_id_;  // Full UMD chip_unique_id
+    region_->board_serial.store(0, std::memory_order_relaxed);
+    region_->asic_id.store(asic_id_, std::memory_order_relaxed);
     TT_ASSERT(device_id_ >= 0, "Negative device_id {} passed to SHM provider", device_id_);
-    region_->device_id = static_cast<uint32_t>(device_id_);
+    region_->device_id.store(static_cast<uint32_t>(device_id_), std::memory_order_relaxed);
 
     if (verbose_enabled_) {
         log_info(
@@ -136,85 +190,33 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
 
 SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
     if (region_ != nullptr && region_ != MAP_FAILED) {
-        pid_t my_pid = getpid();
+        const pid_t my_pid = getpid();
 
-        // Remove our PID entry if per-PID tracking was enabled
-        if (per_pid_tracking_enabled_) {
-            for (auto & processe : region_->processes) {
-                if (processe.pid.load(std::memory_order_relaxed) == my_pid) {
-                    // Subtract this process's allocations from aggregated totals
-                    // before clearing the entry (to properly track memory when process exits)
-                    uint64_t dram = processe.dram_allocated.load(std::memory_order_relaxed);
-                    uint64_t l1 = processe.l1_allocated.load(std::memory_order_relaxed);
-                    uint64_t l1_small = processe.l1_small_allocated.load(std::memory_order_relaxed);
-                    uint64_t trace = processe.trace_allocated.load(std::memory_order_relaxed);
-                    uint64_t cb = processe.cb_allocated.load(std::memory_order_relaxed);
-
-                    // Subtract from aggregated totals with underflow protection
-                    if (region_->total_dram_allocated >= dram) {
-                        region_->total_dram_allocated.fetch_sub(dram, std::memory_order_relaxed);
-                    } else {
-                        region_->total_dram_allocated.store(0, std::memory_order_relaxed);
-                    }
-
-                    if (region_->total_l1_allocated >= l1) {
-                        region_->total_l1_allocated.fetch_sub(l1, std::memory_order_relaxed);
-                    } else {
-                        region_->total_l1_allocated.store(0, std::memory_order_relaxed);
-                    }
-
-                    if (region_->total_l1_small_allocated >= l1_small) {
-                        region_->total_l1_small_allocated.fetch_sub(l1_small, std::memory_order_relaxed);
-                    } else {
-                        region_->total_l1_small_allocated.store(0, std::memory_order_relaxed);
-                    }
-
-                    if (region_->total_trace_allocated >= trace) {
-                        region_->total_trace_allocated.fetch_sub(trace, std::memory_order_relaxed);
-                    } else {
-                        region_->total_trace_allocated.store(0, std::memory_order_relaxed);
-                    }
-
-                    if (region_->total_cb_allocated >= cb) {
-                        region_->total_cb_allocated.fetch_sub(cb, std::memory_order_relaxed);
-                    } else {
-                        region_->total_cb_allocated.store(0, std::memory_order_relaxed);
-                    }
-
-                    // Now clear this PID's entry
-                    processe.pid.store(0, std::memory_order_relaxed);
-                    processe.dram_allocated.store(0, std::memory_order_relaxed);
-                    processe.l1_allocated.store(0, std::memory_order_relaxed);
-                    processe.l1_small_allocated.store(0, std::memory_order_relaxed);
-                    processe.trace_allocated.store(0, std::memory_order_relaxed);
-                    processe.cb_allocated.store(0, std::memory_order_relaxed);
-                    region_->num_active_processes--;
-                    break;
-                }
+        // Release our slot. There is no separate "subtract my totals from the
+        // aggregate" step any more: the aggregates are derived from the live slots,
+        // so dropping the slot is what removes our contribution. That is also why a
+        // SIGKILLed process can be cleaned up by somebody else later -- the old code
+        // could only do this subtraction from its own destructor, so a killed process
+        // left its allocations in the totals permanently.
+        for (auto& slot : region_->processes) {
+            if (slot.pid.load(std::memory_order_relaxed) == my_pid) {
+                clear_process_slot(slot);
+                break;
             }
         }
 
-        // Decrement reference count
-        uint32_t prev_refcount = region_->reference_count.fetch_sub(1, std::memory_order_acq_rel);
+        // Also drop slots of any process that died in the meantime, so the "no live
+        // processes" state below is reached even if a peer was killed.
+        reap_dead_processes();
+        recompute_aggregates();
 
-        // If this was the last process, reset all stats to ensure cleanup
-        // This handles cases where explicit deallocation wasn't called
-        if (prev_refcount == 1) {  // We just decremented to 0
-            log_debug(
-                tt::LogMetal,
-                "Device {}: Last process exiting, cleaning up all stats (refcount {} → 0)",
-                device_id_,
-                prev_refcount);
-
-            // Reset aggregated totals
-            region_->total_dram_allocated.store(0, std::memory_order_relaxed);
-            region_->total_l1_allocated.store(0, std::memory_order_relaxed);
-            region_->total_l1_small_allocated.store(0, std::memory_order_relaxed);
-            region_->total_trace_allocated.store(0, std::memory_order_relaxed);
-            region_->total_cb_allocated.store(0, std::memory_order_relaxed);
-
-            // Reset per-chip stats
-            for (auto & chip_stat : region_->chip_stats) {
+        const uint32_t attached = region_->reference_count.load(std::memory_order_relaxed);
+        if (attached == 0) {
+            log_debug(tt::LogMetal, "Device {}: last process detached, per-chip stats reset", device_id_);
+            // Per-chip stats are accumulated rather than per-process attributed, so
+            // they cannot be derived. Clearing them when nobody is attached keeps the
+            // invariant "no live processes => everything reads zero".
+            for (auto& chip_stat : region_->chip_stats) {
                 if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
                     chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
@@ -224,12 +226,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
                 }
             }
         } else {
-            log_debug(
-                tt::LogMetal,
-                "Device {}: Process exiting, refcount {} → {}",
-                device_id_,
-                prev_refcount,
-                prev_refcount - 1);
+            log_debug(tt::LogMetal, "Device {}: process detached, {} still attached", device_id_, attached);
         }
 
         munmap(region_, sizeof(DeviceMemoryRegion));
@@ -247,17 +244,23 @@ void SharedMemoryStatsProvider::initialize_region() {
         return;
     }
 
-    // Set version (use constexpr from header)
-    region_->version = DEVICE_MEMORY_REGION_VERSION;
-    region_->num_active_processes = 0;
+    // Caller owns init_state: it CASes it to SHM_INIT_IN_PROGRESS before calling us and
+    // publishes SHM_INIT_READY afterwards. We must not touch it here, or another process
+    // could observe READY while these stores are still in flight.
+    //
+    // reference_count and num_active_processes are derived from the live process slots
+    // (see recompute_aggregates), so zeroing them here is just establishing the
+    // "no slots claimed yet" baseline that the loop at the end of this function creates.
+    region_->version.store(DEVICE_MEMORY_REGION_VERSION, std::memory_order_relaxed);
+    region_->num_active_processes.store(0, std::memory_order_relaxed);
     region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
     region_->reference_count.store(0, std::memory_order_relaxed);
 
     // Set physical chip identification (for proper device correlation)
-    region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
-    region_->asic_id = asic_id_;  // Full UMD chip_unique_id
+    region_->board_serial.store(0, std::memory_order_relaxed);
+    region_->asic_id.store(asic_id_, std::memory_order_relaxed);
     TT_ASSERT(device_id_ >= 0, "Negative device_id {} in SHM initialize_region", device_id_);
-    region_->device_id = static_cast<uint32_t>(device_id_);
+    region_->device_id.store(static_cast<uint32_t>(device_id_), std::memory_order_relaxed);
 
     // Initialize atomic counters to zero
     region_->total_dram_allocated.store(0, std::memory_order_relaxed);
@@ -522,30 +525,147 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
         }
     }
 
-    // Not found, create new entry. Use CAS so multiple processes racing to
-    // claim a slot cannot both win the same one.
-    for (auto & processe : region_->processes) {
-        pid_t expected = 0;
-        if (processe.pid.compare_exchange_strong(expected, pid, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            processe.dram_allocated.store(0, std::memory_order_relaxed);
-            processe.l1_allocated.store(0, std::memory_order_relaxed);
-            processe.l1_small_allocated.store(0, std::memory_order_relaxed);
-            processe.trace_allocated.store(0, std::memory_order_relaxed);
-            processe.cb_allocated.store(0, std::memory_order_relaxed);
-            processe.last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
+    // Not found. Normally our slot was claimed at attach time, so getting here means
+    // the slot table was full then; try again (a peer may have exited since).
+    return claim_own_pid_entry(pid);
+}
 
-            // Get process name
-            std::string proc_name = get_process_name(pid);
-            strncpy(processe.process_name, proc_name.c_str(), 63);
-            processe.process_name[63] = '\0';
+DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::claim_own_pid_entry(pid_t pid) {
+    if (!region_) {
+        return nullptr;
+    }
 
-            region_->num_active_processes++;
-            return &processe;
+    // Already ours?
+    for (auto& slot : region_->processes) {
+        if (slot.pid.load(std::memory_order_relaxed) == pid) {
+            return &slot;
         }
     }
 
-    // No free slots
+    // Claim a free slot. CAS so that processes racing for the same slot cannot both win.
+    for (auto& slot : region_->processes) {
+        pid_t expected = 0;
+        if (slot.pid.compare_exchange_strong(expected, pid, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            slot.dram_allocated.store(0, std::memory_order_relaxed);
+            slot.l1_allocated.store(0, std::memory_order_relaxed);
+            slot.l1_small_allocated.store(0, std::memory_order_relaxed);
+            slot.trace_allocated.store(0, std::memory_order_relaxed);
+            slot.cb_allocated.store(0, std::memory_order_relaxed);
+            slot.last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
+
+            const std::string proc_name = get_process_name(pid);
+            strncpy(slot.process_name, proc_name.c_str(), 63);
+            slot.process_name[63] = '\0';
+            return &slot;
+        }
+    }
+
+    // Slot table full even after reaping. Track nothing for this process rather than
+    // corrupting somebody else's slot; aggregates will simply not include us.
+    log_warning(
+        tt::LogMetal,
+        "SHM process table full ({} slots) for asic_id=0x{:x}; memory stats for pid {} will not be reported",
+        MAX_PROCESSES,
+        asic_id_,
+        pid);
     return nullptr;
+}
+
+void SharedMemoryStatsProvider::clear_process_slot(DeviceMemoryRegion::ProcessStats& slot) {
+    slot.dram_allocated.store(0, std::memory_order_relaxed);
+    slot.l1_allocated.store(0, std::memory_order_relaxed);
+    slot.l1_small_allocated.store(0, std::memory_order_relaxed);
+    slot.trace_allocated.store(0, std::memory_order_relaxed);
+    slot.cb_allocated.store(0, std::memory_order_relaxed);
+    slot.last_update_timestamp.store(0, std::memory_order_relaxed);
+    std::memset(slot.process_name, 0, sizeof(slot.process_name));
+    // Release the slot last: pid == 0 is what makes it claimable, so it must not
+    // become visible before the fields above have been cleared.
+    slot.pid.store(0, std::memory_order_release);
+}
+
+bool SharedMemoryStatsProvider::process_is_alive(pid_t pid) {
+    if (pid <= 0) {
+        return false;
+    }
+    // Signal 0 performs the permission/existence check without delivering anything.
+    // EPERM means the PID exists but belongs to another user, which still counts as alive.
+    return ::kill(pid, 0) == 0 || errno == EPERM;
+}
+
+size_t SharedMemoryStatsProvider::reap_dead_processes() {
+    if (!region_) {
+        return 0;
+    }
+
+    size_t reaped = 0;
+    for (auto& slot : region_->processes) {
+        const pid_t pid = slot.pid.load(std::memory_order_acquire);
+        if (pid == 0 || pid == getpid() || process_is_alive(pid)) {
+            continue;
+        }
+        log_debug(
+            tt::LogMetal,
+            "Reclaiming SHM slot of dead pid {} for asic_id=0x{:x} (process exited without cleanup)",
+            pid,
+            asic_id_);
+        clear_process_slot(slot);
+        reaped++;
+    }
+    return reaped;
+}
+
+void SharedMemoryStatsProvider::recompute_aggregates() {
+    // Deriving the totals requires the per-process slots to be the source of truth.
+    // With per-PID tracking off nothing populates them, so recomputing would zero
+    // out figures that record_allocation() is maintaining incrementally instead.
+    if (!region_ || !per_pid_tracking_enabled_) {
+        return;
+    }
+
+    uint64_t dram = 0;
+    uint64_t l1 = 0;
+    uint64_t l1_small = 0;
+    uint64_t trace = 0;
+    uint64_t cb = 0;
+    uint32_t live = 0;
+
+    for (const auto& slot : region_->processes) {
+        if (slot.pid.load(std::memory_order_acquire) == 0) {
+            continue;
+        }
+        live++;
+        dram += slot.dram_allocated.load(std::memory_order_relaxed);
+        l1 += slot.l1_allocated.load(std::memory_order_relaxed);
+        l1_small += slot.l1_small_allocated.load(std::memory_order_relaxed);
+        trace += slot.trace_allocated.load(std::memory_order_relaxed);
+        cb += slot.cb_allocated.load(std::memory_order_relaxed);
+    }
+
+    region_->total_dram_allocated.store(dram, std::memory_order_relaxed);
+    region_->total_l1_allocated.store(l1, std::memory_order_relaxed);
+    region_->total_l1_small_allocated.store(l1_small, std::memory_order_relaxed);
+    region_->total_trace_allocated.store(trace, std::memory_order_relaxed);
+    region_->total_cb_allocated.store(cb, std::memory_order_relaxed);
+    region_->num_active_processes.store(live, std::memory_order_relaxed);
+    region_->reference_count.store(live, std::memory_order_release);
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
+}
+
+bool SharedMemoryStatsProvider::wait_for_region_ready() {
+    if (!region_) {
+        return false;
+    }
+    // Initialization is a handful of stores; a short bounded wait is plenty, and
+    // bounding it means a process that died mid-initialization cannot hang us.
+    constexpr int kMaxAttempts = 1000;  // 1000 x 1ms = 1s
+    for (int i = 0; i < kMaxAttempts; i++) {
+        if (region_->init_state.load(std::memory_order_acquire) == SHM_INIT_READY) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
 }
 
 uint64_t SharedMemoryStatsProvider::current_timestamp_ns() {

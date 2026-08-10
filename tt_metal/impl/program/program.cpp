@@ -1540,15 +1540,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                             dev);
                     }
                 }
-
-                // Also register program with the NEW device
-                auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
-                if (device_obj) {
-                    device_obj->register_program(this);
-                    if (device_obj->get_shm_stats_provider()) {
-                        device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
-                    }
-                }
             }
         }
         return;
@@ -1605,42 +1596,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
 
-    // Register program ONLY with NEW devices (prevents duplicate registration)
-    for (const IDevice* dev : new_devices) {
-        auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
-        if (device_obj) {
-            device_obj->register_program(this);
-            // Update locally-allocated CB stats via query (accurate even for cached programs)
-            if (device_obj->get_shm_stats_provider()) {
-                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
-            }
-        }
-    }
+    // NOTE: CB memory tracking is no longer driven from program registration. A registered
+    // program occupies no CB space until it is dispatched, so tracking is recorded at
+    // dispatch instead (Device::record_dispatched_program_cbs). That is both correct and
+    // O(CBs in the program) rather than O(every live program) on each registration.
     this->local_circular_buffer_allocation_needed_ = false;
-}
-
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
-    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
-    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
-
-    // For each allocator, iterate through all cores in its CoreRange
-    for (const auto& cb_allocator : cb_allocators_) {
-        const auto& l1_regions = cb_allocator.l1_regions;
-
-        // Add these regions to every core in the CoreRange
-        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
-            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
-                CoreCoord core(x, y);
-                auto& core_regions = regions_per_core[core];
-                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
-            }
-        }
-    }
-
-    return regions_per_core;
 }
 
 void detail::ProgramImpl::deallocate_circular_buffers() {
@@ -1649,18 +1609,6 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
     if (!this->cb_devices_.empty() && !this->circular_buffers_.empty()) {
         for (const IDevice* idevice : this->cb_devices_) {
             tt::tt_metal::GraphTracker::instance().track_deallocate_cb(idevice);
-        }
-
-        // Unregister program from ALL devices (matches registration)
-        for (const IDevice* idevice : this->cb_devices_) {
-            auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
-            if (device) {
-                device->unregister_program(this);
-                // Update locally-allocated CB stats via query (accurate after deallocation)
-                if (device->get_shm_stats_provider()) {
-                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
-                }
-            }
         }
 
         this->cb_devices_.clear();  // Clear device set after deallocation

@@ -8,6 +8,9 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include "trace/trace_buffer.hpp"
 
+#include <map>
+#include <tt-metalium/core_coord.hpp>
+
 namespace tt::tt_metal::distributed {
 
 // MeshTrace capture consists of 3 steps:
@@ -36,6 +39,16 @@ public:
     // Trace data per logical Device in a Mesh.
     std::vector<MeshTraceData> ordered_trace_data;
     uint32_t total_trace_size = 0;
+    // Circular buffer bytes this trace leaves resident per logical core, accumulated during
+    // capture and re-applied on each replay. Replay has no per-program host-side pass to
+    // hook, so traced execution would otherwise report whatever ran before it.
+    //
+    // Kept PER MeshCoordinateRange, not merged mesh-wide: a MeshWorkload can run different
+    // programs on different device ranges, and merging would attribute one range's circular
+    // buffers to devices that never ran them. Entries are stored in capture order and
+    // replayed in that order, so later programs overwrite earlier ones on shared cores --
+    // matching what the replayed command stream does to L1.
+    std::vector<std::pair<MeshCoordinateRange, std::map<CoreCoord, uint64_t>>> cb_bytes_per_core_by_range;
 };
 
 // Ties a MeshTraceDescriptor (host side state) to a MeshBuffer (device side state)

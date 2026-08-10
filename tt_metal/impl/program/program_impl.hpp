@@ -323,9 +323,6 @@ public:
     void deallocate_circular_buffers();
 
     // CB tracking for SHM memory reporting
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
-        int device_id, size_t num_devices) const;
-    size_t get_num_cb_devices() const { return cb_devices_.size(); }
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 

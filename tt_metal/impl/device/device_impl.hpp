@@ -60,7 +60,7 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
+    // Move constructor/assignment deleted due to cb_residency_mutex_ (std::mutex is not movable)
     Device(Device&& other) noexcept = delete;
     Device& operator=(Device&& other) noexcept = delete;
 
@@ -180,10 +180,32 @@ public:
     // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
     SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
 
-    // Program tracking for accurate CB memory reporting
-    void register_program(detail::ProgramImpl* program);
-    void unregister_program(detail::ProgramImpl* program);
+    // CB memory reporting.
+    // Bytes of L1 occupied by circular buffers, as currently configured on the device.
+    //
+    // This used to be recomputed by walking every program in active_programs_, which
+    // was both O(live programs) -- the warmup bottleneck -- and the wrong quantity: a
+    // cached program occupies no CB space until it is dispatched, so the result was a
+    // high-water mark across the program cache rather than what is in use. It is now
+    // maintained per core at dispatch time, mirroring the CB config the dispatcher
+    // writes into L1, so it matches what can be read back from the device.
     uint64_t get_total_cb_allocated() const;
+
+    // Called for each program as it is dispatched: records that program's CB footprint
+    // on the cores it covers. Cores it does not cover keep their previous value, which
+    // is correct -- their L1 CB config was not overwritten.
+    void record_dispatched_program_cbs(const detail::ProgramImpl& program);
+
+    // A program's CB footprint per logical core. Device-independent: the CB layout is a
+    // property of the program, not of the device it runs on. Exposed so that trace
+    // capture can accumulate the footprint a trace will produce.
+    static void compute_program_cb_bytes_per_core(
+        const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core);
+
+    // Install a per-core CB footprint wholesale. Used by trace replay: the host does not
+    // walk programs when replaying, so the footprint is computed once during capture and
+    // re-applied on every replay.
+    void apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core);
 
 private:
     // Deprecated overrides for sub_device_manager_tracker
@@ -279,8 +301,11 @@ private:
     std::unique_ptr<class SharedMemoryStatsProvider> shm_stats_provider_;
 
     // Program tracking for CB memory reporting
-    std::unordered_set<detail::ProgramImpl*> active_programs_;
-    mutable std::mutex active_programs_mutex_;
+
+    // CB bytes resident per core, keyed by logical core, updated on dispatch.
+    mutable std::mutex cb_residency_mutex_;
+    std::map<CoreCoord, uint64_t> cb_bytes_per_core_;
+    std::atomic<uint64_t> total_cb_resident_{0};
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
