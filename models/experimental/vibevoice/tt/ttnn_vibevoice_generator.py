@@ -320,6 +320,7 @@ class TTVibeVoiceGenerator:
         # per-call overhead on every frame.
         self._sf_dp2trace_tid = None
         self._sf_lm2trace_tid = None
+        self._sf_ever_captured = False
         # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph eagerly, with no ttnn
         # capture/replay.  Also bit-clean but slower, which isolates capture aliasing from the
         # graph ops themselves.
@@ -1265,7 +1266,17 @@ class TTVibeVoiceGenerator:
             # First frame-0 after a (re)capture: warmup (eager), capture dp2+lm2 (boot stays eager),
             # reset, then the real frame-0 replay — all internal, so warmup/capture frames are
             # discarded and never emitted.
-            for _ in range(self._SF_WARMUP):
+            # The program cache is per-PROCESS and survives release_trace, so only the FIRST capture
+            # needs a warmup frame to populate it; every later segment recaptures the SAME fixed
+            # graph, whose programs are already cached.  An eager warmup frame is ~345 ms (Python
+            # dispatch over ~3400 ops) against ~32 ms for the traced replay, so skipping it on the
+            # ~263 later boundaries of a 100-min render is worth ~64 s.
+            #
+            # Safe by the same argument as _SF_WARMUP=1: a capture that still needed to compile
+            # would fail LOUDLY at begin_trace_capture ("Cannot load new binaries during trace
+            # capture"), not silently record a corrupt trace.
+            _warm = self._SF_WARMUP if not self._sf_ever_captured else 0
+            for _ in range(_warm):
                 self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
                 _boot()
                 # Keep the warmup's audio handle: _lm2trace reads it when the frame output is fused
@@ -1281,6 +1292,7 @@ class TTVibeVoiceGenerator:
             self._sf_tok_out = _lm2trace()
             ttnn.end_trace_capture(dev, tc, cq_id=0)
             self._sf_dp2trace_tid, self._sf_lm2trace_tid = tb, tc
+            self._sf_ever_captured = True
             # RESET for the real frame 0: rewind positions/hidden, zero conv, re-run boot.
             self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
             self._sf_zero_conv()
