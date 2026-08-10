@@ -196,11 +196,18 @@ uint32_t ablate_spin() {
 // 0, matching every result recorded so far. Exists to test whether the hang follows the NoC rather than the
 // core: if egress on NoC 1 stops hanging, NoC 0's route from the DRAM endpoint to the PCIe tile is implicated.
 //
-// NOT just a flag flip. On Blackhole NoC 1 MIRRORS coordinates
-// (NOC_0_X_PHYS_COORD(noc, size_x, x) = noc == 0 ? x : size_x - 1 - x), while the socket's pcie_xy_enc is
-// built from NOC0 coords by a NoC-agnostic hal function. Flipping NOC_INDEX alone would aim every payload
-// write at the wrong tile -- which could hang the card for a reason that has nothing to do with the question.
-// So the host re-encodes the PCIe tile in mirrored coords and passes it down as an override.
+// It IS just a flag flip, and the question it was built to ask is already answered -- see FINDINGS §N+12:
+// egress on NoC 1 hangs identically to NoC 0 (16.0 vs 16.2 GB/s, load matched within 1%, both at run 16), so
+// the route from the DRAM endpoint to the PCIe tile is dead as an explanation.
+//
+// This comment previously claimed the flip needed a mirrored PCIe encoding, because NoC 1 mirrors coordinates
+// (NOC_0_X_PHYS_COORD(noc, size_x, x) = noc == 0 ? x : size_x - 1 - x). That was WRONG: the macro mirrors
+// WORKER coords, while the PCIe tile lives in TRANSLATED space (the kernel is built with PCIE_NOC_X=19,
+// PCIE_NOC_Y=24 -- both outside the 17x12 NOC0 grid), so the socket's NOC0-derived pcie_xy_enc is correct on
+// BOTH NoCs. Measured: with the mirrored override, 0 markers decode from 2.37M pages; without it, 5,501,058
+// decode. The override survives only behind TT_METAL_PERF_DEBUG_NOC_MIRROR=1 to keep the dead end documented.
+// Watch for its signature: pages flow while zero markers decode, because socket credits advance on a
+// different path than the payload writes, so a wrong payload destination looks like healthy throughput.
 uint32_t drain_noc() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_NOC");
