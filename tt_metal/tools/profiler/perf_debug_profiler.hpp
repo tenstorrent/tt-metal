@@ -303,6 +303,22 @@ private:
     std::atomic<uint64_t> dropped_{0};
     std::atomic<bool> writer_done_{false};
     size_t read_chunk_recs_ = 0;
+    // TEMPORARY DIAGNOSTICS (nesting investigation): where markers vanish between decode and the ring, and
+    // whether per-lane ts order is already broken at publish or only after the ring.
+    std::atomic<uint64_t> w_drop_lane_{0};    // markers whose lane is outside the known core grid
+    std::atomic<uint64_t> w_batch_flush_{0};  // mid-decode flushes because the record batch filled
+    std::atomic<uint64_t> w_pub_regress_{0};  // per-lane ts going backwards AT PUBLISH (must stay 0)
+    std::atomic<uint64_t> w_pub_ok_{0};
+    std::vector<uint64_t> pub_last_ts_;
+    // BroadcastRing is SINGLE-producer ("driven by a single thread"), but there is one decoder thread per
+    // socket and they all publish to the one Writer. Unserialized that races: a slot claimed by one thread
+    // while the other advances head lets the reader observe a slot that was never written -- it reads the
+    // stale record still there from an earlier wrap. Consequences measured on a 12x10 run at delay 100:
+    // 1,377 per-lane timestamp regressions and 1,027,642 of 5,490,733 records lost. Serialized: 0 and 0.
+    // Publishing happens once per socket read (~1.1k times/run), so this lock is off the per-record path.
+    std::mutex publish_mu_;
+    std::atomic<uint64_t> w_con_regress_{0};
+    std::atomic<uint64_t> w_con_seen_{0};
     // Writer-thread phase accounting, in nanoseconds. Touched only by the writer thread and read after it
     // joins, so no synchronisation is needed. The Tracy zones (sock-read/decode/publish) only exist inside
     // a capture; these exist always, which is what lets us say whether the host wall is the COPY or the
