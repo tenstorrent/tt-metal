@@ -15,6 +15,7 @@ import torch
 
 from models.demos.deepseek_v3.utils.hf_model_utils import (
     _default_quad_ring_shard_maps,
+    convert_state_dict,
     default_quad_ring_model_path,
     default_stacked_dequantized_model_path,
     index_model_weights,
@@ -412,7 +413,7 @@ def test_save_dequantized_hf_checkpoint_rewrites_dequantized_shards_when_stackin
     )
 
 
-def test_save_dequantized_hf_checkpoint_rejects_incomplete_stacked_expert_groups(tmp_path: Path):
+def test_save_dequantized_hf_checkpoint_rejects_incomplete_stacked_expert_groups(tmp_path: Path, expect_error):
     source_dir = tmp_path / "deepseek-source"
     output_dir = default_stacked_dequantized_model_path(source_dir)
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -427,11 +428,11 @@ def test_save_dequantized_hf_checkpoint_rejects_incomplete_stacked_expert_groups
     safetensors.torch.save_file(expert_tensors, str(shard))
     _write_index(source_dir, {key: shard.name for key in expert_tensors})
 
-    with pytest.raises(ValueError, match="do not match n_routed_experts=2"):
+    with expect_error(ValueError, "do not match n_routed_experts=2"):
         save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
 
 
-def test_save_dequantized_hf_checkpoint_rejects_missing_required_moe_projection_groups(tmp_path: Path):
+def test_save_dequantized_hf_checkpoint_rejects_missing_required_moe_projection_groups(tmp_path: Path, expect_error):
     source_dir = tmp_path / "deepseek-source"
     output_dir = default_stacked_dequantized_model_path(source_dir)
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -460,7 +461,7 @@ def test_save_dequantized_hf_checkpoint_rejects_missing_required_moe_projection_
     safetensors.torch.save_file(expert_tensors, str(shard))
     _write_index(source_dir, {key: shard.name for key in expert_tensors})
 
-    with pytest.raises(ValueError, match="missing required expert projections"):
+    with expect_error(ValueError, "missing required expert projections"):
         save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
 
 
@@ -521,6 +522,75 @@ def test_dequantize_state_dict_compat_shim_handles_quantized_inputs():
     assert torch.equal(dequantized["plain.weight"], plain_weight.to(torch.bfloat16))
 
 
+def test_convert_state_dict_passes_through_dequantized_checkpoint():
+    # A dequantized checkpoint's config.json carries no `quantization_config`, so nothing may reach the
+    # dequantizer -- it would raise on the missing `weight_block_size` (the Kimi prefill-block failure).
+    hf_config = SimpleNamespace()
+    weight = torch.tensor([[1.25, -0.75]], dtype=torch.float32)
+    token_ids = torch.tensor([3, 7], dtype=torch.int64)
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("dequantizer must not be called for an unquantized checkpoint")
+
+    converted = convert_state_dict(
+        {"layer.weight": weight, "embed.ids": token_ids},
+        hf_config,
+        dequantizer=_must_not_run,
+    )
+
+    assert set(converted) == {"layer.weight", "embed.ids"}
+    assert converted["layer.weight"].dtype == torch.bfloat16
+    assert torch.equal(converted["layer.weight"], weight.to(torch.bfloat16))
+    assert converted["embed.ids"].dtype == torch.int64
+    assert torch.equal(converted["embed.ids"], token_ids)
+
+
+def test_convert_state_dict_dequantizes_quantized_checkpoint():
+    quantized_weight = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.float32).to(torch.float8_e4m3fn)
+    inverse_scale = torch.tensor([[0.5]], dtype=torch.float32)
+    hf_config = SimpleNamespace(quantization_config={"weight_block_size": [2, 2]})
+
+    converted = convert_state_dict(
+        {"layer.weight": quantized_weight, "layer.weight_scale_inv": inverse_scale},
+        hf_config,
+    )
+
+    assert set(converted) == {"layer.weight"}
+    assert torch.equal(
+        converted["layer.weight"],
+        _dequantize_reference_tensor(quantized_weight, inverse_scale, (2, 2)).to(torch.bfloat16),
+    )
+
+
+def test_convert_state_dict_reads_quantization_config_nested_under_text_config():
+    # Kimi's multimodal checkpoint nests the LM config; missing it would pass fp8 weights through raw.
+    quantized_weight = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.float32).to(torch.float8_e4m3fn)
+    inverse_scale = torch.tensor([[0.5]], dtype=torch.float32)
+    hf_config = SimpleNamespace(text_config=SimpleNamespace(quantization_config={"weight_block_size": [2, 2]}))
+
+    seen = {}
+
+    def _record(state_dict, config, dtype):
+        seen["called"] = True
+        return {"layer.weight": torch.zeros(1)}
+
+    convert_state_dict(
+        {"layer.weight": quantized_weight, "layer.weight_scale_inv": inverse_scale},
+        hf_config,
+        dequantizer=_record,
+    )
+
+    assert seen.get("called") is True
+
+
+def test_convert_state_dict_rejects_float8_without_quantization_config(expect_error):
+    hf_config = SimpleNamespace()
+    quantized_weight = torch.tensor([[1.0, -2.0]], dtype=torch.float32).to(torch.float8_e4m3fn)
+
+    with expect_error(ValueError, "no `quantization_config`"):
+        convert_state_dict({"layer.weight": quantized_weight}, hf_config)
+
+
 def test_prepare_model_state_dict_returns_lazy_state_dict_for_hf_weights(tmp_path: Path):
     model_dir = tmp_path / "deepseek-dequantized"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -551,7 +621,7 @@ def test_prepare_model_state_dict_returns_lazy_state_dict_for_hf_weights(tmp_pat
     assert torch.equal(state_dict["lm_head.weight"], lm_head)
 
 
-def test_prepare_model_state_dict_rejects_quantized_hf_weights(tmp_path: Path):
+def test_prepare_model_state_dict_rejects_quantized_hf_weights(tmp_path: Path, expect_error):
     model_dir = tmp_path / "deepseek-quantized"
     model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -573,7 +643,7 @@ def test_prepare_model_state_dict_rejects_quantized_hf_weights(tmp_path: Path):
         },
     )
 
-    with pytest.raises(RuntimeError, match="Detected quantized HF tensors"):
+    with expect_error(RuntimeError, "Detected quantized HF tensors"):
         prepare_model_state_dict(SimpleNamespace(), random_weights=False, model_path=str(model_dir))
 
 
@@ -667,7 +737,7 @@ def test_materialized_stacked_checkpoint_load_hooks_resolve_expert_aliases(tmp_p
     assert target_tensor.numel() == 0
 
 
-def test_load_weight_from_weights_dict_rejects_mixed_expert_checkpoint():
+def test_load_weight_from_weights_dict_rejects_mixed_expert_checkpoint(expect_error):
     expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
     stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
     weights_dict = {
@@ -678,7 +748,7 @@ def test_load_weight_from_weights_dict_rejects_mixed_expert_checkpoint():
     load_weight = load_weight_from_weights_dict(weights_dict)
     unload_weight = unload_weight_from_weights_dict(weights_dict)
 
-    with pytest.raises(RuntimeError, match="mixes legacy expert tensor"):
+    with expect_error(RuntimeError, "mixes legacy expert tensor"):
         load_weight(expert_key, torch.empty((2, 4), dtype=torch.bfloat16))
-    with pytest.raises(RuntimeError, match="mixes legacy expert tensor"):
+    with expect_error(RuntimeError, "mixes legacy expert tensor"):
         unload_weight(expert_key, torch.empty((2, 4), dtype=torch.bfloat16))
