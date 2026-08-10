@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-step LM decode workload for Tracy / device-perf profiling.
+"""Single eager speech-frame workload for Tracy / device-perf profiling.
 
-Prefills ``PREFILL_LEN`` tokens **outside** the Tracy window, then measures
-**one** ``decode_step`` between ``start``/``stop`` signposts.
+Profiles **one AR speech-diffusion frame** on the eager path: neg-LM → diffusion
+(CFG × steps) → post-diffusion chain → pos-LM → argmax.  Signposts are emitted
+inside ``TTVibeVoiceGenerator.generate()`` when ``VV_PROFILE_SPEECH_FRAME=1``
+(frame 1).
 
 Standalone Tracy capture::
 
+    VV_TRACE_SEGMENT=0 VV_PROFILE_SPEECH_FRAME=1 VV_PROFILE_SPEECH_FRAME_EXIT=1 \\
     python -m tracy -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
-        models/experimental/vibevoice/tests/perf/test_profile_single_step_decode.py\\
+        models/experimental/vibevoice/tests/perf/test_profile_single_step_decode.py \\
         ::test_profile_single_step_decode -v
 
 Device perf CSV/JSON dump (outer driver spawns this under Tracy)::
@@ -17,21 +20,26 @@ Device perf CSV/JSON dump (outer driver spawns this under Tracy)::
     python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_decode.py
 
 Env:
-  ``VV_DECODE_PERF_PREFILL_LEN`` — KV prefix length before the measured decode (default 256).
+  ``VV_DECODE_PERF_WARMUP_TOKENS`` — warmup AR steps before the measured frame (default 32).
 """
 
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.vibevoice.tests.pcc.pcc_helpers import PREFILL_CHUNK_SIZE, build_tt_lm
+from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VOICES_DIR
+from models.experimental.vibevoice.common.resource_utils import load_script
+from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
-NUM_WARMUP_ITERS = 1
+_CFG_SCALE = 1.3
+_NUM_DIFFUSION_STEPS = 10
+_TEXT_PATH = TEXT_EXAMPLES_DIR / "1p_vibevoice.txt"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -39,6 +47,45 @@ def _env_int(name: str, default: int) -> int:
     if raw is None or not str(raw).strip():
         return default
     return int(raw)
+
+
+def _voice_path() -> str:
+    voice = VOICES_DIR / "en-Alice_woman.wav"
+    if voice.is_file():
+        return str(voice)
+    wavs = list(VOICES_DIR.glob("*.wav"))
+    assert wavs, f"No voice WAV in {VOICES_DIR}"
+    return str(wavs[0])
+
+
+def _build_processor_batch():
+    from models.experimental.vibevoice.reference.processor.vibevoice_processor import VibeVoiceProcessor
+
+    assert _TEXT_PATH.is_file(), f"Missing demo text: {_TEXT_PATH}"
+    script = load_script(_TEXT_PATH)
+    processor = VibeVoiceProcessor.from_pretrained(MODEL_PATH)
+    inputs = processor(
+        text=[script],
+        voice_samples=[[_voice_path()]],
+        padding=True,
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+    return processor, inputs
+
+
+def _generate_kwargs(processor, inputs: dict, *, max_new_tokens: int) -> dict:
+    return {
+        "input_ids": inputs["input_ids"],
+        "attention_mask": inputs["attention_mask"],
+        "speech_input_mask": inputs["speech_input_mask"],
+        "speech_tensors": inputs["speech_tensors"],
+        "speech_masks": inputs["speech_masks"],
+        "tokenizer": processor.tokenizer,
+        "cfg_scale": _CFG_SCALE,
+        "num_diffusion_steps": _NUM_DIFFUSION_STEPS,
+        "max_new_tokens": max_new_tokens,
+    }
 
 
 def _tracy_signpost_available() -> bool:
@@ -50,76 +97,53 @@ def _tracy_signpost_available() -> bool:
         return False
 
 
-def _run_single_decode_step(
-    mesh_device,
-    lm_tt,
-    input_id: torch.Tensor,
-    start_pos: int,
-    kv_cache,
-    *,
-    use_signpost: bool = False,
-) -> None:
-    if use_signpost:
-        from tracy import signpost
-
-        signpost("start")
-
-    logits = lm_tt.decode_step(input_id, start_pos, kv_cache, return_last_hidden=False)
-
-    if use_signpost:
-        ttnn.synchronize_device(mesh_device)
-        signpost("stop")
-
-    assert logits is not None
-
-
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(3600)
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_profile_single_step_decode(mesh_device, vv_config, lm_state):
-    """One warm LM decode step with Tracy start/stop around ``decode_step`` only."""
-    prefill_len = _env_int("VV_DECODE_PERF_PREFILL_LEN", PREFILL_CHUNK_SIZE)
-    decode_pos = prefill_len
-    total_len = prefill_len + 1
-
+def test_profile_single_step_decode(mesh_device, device_params, model_path):
+    """Profile one warm eager speech-diffusion frame (generator signposts)."""
+    del device_params
     use_signpost = _tracy_signpost_available()
     if not use_signpost:
         logger.info("tracy.signpost unavailable; running profile workload without signpost markers.")
 
-    torch.manual_seed(0)
-    cfg = vv_config.decoder
-    lm_tt = build_tt_lm(lm_state, mesh_device, cfg)
-    input_ids = torch.randint(0, cfg.vocab_size, (1, total_len), dtype=torch.long)
+    os.environ["VV_TRACE_SEGMENT"] = "0"
+    if use_signpost:
+        os.environ["VV_PROFILE_SPEECH_FRAME"] = "1"
+        os.environ["VV_PROFILE_SPEECH_FRAME_EXIT"] = "1"
+    else:
+        os.environ.pop("VV_PROFILE_SPEECH_FRAME", None)
+        os.environ.pop("VV_PROFILE_SPEECH_FRAME_EXIT", None)
 
-    # Untimed warmup: same prefill+decode shape to fill program cache.
-    kv_warm = lm_tt.alloc_kv_cache(total_len + 8)
-    for _ in range(NUM_WARMUP_ITERS):
-        lm_tt.prefill(input_ids[:, :prefill_len], kv_cache=kv_warm, return_last_hidden=True)
-        lm_tt.decode_step(input_ids[:, decode_pos : decode_pos + 1], decode_pos, kv_warm)
-        ttnn.synchronize_device(mesh_device)
-    del kv_warm
+    processor, inputs = _build_processor_batch()
+    warmup_tokens = _env_int("VV_DECODE_PERF_WARMUP_TOKENS", 32)
 
-    # Fresh cache: untimed prefill fills KV; measured window is decode only.
-    kv_cache = lm_tt.alloc_kv_cache(total_len + 8)
-    lm_tt.prefill(input_ids[:, :prefill_len], kv_cache=kv_cache, return_last_hidden=True)
-    ttnn.synchronize_device(mesh_device)
-
-    # Drain load/warmup/prefill markers so the signposted decode is not dropped (Voxtral pattern).
-    ttnn.ReadDeviceProfiler(mesh_device)
-
-    _run_single_decode_step(
+    tt_model = TTVibeVoiceModel.from_checkpoint(
         mesh_device,
-        lm_tt,
-        input_ids[:, decode_pos : decode_pos + 1],
-        decode_pos,
-        kv_cache,
-        use_signpost=use_signpost,
+        model_path,
+        cfg_scale=_CFG_SCALE,
+        num_diffusion_steps=_NUM_DIFFUSION_STEPS,
     )
-    if not use_signpost:
-        ttnn.synchronize_device(mesh_device)
+
+    warm_kw = _generate_kwargs(processor, inputs, max_new_tokens=warmup_tokens)
+    torch.manual_seed(0)
+    _ = tt_model.generate(**warm_kw)
+    ttnn.synchronize_device(mesh_device)
     ttnn.ReadDeviceProfiler(mesh_device)
 
+    profile_kw = _generate_kwargs(processor, inputs, max_new_tokens=warmup_tokens)
+    torch.manual_seed(0)
+    t0 = time.perf_counter()
+    out = tt_model.generate(**profile_kw)
+    ttnn.synchronize_device(mesh_device)
+    wall_ms = (time.perf_counter() - t0) * 1000.0
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+    assert out is not None
     logger.info(
-        f"Profile workload complete: single decode at pos={decode_pos} "
-        f"(prefill_len={prefill_len}), signposts={'on' if use_signpost else 'off'}"
+        f"Profile workload complete: eager_speech_frame1, "
+        f"signposts={'on' if use_signpost else 'off'}, host_wall_ms={wall_ms:.2f}"
     )
+    if use_signpost:
+        print(f"\nDECODE_STEP_HOST_WALL_MS={wall_ms:.2f}", flush=True)

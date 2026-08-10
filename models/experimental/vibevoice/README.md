@@ -348,7 +348,7 @@ stated.
 | `VV_WER_MAX_NEW_TOKENS`, `VV_WER_THRESHOLD` | 512 / 0.05 | WER test cap and gate |
 | `VV_SIM_MAX_NEW_TOKENS`, `VV_SIM_TARGET_FLOOR`, `VV_SIM_MARGIN` | 200 / 0.5 / 0.05 | SIM test AR cap (≈20–25 s of audio) and the two gates |
 | `VV_SIM_TEXT_ID`, `VV_SIM_TARGET_VOICE`, `VV_SIM_REUSE_TT` | `1p_abs` / `en-Carter_man.wav` / off | SIM test script, cloned target voice, and reuse of previously saved TT wavs for a rescore-only run |
-| `VV_PREFILL_PERF_SEQ_LEN`, `VV_PREFILL_PERF_START_POS`, `VV_DECODE_PERF_PREFILL_LEN` | 256 / 0 / 256 | Single-step perf-dump shapes |
+| `VV_PREFILL_PERF_SEQ_LEN`, `VV_PREFILL_PERF_START_POS`, `VV_DECODE_PERF_WARMUP_TOKENS` | 256 / 0 / 32 | Single-step perf-dump shapes |
 
 ## Test cases
 
@@ -384,7 +384,7 @@ One line per test. All PCC tests take `mesh_device` shape `[1]`; the device-free
 | `test_device_perf_single_step_prefill.py` | `main()` | Outer driver for a single-prefill-chunk Tracy op dump |
 | `test_profile_single_step_prefill.py` | `test_profile_single_step_prefill` | Inner workload: one warm `prefill` chunk (default seq 256) inside signposts |
 | `test_device_perf_single_step_decode.py` | `main()` | Outer driver for a single-decode-step Tracy op dump |
-| `test_profile_single_step_decode.py` | `test_profile_single_step_decode` | Inner workload: untimed prefill (default 256) then one `decode_step` inside signposts |
+| `test_profile_single_step_decode.py` | `test_profile_single_step_decode` | Inner workload: warmup generate, then one eager speech-diffusion frame inside generator signposts |
 | `test_e2e_isl_sweep_perf.py` | `test_e2e_isl_sweep_4p_climate_100min` | Wall-clock end-to-end sweep over 11 ISLs on the 100-min script: prefill tok/s, TTFT, decode tok/s, ms/tok, E2E, AR tokens |
 
 ## Commands — PCC checks
@@ -575,8 +575,9 @@ CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_prefill/reports/*/ops_p
 tt-perf-report "$CSV" --start-signpost start --end-signpost stop
 ```
 
-**3. Single-step decode dump** — untimed prefill, then one `decode_step` inside signposts. Optional:
-`VV_DECODE_PERF_PREFILL_LEN` (default 256).
+**3. Single-step decode dump** — warmup generate, then one eager speech-diffusion frame (neg-LM →
+diffusion → post-diffusion → pos-LM) inside generator signposts. Optional:
+`VV_DECODE_PERF_WARMUP_TOKENS` (default 32; must reach speech-diffusion).
 
 ```bash
 python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_decode.py
