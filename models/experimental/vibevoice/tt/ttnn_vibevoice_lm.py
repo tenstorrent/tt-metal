@@ -36,11 +36,11 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
-# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead of
-# separate wq (1536x1536) + wkv (1536x512).  BYTE-IDENTICAL (validated by wav sha256): the fused output
-# [q|k|v] equals the column concat of the separate matmuls (block matmul; fp32-dest reduction is
-# blocking-invariant), and nlp_create_qkv_heads splits it into the same q/k/v.  Saves one launch + one
-# bias-add per layer on the latency-bound qkv matmuls (~-1.2% frame).  N=2048=64 tiles / 8x4=32 cores.
+# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead
+# of separate wq (1536x1536) + wkv (1536x512).  Byte-identical: the fused output [q|k|v] equals the
+# column concat of the separate matmuls (block matmul; fp32-dest reduction is blocking-invariant),
+# and nlp_create_qkv_heads splits it into the same q/k/v.  Saves one launch + one bias-add per layer
+# on the latency-bound qkv matmuls.  N=2048=64 tiles / 8x4=32 cores.
 _QKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
     in0_block_w=8,
@@ -68,9 +68,8 @@ _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
 )
 
 # Decode-only program config for the wq/wo 1536x1536 projections (single-token step, Mt=1):
-# 1D mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2, width-sharded
-# output -> 12.25 µs vs 25.4 µs on the auto config (2.08x).  per_core_M=1 makes it valid only
-# for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
+# 1D mcast_in0 with a width-sharded L1 output.  per_core_M=1 makes it valid only for S==1 decode;
+# prefill (S>1, Mt>1) keeps the auto config.
 _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=4,
@@ -82,20 +81,17 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-# Width-sharded L1 output (the winning layout); the shard spec is derived from the
-# program config.  Downstream ops that need interleaved input reshard automatically.
+# Width-sharded L1 output; the shard spec is derived from the program config.  Downstream ops
+# that need interleaved input reshard automatically.
 _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
 # B=2 variant of _QO_DECODE_PROGCFG for the CFG batch-2 fused decode (pos+neg rows folded
 # into M).  per_core_M=2 so it is valid for M=2.  Byte-identical per row to the per_core_M=1
 # B=1 config (row 0 maxabsdiff==0), i.e. the K-reduction order is preserved — long-form-safe.
 #
-# in0_block_w=8 (was 4): 21.0 -> 16.8 us in isolation (1.26x, 224 -> 282 GB/s), 56 calls/frame.
-# Swept at 24/48/16/12 cores; MORE cores did not help (48c bottomed at 19.1 us, and 48c/ib2 was
-# 30.0 us) — K-blocking, not core count, was the lever here.  Subblock is noise (sb1x1 16.6 us).
-# NOTE the bit-exactness boundary: ib in {4,8,12,16} are all maxabsdiff==0 against each other,
-# but ib>=24 differs (3.8e-06).  K is 48 tiles, so ib>=24 leaves <=2 K-blocks and the inter-block
-# accumulation path changes; do not raise this past 16.
+# Bit-exactness boundary: in0_block_w in {4,8,12,16} are all byte-identical to each other, but
+# ib>=24 diverges.  K is 48 tiles, so ib>=24 leaves <=2 K-blocks and the inter-block accumulation
+# path changes — do NOT raise this past 16.
 _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=8,
@@ -112,16 +108,12 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 #
 # These extend the CFG batch-2 weight-read-once pattern to the FFN.  The batch-2 LM fusion batched
 # the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each FFN weight matrix
-# once per CFG row.  per_core_M=2 folds both rows into M so each weight is read once: ~1.9x on the
-# down-proj and ~1.85x each on gate/up at B=2.
+# once per CFG row.  per_core_M=2 folds both rows into M so each weight is read once.
 #
-# down-proj in0_block_w=4 (K=8960=280 tiles): isolated trace-replay sweep (M=32) measured the
-# down-proj at 124us @ ib2 -> 73.7us @ ib4 (1.68x); integrated layer profile 118us -> 68us.
-# ib4 is BYTE-IDENTICAL to ib2: measured maxabsdiff(ib2,ib4)==0 over all output elements for both
-# B1 (per_core_M=1) and B2 (per_core_M=2), L1 and DRAM output.  in0_block_w only sets the K-tile
-# streaming granularity; the fp32-dest accumulation order is unchanged, so the bf16 output is
-# identical (data-independent) — same maxabsdiff==0 / long-form-safe guarantee ib2 had vs auto.
-# Layer PCC gate: test_decoder_layer_pcc.py PASS (min=0.99819, mean=0.99858).
+# down-proj in0_block_w=4 (K=8960=280 tiles) is byte-identical to ib2 for both B1 (per_core_M=1)
+# and B2 (per_core_M=2): in0_block_w only sets the K-tile streaming granularity; the fp32-dest
+# accumulation order is unchanged, so the bf16 output is identical (data-independent) — the same
+# long-form-safe guarantee ib2 had vs auto.
 #
 # per_core_M makes these valid only for S==1 decode; prefill (S>1) keeps auto.
 _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -135,13 +127,11 @@ _FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-# B=2 down-proj (K=8960 latency-bound on K-streaming, not weight-read).  Spread N over 6x8=48 cores
-# (per_core_N=1, 48*1 == Nt=48) and widen the K-streaming: sweeping in0_block_w, 14 (280/14 == 20
-# K-blocks) is the optimum — the deployed frame drops from 62 us (ib8) to 54 us (BW 44% -> 50%,
-# 28 calls/frame => -0.22 ms).  ib8 was the prior value; {8,10,14,20,28,40} isolation-swept, 14 won.
-# maxabsdiff==0 vs auto and every other in0_block_w — it only sets the K-tile streaming granularity
-# and each core reduces the full K into an fp32 dest, so the accumulation order (and bf16 out) is
-# unchanged (byte-identical).
+# B=2 down-proj (K=8960, latency-bound on K-streaming, not weight-read).  Spread N over 6x8=48 cores
+# (per_core_N=1, 48 == Nt) and widen the K-streaming to in0_block_w=14 (280/14 == 20 K-blocks).
+# Byte-identical to auto and every other in0_block_w — it only sets the K-tile streaming
+# granularity and each core reduces the full K into an fp32 dest, so the accumulation order (and
+# bf16 output) is unchanged.
 _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
     in0_block_w=14,
@@ -154,9 +144,8 @@ _FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 # gate/up (1536x8960): N=8960=280 tiles, so per_core_N=4 over an 11x8=88 grid (352>=280).  Only the
-# B=2 batched case beats auto (B=1 gate/up candidates were slower than auto).  in0_block_w=4 (12 K-blocks)
-# is the sweep optimum: 51 us (ib2) -> 44 us (BW 53% -> 60%, 56 calls/frame => -0.30 ms).  ib8 is slower.
-# maxabsdiff==0 vs auto and every other in0_block_w (K-stream granularity only, fp32 dest -> byte-identical).
+# B=2 batched case beats auto, so B=1 gate/up keeps auto.  in0_block_w=4 (12 K-blocks) is
+# byte-identical to auto and every other in0_block_w (K-stream granularity only, fp32 dest).
 _FFN_GATEUP_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
     in0_block_w=4,
@@ -385,26 +374,20 @@ def preprocess_lm_weights(
 # ──────────────────────────────────────────────────────────────
 
 # VV_FUSED_ROPE=1 replaces the 9-op fp32 RoPE chain in the hot batch-2 decode with
-# ttnn.experimental.rotary_embedding_llama (3.97 ms → 0.31 ms per speech frame) and builds/reads
-# the cos/sin tables entirely on device.  The kernel pairs ADJACENT head_dim elements while
-# VibeVoice/HF pair (i, i + hd/2), so the bridge is a relabelling of head_dim: permuting the
-# ROTATED projections' out dim (wq, wk and their biases) by _interleave_perm at load makes q/k
-# emerge already adjacent-paired, and permuting the cos/sin tables the same way makes RoPE commute
-# with it.  Attention only ever contracts q against k — both permuted identically — and v/wo are
-# untouched, so every model output is unchanged.  Prefill keeps its fp32 mul/add — the adjacent-pair
-# rotate is a signed permutation, hence exact as an fp32 matmul on the bf16-valued q/k, so its RoPE
-# is bit-exact for a given table; it shifts only by the device table's 1.2e-07 deviation from numpy
-# (measured: prefill hidden PCC 0.999946).  The decode paths take the kernel's bf16 RoPE, which
-# leaves greedy tokens unchanged over a synthetic 8-step check but is not bit-exact.
+# ttnn.experimental.rotary_embedding_llama and builds/reads the cos/sin tables entirely on device.
+# The kernel pairs ADJACENT head_dim elements while VibeVoice/HF pair (i, i + hd/2), so the bridge
+# is a relabelling of head_dim: permuting the ROTATED projections' out dim (wq, wk and their biases)
+# by _interleave_perm at load makes q/k emerge already adjacent-paired, and permuting the cos/sin
+# tables the same way makes RoPE commute with it.  Attention only ever contracts q against k — both
+# permuted identically — and v/wo are untouched, so every model output is unchanged.  Prefill keeps
+# its fp32 mul/add — the adjacent-pair rotate is a signed permutation, hence bit-exact for a given
+# table.  The decode paths take the kernel's bf16 RoPE, which leaves greedy tokens unchanged but is
+# not bit-exact.
 #
-# Default ON.  It was shipped off after a 100-min acceptance run showed the speaking rate
-# accelerating (median 208 wpm vs 153) with every energy/spectral gate passing.  Re-validated on the
-# current frame (batched RoPE + bf8b FFN + depthwise mul-reduce + tile-row modulation): a full
-# 4p_climate_100min render holds 42,498 AR tokens — the same count as the pacing-safe reference —
-# and 93.04 min against its 93.17, with whisper pacing 169/173/195 wpm early/mid/late (median 173,
-# natural 150-190) versus the regression's 208.  Clipping 0.000000%, DC 4.8e-04, longest near-silent
-# run 9 frames.  Listened through and clean.  ISL 23038 decode 37.90 -> 36.43 ms/tok, rtf_decode
-# 0.2842 -> 0.2732, e2e rtf 0.3763 -> 0.3491.  VV_FUSED_ROPE=0 restores the fp32 RoPE rows.
+# Default ON.  It was previously shipped OFF because a long-form render showed the speaking rate
+# accelerating while every energy/spectral gate still passed — a pacing regression the per-op gates
+# do not catch — and has since been re-validated to hold natural pacing on the current frame.
+# VV_FUSED_ROPE=0 restores the fp32 RoPE rows.
 #
 # NOTE: this default must stay in lockstep with resolve_weight_cache's rope{0,1} variant key in
 # common/weight_cache.py — the flag PERMUTES wq/wk at load, so a mismatched key would load
@@ -732,7 +715,7 @@ class TTVibeVoiceLM:
             # On-device bf16 RoPE tables [max_len, hd] ROW_MAJOR for the llama-style path: the row
             # for a DEVICE position is gathered on-device via ttnn.embedding (bf16-only), so the
             # position can advance on-device (plus_one) with no per-step host RoPE write.  bf16 RoPE
-            # is ~0.9999 PCC vs the fp32 host rows and does not flip greedy tokens.
+            # closely tracks the fp32 host rows and does not flip greedy tokens.
             self._cos_emb = ttnn.as_tensor(
                 torch.from_numpy(self._cos_np).to(torch.bfloat16),
                 device=device,
@@ -946,8 +929,8 @@ class TTVibeVoiceLM:
             # The chunk's K/V is written into the preallocated cache at its (tile-
             # aligned) offset, then we read the whole [0:start_pos+S] prefix and run
             # the reference-parity fp32 path (GQA materialize + fp32 matmul/softmax).
-            # This keeps prefill numerics identical to the original (PCC >= 0.99);
-            # bf16 flash-SDPA prefill compounds to ~0.984 over 28 layers.  Prefill is
+            # This keeps prefill numerics identical to the reference; bf16 flash-SDPA
+            # prefill instead compounds error across the 28 layers.  Prefill is
             # one-time, so the fp32 cost is acceptable.
             if kv_cache is not None and kv_cache.keys[layer_idx] is not None:
                 # Write this chunk's K/V into the fixed cache and attend over the prefix.
@@ -1000,8 +983,7 @@ class TTVibeVoiceLM:
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.typecast(out, ttnn.bfloat16)
-            # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape
-            # (maxabsdiff==0 on S=1 and S=256).
+            # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape.
             out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             # ── Decode: write one token at start_pos, then fused flash-decode over the
@@ -1009,14 +991,11 @@ class TTVibeVoiceLM:
             # blow-up); reads only the valid prefix bounded by ``cur_pos``.  ~flat in
             # emitted-token count → scales to 64k ctx / ~40k tokens, and is trace-ready.
             #
-            # Precision note: the op is bf16-only (rejects fp32).  Its attention is
-            # numerically excellent (decode hidden PCC 0.9997 vs HF Qwen2) but, being
-            # bf16 vs the fp32 CPU reference, it flips a few *greedy near-ties* among the
-            # constrained tokens (free-running token_match ~0.977).  For this generative
-            # TTS that is a different-but-valid generation, not degraded audio — validated
-            # by a forced-token audio-parity check.  A grouped
-            # fp32 manual decode matches tokens exactly but measured 358 ms/step (slower
-            # than the old 202 ms), so it is not used.
+            # Precision note: the op is bf16-only (rejects fp32).  Being bf16 vs the fp32
+            # CPU reference, it flips a few *greedy near-ties* among the constrained tokens.
+            # For this generative TTS that is a different-but-valid generation, not degraded
+            # audio — validated by a forced-token audio-parity check.  A grouped fp32 manual
+            # decode matches tokens exactly but is much slower, so it is not used.
             assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
             ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
             ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
@@ -1106,25 +1085,23 @@ class TTVibeVoiceLM:
         else:  # prefill (S>1) → auto
             gate_pc, down_pc = None, None
         # L1-island for gate/up matmul outputs + silu:
-        # - Decode B==2: explicit progcfg + L1, ~1.15x and maxabsdiff==0.
-        # - Prefill S>1: auto + L1 interleaved is byte-identical and ~1.13x on the 5-op chain.
+        # - Decode B==2: explicit progcfg + L1, byte-identical.
+        # - Prefill S>1: auto + L1 interleaved is byte-identical.
         #   Prefill down must keep a DRAM in0 — auto with an L1 in0 re-picks the K-reduction
-        #   (maxabsdiff≠0) — so silu→mul stays in DRAM below.
+        #   (NOT byte-identical) — so silu→mul stays in DRAM below.
         # - Decode B==1: auto + L1 gate is byte-identical in isolation, but the full chain is not
         #   faster, so it stays in DRAM.
         gateup_mc = ttnn.L1_MEMORY_CONFIG if ((S == 1 and B == 2) or S > 1) else ttnn.DRAM_MEMORY_CONFIG
         gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest LM
-        # matmul (K=8960, 24 cores, ~45% DRAM BW) and reads in0 faster from L1 (151 -> 134 µs at
-        # B=2, 1.13x).  Placement only — same in0_block_w K-reduction, so byte-identical
-        # (maxabsdiff==0).  Prefill (S>1) keeps DRAM.
+        # matmul (K=8960) and reads in0 faster from L1.  Placement only — same in0_block_w
+        # K-reduction, so byte-identical.  Prefill (S>1) keeps DRAM.
         hidden_mc = ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG
-        # silu folded into the product as an in0 activation, dropping the standalone unary op
-        # (28 calls/frame).  Measured maxabsdiff==0 vs `mul(silu(gate), up)` — the fused form
-        # still rounds the activation to the operand dtype before the multiply.  Only worth
-        # ~0.01 ms/frame here (the SFPU work moves rather than disappears); the diffusion-head
-        # sibling in ttnn_diffusion_head.py is the one that actually pays.
+        # silu folded into the product as an in0 activation, dropping the standalone unary op.
+        # Byte-identical to `mul(silu(gate), up)` — the fused form still rounds the activation to
+        # the operand dtype before the multiply.  Barely matters here (the SFPU work moves rather
+        # than disappears); the diffusion-head sibling in ttnn_diffusion_head.py is the one that pays.
         hidden = ttnn.mul(gate, up, memory_config=hidden_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         out = ttnn.linear(
             hidden,
@@ -1223,14 +1200,13 @@ class TTVibeVoiceLM:
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
 
         # Non-final prefill chunks: their logits are discarded by the sampler, so skip the
-        # vocab-151936 matmul entirely (~1.7 ms per intermediate chunk).
+        # vocab-151936 matmul entirely.
         if not compute_logits:
             return None, last_hidden
 
         # Only the LAST position's logits are consumed (greedy argmax of the next token),
         # so for prefill (S>1) run lm_head on just the last row — bit-exact, and cuts the
-        # S×1536×151936 matmul's M from S to 1 (1752→1215 µs; the 467 MB weight read is the
-        # remaining floor).  last_hidden stays full-S.
+        # S×1536×151936 matmul's M from S to 1.  last_hidden stays full-S.
         x_head = (
             x
             if S == 1
@@ -1479,9 +1455,9 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Batched weight-bound projection — fused wqkv read once for both CFG rows (deployed CFG-b2
-        # decode), split by nlp_create_qkv_heads.  Byte-identical vs separate wq + wkv (same column
-        # values, same split); saves one launch + one bias-add/layer.
+        # Batched weight-bound projection — fused wqkv read once for both CFG rows, split by
+        # nlp_create_qkv_heads.  Byte-identical vs separate wq + wkv (same column values, same
+        # split); saves one launch + one bias-add/layer.
         qkv = ttnn.linear(
             x,
             layer_w.wqkv,
@@ -1548,7 +1524,7 @@ class TTVibeVoiceLM:
             )
             attn_rows.append(_reshape_tt(attn, [1, 1, 1, n_heads * head_dim]))
 
-        # L1: this concat is wo's in0 (1536x1536, 28 calls/frame).  Placement only, maxabsdiff==0.
+        # L1: this concat is wo's in0 (1536x1536).  Placement only, byte-identical.
         attn = ttnn.concat(attn_rows, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)  # [2,1,1,n_heads*hd]
         out = ttnn.linear(
             attn,
@@ -1575,9 +1551,9 @@ class TTVibeVoiceLM:
             weight=lw.ffn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            # L1: this is the in0 of _ffn_layer's gate/up pair (1536x8960, 56 calls/frame), which was
-            # the last big DRAM-in0 matmul in the LM.  Placement only, maxabsdiff==0.  Decode-only
-            # path, so prefill's deliberate DRAM in0 (see _ffn_layer) is untouched.
+            # L1: this is the in0 of _ffn_layer's gate/up pair (1536x8960).  Placement only,
+            # byte-identical.  Decode-only path, so prefill's deliberate DRAM in0 (see _ffn_layer)
+            # is untouched.
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ffn_out = self._ffn_layer(x_norm, lw)  # batched [2,..] — auto matmuls, batch-independent

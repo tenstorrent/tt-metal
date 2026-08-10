@@ -36,13 +36,10 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 
 
 # Byte-identical B=2 program configs for the CFG diffusion head.  The head always runs at B=2
-# (sample_speech_latents concats [neg, pos] on dim 0); on the auto config each head weight is
-# therefore read twice per step, 10 steps per frame.  per_core_M=2 folds both CFG rows into M so
-# each weight is read once, worth ~1.6-1.9x per matmul.  in0_block_w=2 is the K-reduction block
-# auto picks for these shapes, so the reduction order — and hence the rounding — is unchanged
-# (maxabsdiff==0 vs auto for both fp32 and bf16 inputs).
-#
-# Applied only when B==2; a B=1 PCC-test call falls back to auto.
+# (sample_speech_latents concats [neg, pos] on dim 0), so per_core_M=2 folds both CFG rows into M
+# and each weight is read once per step instead of twice.  in0_block_w=2 matches the K-reduction
+# block auto picks for these shapes, so the reduction order — and hence the output bits — is
+# unchanged.  Applied only when B==2; a B=1 PCC-test call falls back to auto.
 def _diff_b2_cfg(cx, cy, pn, ibw=2):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
@@ -57,21 +54,13 @@ def _diff_b2_cfg(cx, cy, pn, ibw=2):
     )
 
 
-# gate / up / head-layer modulation (K=1536, N=4608).  in0_block_w=4 (12 K-blocks) vs the prior ib2:
-# -11 us/op in the deployed frame (84 calls => -0.95 ms).  NOTE: isolation timing showed this flat —
-# only the in-model device profiler surfaces it.  maxabsdiff==0 for both the bf8b gate/up and the
-# fp32-act modulation (in0_block_w is K-stream granularity only, fp32 dest -> byte-identical).
+# gate / up / head-layer modulation (K=1536, N=4608).  in0_block_w=4 is byte-identical to auto:
+# in0_block_w only sets the K-tile streaming granularity, and each core reduces the full K into an
+# fp32 dest, so the accumulation order is unchanged.
 _DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2, ibw=4)
-# swiglu down (K=4608, N=1536): the 8x3=24-core / in0_block_w=2 config above ran at 74.4 us =
-# 190 GB/s, less than half the 379 GB/s its same-weight-size sibling (_DIFF_N4608_B2) reaches.
-# Widening the K-streaming granularity to in0_block_w=4 AND spreading N over 48 cores
-# (per_core_N=1, 48*1 == Nt) gives 49.7 us = 285 GB/s (1.50x, 40 calls/frame => -1.0 ms).
-# Neither change alone is enough: 48 cores at in0_block_w=2 is *slower* than the 24-core config
-# (81.8 us).  Measured maxabsdiff==0 vs both auto and the previous config — in0_block_w only sets
-# the K-tile streaming granularity and each core still reduces the full K into an fp32 dest, so
-# the accumulation order (and the bf16 output) is unchanged.  Confirmed end-to-end: a full 93-min
-# 4p_climate_100min render with this and the two LM config changes is BYTE-IDENTICAL to the
-# pre-change render (same sha256 over all 134,163,200 samples, same 42,498 AR tokens).
+# swiglu down (K=4608, N=1536): in0_block_w=4 with N spread over 48 cores (per_core_N=1, 48 == Nt).
+# Byte-identical to auto — in0_block_w only sets K-tile streaming granularity and each core reduces
+# the full K into an fp32 dest, so the accumulation order and bf16 output are unchanged.
 _DIFF_N1536_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
     in0_block_w=4,
@@ -84,15 +73,9 @@ _DIFF_N1536_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
-# cond_proj (B=2, K=1536, N=1536).  This was the ONLY matmul in the frame left on the auto
-# program config, and auto lands it at 55 us / 19.6% of DRAM peak while its five progcfg'd fp32
-# siblings (the adaLN modulations, same HiFi4 FP32 x BF16 dtypes) run at 63-79%.  So the fp32
-# activation was never the problem — the missing config was.  The LM's wq/wo config is legal
-# here (identical 1536x1536 shape, K=1536 -> 48 tiles, 24 cores x per_core_N=2 == Nt) and is what
-# gets that shape to 16.4 us in the LM.  Measured -35 us/frame (-0.11% end-to-end; 4/5 wins on a
-# paired head-to-head, pooled over 11 baseline and 8 candidate interleaved runs with a control
-# arm); every run BYTE-IDENTICAL to the auto baseline, so this is blocking/placement only.
-# Applied at B==2; B=1 PCC paths keep auto.
+# cond_proj (B=2, K=1536, N=1536).  Reuses the LM's wq/wo config for this shape (K=1536 -> 48 tiles,
+# 24 cores x per_core_N=2 == Nt).  Byte-identical to auto — this changes core placement/blocking
+# only, not the math.  Applied at B==2; B=1 PCC paths keep auto.
 _COND_PROJ_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=8,
@@ -104,9 +87,9 @@ _COND_PROJ_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-# final_linear 1536→64: auto runs this on only 2 cores (~36 µs).  in0_block_w=2 matches auto's
-# K-reduction (maxabsdiff==0 vs auto) and brings it to ~21 µs.  Any other in0_block_w changes the
-# reduction order, so it is not byte-identical and must not be used on the long-form path.
+# final_linear 1536→64.  in0_block_w=2 matches auto's K-reduction, so it stays byte-identical to
+# auto.  Any other in0_block_w changes the reduction order and is NOT byte-identical — must not be
+# used on the long-form path.
 _DIFF_N64_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
     in0_block_w=2,
@@ -403,16 +386,14 @@ class TTDiffusionHead:
             program_config=_DIFF_N4608_B2 if b2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Place the SwiGLU product (down_proj's in0) in L1: down_proj is the slowest head matmul
-        # (K=4608, 24 cores, ~37% DRAM BW) and reads in0 ~9 µs faster from L1 (79.4 -> 70.7 µs).
-        # Placement changes where the tensor lives, not its bits, so this stays byte-identical
-        # (maxabsdiff==0).  Only down_proj benefits — L1 in0 regresses final_adaLN (41 -> 108 µs),
-        # which therefore stays in DRAM.
+        # Place the SwiGLU product (down_proj's in0) in L1: down_proj is the slowest head matmul and
+        # reads its in0 faster from L1.  Placement changes where the tensor lives, not its bits, so
+        # this stays byte-identical.  Only down_proj benefits — L1 in0 regresses final_adaLN, which
+        # therefore stays in DRAM.
         #
-        # silu folded into the product as an in0 activation, dropping the standalone unary op
-        # (40 calls/frame — 10 DPM steps x 4 head layers).  Measured maxabsdiff==0 vs
-        # `mul(silu(gate), up)`: the fused form still rounds the activation to the operand dtype
-        # before multiplying.  9.70 -> 7.99 us on the pair (1.21x).
+        # silu is folded into the product as an in0 activation, dropping the standalone unary op.
+        # Byte-identical to `mul(silu(gate), up)`: the fused form still rounds the activation to the
+        # operand dtype before multiplying.
         hidden = ttnn.mul(
             gate, up, memory_config=ttnn.L1_MEMORY_CONFIG, input_tensor_a_activations=[ttnn.UnaryOpType.SILU]
         )
@@ -432,20 +413,15 @@ class TTDiffusionHead:
         (already hoisted out of the DPM loop) and ``t_embs`` is schedule-constant, so all
         ``num_steps`` of ``sc`` are known *before* the loop runs.  One matmul per layer then
         produces every step's modulation, so each adaLN weight is read once per frame instead of
-        once per step (40 -> 4 layer modulation matmuls, 10 -> 1 final; measured 400.5 -> 45.6 µs
-        for a layer's ten calls).
+        once per step.
 
         The steps stack on the BATCH axis, giving ``[2*S, 1, 1, hidden]``, so every per-step chunk
-        slice below stays tile-aligned.  Two other layouts were measured end-to-end and lost:
-        stacking on the tile HEIGHT axis makes the matmul far cheaper (Mt stays 2: 45.6 vs 400.5 µs
-        for a layer's ten calls, against ~262 µs for this layout's Mt=2*S) but every chunk read
-        becomes an unaligned intra-tile row slice (115 vs 65 µs) — with 3 chunks x S steps x 5
-        modulations that was 3.6% SLOWER than not batching at all (42.02 vs 40.56 ms/tok), and
-        extracting each step's row once before chunking still lost (36.91 vs 36.41).  The frame is
-        op-count-bound at this scale: 50 extra slice ops outweigh the cheaper matmul.
+        slice below stays tile-aligned.  Stacking on the tile HEIGHT axis instead makes the matmul
+        cheaper but turns every chunk read into an unaligned intra-tile row slice; the frame is
+        op-count-bound at this scale, so the extra slice ops outweigh the cheaper matmul.
 
         Byte-identical: matmul output rows are independent and ``in0_block_w`` (hence the K
-        reduction order) is unchanged.  Verified ``maxabsdiff == 0`` against the per-step path.
+        reduction order) is unchanged.
         """
         w = self.w
         steps = len(t_embs)
@@ -460,16 +436,12 @@ class TTDiffusionHead:
         )
         # PACK the b*steps rows into tile ROWS before the matmul.  On the batch axis each of the 20
         # (b=2, S=10) rows owns a whole 32-row tile, so M is 20 tiles and the matmul computes 640
-        # rows to use 20 — it is the one COMPUTE-bound matmul in the frame (29.2 TFLOPs, 29.3% of
-        # peak, at only 96 GB/s: the DRAM column reads low because compute, not bandwidth, is the
-        # wall).  As tile rows the same work is Mt=1 and the matmul becomes DRAM-bound like its
-        # siblings: 315 -> 45 µs for N=4608, 291 -> 45 µs for the final N=3072.
+        # rows to use 20 — compute-bound.  As tile rows the same work is Mt=1 and the matmul becomes
+        # DRAM-bound like its siblings.
         #
         # One reshape per modulation restores the batch axis, so every per-step chunk slice below
-        # stays tile-aligned exactly as before — this is what makes the packing pay, unlike the two
-        # height-axis layouts described above which pushed unaligned slices into the DPM loop.  The
-        # reshapes cost ~60/44 µs and the one input-side reshape ~43 µs, against 1.27 ms of matmul
-        # saved: measured 1.552 -> 0.561 ms per frame for the five modulations.
+        # stays tile-aligned exactly as before — this is what makes the packing pay, unlike the
+        # height-axis layout above which pushed unaligned slices into the DPM loop.
         rows = b * steps
         mt = (rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
         sc_packed = ttnn.reshape(sc_all, [1, 1, rows, w.hidden_size])
@@ -542,7 +514,7 @@ class TTDiffusionHead:
         )
         # modulate: x_norm * (1 + scale) + shift.  The +1 is folded into the modulation matmul's
         # bias (see _adaLN_plus_one_bias), so `scale` already IS (1 + scale) and the standalone
-        # add is gone — 50 ops/frame removed, byte-identical.
+        # add is gone (byte-identical).
         x_mod = ttnn.add(
             ttnn.mul(
                 x_norm,
@@ -550,8 +522,8 @@ class TTDiffusionHead:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             shift,
-            # L1: x_mod is the in0 of _swiglu_ffn's gate/up pair (1536x4608, 120 calls/frame — the
-            # largest DRAM-in0 matmul bucket left).  Placement only, maxabsdiff==0.
+            # L1: x_mod is the in0 of _swiglu_ffn's gate/up pair (1536x4608).  Placement only,
+            # byte-identical.
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # FFN + gated residual
