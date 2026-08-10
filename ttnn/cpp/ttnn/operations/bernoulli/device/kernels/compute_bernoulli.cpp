@@ -25,7 +25,7 @@ void kernel_main() {
     uint32_t rand_from = 0;
 
     eltwise_chain(
-        EltwiseShape::tiles(num_tiles),
+        IterationShape::tiles(num_tiles),
         RandTile<Dst::D0>{rand_from, rand_scale.u, seed},
         PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 }

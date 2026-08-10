@@ -38,13 +38,12 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             if (enable_reload) {
                 ckl::add<ckl::input(dfb_in0_id), ckl::input(dfb_intermed0_id), ckl::output(dfb_intermed0_id)>(
-                    ckl::EltwiseShape::tiles(onetile));
+                    ckl::IterationShape::tiles(onetile));
             } else {
                 ckl::add<
                     ckl::input(dfb_in0_id),
                     ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::output(dfb_intermed0_id),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::output(dfb_intermed0_id)>(ckl::IterationShape::tiles(onetile));
             }
 
             enable_reload = true;
@@ -52,8 +51,7 @@ void kernel_main() {
 
         ckl::mul<
             ckl::input(dfb_intermed0_id),
-            ckl::input(dfb_scalar_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(dfb_out0_id),
-            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(dfb_scalar_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_out0_id)>(ckl::IterationShape::tiles(onetile));
     }
 }

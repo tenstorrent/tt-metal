@@ -19,12 +19,12 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     if constexpr (dim == 0) {
-        unary_bcast<BroadcastDim::None, input(cb_in), output(cb_out)>(EltwiseShape::tiles(n));
+        unary_bcast<BroadcastDim::None, input(cb_in), output(cb_out)>(IterationShape::tiles(n));
     } else if constexpr (dim == 1) {
-        unary_bcast<BroadcastDim::Col, input(cb_in), output(cb_out)>(EltwiseShape::tiles(n));
+        unary_bcast<BroadcastDim::Col, input(cb_in), output(cb_out)>(IterationShape::tiles(n));
     } else if constexpr (dim == 2) {
-        unary_bcast<BroadcastDim::Row, input(cb_in), output(cb_out)>(EltwiseShape::tiles(n));
+        unary_bcast<BroadcastDim::Row, input(cb_in), output(cb_out)>(IterationShape::tiles(n));
     } else {
-        unary_bcast<BroadcastDim::Scalar, input(cb_in), output(cb_out)>(EltwiseShape::tiles(n));
+        unary_bcast<BroadcastDim::Scalar, input(cb_in), output(cb_out)>(IterationShape::tiles(n));
     }
 }

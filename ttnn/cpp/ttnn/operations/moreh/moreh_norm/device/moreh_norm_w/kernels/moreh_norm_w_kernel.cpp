@@ -77,7 +77,7 @@ void kernel_main() {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             const bool mask_this = do_mask_w && (col_idx == Wt - 1);
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
+                ckl::IterationShape::tiles(onetile),
                 ckl::CopyTile<ckl::input(
                     dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(

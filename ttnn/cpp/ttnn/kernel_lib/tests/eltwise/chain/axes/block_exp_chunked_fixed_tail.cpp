@@ -30,13 +30,13 @@ void kernel_main() {
     constexpr auto tail_sync = synchronize_full_block ? BlockTailSync::FullBlock : BlockTailSync::ValidTiles;
     if constexpr (Ht == 1) {
         eltwise_chain(
-            EltwiseShape::tiles(Wt, block_size, tail_sync),
+            IterationShape::tiles(Wt, block_size, tail_sync),
             CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {
         eltwise_chain(
-            EltwiseShape::grid(Ht, Wt, block_size, tail_sync),
+            IterationShape::grid(Ht, Wt, block_size, tail_sync),
             CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});

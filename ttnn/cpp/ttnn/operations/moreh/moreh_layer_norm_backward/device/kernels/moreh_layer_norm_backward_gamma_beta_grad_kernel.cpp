@@ -92,7 +92,7 @@ void kernel_main() {
             // Compute dfb_dycopy_id
             // deepcopy and mask(optional)
             ckl::eltwise_chain(
-                ckl::EltwiseShape::single(),
+                ckl::IterationShape::one_tile(),
                 ckl::CopyTile<ckl::input(
                     dfb_dy_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(
@@ -136,12 +136,16 @@ void kernel_main() {
                 // Compute dfb_xmm_id
                 // x - mean and mask(optional)
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::single(),
+                    ckl::IterationShape::one_tile(),
                     ckl::BinaryFpu<
-                        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                        ckl::input(dfb_mean_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                         ckl::BinaryFpuOp::Sub,
-                        is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{},
+                        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(
+                            dfb_mean_id,
+                            is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
+                            ckl::WaitPolicy::PerTile,
+                            ckl::PopPolicy::PerTile,
+                            kDataFormatReconfig)>{},
                     ckl::runtime_if(
                         do_mask_h && ((h_idx + 1) % origin_Ht == 0),
                         ckl::CopyTile<
@@ -173,10 +177,14 @@ void kernel_main() {
                 // (x - mean) * rstd
                 ckl::mul<
                     ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                    ckl::input(dfb_rstd_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                    ckl::output(dfb_y_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig),
-                    is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
-                    ckl::EltwiseShape::single());
+                    ckl::input(
+                        dfb_rstd_id,
+                        is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        kDataFormatReconfig),
+                    ckl::output(dfb_y_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+                    ckl::IterationShape::one_tile());
 
                 // Compute dfb_ydy_id
                 mul_tiles_to_dfb<dfb_y_id, dfb_dycopy_id, dfb_ydy_id>(0, 0, 1, beta_grad_has_value ? 0 : 1);

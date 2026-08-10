@@ -39,7 +39,7 @@ void kernel_main() {
 
     // Stage 0: Bulk-fill cb_x from the reader; after this cb_x is owned entirely by compute.
     eltwise_chain(
-        EltwiseShape::tiles(n),
+        IterationShape::tiles(n),
         CopyTile<input(cb_src, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
         PackTile<output(cb_x, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 
@@ -47,25 +47,25 @@ void kernel_main() {
     if constexpr (life == 0) {
         // Front rotation: pop frees the front tile, reserve reuses it. Scalar reads the current front.
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::PerTile), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_x)>{});
     } else if constexpr (life == 1) {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
-            EltwiseShape::tiles(n, blk),
+            IterationShape::tiles(n, blk),
             CopyTile<input(cb_x, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_x, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {  // life == 2
         // Per-tile rotation: like life 0 but the wait is per-tile too.
-        eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_x)>{}, Exp<>{}, PackTile<output(cb_x)>{});
+        eltwise_chain(IterationShape::tiles(n), CopyTile<input(cb_x)>{}, Exp<>{}, PackTile<output(cb_x)>{});
     }
 
     // Stage B: copy cb_x -> cb_out (plain Bulk copy) so the DRAM writer drains cb_out, never cb_x.
     eltwise_chain(
-        EltwiseShape::tiles(n),
+        IterationShape::tiles(n),
         CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

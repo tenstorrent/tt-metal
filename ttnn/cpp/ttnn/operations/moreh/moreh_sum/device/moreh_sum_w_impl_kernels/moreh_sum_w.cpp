@@ -75,7 +75,7 @@ void kernel_main() {
                 // Reconfig: chain Input+Output (fold elides no-op transitions); matches
                 // the FP32_DEST_ACC_EN-guarded reconfigs in the original.
                 compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
+                    compute_kernel_lib::IterationShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<compute_kernel_lib::input(tt::CBIndex::c_0)>{},
                     compute_kernel_lib::CopyTile<
                         compute_kernel_lib::input(

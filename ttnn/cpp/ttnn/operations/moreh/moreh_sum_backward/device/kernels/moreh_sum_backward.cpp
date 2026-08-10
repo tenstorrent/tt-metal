@@ -29,10 +29,11 @@ void kernel_main() {
                                                                 : ckl::BroadcastDim::None;
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_output_tiles),
-        ckl::OptionalChainElement<
+        ckl::IterationShape::tiles(num_output_tiles),
+        ckl::Optional<
             has_bcast,
             ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
                 ckl::input(
                     dfb_in1_id,
                     ckl::WaitPolicy::Upfront,
@@ -40,10 +41,12 @@ void kernel_main() {
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
-                    dfb_in0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::BinaryFpuOp::Add,
-                bcast_dim>>{},
-        ckl::OptionalChainElement<
+                    dfb_in0_id,
+                    bcast_dim,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>>{},
+        ckl::Optional<
             !has_bcast,
             ckl::CopyTile<
                 ckl::input(

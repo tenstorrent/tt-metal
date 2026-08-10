@@ -34,30 +34,30 @@ void kernel_main() {
 
     if constexpr (life == 0) {
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else if constexpr (life == 1) {
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{});
     } else if constexpr (life == 2) {
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else if constexpr (life == 3) {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled)>{});
         cb_out_obj.push_back(n);
     } else {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::None, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{});
     }

@@ -85,9 +85,14 @@ void kernel_main() {
                 ckl::PopPolicy::AtEnd,
                 ckl::OperandKind::Block,
                 kDataFormatReconfig),
-            ckl::input(dfb_max_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(dfb_x_m_max_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(
+                dfb_max_id,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                kDataFormatReconfig),
+            ckl::output(dfb_x_m_max_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Wt));
 
         dfb_x_m_max_obj.wait_front(Wt);
 #ifdef SOFTMAX
@@ -96,7 +101,7 @@ void kernel_main() {
         constexpr bool is_softmax = false;
 #endif
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(Wt - 1),
+            ckl::IterationShape::tiles(Wt - 1),
             ckl::CopyTile<
                 ckl::input(
                     dfb_x_m_max_id,
@@ -105,13 +110,13 @@ void kernel_main() {
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
                 ckl::Dst::D0>{},
-            ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
+            ckl::Optional<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_exps_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         ckl::eltwise_chain(
-            ckl::EltwiseShape::single(),
+            ckl::IterationShape::one_tile(),
             ckl::CopyTile<
                 ckl::input(
                     dfb_x_m_max_id,
@@ -121,7 +126,7 @@ void kernel_main() {
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
                 ckl::Dst::D0>{Wt - 1},
-            ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
+            ckl::Optional<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::CopyTile<
                 ckl::input(dfb_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
@@ -173,9 +178,14 @@ void kernel_main() {
                 ckl::PopPolicy::None,
                 ckl::OperandKind::Block,
                 kDataFormatReconfig),
-            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(
+                dfb_recipsumexps_id,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                kDataFormatReconfig),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Wt));
 #else
         ckl::mul<
             ckl::input(
@@ -184,9 +194,14 @@ void kernel_main() {
                 ckl::PopPolicy::AtEnd,
                 ckl::OperandKind::Block,
                 kDataFormatReconfig),
-            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
-            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(
+                dfb_recipsumexps_id,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                kDataFormatReconfig),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
+            ckl::IterationShape::tiles(Wt));
 #endif
         dfb_x_m_max_obj.pop_front(Wt);
     }

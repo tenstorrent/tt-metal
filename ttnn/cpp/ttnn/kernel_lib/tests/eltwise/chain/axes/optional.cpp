@@ -22,21 +22,21 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
     if constexpr (scenario == 0) {
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_in)>{},
-            OptionalChainElement<enabled, Negative<Dst::D0>>{},
+            Optional<enabled, Negative<Dst::D0>>{},
             PackTile<output(cb_out)>{});
     } else if constexpr (scenario == 1) {
         constexpr uint32_t cb_out_2 = tt::CBIndex::c_17;
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_in)>{},
             PackTile<output(cb_out)>{},
-            OptionalChainElement<enabled, PackTile<output(cb_out_2)>>{});
+            Optional<enabled, PackTile<output(cb_out_2)>>{});
     } else {
         const uint32_t mode = get_arg_val<uint32_t>(0);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_in)>{},
             runtime_if(mode == 0, Negative<Dst::D0>{})
                 .else_if(mode == 1, Square<Dst::D0>{}, Negative<Dst::D0>{})

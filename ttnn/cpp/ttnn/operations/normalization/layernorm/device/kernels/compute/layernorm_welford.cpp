@@ -118,7 +118,7 @@ void kernel_main() {
         if constexpr (fuse_pre_add) {
             for (auto block : generic::blocks(Wt, blk)) {
                 const auto block_shape =
-                    ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+                    ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
                 if constexpr (welford_fp32_alias) {
                     dfb_x_welford_obj.reserve_back(block.full_block_size());
                 }
@@ -133,8 +133,8 @@ void kernel_main() {
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
                         ckl::OperandKind::Block),
-                    ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-                    ckl::BroadcastDim::None>(block_shape);
+                    ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    block_shape);
                 if constexpr (welford_fp32_alias) {
                     dfb_x_welford_obj.push_back(block.full_block_size());
                 }
@@ -274,13 +274,12 @@ void kernel_main() {
         dfb_ex_obj.wait_front(onetile);
         ckl::sub<
             ckl::input(dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-            ckl::input(dfb_ex_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(
                 dfb_xmm_id,
                 ckl::ReservePolicy::Upfront,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(total_buffer_size, /*block_size=*/blk));
+                ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(total_buffer_size, /*block_size=*/blk));
         dfb_ex_obj.pop_front(1);
         dfb_xmm_obj.wait_front(total_buffer_size);
 
@@ -289,12 +288,11 @@ void kernel_main() {
         }
 
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
+            ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(dfb_ex2_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None>{},
+                ckl::input(dfb_ex2_id),
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_ex2pe_id,
@@ -306,10 +304,11 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
                     ckl::input(
                         dfb_xmm_id,
                         ckl::WaitPolicy::Upfront,
@@ -317,9 +316,8 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileOffset::Set),
-                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::Col>{block.start(), 0u},
+                    ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
+                    block.start(), 0u},
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
@@ -328,6 +326,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
                         ckl::input(
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
@@ -335,13 +334,12 @@ void kernel_main() {
                             ckl::OperandKind::Block),
                         ckl::input(
                             dfb_gamma_id,
+                            ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set),
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::Row>{0u, block.start()},
+                            ckl::TileOffset::Set)>{0u, block.start()},
                     ckl::PackTile<ckl::output(
                         dfb_outg_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
@@ -349,6 +347,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Add,
                         ckl::input(
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
@@ -356,13 +355,12 @@ void kernel_main() {
                             ckl::OperandKind::Block),
                         ckl::input(
                             dfb_beta_id,
+                            ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set),
-                        ckl::BinaryFpuOp::Add,
-                        ckl::BroadcastDim::Row>{0u, block.start()},
+                            ckl::TileOffset::Set)>{0u, block.start()},
                     ckl::PackTile<ckl::output(
                         dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }

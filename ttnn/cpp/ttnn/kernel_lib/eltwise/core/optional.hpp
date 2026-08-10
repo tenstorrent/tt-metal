@@ -16,7 +16,7 @@
  *
  * Compile-time optional:
  *
- *     OptionalChainElement<COND, Op>
+ *     Optional<COND, Op>
  *
  * Runtime conditionals use one surface:
  *
@@ -47,7 +47,7 @@ struct DisabledChainElement {
 
 /// Enabled optionals are exactly `Inner`; disabled optionals share one short marker type.
 template <bool COND, class Inner>
-using OptionalChainElement = std::conditional_t<COND, Inner, DisabledChainElement>;
+using Optional = std::conditional_t<COND, Inner, DisabledChainElement>;
 
 namespace detail {
 

@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"    // Log
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // Clamp, RsubUnary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 
 namespace ckl = compute_kernel_lib;
 
@@ -30,17 +30,17 @@ void kernel_main() {
     constexpr bool do_clamp = false;
 #endif
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(
                 dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
-        ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
+        ckl::Optional<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
         ckl::PackTile<ckl::output(
             dfb_tmp0_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(dfb_tmp0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},

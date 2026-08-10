@@ -18,19 +18,18 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(B * Ht, Wt),
-        ckl::BinaryFpu<  // dfb_lhs_id: one tile per (row,col)
-            ckl::input(
-                dfb::in0,
-                ckl::WaitPolicy::PerTile,
-                ckl::PopPolicy::PerTile,
-                ckl::DataFormatReconfig::Disabled),  // dfb_rhs_id: streamed
-                                                     // broadcast, one
-                                                     // per row
-            ckl::input(
-                dfb::in1, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled),
+        ckl::IterationShape::grid(B * Ht, Wt),
+        ckl::BinaryFpu<
             CHAIN_BCAST_OP,
-            CHAIN_BCAST_DIM>{},
+            // dfb_lhs_id: one tile per (row,col)
+            ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            // dfb_rhs_id: one broadcast tile per row
+            ckl::input(
+                dfb::in1,
+                CHAIN_BCAST_DIM,
+                ckl::WaitPolicy::PerOuter,
+                ckl::PopPolicy::PerOuter,
+                ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(
             dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

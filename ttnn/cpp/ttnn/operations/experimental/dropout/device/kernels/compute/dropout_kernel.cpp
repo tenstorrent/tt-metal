@@ -24,7 +24,7 @@ void kernel_main() {
 
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(total_tiles),
+        ckl::IterationShape::tiles(total_tiles),
         ckl::CopyTile<
             ckl::input(
                 dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),

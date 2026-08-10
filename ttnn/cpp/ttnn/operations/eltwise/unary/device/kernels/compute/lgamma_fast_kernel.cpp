@@ -26,7 +26,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),

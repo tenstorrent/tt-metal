@@ -26,7 +26,7 @@ void kernel_main() {
     if constexpr (mode == 0) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_a)>{},
             CopyTile<input(cb_b), Dst::D1>{},
             CopyTile<input(cb_c), Dst::D2>{},
@@ -36,7 +36,7 @@ void kernel_main() {
         constexpr uint32_t cb_linear = tt::CBIndex::c_17;
         compute_kernel_hw_startup(cb_a, cb_out);
         eltwise_chain(
-            EltwiseShape::tiles(n),
+            IterationShape::tiles(n),
             CopyTile<input(cb_a)>{},
             PackTile<output(
                 cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Enabled, PackRelu::Zero)>{},

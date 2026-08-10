@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"     // Typecast
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -30,7 +30,7 @@ ALWI void update_running_stat() {
     constexpr auto SCALAR = ckl::OperandKind::Scalar;
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::single(),
+        ckl::IterationShape::one_tile(),
         ckl::CopyTile<ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
         ckl::CopyTile<ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
@@ -41,7 +41,7 @@ ALWI void update_running_stat() {
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
         ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
-        ckl::OptionalChainElement<
+        ckl::Optional<
             AlsoOut0,
             ckl::PackTile<ckl::output(dfb_out0_id, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
 }
@@ -50,7 +50,7 @@ template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcD
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
         ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcDfb), ckl::output(DstDfb)>(
-            ckl::EltwiseShape::single());
+            ckl::IterationShape::one_tile());
     }
 }
 

@@ -38,15 +38,14 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    constexpr auto squaring_shape = ckl::EltwiseShape::tiles(Wt, blk);
+    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSE_PRE_ADD
         ckl::add<
             ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-            ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-            ckl::BroadcastDim::None>(squaring_shape);
+            ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
 #endif
 
         ckl::square<
@@ -66,12 +65,11 @@ void kernel_main() {
 
 #ifdef IS_MERGE_CORE
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_cores_y),
+        ckl::IterationShape::tiles(num_cores_y),
         ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Add,
             ckl::input(dfb::x2_merge, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-            ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None,
             ckl::Dst::D0,
             ckl::DestAccumulation::WholeShape>{},
         ckl::PackTile<ckl::output(

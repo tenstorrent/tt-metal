@@ -20,7 +20,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
-    const auto shape = ckl::EltwiseShape::tiles(num_tiles);
+    const auto shape = ckl::IterationShape::tiles(num_tiles);
 
     ckl::eltwise_chain(
         shape,

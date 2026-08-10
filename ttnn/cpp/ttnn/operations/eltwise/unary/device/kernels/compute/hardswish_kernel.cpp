@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 
 namespace ckl = compute_kernel_lib;
 
@@ -23,19 +23,19 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::Hardsigmoid<ckl::Dst::D0>{},
-        ckl::OptionalChainElement<
+        ckl::Optional<
             kIsFloat32,
             ckl::CopyTile<
                 ckl::input(
                     dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D1>>{},
-        ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
-        ckl::OptionalChainElement<
+        ckl::Optional<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
+        ckl::Optional<
             kIsFloat,
             ckl::DestReuseBinary<
                 ckl::input(

@@ -61,7 +61,7 @@ void kernel_main() {
             // Optional masking of last H tile.
             if constexpr (do_mask_h) {
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::IterationShape::tiles(onetile),
                     ckl::CopyTile<ckl::input(
                         dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<

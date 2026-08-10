@@ -16,8 +16,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
+        compute_kernel_lib::IterationShape::tiles(B * Ht * Wt),
         compute_kernel_lib::BinaryFpu<
+            CHAIN_BCAST_OP,
             compute_kernel_lib::input(
                 dfb::in0,
                 compute_kernel_lib::WaitPolicy::PerTile,
@@ -25,11 +26,10 @@ void kernel_main() {
                 compute_kernel_lib::DataFormatReconfig::Disabled),
             compute_kernel_lib::input(
                 dfb::in1,
+                CHAIN_BCAST_DIM,
                 compute_kernel_lib::WaitPolicy::PerTile,
                 compute_kernel_lib::PopPolicy::PerTile,
-                compute_kernel_lib::DataFormatReconfig::Disabled),
-            CHAIN_BCAST_OP,
-            CHAIN_BCAST_DIM>{},
+                compute_kernel_lib::DataFormatReconfig::Disabled)>{},
         compute_kernel_lib::PackTile<compute_kernel_lib::output(
             dfb::out,
             compute_kernel_lib::ReservePolicy::PerTile,

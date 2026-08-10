@@ -85,7 +85,7 @@ void kernel_main() {
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         ckl::eltwise_chain(
-            ckl::EltwiseShape::single(),
+            ckl::IterationShape::one_tile(),
             ckl::CopyTile<ckl::input(
                 dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig)>{},
             ckl::runtime_if(mh, CopyMaskH{}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
@@ -104,15 +104,15 @@ void kernel_main() {
                     dfb_correct_xpow_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::output(
                     dfb_xpowadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>(
-                ckl::EltwiseShape::single());
+                ckl::IterationShape::one_tile());
         } else {
             ckl::add<
                 ckl::input(
                     dfb_correct_xpow_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::input(dfb_xpowadd_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::output(
-                    dfb_xpowadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
+                    dfb_xpowadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>(
+                ckl::IterationShape::one_tile());
         }
     }
 

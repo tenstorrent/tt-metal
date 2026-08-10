@@ -58,8 +58,8 @@ template <
     ckl::OperandKind BKind = ckl::OperandKind::Block>
 ALWI void binary_block() {
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(block_size, block_size),
-        ckl::BinaryFpu<block_input<DfbA, ConsumeA>(), block_input<DfbB, ConsumeB, BKind>(), Op, Bcast>{},
+        ckl::IterationShape::tiles(block_size, block_size),
+        ckl::BinaryFpu<Op, block_input<DfbA, ConsumeA>(), ckl::input(block_input<DfbB, ConsumeB, BKind>(), Bcast)>{},
         ckl::PackTile<ckl::output(
             DfbOut,
             ckl::ReservePolicy::PerBlockSize,
@@ -71,11 +71,11 @@ template <uint32_t GradDfb>
 ALWI void finish_momentum() {
     DataflowBuffer(GradDfb).wait_front(block_size);
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(block_size, block_size),
+        ckl::IterationShape::tiles(block_size, block_size),
         ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Add,
             block_input<dfb_momentum_scaled_idx_id, true>(),
-            block_input<GradDfb, false>(),
-            ckl::BinaryFpuOp::Add>{},
+            block_input<GradDfb, false>()>{},
         ckl::PackTile<ckl::output(
             dfb_momentum_out_idx_id,
             ckl::ReservePolicy::PerBlockSize,

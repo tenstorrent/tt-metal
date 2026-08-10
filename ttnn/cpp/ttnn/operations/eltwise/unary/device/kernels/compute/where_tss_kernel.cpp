@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"    // Where
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillBitcast / FillInt
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // Optional
 
 namespace ckl = compute_kernel_lib;
 
@@ -39,7 +39,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::IterationShape::tiles(num_tiles),
         // cond -> D0. Single DFB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
         ckl::CopyTile<
             ckl::input(
@@ -47,11 +47,11 @@ void kernel_main() {
             ckl::Dst::D0>{},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
-        ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
-        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
+        ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
+        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
         // false_value -> D2.
-        ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D2>>{packed_scalar2},
-        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
+        ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D2>>{packed_scalar2},
+        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(

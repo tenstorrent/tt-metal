@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Typecast
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -31,7 +31,7 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     using namespace compute_kernel_lib;
 
     eltwise_chain(
-        EltwiseShape::single(),
+        IterationShape::one_tile(),
         CopyTile<input(dfb_batch_var_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
         CopyTile<input(dfb_eps_id, WaitPolicy::None, PopPolicy::None), Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
@@ -43,19 +43,17 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     constexpr uint32_t dfb_final_out_id = NeedsTypecast ? dfb_output_final_id : dfb_output_0_id;
 
     eltwise_chain(
-        EltwiseShape::tiles(inner_count),
+        IterationShape::tiles(inner_count),
         CopyTile<input(dfb_other_id)>{},
         CopyTile<input(dfb_bcast_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         CopyTile<input(dfb_den_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        OptionalChainElement<
-            WeightHas,
-            CopyTile<input(dfb_weight_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
-        OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<BiasHas, CopyTile<input(dfb_bias_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
-        OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
+        Optional<WeightHas, CopyTile<input(dfb_weight_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
+        Optional<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
+        Optional<BiasHas, CopyTile<input(dfb_bias_id, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
+        Optional<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
+        Optional<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
         PackTile<output(dfb_final_out_id)>{});
 }
 

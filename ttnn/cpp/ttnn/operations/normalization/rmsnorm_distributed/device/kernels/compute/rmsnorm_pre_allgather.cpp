@@ -37,15 +37,14 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    constexpr auto squaring_shape = ckl::EltwiseShape::of(Wt / blk, blk);
+    constexpr auto squaring_shape = ckl::IterationShape::of(Wt / blk, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSE_PRE_ADD
         ckl::add<
             ckl::input(dfb::in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb::res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
-            ckl::BroadcastDim::None>(squaring_shape);
+            ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
 #endif
 
         ckl::square<

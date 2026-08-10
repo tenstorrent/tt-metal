@@ -41,12 +41,11 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(Wt, ndst),
+        ckl::IterationShape::tiles(Wt, ndst),
         ckl::BinaryFpu<
-            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(dfb_max_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Sub,
-            ckl::BroadcastDim::Col>{},
+            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_out_id,
@@ -126,9 +125,8 @@ void kernel_main() {
 #if FUSED_SCALE_MASK
         ckl::mul<
             ckl::input(dfb_in0_id),
-            ckl::input(dfb_fused_scale_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(dfb_scale_mask_id),
-            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(dfb_fused_scale_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb_scale_mask_id)>(ckl::IterationShape::tiles(Wt));
 #ifdef CAUSAL_MASK
         dfb_fused_attn_obj.wait_front(Wt);
 #else
@@ -138,17 +136,21 @@ void kernel_main() {
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(Wt, ndst),
+            ckl::IterationShape::tiles(Wt, ndst),
             ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
                 ckl::input(
                     dfb_scale_mask_id,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
                     ckl::OperandKind::Block),
-                ckl::input(dfb_fused_attn_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
-                ckl::BinaryFpuOp::Add,
-                mask_bcast>{},
-            ckl::OptionalChainElement<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::input(
+                    dfb_fused_attn_id,
+                    mask_bcast,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Block)>{},
+            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(
                 dfb_x_id,
                 ckl::ReservePolicy::PerBlockSize,
@@ -186,11 +188,9 @@ void kernel_main() {
 #ifdef MASK_PADDED_DATA
         {
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(Wt - 1),
+                ckl::IterationShape::tiles(Wt - 1),
                 ckl::CopyTile<ckl::input(dfb_in0_id)>{},
-                ckl::OptionalChainElement<
-                    !numeric_stable,
-                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
                     dfb_x_id,
                     ckl::ReservePolicy::PerTile,
@@ -198,16 +198,17 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>{});
 
             ckl::eltwise_chain(
-                ckl::EltwiseShape::single(),
+                ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
-                    ckl::input(dfb_in0_id),
-                    ckl::input(dfb_mask_padded_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::Row>{},  // dfb_mask_padded_id: held scalar, chain waits(1), no
-                                                // pop
-                ckl::OptionalChainElement<
-                    !numeric_stable,
-                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                    ckl::input(dfb_in0_id),
+                    ckl::input(
+                        dfb_mask_padded_id,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None)>{},  // dfb_mask_padded_id: held scalar, chain waits(1), no
+                                                   // pop
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
                     dfb_x_id,
                     ckl::ReservePolicy::PerTile,
@@ -234,7 +235,7 @@ void kernel_main() {
                     dfb_exps_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::EltwiseShape::tiles(Wt));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(Wt));
 #endif
         }
 #endif  // MASK_PADDED_DATA
@@ -258,9 +259,9 @@ void kernel_main() {
 
         ckl::mul<
             ckl::input(dfb_exps_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(dfb_recipsumexps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(dfb_out0_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, ndst));
+            ckl::input(dfb_recipsumexps_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb_out0_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            ckl::IterationShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the DFBs are left balanced.

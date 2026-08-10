@@ -23,7 +23,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        EltwiseShape::grid(Ht, Wt),
+        IterationShape::grid(Ht, Wt),
         CopyTile<input(
             cb_in,
             WaitPolicy::None,

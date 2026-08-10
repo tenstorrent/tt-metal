@@ -20,13 +20,12 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in1_id, dfb_out0_id);
 
     ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(num_output_tiles, num_input_tiles),
+        ckl::IterationShape::grid(num_output_tiles, num_input_tiles),
         ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Add,
             ckl::input(
                 dfb_in0_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(dfb_in1_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
-            ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None,
             ckl::Dst::D0,
             ckl::DestAccumulation::PerRow>{},
         ckl::PackTile<ckl::output(

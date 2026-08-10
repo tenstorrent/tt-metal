@@ -81,7 +81,7 @@ void kernel_main() {
 
             if constexpr (do_mask_w) {
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::IterationShape::tiles(onetile),
                     ckl::CopyTile<ckl::input(
                         dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<

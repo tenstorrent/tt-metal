@@ -30,10 +30,9 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
         using PerRowAccumulate = BinaryFpu<
+            BinaryFpuOp::Add,
             input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
             input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
             Dst::D0,
             DestAccumulation::PerRow>;
         using PerRowManagedPack = PackTile<output(
@@ -53,10 +52,9 @@ void kernel_main() {
             L1Accumulation::Disabled,
             DestAccumulation::PerRow)>;
         using WholeShapeAccumulate = BinaryFpu<
+            BinaryFpuOp::Add,
             input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
             input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
             Dst::D0,
             DestAccumulation::WholeShape>;
         using WholeShapeManagedPack = PackTile<output(
@@ -81,19 +79,20 @@ void kernel_main() {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(1);
                 eltwise_chain(
-                    EltwiseShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeCallerPack{});
+                    IterationShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeCallerPack{});
                 output_buffer.push_back(1);
             } else {
                 eltwise_chain(
-                    EltwiseShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeManagedPack{});
+                    IterationShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeManagedPack{});
             }
         } else {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(num_outputs);
-                eltwise_chain(EltwiseShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowCallerPack{});
+                eltwise_chain(IterationShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowCallerPack{});
                 output_buffer.push_back(num_outputs);
             } else {
-                eltwise_chain(EltwiseShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowManagedPack{});
+                eltwise_chain(
+                    IterationShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowManagedPack{});
             }
         }
     } else {
@@ -122,16 +121,16 @@ void kernel_main() {
         if constexpr (caller_managed) {
             accumulator.reserve_back(1);
             eltwise_chain(
-                EltwiseShape::tiles(n),
+                IterationShape::tiles(n),
                 CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
                 CallerPack{});
             accumulator.push_back(1);
         } else {
             eltwise_chain(
-                EltwiseShape::tiles(n),
+                IterationShape::tiles(n),
                 CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
                 ManagedPack{});
         }
-        eltwise_chain(EltwiseShape::single(), CopyTile<input(cb_acc)>{}, PackTile<output(cb_out)>{});
+        eltwise_chain(IterationShape::one_tile(), CopyTile<input(cb_acc)>{}, PackTile<output(cb_out)>{});
     }
 }

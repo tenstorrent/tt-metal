@@ -14,7 +14,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
     compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt),
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt),
         compute_kernel_lib::CopyTile<compute_kernel_lib::input(
             dfb_in_id,
             compute_kernel_lib::WaitPolicy::PerTile,

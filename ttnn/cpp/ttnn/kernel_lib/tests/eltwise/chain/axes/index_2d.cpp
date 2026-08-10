@@ -26,21 +26,19 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     if constexpr (mode == 2) {  // Row index on B
         eltwise_chain(
-            EltwiseShape::grid(Ht, Wt),
+            IterationShape::grid(Ht, Wt),
             BinaryFpu<
-                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Row),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Row)>{},
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
     } else {  // Col index on B
         eltwise_chain(
-            EltwiseShape::grid(Ht, Wt),
+            IterationShape::grid(Ht, Wt),
             BinaryFpu<
-                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Col),
                 BinaryFpuOp::Add,
-                BroadcastDim::None>{},
+                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Col)>{},
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
     }
 }

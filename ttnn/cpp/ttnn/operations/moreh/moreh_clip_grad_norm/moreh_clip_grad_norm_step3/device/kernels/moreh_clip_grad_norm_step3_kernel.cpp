@@ -22,6 +22,7 @@ void kernel_main() {
             compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::input(
             dfb_clip_coef_clamped_id,
+            compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::WaitPolicy::Upfront,
             compute_kernel_lib::PopPolicy::AtEnd,
             compute_kernel_lib::DataFormatReconfig::Disabled),
@@ -29,6 +30,5 @@ void kernel_main() {
             dfb_y_id,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled),
-        compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
 }
