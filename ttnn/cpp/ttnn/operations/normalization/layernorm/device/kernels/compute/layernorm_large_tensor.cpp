@@ -114,12 +114,19 @@ void kernel_main() {
         numeric::row_wise_mean_with_pre_add<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            FLOAT32_REDUCTION,
-            policies::FullBlockWithPopPolicy>(dfb_in, dfb_inb, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
+            dfb_in_id,
+            dfb_inb_id,
+            dfb_scaler_id,
+            dfb_ex_id,
+            policies::FullBlockWithPopPolicy>(W, Wt, block_size, tile_width);
 #else
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                dfb_in, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
+        numeric::row_wise_mean<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb_in_id,
+            dfb_scaler_id,
+            dfb_ex_id,
+            policies::FullBlockWithPopPolicy>(W, Wt, block_size, tile_width);
 #endif
 #endif  // !RMS ifdef end
         // Start of
