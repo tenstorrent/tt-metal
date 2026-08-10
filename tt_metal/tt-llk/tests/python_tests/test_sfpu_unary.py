@@ -28,7 +28,6 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.sfpu_domains import (
-    _OP_DOMAIN_REGISTRY,
     _UNARY_OPS_NOT_SWEPT,
     exclude_undefined,
     for_op_pipeline,
@@ -70,8 +69,10 @@ SUPPORTED_FAST_MODE_OPS = [
 #   STANDARD_SWEEP_OPS - Float16_b + Float32, approximation mode off, one tile shape.
 #                        Enough to validate the op's own math, and ~8x cheaper.
 #
-# Adding an op: put it in exactly one list, and register a domain for it in
-# sfpu_domains.py. _assert_sweep_profiles_disjoint() below enforces both.
+# Only the broad profile is listed by hand. The standard profile is every other unary
+# SFPU op the registry knows about, so registering a domain is all it takes to get an op
+# swept -- there is no second list to remember. Opting an op out of the sweep entirely is
+# still a deliberate act: it goes in sfpu_domains._UNARY_OPS_NOT_SWEPT with a reason.
 # ─────────────────────────────────────────────────────────────────────────────
 
 BROAD_SWEEP_OPS = [
@@ -108,74 +109,13 @@ BROAD_SWEEP_OPS = [
     MathOperation.ReluMin,
 ]
 
-STANDARD_SWEEP_OPS = [
-    MathOperation.Add1,
-    MathOperation.CastFp32ToFp16a,
-    MathOperation.Cbrt,
-    MathOperation.Clamp,
-    MathOperation.Digamma,
-    MathOperation.EqualZero,
-    MathOperation.Erf,
-    MathOperation.Erfc,
-    MathOperation.Erfinv,
-    MathOperation.Expm1,
-    MathOperation.Expm1Cw,
-    MathOperation.Fmod,
-    MathOperation.GreaterThanEqualZero,
-    MathOperation.GreaterThanZero,
-    MathOperation.Hardmish,
-    MathOperation.Hardshrink,
-    MathOperation.Hardtanh,
-    MathOperation.Heaviside,
-    MathOperation.I0,
-    MathOperation.I1,
-    MathOperation.Identity,
-    MathOperation.LessThanEqualZero,
-    MathOperation.LessThanZero,
-    MathOperation.Lgamma,
-    MathOperation.Lrelu,
-    MathOperation.Mish,
-    MathOperation.NotEqualZero,
-    MathOperation.Polygamma,
-    MathOperation.Prelu,
-    MathOperation.Rdiv,
-    MathOperation.Remainder,
-    MathOperation.Rpow,
-    MathOperation.RsqrtCompat,
-    MathOperation.Selu,
-    MathOperation.Sigmoid,
-    MathOperation.SigmoidAppx,
-    MathOperation.Sign,
-    MathOperation.Signbit,
-    MathOperation.Softplus,
-    MathOperation.Softshrink,
-    MathOperation.Softsign,
-    MathOperation.SqrtCustom,
-    MathOperation.TanhDerivative,
-    MathOperation.TanhDerivativeLut,
-    MathOperation.UnaryGe,
-    MathOperation.UnaryGt,
-    MathOperation.UnaryLe,
-    MathOperation.UnaryLt,
-    MathOperation.UnaryMax,
-    MathOperation.UnaryMin,
-    MathOperation.UnaryPower,
-    MathOperation.Xielu,
-    # Trigonometric / inverse / hyperbolic and round (per-op safe domains).
-    MathOperation.Tan,
-    MathOperation.Atan,
-    MathOperation.Asin,
-    MathOperation.Acos,
-    MathOperation.Sinh,
-    MathOperation.Cosh,
-    MathOperation.Round,
-    # gelu derivative and log-with-base (log2).
-    MathOperation.GeluDerivative,
-    MathOperation.LogWithBase,
-    # gelu LUT approximation and exp-with-base (exp(0.5*x)).
-    MathOperation.GeluAppx,
-    MathOperation.ExpWithBase,
-]
+# Every registered unary SFPU op that the broad profile does not already cover, minus the
+# ops sfpu_domains marks as deliberately unswept. Sorted so the parametrize ids are stable
+# across runs.
+STANDARD_SWEEP_OPS = sorted(
+    sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
+    key=lambda op: op.name,
+)
 
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
 # per-format default in passed_test.
@@ -275,45 +215,37 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     )
 
 
-def _assert_sweep_profiles_disjoint():
-    """No op sits in both profiles, and every swept op has a registered domain.
+def _assert_broad_profile_valid():
+    """Everything the derived standard profile cannot check for itself.
 
-    An op in both lists would run its whole matrix twice. An op with no registry entry
-    does raise in for_op(), but only once the sweep reaches it, so assert here to fail at
-    collection instead.
+    Non-overlap, registration and exhaustiveness hold by construction now that
+    STANDARD_SWEEP_OPS is the complement of BROAD_SWEEP_OPS within sfpu_unary_ops(). What
+    is left is the hand-written half:
 
-    Exhaustiveness is checked too, against sfpu_unary_ops(): the registry knows which of
-    its entries have a unary SFPU kernel, so an op added to the registry and to no sweep
-    profile fails here rather than going quietly untested. An op that genuinely should not
-    be swept belongs in _UNARY_OPS_NOT_SWEPT (with a reason) or, if it has no unary SFPU
-    kernel at all, in _NON_SFPU_UNARY_OPS.
+    - a repeated entry in BROAD_SWEEP_OPS runs that op's whole matrix twice,
+    - a non-unary op in BROAD_SWEEP_OPS fails to compile once the sweep reaches it, and
+      also silently drops out of the standard profile's complement,
+    - an _UNARY_OPS_NOT_SWEPT entry that is not a unary op exempts nothing, so the reason
+      recorded against it is misleading.
     """
-    overlap = set(BROAD_SWEEP_OPS) & set(STANDARD_SWEEP_OPS)
-    assert not overlap, (
-        "These ops are in both sweep profiles and would run twice: "
-        f"{sorted(op.name for op in overlap)}"
+    duplicates = sorted(
+        {op.name for op in BROAD_SWEEP_OPS if BROAD_SWEEP_OPS.count(op) > 1}
     )
-    unregistered = [
-        op.name
-        for op in chain(BROAD_SWEEP_OPS, STANDARD_SWEEP_OPS)
-        if op not in _OP_DOMAIN_REGISTRY
-    ]
-    assert not unregistered, (
-        "These swept ops have no domain in sfpu_domains._OP_DOMAIN_REGISTRY, so the "
-        f"driver cannot build stimuli for them: {sorted(unregistered)}"
+    assert not duplicates, (
+        "These ops are listed more than once in BROAD_SWEEP_OPS and would run their "
+        f"whole matrix twice: {duplicates}"
     )
-    swept = set(BROAD_SWEEP_OPS) | set(STANDARD_SWEEP_OPS)
-    expected = sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT)
-    untested = sorted(op.name for op in expected - swept)
-    assert not untested, (
-        "These ops have a unary SFPU kernel and a registered domain but are in neither "
-        "sweep profile, so nothing drives them. Add them to a profile, or to "
-        f"_UNARY_OPS_NOT_SWEPT with a reason: {untested}"
-    )
-    not_unary = sorted(op.name for op in swept - sfpu_unary_ops())
+    not_unary = sorted(op.name for op in set(BROAD_SWEEP_OPS) - sfpu_unary_ops())
     assert not not_unary, (
-        "These swept ops are classified as having no unary SFPU kernel "
+        "These broad-profile ops are classified as having no unary SFPU kernel "
         f"(sfpu_domains._NON_SFPU_UNARY_OPS): {not_unary}"
+    )
+    stale_exemptions = sorted(
+        op.name for op in set(_UNARY_OPS_NOT_SWEPT) - sfpu_unary_ops()
+    )
+    assert not stale_exemptions, (
+        "These ops are exempted in sfpu_domains._UNARY_OPS_NOT_SWEPT but are not unary "
+        f"SFPU ops, so the exemption does nothing: {stale_exemptions}"
     )
 
 
@@ -342,7 +274,7 @@ UNARY_SWEEP_PARAMS = (
 )
 
 
-_assert_sweep_profiles_disjoint()
+_assert_broad_profile_valid()
 
 
 def _skip_bh_unsupported_float_combo(formats, dest_acc):
