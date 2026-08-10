@@ -38,10 +38,20 @@
 - name: "Fabric stability short (SC4)"
   cmd: |
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    # multihost-ci may set TT_MESH_GRAPH_DESC_PATH=/etc/ttop/mgd.textproto without shipping the file.
+    # Install our MGD there and force the env so Phase 1/2 cannot pick up a stale path.
+    mpirun --pernode bash -lc "sudo mkdir -p /etc/ttop && sudo cp -f '${MGD}' /etc/ttop/mgd.textproto"
+    unset TT_MESH_GRAPH_DESC_PATH
+    export TT_MESH_GRAPH_DESC_PATH="${MGD}"
 
     cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
@@ -50,8 +60,8 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
-      --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
       --filter 'name.*_short'
   skus:
     bh_sc4:
