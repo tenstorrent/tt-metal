@@ -100,12 +100,19 @@ silently passing -- that is what the emitted test is for.
   in-cluster egress path makes Garage reachable is untested. Budget for a full build.
 - **Hugepages are mounted conditionally**, because the viommu runners do not all expose
   `/dev/hugepages-1G`.
-- **The viommu image has no `net-tools`, and gh-aw needs `netstat`.** Its own health check for the
-  MCP scripts server shells out to `netstat`, so the server started, the check could not see it, and
-  the job failed on a step that is gh-aw's rather than ours. A `netstat` shim over `ss` goes onto
-  `PATH` before that step, in `RUNNER_TEMP` so nothing outlives the job. Our own port probes were
-  never affected because they already use `ss`. Expect more of this class from the image: the runner
-  is leaner than the CIv1 pool, and the failure surfaces late, after the build has been paid for.
+- **The viommu image ships neither `curl` nor `netstat`, and gh-aw assumes both.** It decides whether
+  its MCP servers came up with `curl -s -f http://localhost:$PORT/health >/dev/null 2>&1`, ten times,
+  then prints `netstat` as the diagnostic. With curl absent, every attempt failed silently while the
+  server sat listening, and the only visible error was the diagnostic's own
+  `netstat: command not found` -- which is misleading, because netstat was never what failed.
+  `.github/scripts/port/shims/` holds stand-ins over `ss` and `python3`, linked onto `PATH` only when
+  the real tool is missing. Shims rather than `apt-get install`, because egress goes through the
+  restricted proxy and neither answer needs the network.
+
+  Two general lessons for this runner pool. A silent probe in someone else's step is the worst thing
+  to debug, so the shim step verifies itself against a server it starts. And the image is leaner than
+  the CIv1 pool in ways that surface late, after the build is paid for -- when a gh-aw step fails
+  here, suspect a missing binary before suspecting the logic.
 
 ## If the run fails
 
