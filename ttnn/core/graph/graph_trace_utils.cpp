@@ -82,7 +82,7 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
                 --i;  // adjust for loop increment
             }
             current_op.push_back(v[kParams][kName]);
-        } else if (v[kNodeType] == kNodeCBAllocate) {
+        } else if (v[kNodeType] == kNodeCBAllocate || v[kNodeType] == kNodeScratchpadAllocate) {
             total_cb += json_to_int(v[kParams][kSize]);
         } else if (v[kNodeType] == kNodeDataflowBufferAllocate) {
             // Same program-scope L1 as a CB for a single peak figure; a borrowed buffer's bytes
@@ -90,8 +90,6 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
             if (json_to_int(v[kParams][kBorrowsMemory]) != 1) {
                 total_cb += json_to_int(v[kParams][kSize]);
             }
-        } else if (v[kNodeType] == kNodeScratchpadAllocate) {
-            total_cb += json_to_int(v[kParams][kSize]);
         } else if (v[kNodeType] == kNodeCBDeallocateAll) {
             total_cb = 0;
         } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
