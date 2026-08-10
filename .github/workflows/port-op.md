@@ -122,7 +122,6 @@ steps:
         echo "PORT_CONTAINER=portdev"
         echo "TT_METAL_HOME=/work"
       } >> $GITHUB_ENV
-      mkdir -p /tmp/ccache
 
   # Checked out at the workspace root, not a subdirectory: gh-aw's own later steps assume the
   # workspace root is the repository, and a subdirectory checkout fails them.
@@ -180,6 +179,14 @@ steps:
   - name: Start the toolchain container
     run: |
       docker pull "${{ inputs['docker-image'] || 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest' }}"
+
+      # Deliberately no host cache mount. Nothing this run produces may outlive it on the runner:
+      # a per-run ccache directory under $HOME would grow without bound across every workflow that
+      # lands on the machine, and these runners are shared. Cross-run reuse belongs in the network
+      # cache (Garage S3, wired up below) and nowhere else. The local ccache directory therefore
+      # stays inside portdev, where it still pays for itself -- the build step and the agent's
+      # `build` tool both exec as root, so they share /root/.cache/ccache for the life of the job --
+      # and post-steps deletes it with the container.
       docker run -d --name portdev \
         --device /dev/tenstorrent \
         --group-add 1457 \
@@ -200,6 +207,9 @@ steps:
         "${{ inputs['docker-image'] || 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest' }}" sleep infinity
       docker exec portdev git config --global --add safe.directory /work
       docker exec portdev git config --global --add safe.directory /codegen
+      # CCACHE_TEMPDIR above names a path inside portdev, not on the runner, so create it there.
+      # `build-artifact.yaml` has the same step for the same reason.
+      docker exec portdev mkdir -p /tmp/ccache
       docker exec portdev bash -c 'ls /dev/tenstorrent && echo "card visible in container"'
 
   # Scaffold before building, not after: this registers the codegen sources in CMake once, so
@@ -398,6 +408,35 @@ steps:
 # own gateway container. This is also H8 of the threat model, specified and never implemented:
 # reset the card so a wedged device becomes this job's problem rather than the next job's.
 post-steps:
+  # Run 31406186048 wrote a correct port -- 184/184 cases bit-exact -- and threw it away. The
+  # performance verdict never reached `win`, the agent correctly declined to open a PR, and the C++
+  # existed nowhere but this workspace. The `agent` artifact holds only the transcript, and the
+  # transcript truncates file bodies (`56 lines...`), so nothing was recoverable: a 20-minute build,
+  # eleven `verify` calls and an hour of card time produced a log message. This runs before the
+  # verdict is known and regardless of it, because the run that most needs its work preserved is
+  # exactly the run that is not going to open a PR.
+  - name: Preserve the port whatever the verdict
+    if: always()
+    run: |
+      mkdir -p /tmp/port-artifact
+      dir="ttnn/cpp/ttnn/operations/${PORT_CATEGORY}/${PORT_OP}"
+      # The scaffolded codegen tree is untracked, so a diff would omit the very files the agent was
+      # asked to fill in. Archive the op directory outright, and keep a diff for the few tracked
+      # files the port may touch (sources.cmake, CMakeLists.txt, the op's own .cpp/.hpp).
+      tar -czf /tmp/port-artifact/port-tree.tar.gz "$dir" || echo "::warning::no $dir to archive"
+      git diff "${PORT_BASE_SHA}" -- . > /tmp/port-artifact/tracked.diff || true
+      git status --porcelain > /tmp/port-artifact/status.txt || true
+      ls -l /tmp/port-artifact/
+
+  - name: Upload the port
+    if: always()
+    continue-on-error: true
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    with:
+      name: port-${{ env.PORT_OP }}-${{ github.run_id }}-${{ github.run_attempt }}
+      path: /tmp/port-artifact
+      if-no-files-found: warn
+
   - name: Release the card and remove the toolchain container
     if: always()
     run: |
@@ -569,6 +608,13 @@ Read the verdict rather than pattern-matching on it:
   landing. **Do not open a PR.** Use the no-op output and explain what you measured.
 - **`blocked`** — the harness could not run, or the tree changed outside the port's own files. Read
   the error. If it is the write-path guard, revert the stray edit; do not try to work around it.
+
+**Do not re-run `verify` on unchanged code.** It costs minutes of card time per call, and the
+wall-clock noise that once made repeated calls look informative is now absorbed by the gate itself: a
+case under the tie band is recorded as `marginal` instead of failing, and only a case below the noise
+floor, or marginals on more than a quarter of the measurements, refuses the port. So
+`back-to-translate` means the code needs changing, not that the measurement was unlucky. Read
+`failing`, `summary.wall_marginal` and `summary.wall_regressions`, and fix what they point at.
 
 ## Rules
 
