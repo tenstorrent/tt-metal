@@ -1542,6 +1542,23 @@ class TTVibeVoiceLM:
         t = ttnn.reshape(t, [1, 2, t.shape[2], t.shape[3]])
         return ttnn.to_memory_config(t, self._kv_update_shard_mc_b2)
 
+    def _qkv_split_b2(self, qkv: ttnn.Tensor):
+        """[2,1,1,(n_heads+2*n_kv)*hd] fused projection → q/k/v as [1,2,n,hd] height-sharded L1.
+
+        The layout ``nlp_create_qkv_heads`` + ``_to_sdpa_b2`` produce together, but without the
+        2-core head-split op: each CFG row's ``n*hd`` slice IS its ``n`` heads of ``hd`` laid out
+        contiguously, so ``[2,1,1,n*hd] → [1,2,n,hd]`` is the same relabeling (verified
+        maxabsdiff==0 against the op).
+        """
+        cfg = self.cfg
+        hd, nh, nkv = cfg.head_dim, cfg.num_attention_heads, cfg.num_key_value_heads
+        qd, kd = nh * hd, nkv * hd
+        out = []
+        for lo, n in ((0, nh), (qd, nkv), (qd + kd, nkv)):
+            t = ttnn.slice(qkv, [0, 0, 0, lo], [2, 1, 1, lo + n * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out.append(ttnn.to_memory_config(ttnn.reshape(t, [1, 2, n, hd]), self._kv_update_shard_mc_b2))
+        return out[0], out[1], out[2]
+
     def _rope_decode_fused_b2(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
         """_rope_decode_fused over BOTH CFG rows at once.  [2, n, 1, hd] → [1, 2, n, hd] sharded."""
         return ttnn.experimental.rotary_embedding_llama(
@@ -1598,9 +1615,10 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Batched weight-bound projection — fused wqkv read once for both CFG rows, split by
-        # nlp_create_qkv_heads.  Byte-identical vs separate wq + wkv (same column values, same
-        # split); saves one launch + one bias-add/layer.
+        # Batched weight-bound projection — fused wqkv read once for both CFG rows, split below
+        # by nlp_create_qkv_heads or, on the batched path, by slicing straight into the attention
+        # layout.  Byte-identical vs separate wq + wkv (same column values, same split); saves one
+        # launch + one bias-add/layer.
         qkv = ttnn.linear(
             x,
             layer_w.wqkv,
@@ -1611,17 +1629,36 @@ class TTVibeVoiceLM:
         if layer_w.qkv_bias is not None:
             qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv,
-            num_heads=n_heads,
-            num_kv_heads=n_kv,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [2, n_heads/n_kv, 1, hd]
+        shared = isinstance(kv_caches, KVCache)
+        # The batched path slices the projection straight into the attention layout; the per-row
+        # and prefill paths still need the head-split op.
+        split_direct = shared and self._fused_rope
+        if not split_direct:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv,
+                num_heads=n_heads,
+                num_kv_heads=n_kv,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [2, n_heads/n_kv, 1, hd]
 
-        if isinstance(kv_caches, KVCache):
+        if shared:
             # ── Shared batch-2 cache: ONE attention for both CFG rows ──────────────────
-            if self._fused_rope:
+            if split_direct:
+                # nlp_create_qkv_heads runs on 2 cores (it shards over batch) and its output is
+                # then permuted into the [1,2,n,hd] the batched attention wants.  Slicing the
+                # projection and reshaping straight into that layout does the same rearrangement
+                # in ops that spread over the whole grid.  Exact: both are pure relabelings of
+                # the same contiguous [q|k|v] row.
+                q_s, k_s, v_dec = self._qkv_split_b2(qkv)
+                cos_sh, sin_sh = rope_rows
+                q_dec = ttnn.experimental.rotary_embedding_llama(
+                    q_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+                )
+                k_dec = ttnn.experimental.rotary_embedding_llama(
+                    k_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+                )
+            elif self._fused_rope:
                 cos_sh, sin_sh = rope_rows
                 q_dec = self._rope_decode_fused_b2(q, cos_sh, sin_sh)  # [1,2,n_heads,hd] sharded
                 k_dec = self._rope_decode_fused_b2(k, cos_sh, sin_sh)  # [1,2,n_kv,hd] sharded
