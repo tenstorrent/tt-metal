@@ -4,7 +4,6 @@
 
 #pragma once
 #include <cstdint>
-#include "llk_bfd_alloc.h"
 #include "llk_pack_common_api.h"
 #include "llk_pack.h"
 #include "tensor_shape.h"
@@ -28,13 +27,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    const std::uint8_t bfd_id = ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Pack0>();
-    // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
-    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc(
-        tensor_shape,
-        get_local_dfb_interface(output_id).tc_slots[0].base_addr,
-        static_cast<std::uint32_t>(pack_dst_format[output_id]));
-    ckernel::trisc::_configure_buf_desc_table_(bfd_id, buf_desc);
+    const std::uint8_t bfd_id = llk_pack_program_bfd_(output_id);
 
     _llk_pack_init_(bfd_id, tensor_shape);
 

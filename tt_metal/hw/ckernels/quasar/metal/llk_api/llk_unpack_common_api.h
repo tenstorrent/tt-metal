@@ -26,12 +26,15 @@
  * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
  * DFB info (shape, L1 base, formats), and return the id to bake into the MOP. The DFB id is used
  * only to fetch buffer info — it never doubles as the BFD id.
+ *
+ * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
+ * UNPACR_STRIDE tilize sequences.
  */
-template <ckernel::trisc::BfdResource R>
+template <ckernel::trisc::BfdResource R, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
 inline std::uint8_t llk_unpack_program_bfd_(const std::uint32_t operand_id) {
     const std::uint8_t bfd_id = ckernel::trisc::bfd_alloc<R>();
     // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
-    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc(
+    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc<MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));

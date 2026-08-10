@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "ckernel.h"
+#include "llk_bfd_alloc.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
 #include "llk_sync.h"
@@ -14,6 +15,26 @@
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
+
+/**
+ * @brief Allocate a BFD id from the pack partition, program its table entry from the output's
+ * DFB info (shape, L1 base, formats), and return the id to bake into the MOP. The DFB id is used
+ * only to fetch buffer info — it never doubles as the BFD id.
+ *
+ * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
+ * PACR_STRIDE untilize sequences.
+ */
+template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
+inline std::uint8_t llk_pack_program_bfd_(const std::uint32_t output_id) {
+    const std::uint8_t bfd_id = ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Pack0>();
+    // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
+    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc<MODE>(
+        get_output_tensor_shape(output_id),
+        get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+        static_cast<std::uint32_t>(pack_dst_format[output_id]));
+    ckernel::trisc::_configure_buf_desc_table_(bfd_id, buf_desc);
+    return bfd_id;
+}
 
 /**
  * @brief Programs packer0 math destination register format

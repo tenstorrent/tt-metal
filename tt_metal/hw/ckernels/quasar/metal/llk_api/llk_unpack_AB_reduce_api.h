@@ -30,7 +30,10 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    _llk_unpack_reduce_init_<pool_type, reduce_dim>(operandA_id, operandB_id, tensor_shape);
+    const std::uint8_t bfd_a = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpA>(operandA_id);
+    const std::uint8_t bfd_b = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpB>(operandB_id);
+
+    _llk_unpack_reduce_init_<pool_type, reduce_dim>(bfd_a, bfd_b, tensor_shape);
 }
 
 /**
