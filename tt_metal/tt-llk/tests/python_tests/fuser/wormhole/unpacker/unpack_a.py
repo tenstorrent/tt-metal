@@ -16,7 +16,12 @@ from helpers.golden_generators import (
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import BroadcastType, EltwiseBinaryReuseDestType, Transpose
+from helpers.llk_params import (
+    AccToDest,
+    BroadcastType,
+    EltwiseBinaryReuseDestType,
+    Transpose,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -114,12 +119,21 @@ class UnpackerA(Unpacker):
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return "_perf_unpack_loop_set_valid<true, true>(1);\n"
         elif compute_unit.broadcast_type == BroadcastType.Column:
+            if compute_unit.acc_to_dest == AccToDest.Yes:
+                num_face_rows = compute_unit.src_a.tile_shape.num_faces_r_dim
+                num_face_cols = compute_unit.src_a.tile_shape.num_faces_c_dim
+                return (
+                    "_perf_unpack_loop_set_valid<false, true>(1);\n"
+                    f"_perf_unpack_loop_set_valid<true, false>({num_face_cols});\n"
+                ) * num_face_rows
             return (
                 "_perf_unpack_loop_set_valid<false, true>(2);\n"
                 "_perf_unpack_loop_set_valid<true, false>(1);\n"
             )
         elif compute_unit.broadcast_type == BroadcastType.Row:
-            return "_perf_unpack_loop_set_valid<false, true>(4);\n"
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+            set_srca = "true" if compute_unit.acc_to_dest == AccToDest.Yes else "false"
+            return f"_perf_unpack_loop_set_valid<{set_srca}, true>({num_faces});\n"
         else:
             num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return f"_perf_unpack_loop_set_valid<true, true>({num_faces});\n"
@@ -134,12 +148,23 @@ class UnpackerA(Unpacker):
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return "_perf_math_loop_clear_valid<true, true>(1);\n"
         elif compute_unit.broadcast_type == BroadcastType.Column:
+            if compute_unit.acc_to_dest == AccToDest.Yes:
+                num_face_rows = compute_unit.src_a.tile_shape.num_faces_r_dim
+                num_face_cols = compute_unit.src_a.tile_shape.num_faces_c_dim
+                return (
+                    "_perf_math_loop_clear_valid<false, true>(1);\n"
+                    f"_perf_math_loop_clear_valid<true, false>({num_face_cols});\n"
+                ) * num_face_rows
             return (
                 "_perf_math_loop_clear_valid<false, true>(2);\n"
                 "_perf_math_loop_clear_valid<true, false>(1);\n"
             )
         elif compute_unit.broadcast_type == BroadcastType.Row:
-            return "_perf_math_loop_clear_valid<false, true>(4);\n"
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+            clear_srca = (
+                "true" if compute_unit.acc_to_dest == AccToDest.Yes else "false"
+            )
+            return f"_perf_math_loop_clear_valid<{clear_srca}, true>({num_faces});\n"
         else:
             num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return f"_perf_math_loop_clear_valid<true, true>({num_faces});\n"

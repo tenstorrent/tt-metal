@@ -48,6 +48,10 @@ inline void _llk_unpack_A_mop_config_(
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
     static_assert(
+        BType == BroadcastType::NONE || binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCA ||
+            acc_to_dest,
+        "Broadcast DEST_TO_SRCA requires acc_to_dest!");
+    static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_mop_config_", tensor_shape);
@@ -126,17 +130,17 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        constexpr std::uint32_t innerloop = 2;
-        constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces
+        const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+        const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srcb, unpack_srca_set_dvalid);
             tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb);
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srcb);
             tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }

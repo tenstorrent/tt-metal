@@ -50,6 +50,10 @@ inline void _llk_unpack_A_mop_config_(
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
     static_assert(
+        BType == BroadcastType::NONE || binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCA ||
+            acc_to_dest,
+        "Broadcast DEST_TO_SRCA requires acc_to_dest!");
+    static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_mop_config_", tensor_shape);
@@ -74,13 +78,10 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr std::uint32_t srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);  // set srcA ch0_z = 1
     static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
-    lltt::record(0, 4);
+    lltt::record(0, 2);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
-    TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_zerosrc_set_dvalid = lltt::replay_insn(0, 2);
-    static constexpr std::uint32_t unpack_srcb_unpack_srcb        = lltt::replay_insn(2, 2);
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -116,41 +117,44 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::COL)
     {
-        constexpr std::uint32_t innerloop = 1;
-        constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
-        // ELWADD used in datacopy for float16
-        tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
-        tmp.set_end_op(unpack_srcb);
-        tmp.program();
-    }
-    else if constexpr (BType == BroadcastType::ROW)
-    {
-        if constexpr (acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+        if constexpr (acc_to_dest)
         {
-            // DEST_TO_SRCA moves DEST into SrcA one face at a time. The math MOP
-            // consumes SrcA DVALID after each face, so publish a dummy SrcA DVALID
-            // alongside every SrcB face unpack.
+            // Math consumes SrcA once per face while retaining one SrcB face per face row.
             const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
             const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
-            ckernel_template tmp(
-                num_faces_r_dim,
-                num_faces_c_dim,
-                unpack_srca_zerosrc_set_dvalid,
-                unpack_srcb);
-            tmp.set_end_op(srcb_clear_z);
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca_zerosrc_set_dvalid);
+            tmp.set_start_op(unpack_srcb);
+            tmp.set_end_op(srcb_set_z_2);
             tmp.program();
         }
         else
         {
             constexpr std::uint32_t innerloop = 1;
             constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
-            if constexpr (acc_to_dest)
-            {
-                tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
-            }
-            tmp.set_end_op(unpack_srcb_unpack_srcb);
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
+            // ELWADD used in datacopy for float16
+            tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
+            tmp.set_end_op(unpack_srcb);
+            tmp.program();
+        }
+    }
+    else if constexpr (BType == BroadcastType::ROW)
+    {
+        const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+        const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+        if constexpr (acc_to_dest)
+        {
+            // Math consumes SrcA and SrcB once per face. DEST_TO_SRCA replaces the
+            // zero SrcA face after each DVALID, while plain accumulation uses it.
+            ckernel_template tmp(
+                num_faces_r_dim, num_faces_c_dim, unpack_srca_zerosrc_set_dvalid, unpack_srcb);
+            tmp.set_end_op(srcb_clear_z);
+            tmp.program();
+        }
+        else
+        {
+            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srcb);
+            tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }
     }
