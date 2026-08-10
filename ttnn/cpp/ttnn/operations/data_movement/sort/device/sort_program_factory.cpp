@@ -1078,10 +1078,9 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     // footprint matches what the cross-core exchange has always allocated, and can be dropped once
     // that is confirmed to be safe.
     // -----------------------------------------------------------------------
-    // exchange/barrier are honestly SET-labeled (peer up + wait + reset-set through one
-    // binding): on Quasar, AUTO's racing-SET check would reject that -- forced EXTERNAL is the
-    // documented escape and preserves the scope AUTO resolves there today. Gen1 stays AUTO
-    // (LOCAL_NONATOMIC; the racing-SET check is Gen2-only).
+    // exchange/barrier are SET-labeled, which trips AUTO's racing-SET check; forced EXTERNAL
+    // is the documented escape and matches what AUTO resolves on Quasar today. Gen1 stays
+    // AUTO (the check is Gen2-only).
     const SemaphoreScope sync_scope =
         tensor_args.input_tensor.device()->arch() == tt::ARCH::QUASAR ? SemaphoreScope::EXTERNAL : SemaphoreScope::AUTO;
     spec.semaphores.push_back(

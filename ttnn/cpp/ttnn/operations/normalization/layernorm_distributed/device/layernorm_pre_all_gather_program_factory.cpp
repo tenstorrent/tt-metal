@@ -754,10 +754,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .name = "layernorm_pre_all_gather_2d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dfbs),
-        // SET-labeled binding (remote up + wait + reset-set): on Quasar, AUTO's racing-SET
-        // check would reject it -- forced EXTERNAL is the documented escape and preserves the
-        // scope AUTO resolves there today. Gen1 stays AUTO (resolves LOCAL_NONATOMIC; the
-        // racing-SET check is Gen2-only).
+        // The SET-labeled binding trips AUTO's racing-SET check; forced EXTERNAL is the
+        // documented escape and matches what AUTO resolves on Quasar today. Gen1 stays AUTO
+        // (the check is Gen2-only).
         .semaphores = {m2::SemaphoreSpec{
             .unique_id = PRE2D_REDUCER,
             .target_nodes = all_cores,

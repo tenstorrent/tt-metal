@@ -15,14 +15,12 @@
 // noc_semaphore.h, with no kernel-source change.
 //
 // Deliberately NO `operator uint32_t()` (unlike the DFB accessor): the token cannot decay to a
-// raw address, so `get_semaphore(sem::x)` and `noc_semaphore_inc(get_noc_addr(x, y, sem::x))`
-// fail to compile. An explicit `Semaphore<...>` pin fails the token-ctor static_asserts on any
-// scope/access mismatch; a pin that happens to match compiles and is caught by the hygiene
-// sweep (test_semaphore_binding_hygiene) instead.
+// raw address, so `get_semaphore(sem::x)` and raw noc_semaphore_* calls fail to compile. An
+// explicit `Semaphore<...>` pin that mismatches the token fails its ctor static_asserts; a
+// matching pin is caught by the hygiene sweep (test_semaphore_binding_hygiene).
 //
-// Access is the host's KernelSpec::SemaphoreBinding::access_type, baked whole: every Semaphore
-// mutator static_asserts against it (down() needs CONSUME, set() needs SET, up() anything but
-// OBSERVE), so the labels the census trusts are the labels the kernel can actually exercise.
+// Access is the host's KernelSpec::SemaphoreBinding::access_type, baked whole; Semaphore
+// mutators static_assert against it (see sem_scope.h for the label -> mutator mapping).
 // Defaults to INCREMENT so a two-argument token means "plain writer".
 template <uint32_t Id, SemScope S, SemAccess Access = SemAccess::INCREMENT>
 struct SemaphoreBindingToken {

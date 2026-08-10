@@ -579,9 +579,8 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.id));
-        // scope and access are baked into the emitted token, so kernels differing in
-        // either must not share a cached artifact. (external_multi_consumer is host-only
-        // metadata, never emitted -- deliberately NOT folded.)
+        // scope and access are baked into the emitted token, so kernels differing in either
+        // must not share a cached artifact. external_multi_consumer is never emitted -- NOT folded.
         hasher.update(static_cast<uint64_t>(it->second.scope));
         hasher.update(static_cast<uint64_t>(it->second.access));
     }

@@ -1407,8 +1407,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // construct Semaphore(sem::weights_mcast_*) unconditionally (the mcast bodies are #ifndef SKIP_MCAST,
     // but the semaphore objects are built up-front), so the tokens must exist even when mcast is skipped.
     // target_nodes spans all kernel-placement cores (sender ∪ receiver ⊆ all_cores).
-    // SET-labeled handshake bindings: AUTO's racing-SET check would reject them -- forced
-    // EXTERNAL is the documented escape and preserves what AUTO resolves today.
+    // SET-labeled handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is the
+    // documented escape and matches what AUTO resolves today.
     if (block_sharded) {
         spec.semaphores.push_back(m2::SemaphoreSpec{
             .unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});

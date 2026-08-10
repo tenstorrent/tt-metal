@@ -6,8 +6,8 @@
 // SWAP/CAS/ACC/RISCV_AMO opcodes (noc_parameters.h) but tt-metal only ever emits INCR_GET;
 // this probe confirms cross-domain atomic DECREMENT and CAS work.
 //
-// Encodings below are RTL-confirmed (aether tt_t6_l1_sub_bank_atomic.sv /
-// tt_t6_l1_pkg.sv). Modes selected by a -D from the host:
+// Encodings per the RTL (tt_t6_l1_sub_bank_atomic.sv / tt_t6_l1_pkg.sv).
+// Modes selected by a -D from the host:
 //   PROBE_DECR_INCRGET : atomic decrement via the EXISTING INCR_GET path
 //                        (noc_semaphore_inc with incr = -1, wrap=31 => modular sub).
 //   PROBE_DECR_AMO     : atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, -1). Quasar-only.
@@ -103,9 +103,9 @@ void kernel_main() {
 #if defined(ARCH_QUASAR)
     // CAS return value (program_ret_addr=true): the response writes the PRE-OP word to the slot
     // programmed into this hart's sticky R_SRC_ADDR -- on success AND on failure. Single writer;
-    // each CAS gets a private slot pre-set to a sentinel via the uncached alias, then polled
-    // until the response overwrites it. report[0]/report[2] are read IMMEDIATELY after the
-    // atomic barrier (no poll) to probe whether the barrier also orders the return write.
+    // each CAS gets a private slot pre-set to a sentinel, then polled. report[0]/report[2] are
+    // read IMMEDIATELY after the atomic barrier (no poll) to probe whether the barrier also
+    // orders the return write.
     // Scratch layout (offsets from sem_addr; must match TestAtomicCasReturnsPreOpValue):
     //   +0 word (host preloads 5)   +16 word2 (host preloads 0x15)
     //   +32/+48/+64 slotA/B/C       +128 report[7]

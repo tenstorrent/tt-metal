@@ -474,9 +474,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         m2::TensorParameter{.unique_id = TP_READER_INDICES, .spec = reader_indices_mesh_tensor.tensor_spec()});
 
     // ---- Semaphores (act mcast sender/receiver) ----
-    // SET-labeled mcast handshake bindings: AUTO's racing-SET check would reject them --
-    // forced EXTERNAL is the documented escape and preserves what AUTO resolves today
-    // (multi-core, Quasar-only op).
+    // SET-labeled mcast handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is
+    // the documented escape and matches what AUTO resolves today.
     spec.semaphores.push_back(m2::SemaphoreSpec{
         .unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
     spec.semaphores.push_back(m2::SemaphoreSpec{

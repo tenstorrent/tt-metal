@@ -75,11 +75,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         .unique_id = SemaphoreSpecName{"dram_unary_rw_sync"},
         .target_nodes = core_range_set,
     };
-    // Honest labels below (reader set()s, writer down()s) would trip AUTO's racing-SET check on
-    // Quasar -- correctly: this is exactly the phase-separated init-then-write shape whose
-    // documented escape is a forced scope. EXTERNAL preserves today's Quasar resolution
-    // (2 binder kernels fail cached geometry); Gen1 AUTO stays (resolves LOCAL_NONATOMIC, and
-    // the racing-SET check is Gen2-only).
+    // The honest labels below (reader SETs, writer CONSUMEs) trip AUTO's racing-SET check;
+    // forcing the scope is the documented escape for this phase-separated shape, and EXTERNAL
+    // matches what AUTO resolves on Quasar today. Gen1 stays AUTO (the check is Gen2-only).
     if (device->arch() == tt::ARCH::QUASAR) {
         rw_sync_sem.scope = SemaphoreScope::EXTERNAL;
     }

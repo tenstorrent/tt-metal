@@ -191,27 +191,23 @@
 #define MEM_NOC_CAS_RET_SIZE 64
 
 // Per-semaphore EXTERNAL down() lock words (4-bit NoC-CAS spinlock; values only 0/1).
-// 16 semaphores x 16B: one lock per 16B row, so the CAS always addresses 32-bit LANE 0 of its
-// row. Lane 0 is keystone-proven (TestSelfCasLockDrain); a 4B-packed layout would put ids with
-// id % 4 == 2 on lane 2, which showed an anomalous CAS return on the emulator RTL
-// (DISABLED_TestSelfCasLockLane2Anomaly) -- 192B of reserved L1 buys independence from that.
-// Touched only by NoC atomics. Zeroed once by DM firmware at boot (dm.cc hart 0); the lock
-// protocol returns each word to 0 on release. Grow with NUM_SEMAPHORES.
+// One lock per 16B row, so the CAS always addresses 32-bit LANE 0 of its row: a 4B-packed
+// layout would put some ids on lane 2, which showed an anomalous CAS return on the emulator
+// RTL (DISABLED_TestSelfCasLockLane2Anomaly). Touched only by NoC atomics. Zeroed once by DM
+// firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
+// Grow with NUM_SEMAPHORES.
 #define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
 #define MEM_NOC_SEM_LOCK_SIZE 256  // NUM_SEMAPHORES * 16 (one 16B row per lock)
 
-// Dedicated cached-only DM-local semaphore pool. DM_LOCAL_CACHED semaphores live HERE, in
-// node L1 but physically disjoint from (and below) the NoC-written kernel_config ring, which
-// starts at MEM_MAP_END. The pool is 64B (cache-line) aligned and a whole number of 64B
-// lines, so a DM cached-AMO's write-back line can never overlap any word written over the
-// NoC / uncached alias -> no cross-domain clobber by construction (the CAS-ret/lock lines
-// above are never cache-dirtied). Sized to NUM_SEMAPHORES=16 slots * L1_ALIGNMENT=16B = 256B
-// (4 x 64B lines), indexed by the semaphore's normal id. See
-// tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
+// Dedicated cached-only pool: DM_LOCAL_CACHED semaphores live HERE, in node L1 but disjoint
+// from the NoC-written kernel_config ring (which starts at MEM_MAP_END). Whole, aligned 64B
+// cache lines, so a DM cached-AMO's write-back line can never overlap any word written over
+// the NoC / uncached alias -> no cross-domain clobber by construction. Sized to
+// NUM_SEMAPHORES=16 slots * L1_ALIGNMENT=16B = 256B, indexed by the semaphore's normal id.
+// See tt_metal/hw/inc/api/dataflow/noc_semaphore.h (DM_LOCAL_CACHED routing).
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_SIZE 256  // 16 semaphores * 16B; keep >= NUM_SEMAPHORES * L1_ALIGNMENT
-// Guard size edits: all three regions must stay whole, 64B-aligned cache lines
-// (a non-multiple size above would misalign the pool base).
+// Guard size edits: all three regions must stay whole, 64B-aligned cache lines.
 #if (MEM_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_NOC_SEM_LOCK_SIZE % 64 != 0) || (MEM_DM_CACHED_SEM_BASE % 64 != 0) || \
     (MEM_DM_CACHED_SEM_SIZE % 64 != 0)
 #error "CAS-ret/lock regions and the cached semaphore pool must be whole, aligned 64B cache lines"
@@ -219,8 +215,7 @@
 
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
-// Read-write reserved memory boundary for watcher checks (cached-sem pool is read-write; it is
-// the last reserved region, so the kernel_config ring begins right after it at MEM_MAP_END).
+// Read-write reserved memory boundary for watcher checks (the kernel_config ring begins here).
 #define MEM_MAP_END (MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE)
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).

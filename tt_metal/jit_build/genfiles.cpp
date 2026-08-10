@@ -227,12 +227,12 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
         if (!sem_entries.empty()) {
-            // Defines SemaphoreBindingToken<Id, SemScope, SemAccess> (and pulls in SemScope), the
-            // token each sem::<name> symbol is emitted as.
+            // Defines SemaphoreBindingToken<Id, SemScope, SemAccess>, which each sem::<name> is
+            // emitted as.
             content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
             if (has_cached_sem) {
-                // Includes for sem::init_dm_cached()'s body, guarded exactly like that body:
-                // the pool and wait_threads_on are DM-only, so a compute kernel must not pull these in.
+                // Includes for sem::init_dm_cached()'s body, guarded exactly like that body
+                // (the pool and wait_threads_on are DM-only).
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 content << "#include \"api/dataflow/dataflow_api.h\"\n";
                 content << "#include \"api/kernel_thread_globals.h\"\n";
@@ -263,13 +263,12 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
-            // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access>. The kernel
-            // writes `Semaphore s(sem::<name>)` and CTAD picks the host-resolved mechanism and access
-            // rights. scope is emitted numerically to avoid a host<->device enumerator-name dependency.
+            // Emit each bound semaphore as a SemaphoreBindingToken<id, scope, access>; CTAD gives
+            // the kernel's Semaphore the host-resolved mechanism and access rights. scope is
+            // emitted numerically to avoid a host<->device enumerator-name dependency.
             if (has_cached_sem) {
-                // This kernel binds >= 1 DM_LOCAL_CACHED semaphore, so sem::init_dm_cached() exists.
-                // The call is auto-injected at kernel entry (jit_build_genfiles_kernel_include wraps
-                // kernel_main); the macro lets kernel code detect the cached path.
+                // sem::init_dm_cached() exists and is auto-injected at kernel entry
+                // (jit_build_genfiles_kernel_include); the macro lets kernel code detect the cached path.
                 content << "#define SEM_HAS_DM_CACHED 1\n";
             }
             content << "namespace sem {\n";
@@ -279,11 +278,10 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                         << static_cast<int>(entry.access) << ")> " << entry.name << "{};\n";
             }
             if (has_cached_sem) {
-                // Seed the cached-only pool, which the dispatcher never NoC-writes: thread 0 copies
+                // Seed the cached-only pool (the dispatcher never NoC-writes it): thread 0 copies
                 // each cached sem's init value from its ring slot (uncached alias) into the pool,
-                // then a barrier so every thread sees the init before its first up(). The body is
-                // empty off the DM+Quasar path (a DM_LOCAL_CACHED Semaphore is a compile error
-                // there), but the symbol always exists so a manual call still compiles.
+                // then all threads barrier. Empty body off the DM+Quasar path, but the symbol
+                // always exists so a manual call still compiles.
                 content << "inline void init_dm_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 content << "    if (::get_my_thread_id() == 0u) {\n";
@@ -297,9 +295,8 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                             << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
                 }
                 content << "    }\n";
-                // Rendezvous on the dedicated seeder barrier -- not addressable via sync_threads(idx),
-                // so a co-resident kernel's (in-bounds) barrier-slot choice can never mix with this
-                // rendezvous.
+                // Dedicated seeder barrier -- not addressable via sync_threads(idx), so a
+                // co-resident kernel's barrier-slot choice can never mix with this rendezvous.
                 content << "    ::wait_threads_on(::g_cached_sem_init_barrier, ::get_num_threads());\n";
                 content << "#endif\n";
                 content << "}\n";
@@ -635,9 +632,8 @@ void jit_build_genfiles_kernel_include(
     ////////////////////////////////////////////////////////////
 
     // AUTO-INJECT the cached-semaphore pool init: rename the kernel's entry point and define the
-    // real kernel_main() as a wrapper that calls sem::init_dm_cached() first, so a kernel can never
-    // read an unseeded pool word. Covers both a hand-written kernel_main() and the TT_KERNEL shim
-    // appended below (the macro is still in effect for it).
+    // real kernel_main() as a wrapper that calls sem::init_dm_cached() first, so a kernel can
+    // never read an unseeded pool word. Covers hand-written kernel_main() and the TT_KERNEL shim.
     // No leading underscore: global-scope identifiers starting with _ are reserved ([lex.name]).
     static constexpr const char* kUserEntry = "tt_dm_cached_user_kernel_main_";
     if (has_cached_sem) {

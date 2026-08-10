@@ -3779,9 +3779,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     // ---- Semaphores (in0 sender/receiver + in1 sender/receiver). Default init; kernels set
     // VALID/INVALID. ----
-    // SET-labeled handshake bindings: AUTO's racing-SET check would reject them -- forced
-    // EXTERNAL is the documented escape and preserves what AUTO resolves today (multi-core,
-    // Quasar-only op).
+    // SET-labeled handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is the
+    // documented escape and matches what AUTO resolves today.
     m2::Group<m2::SemaphoreSpec> semaphores = {
         m2::SemaphoreSpec{
             .unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores_set, .scope = m2::SemaphoreScope::EXTERNAL},
