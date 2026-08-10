@@ -16,7 +16,11 @@
  *************************************************************************/
 
 /**
- * @brief Programs packer0 L1 information & math destination register format
+ * @brief Programs packer0 math destination register format
+ *
+ * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
+ * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_pack_*_init
+ * programs its own table entry. DFB ids never double as BFD ids.
  *
  * @tparam EN_32BIT_DEST: Set to true to use 32bit Destination register mode
  * @param pack_output The output DataFlow Buffer identifier
@@ -25,36 +29,7 @@ template <bool EN_32BIT_DEST>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
-    // Skip non-participating DFBs (gate matched the state in which A2 implicit-sync
-    // passes; reverting to a plain unfiltered loop caused the implicit-sync 3-DFB
-    // runtime to hang at credit-ack handshake). Loop bound is dfb::NUM_DFBS because
-    // g_dfb_logical_to_compact[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS
-    // resolves to 64 on Quasar — GCC -Werror=aggressive-loop-optimizations rejects
-    // the direct OOB array access at the gate.
-    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
-        if (g_dfb_logical_to_compact[i] == 0xFF) {
-            continue;
-        }
-        const DataFormat l1_data_format = static_cast<DataFormat>(pack_dst_format[i]);
-
-        if (l1_data_format == DataFormat::Invalid) {
-            continue;
-        }
-
-        const tdma_descriptor_t td = ckernel::trisc::construct_tdma_desc(
-            get_output_tensor_shape(i),
-            get_local_dfb_interface(i).tc_slots[0].base_addr,
-            pack_dst_format[i],
-            i,
-            pack_src_format[i]);
-
-        ckernel::trisc::_configure_buf_desc_table_(i, td.buf_desc);
-    }
-
-    tdma_descriptor_t td_val;
-    td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
-    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(td_val, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(pack_src_format[output_id], ckernel::ReluConfig::none());
 }
 
 inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {

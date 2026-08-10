@@ -56,7 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
     _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a, tdma_desc_src_b);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a.reg_data_format, tdma_desc_src_b.reg_data_format);
 
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, params.CT_DIM, params.RT_DIM, params.KT_DIM);
 
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_unpack.buf_desc_id     = buf_desc_id_unpack;
     td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
 
     bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
     bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
@@ -149,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_pack.buf_desc_id     = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
@@ -211,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst.reg_data_format, ckernel::ReluConfig::none());
     _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1);
 
     _llk_pack_matmul_(0, 0);

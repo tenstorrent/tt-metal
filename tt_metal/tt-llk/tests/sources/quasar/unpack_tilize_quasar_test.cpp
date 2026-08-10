@@ -93,11 +93,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
         }
         else
         {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
+            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val.reg_data_format);
         }
 
         if constexpr (unpack_to_dest)
@@ -106,8 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
-                buf_desc_id, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
+            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
@@ -313,7 +312,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst, buf_desc_id, formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none() /*relu_config*/);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none() /*relu_config*/);
         _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
         PROFILER_SYNC();
     }
