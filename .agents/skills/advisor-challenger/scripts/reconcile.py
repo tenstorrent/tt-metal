@@ -672,26 +672,39 @@ def main() -> int:
                             "sharded shipped op")
             cur = None
         else:
-            # AGREEMENT MUST INCLUDE THE MEMORY SPACE. Neither old branch looked at it, so an op advised
-            # into L1 and shipped in DRAM read as agreement whenever the core counts coincided -- 1 of one
-            # v2 cell's 2 such rows. `mem` is input-0's memory class, the only space the profile exposes;
-            # an unreadable one is unknown, not a match.
+            # AGREEMENT, AND A SPACE HINT THAT IS DELIBERATELY NOT PART OF IT.
+            #
+            # An op advised into L1 and shipped in DRAM should not read as agreement just because the core
+            # counts coincide -- one v2 cell had exactly that, on a `typecast`. But THE PROFILE CANNOT
+            # SETTLE IT: `Input 0 Memory` is the space of the op's INPUT, and what the advisor states is a
+            # placement for its OUTPUT. There is no output-memory column at all. A matmul legitimately
+            # reads DRAM and writes L1 width-sharded, so treating input-0 as the op's space and moving the
+            # bucket on it manufactures disagreements. Measured over 21 corpus kind-runs, it did: 15 rows
+            # left agreement and only ONE -- the documented typecast -- was real; the other 14 were
+            # `linear` and `nlp_create_qkv_heads_decode` reading DRAM and writing L1, six of them on the
+            # matmul class a ladder sweep is already known to lose on.
+            #
+            # So the space mismatch is recorded as a HINT to check the IR, and agreement is decided as
+            # before. Do not promote this to a bucket rule without the output memory config.
             dev_space = ("l1" if "L1" in (dev.get("mem") or "") else
                          "dram" if "DRAM" in (dev.get("mem") or "") else None)
             grid_same = adv["cores"] is not None and adv["cores"] == dev["cores"]
             ds_same = dev["dram_sharded"] and "dram_sharded" in adv["program_config"]
-            space_same = dev_space is None or dev_space == adv["space"]
-            same = ds_same or (grid_same and space_same)
+            same = grid_same or ds_same
             r.update(bucket="agrees_with_shipped" if same else "chain",
                      advised=adv["layout"], advised_cores=adv["cores"],
                      advised_cores_bbox=adv["cores_bbox"], advised_shard_shape=adv.get("ir_shard_shape"),
-                     shipped_space=dev_space)
+                     shipped_input0_space=dev_space)
+            if dev_space is not None and dev_space != adv["space"]:
+                r["space_hint"] = (
+                    f"advised into {adv['space']}, and this op's INPUT 0 is in {dev_space}. The profile "
+                    "carries no output memory config, so this is not a disagreement -- an op can read one "
+                    "space and write another. Check the edge in final_ir.mlir before treating it as one.")
             if same:
                 # WHAT they agree on. `ds_family` says nothing about the grid -- DS beats core count in the
                 # advisor's ordering, so a 12-vs-99-core DS pair is agreement. That is correct (widening a
                 # DS matmul measured +65 % slower, 1 win in 7) but reads as a grid match without this field.
-                r["agreed_on"] = ("ds_family" if ds_same and not grid_same else
-                                  "space+grid" if dev_space is not None else "grid_only_space_unknown")
+                r["agreed_on"] = "grid" if grid_same else "ds_family"
             if not same:
                 if cur is None:
                     cur = {"chain": f"{a.layer_kind}:{len(chains)}", "ops": [], "us": 0.0,
@@ -1395,15 +1408,19 @@ def self_test() -> int:
         check(o["feasibility"]["verdict"] == "regrid_only",
               "a zero boundary ceiling with a cliff op is regrid_only, not not_measurable")
 
-        # 11. agreement must match the memory space, not only the core count
+        # 11. an advised-L1/shipped-DRAM-input row is HINTED, not rebucketed. Input 0 is the input's space
+        # and the advisor states a placement for the OUTPUT, so a bucket rule on it invents disagreements:
+        # over 21 corpus kind-runs it moved 15 rows and 14 of them were an op reading DRAM and writing L1.
         rep = json.loads(report_of(["rms_norm"]))
         rep["ops"][0]["layout"] = "l1/height_sharded/1x1 cores=(0,0)-(0,0)"
         r = run(json.dumps(rep),
                 "OP CODE,DEVICE KERNEL DURATION [ns],CORE COUNT,INPUT 0 MEMORY\n"
                 "LayerNormDeviceOperation,5000,1,DEV_0_DRAM_INTERLEAVED\n")
         o = load()
-        check(o["disagreements"][0]["bucket"] == "chain",
-              "advised L1 shipped DRAM at a matching core count is NOT agreement")
+        row = o["disagreements"][0]
+        check(row["bucket"] == "agrees_with_shipped" and row.get("agreed_on") == "grid"
+              and "space_hint" in row,
+              "advised L1 vs a DRAM input is a recorded hint, not a rebucketing")
 
         # 12. evidence merges by identifier, and a stale identifier is fatal
         r = run(report_of(["rms_norm", "linear", "add"]),

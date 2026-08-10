@@ -154,7 +154,7 @@ four cells wrote, promoted to the supported path.)
 
 | change | why |
 |---|---|
-| `agrees_with_shipped` compares the **memory space**, and records `agreed_on: space+grid \| ds_family \| grid_only_space_unknown` | neither old branch looked at the space, so L1-advised/DRAM-shipped read as agreement. 1 of one cell's 2 such rows was wrong |
+| a space mismatch between the advice and the op's input-0 memory is recorded as `space_hint`, and `agreed_on: grid \| ds_family` says what agreement rests on | **narrowed after step 0 measured it** — the profile has no output memory column, so input-0 space cannot decide agreement: as a bucket rule it moved 15 rows and only 1 was real ([`STEP0`](ADVCHAL-V3-STEP0.md)). The hint points at the IR edge instead |
 | positional pairings excluded from anything presented as a **finding** (kept for cost) | 23.2 % of pairings corpus-wide are positional guesses the tool documented and then ignored; seven published claims were downgraded to undecidable |
 | `capture_scope` — ops attempted, **methods substituted**, env knobs, `stopped_at` | 15 captures of 54–290 lines, uncompared; where a method is substituted the advice for that region is advice for the stand-in |
 | `reachable_by_advisor` in `final.json` | 4 of the corpus's 7 zeros were coverage zeros and nothing said so |
@@ -249,7 +249,16 @@ This is the cheap check that the rewrite is right, and it is the same move v2 ma
 5. **the ceiling equals the sum of the chains' attributable value** (B2), where v2 left a gap;
 6. `--self-test` is **21/21**.
 
-*Already done for two cells while implementing, and both behaved as predicted.* On phi `fuse-noadvise`:
+**DONE — results in [`ADVCHAL-V3-STEP0.md`](ADVCHAL-V3-STEP0.md).** 21 of 26 kind-runs across 12 of 15 cells
+replay (5 are not reproducible from what the corpus published: three cells committed no perf CSV, and
+gemma-4-26B `nofuse-noadvise`'s CSVs do not reproduce its window — which means step 2's 26× prediction cannot
+be pre-checked). All six predictions hold, at 56.0 % of advised core counts understated against 58.3 %
+predicted, 18.4 % of chain rows carrying 31.1 % of chain µs turning out phantom against 17.7 % / 34.4 %, the
+cliff check flagging 5 of 12 cells with three of the four win cells among them, the ceiling gap closing from
+83.1 µs to 0.003 µs, and **seven feasibility verdicts moving off `not_measurable` on the two cells that
+published zeros over screenable cliffs.** Step 0 also found and fixed one defect in v3 itself — see §2.9.
+
+*Detail for two cells, from while implementing:* On phi `fuse-noadvise`:
 window 725.175 µs unchanged and still closing; 14 of 35 advised ops understated; the wrongly-agreeing
 `typecast` row moved out of `agrees_with_shipped`; `nlp_concat_heads_decode` moved into `advisor_unfixable`;
 the ceiling now reconciles to 71.635 against 71.637; and the two 1-core `rms_norm` ops the cell discarded rank
