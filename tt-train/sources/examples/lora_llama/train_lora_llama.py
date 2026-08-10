@@ -44,7 +44,7 @@ PRINT_INTERVAL = 1
 
 LORA_RANK = 8
 LORA_ALPHA = 16
-LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
+LORA_TARGET_MODULES = ["qkv_linear", "out_linear"]
 LORA_IS_BIAS_TRAINABLE = False
 LORA_TRAINABLE_MODULES: list[str] = []
 LORA_DROPOUT = 0.05
