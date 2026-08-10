@@ -593,7 +593,6 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
@@ -647,7 +646,6 @@
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
 - name: GPT-OSS 20B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
@@ -669,7 +667,6 @@
 
 - name: GPT-OSS 120B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
@@ -801,7 +798,6 @@
 
 - name: Qwen2.5-72B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
