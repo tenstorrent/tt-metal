@@ -149,15 +149,16 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // column reader's strided narrow streams do not (an identical column program — same ncol,
     // same core count — still measures 1.2-1.3x slower on BH), so one configuration can be a win
     // on WH and a loss on BH. Thresholds are measured on the cross-arch sweep suite, not derived:
-    // on BH, cores * 2 >= strip_bytes catches every measured loser and sacrifices no win; WH
-    // measures wins up to twice that concurrency, so the rule arms only where a regression was
-    // measured. Scoring the dispatch's own ncol (rather than a re-derived one) keeps the rule
+    // on BH every measured loser sits at cores * 64 >= 24 * strip_bytes and every measured win at
+    // cores * 64 <= 18 * strip_bytes, so the rule arms at 20, inside the empty band between; WH
+    // measures wins up to cores * 64 == 63 * strip_bytes, so the rule arms only where a regression
+    // was measured. Scoring the dispatch's own ncol (rather than a re-derived one) keeps the rule
     // correct on harvested grids. Forced implementation=codegen never consults this gate.
     if (is_device_tensor(tensor_args.input_tensor)) {
         IDevice* device = tensor_args.input_tensor.device();
         uint32_t streams_per_64b = 0;  // 0: rule not armed on this arch
         switch (device->arch()) {
-            case tt::ARCH::BLACKHOLE: streams_per_64b = 32; break;
+            case tt::ARCH::BLACKHOLE: streams_per_64b = 20; break;
             default: break;
         }
         if (streams_per_64b != 0) {
