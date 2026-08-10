@@ -6,7 +6,12 @@
 
 #include <stdint.h>
 
+// assert.h only where ASSERT is used (the Quasar DM wait_threads guard): its watcher chain
+// pulls device-only mailbox definitions, and this header is also compiled host-side
+// (tensor_accessor.h includes it for get_num_threads()).
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
 #include "api/debug/assert.h"
+#endif
 
 #if defined(ARCH_QUASAR)
 
