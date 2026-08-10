@@ -68,6 +68,8 @@
             xz
             zstd
             zlib
+            libpng
+            bzip2
             openssl
             wget
             curl
@@ -80,6 +82,9 @@
             hwloc
             tbb
             capstone
+            llvm.openmp
+            pugixml
+            libxslt
             openmpi
             llvm.clang
             llvm.clang-tools
