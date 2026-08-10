@@ -26,12 +26,11 @@ parsed from the run_dir name, ``run_id`` = the dir name — or a default.
 
 Raw vs post-processed: only the raw per-test CSVs migrate; the post-processed
 twin (``<base>.post.csv``) and per-worker ``<base>.counters.csv`` are excluded.
-Because raw and ``.post`` are column-identical, a migrated ``TILE_LOOP`` row
-carries LOOP TOTALS, not the per-tile figures ``.post.csv`` holds
-(``post_process`` divides by ``loop_factor * tile_cnt``), and the schema has no
-column recording which variant a row is. TODO(#51249): confirm whether the live
-publish path stamps pre- or post-``post_process()`` frames, make migration match,
-and record the variant — before any production consumer reads this table.
+Raw is the canonical stored form both here and in the live publish path
+(``perf.combine_perf_reports``): a ``TILE_LOOP`` row carries loop totals, and the
+per-tile figures are derived downstream by dividing mean/std by
+``loop_factor * tile_cnt`` (both are columns). Storing raw keeps the table
+lossless without a redundant per-tile copy, so no ``variant`` column is needed.
 """
 
 import json
