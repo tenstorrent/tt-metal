@@ -59,6 +59,10 @@ ALLOW_REBOOT=${ALLOW_REBOOT:-0}
 DISPATCH=${DISPATCH:-fast}
 DRAINER=${DRAINER:-drisc}
 RUN_TIMEOUT=${RUN_TIMEOUT:-300}
+# Stop after this many consecutive non-CLEAN runs. Once the box enters a persistent state every further
+# run just pays the timeout again: a real sweep sat at 16 consecutive MASKED (45 s each) learning nothing,
+# because MASKED did not trigger recovery and nothing watched for a streak. 0 disables the bail-out.
+MAX_CONSEC_FAIL=${MAX_CONSEC_FAIL:-5}
 EP=${EP:-0000:01:00.0}          # Blackhole endpoint
 RP=${RP:-0000:00:01.1}          # its root port -- the ONLY reliable link-state witness once wedged
 TT_SMI=${TT_SMI:-$(command -v tt-smi || echo "$HOME/.local/bin/tt-smi")}
@@ -66,13 +70,45 @@ TT_SMI=${TT_SMI:-$(command -v tt-smi || echo "$HOME/.local/bin/tt-smi")}
 mkdir -p "$OUT" || exit 1
 SUM=$OUT/summary.txt
 CSV=$OUT/runs.csv
-[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class" > "$CSV"
 
 log(){ echo "$*" | tee -a "$SUM"; }
+
+# Refuse to append to an existing sweep. Reusing a TAG used to silently concatenate sweeps into one
+# runs.csv with restarting k values and different ARMED/DISPATCH settings -- which makes any rate
+# computed off that file wrong, and is unrecoverable after the fact because the settings are not in
+# the rows. Pick a new TAG, or opt in with APPEND=1 if you really are continuing the same sweep.
+if [ -f "$CSV" ] && [ "${APPEND:-0}" != "1" ]; then
+    echo "FATAL: $CSV already exists -- that sweep's rows would be mixed with this one's."
+    echo "  use a fresh TAG=...   (or APPEND=1 to deliberately continue the same sweep)"
+    exit 1
+fi
+[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class" > "$CSV"
+# Settings live next to the rows, so a csv is still interpretable months later.
+{ echo "date=$(date -Is) host=$(hostname) tag=$TAG"
+  echo "N=$N DELAY=$DELAY ITERS=$ITERS GX=$GX GY=$GY ARMED=$ARMED"
+  echo "DISPATCH=$DISPATCH DRAINER=$DRAINER STOP_ON_WEDGE=$STOP_ON_WEDGE ALLOW_REBOOT=$ALLOW_REBOOT"
+  echo "MAX_CONSEC_FAIL=$MAX_CONSEC_FAIL RUN_TIMEOUT=$RUN_TIMEOUT BIN=$BIN"
+} >> "$OUT/params.txt"
 
 [ -x "$BIN" ] || { log "FATAL: workload not found: $BIN"; log "  build it first: ./build_metal.sh --release --build-programming-examples"; exit 1; }
 [ -c /dev/tenstorrent/0 ] || log "WARN: /dev/tenstorrent/0 missing -- is this the host, and is the driver loaded?"
 [ -x "$TT_SMI" ] || log "WARN: tt-smi not found at '$TT_SMI' -- recovery will be manual"
+
+# PCIe diagnostics preflight. These need the HOST: /sys is bind-mounted into the dev container so link
+# state still reads there, but sudo/setpci config-space access does not -- which is how a whole sweep can
+# look instrumented while its DevSta column is meaningless.
+[ -f /.dockerenv ] && log "WARN: running INSIDE the container -- PCIe config-space diagnostics need the host"
+DEVSTA_OK=0
+if sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w >/dev/null 2>&1; then
+    DEVSTA_OK=1
+else
+    log "FATAL: cannot read endpoint DevSta (sudo -n setpci -s ${EP#0000:} CAP_EXP+0A.w failed)."
+    log "  DevSta at PCIe cap + 0x0A is the per-run PCIe error probe -- AER reads clean while the"
+    log "  endpoint carries a real UnsupReq, so without it a wedge has no error evidence at all."
+    log "  Run this on the HOST (not the container), or set ALLOW_NO_DEVSTA=1 to sweep without it."
+    [ "${ALLOW_NO_DEVSTA:-0}" = "1" ] || exit 1
+    log "  ALLOW_NO_DEVSTA=1 -> continuing; the devsta column will read 'unavail', not a value."
+fi
 
 # Endpoint config space reads ALL-ONES once wedged, so its own sysfs cannot tell you anything: an
 # all-ones link speed surfaces as "Unknown". That is the wedge signature, not downtraining -- always
@@ -86,8 +122,14 @@ link_state(){ local d=$1
 # DevSta lives at PCIe cap + 0x0A -- a DIFFERENT register from AER, which reads clean while the
 # endpoint carries a real UnsupReq. Bits are RW1C, so clearing before each run turns it into a
 # per-run probe. 0x8 = UnsupReq, 0x1 = CorrErr.
-devsta_clear(){ sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w=0x000f >/dev/null 2>&1; }
-devsta_read(){ sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w 2>/dev/null || echo "NA"; }
+# DEVSTA_OK is resolved ONCE at startup (see the preflight below). Without it these are no-ops that
+# report "unavail" rather than "NA": a per-row "NA" reads like a measured value and is exactly the
+# "coarse observable standing in for the real one" mistake this investigation keeps paying for. An
+# entire 316-run sweep once recorded NA in every row and nobody noticed.
+devsta_clear(){ [ "$DEVSTA_OK" = 1 ] || return 0
+  sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w=0x000f >/dev/null 2>&1; }
+devsta_read(){ [ "$DEVSTA_OK" = 1 ] || { echo "unavail"; return 0; }
+  sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w 2>/dev/null || echo "readfail"; }
 
 # Everything worth knowing about a wedged card, captured BEFORE recovery touches it.
 wedge_dump(){ local k=$1 d=$OUT/wedge_${k}.txt
@@ -138,7 +180,7 @@ log "    host=$(hostname) out=$OUT stop_on_wedge=$STOP_ON_WEDGE allow_reboot=$AL
 log "    baseline endpoint=$(link_state "$EP") root_port=$(link_state "$RP")"
 log "    NOTE 2.5GT/s on either side = a DEGRADED link (cold power cycle), a different failure to WEDGE"
 
-nclean=0; nwedge=0; nteardown=0; nmasked=0; nother=0
+nclean=0; nwedge=0; nteardown=0; nmasked=0; nother=0; nconsec=0
 for k in $(seq 1 "$N"); do
   RUNLOG=$OUT/${k}.log
   devsta_clear
@@ -175,6 +217,12 @@ for k in $(seq 1 "$N"); do
   echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class" >> "$CSV"
   [ "$class" != CLEAN ] && log "k=$k rc=$rc dur=${dur}s ep=$ep rp=$rp devsta=$ds -> $class"
 
+  if [ "$class" = CLEAN ]; then
+    nconsec=0
+  else
+    nconsec=$((nconsec+1))
+  fi
+
   if [ "$class" = WEDGE ]; then
     wedge_dump "$k"
     if [ "$STOP_ON_WEDGE" = "1" ]; then
@@ -183,8 +231,17 @@ for k in $(seq 1 "$N"); do
       break
     fi
     recover || break
-  elif [ "$class" = TEARDOWN ] || [ "$class" = OTHER ]; then
+  elif [ "$class" = TEARDOWN ] || [ "$class" = OTHER ] || [ "$class" = MASKED ]; then
+    # MASKED recovers too: it IS a teardown hang, just one the armed timeout caught. Leaving it
+    # unrecovered is what let a sweep grind out 16 identical 46 s masked runs in a row.
     recover || break
+  fi
+
+  if [ "$MAX_CONSEC_FAIL" != "0" ] && [ "$nconsec" -ge "$MAX_CONSEC_FAIL" ]; then
+    log "=== STOPPING: $nconsec consecutive non-clean runs (last=$class) ==="
+    log "    The box is in a persistent state; sweeping further re-pays the timeout and learns nothing."
+    log "    Next: $TT_SMI -r, then a few probe runs to see whether it clears or survives a reset."
+    break
   fi
 
   [ $((k % 20)) -eq 0 ] && log "progress k=$k clean=$nclean wedge=$nwedge teardown=$nteardown masked=$nmasked other=$nother"
