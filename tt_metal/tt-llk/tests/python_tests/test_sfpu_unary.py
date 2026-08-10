@@ -300,19 +300,6 @@ def _skip_bh_unless_fp32(formats, dest_acc):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
-# Approximate exp overshoots the golden by ~5.7% (peak 6.75%) once its argument passes ~8,
-# breaching the default 5% rtol -- a property of the approximation, not of the stimuli
-# (measured on Wormhole). Membership is marginal, set by the domain the output format
-# selects and by whether a 16-bit dst rounds golden and result back together: dest_acc=Yes
-# keeps an fp32 dst and exposes the full error. Listed exhaustively rather than by
-# predicate so a combination drifting in or out of tolerance shows up as a diff here.
-_APPROX_EXP_ACCURACY_XFAIL = {
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.No),
-    (DataFormat.Float16, DataFormat.Float16_b, DestAccumulation.Yes),
-    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-}
-
-
 _UNARY_SWEEP_ARGNAMES = (
     "formats",
     "approx_mode",
@@ -330,7 +317,6 @@ _UNARY_SWEEP_ARGNAMES = (
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
 def test_eltwise_unary_sfpu(
-    request,
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -344,22 +330,6 @@ def test_eltwise_unary_sfpu(
     the op is in) is the only thing that varies. See BROAD_SWEEP_OPS.
     """
     broad = mathop in BROAD_SWEEP_OPS
-
-    if (
-        mathop == MathOperation.Exp
-        and approx_mode == ApproximationMode.Yes
-        and (formats.input_format, formats.output_format, dest_acc)
-        in _APPROX_EXP_ACCURACY_XFAIL
-    ):
-        # Marked dynamically rather than skipped so the case still executes: if the
-        # approximation tightens, this reports XPASS instead of quietly staying green.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Approximate exp exceeds the default 5% rtol above an argument "
-                "of ~8, peaking at 6.75%. See _APPROX_EXP_ACCURACY_XFAIL.",
-                strict=False,
-            )
-        )
 
     if TestConfig.WITH_COVERAGE:
         # Coverage runs skip the broad profile wholesale; only the standard profile runs.

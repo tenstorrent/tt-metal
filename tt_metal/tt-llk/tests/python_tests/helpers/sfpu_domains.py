@@ -102,10 +102,10 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
         #
-        # The positive side stops at 16 for accuracy, not range: the approximation's
-        # relative error grows with x, exceeding the default 5% rtol on the fp32
-        # (dest_acc=Yes) path well before x=80.
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=16.0)
+        # The positive side is bounded by range, not accuracy: exp overflows an 8-bit
+        # exponent near x = 88.7, and 80 leaves margin below it. Narrower output formats
+        # pull this in through for_op_pipeline.
+        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=80.0)
     return OperandSpecs(spec_A=spec)
 
 
@@ -113,19 +113,18 @@ def _exp_with_base_spec(fmt: DataFormat) -> OperandSpecs:
     """Input range for exp_with_base, which computes exp(0.5*x).
 
     Keep the negative reach of _exp_spec (low=-100 crosses the SFPU's negative-side
-    sanitization boundary near x ~ -88.5), but cap the positive side tighter than
-    plain exp. exp's relative condition number equals its argument, so with the 0.5
-    scale a high of 32 keeps the argument <= 16 -- small enough that the shared exp
-    approximation's error stays within the default rtol even on the fp32 (dest_acc=Yes)
-    path. At the reused high=80 the argument reaches ~40, and that ~40x amplification
-    pushes the largest-output elements past 10% relative error (PCC still fine).
+    sanitization boundary near x ~ -88.5). The 0.5 scale halves the argument, so the
+    positive side is double _exp_spec's to put the argument under the same overflow
+    ceiling.
     """
     if fmt == DataFormat.MxFp8P:
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     else:
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=32.0)
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=160.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -136,10 +135,11 @@ def _exp2_spec(fmt: DataFormat) -> OperandSpecs:
     elif fmt in (DataFormat.Float16, DataFormat.MxFp8R):
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-14.0, high=14.0)
     else:
-        # exp2(x) = exp(x * ln2), so the accuracy ceiling _exp_spec puts at an
-        # argument of 16 lands at x = 16 / ln2 ~ 23 here. Above that the shared
-        # approximation drifts past the default rtol on the fp32 dst path.
-        spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=23.0)
+        # 2^100 still fits an 8-bit exponent, so the positive side is not range-bound
+        # the way _exp_spec is; the negative side matches its reach past the clamp.
+        spec = StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
+        )
     return OperandSpecs(spec_A=spec)
 
 
@@ -799,7 +799,7 @@ def for_op_pipeline(
     either one alone drops the other:
 
     * **Range** is bounded by the narrowest exponent range anywhere in the
-      pipeline. exp over (-100, 16) is fine into a Float32 output and saturates
+      pipeline. exp over (-100, 80) is fine into a Float32 output and saturates
       a Float16 one, so the *output* format has to be able to narrow the domain.
     * **Precision** is a property of the *input* format alone. A block-float
       input has already spent its relative precision by the time the op runs,
