@@ -69,6 +69,9 @@ class TtPrefillRuntimeConfig:
     # this model's residual layout): True => emb TP-sharded, False => emb replicated across TP. M3's SP
     # residual is emb-replicated, so its adapter passes False.
     pipeline_activation_emb_tp_sharded: bool = True
+    # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
+    # ones the D2H service. M3 has no traced path, so it stays False.
+    use_trace: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -265,6 +268,8 @@ class TtPrefillRuntime:
         actual_start: int,
         actual_end: int,
         request_id: int = 0,
+        d2h_service=None,
+        record_dev=None,
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
@@ -299,7 +304,15 @@ class TtPrefillRuntime:
                 pipelined layer-completion sink needs it (to build a globally-dense
                 seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
                 channel carries no payload, so it is accepted and ignored.
+            d2h_service / record_dev: the device-side per-layer ack transport. This runtime emits acks
+                only through the host callback (set_layer_ack_channel), so a caller asking for the D2H
+                path gets a loud error rather than silently missing acks.
         """
+        if d2h_service is not None or record_dev is not None:
+            raise NotImplementedError(
+                "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
+                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
+            )
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         assert (
@@ -379,12 +392,33 @@ class TtPrefillRuntime:
         index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
         return k, v, index_k
 
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def kv_migration_base_address(self, kv_cache) -> int:
+        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
+        all-gather (it holds the cache but must not introspect its layout). M3's cache is three
+        tensors; the K tensor is the anchor, and since the table build is single-rank the gathered
+        layout is never consumed."""
+        return int(kv_cache.k.buffer_address())
+
+    def build_kv_chunk_table(
+        self,
+        kv_cache,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
         ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
         comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
-        Single-rank only — the runner disables migration for num_ranks>1 (pipelined migration is not
-        wired), so this describes the whole-model cache."""
+
+        Single-rank only: this describes the whole-model cache and has no cross-stage merge, so a
+        gathered layout spanning more than this rank's stage is rejected rather than silently dropped."""
+        if stage_layout is not None and len(stage_layout) > 1:
+            raise NotImplementedError(
+                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layout)}-stage layout. "
+                "The multi-config (per head-shard) table has no cross-stage merge."
+            )
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config
