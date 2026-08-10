@@ -15,6 +15,8 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+#include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
+#include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -26,8 +28,8 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
@@ -41,6 +43,7 @@
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
+#include "ops/swiglu_packed_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -75,6 +78,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("swiglu");
+    m.def_submodule("swiglu_packed");
     m.def_submodule("unary");
     m.def_submodule("metal");
 }
@@ -555,6 +559,16 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_swiglu_packed = static_cast<nb::module_>(m.attr("swiglu_packed"));
+        py_swiglu_packed.def(
+            "swiglu_packed",
+            &ttml::ops::swiglu_packed,
+            nb::arg("packed"),
+            "Packed-SwiGLU gating: `packed` [.., .., R, 2*I] (gate|up) -> h = silu(gate) * up "
+            "[.., .., R, I].");
+    }
+
+    {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
@@ -628,6 +642,21 @@ void py_module(nb::module_& m) {
             "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
             "are direct outputs of moe_group (grouped_scores already encodes\n"
             "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
+        py_metal.def(
+            "swiglu_packed_fw",
+            &ttml::metal::swiglu_packed_fw,
+            nb::arg("packed"),
+            nb::arg("preallocated_output") = nb::none(),
+            "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
+            "[.., R, I].");
+        py_metal.def(
+            "swiglu_packed_bw",
+            &ttml::metal::swiglu_packed_bw,
+            nb::arg("packed"),
+            nb::arg("dL_dh"),
+            nb::arg("preallocated_dL_dpacked") = nb::none(),
+            "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
+            "dL/dpacked [.., R, 2*I] = [dgate|dup].");
     }
 }
 
