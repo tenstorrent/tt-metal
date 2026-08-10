@@ -481,6 +481,156 @@ def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device, 
         )
 
 
+def _krow_major_program_config(ring_cols, ring_rows, recv_per_bank, in0_block_w, per_core_N, *, gather):
+    """A 1D matmul config for a K-row-major weight, as either consumer."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=not gather,
+        gather_in0=gather,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=recv_per_bank,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+
+def test_create_global_circular_buffer_for_matmul_1d_sizes_per_config(device, expect_error):
+    """Each consumer sharing a GCB is sized against its own window, not against the
+    largest page paired with the largest block count over all configs.
+
+    A batched gather (small page, whole layer resident) beside an mcast (large page,
+    double-buffered window) is the case that separates the two rules: the cross-config
+    product asks for the gather's block count at the mcast's page size, which neither
+    consumer needs and which can exceed the 2 MB remote-CB cap outright.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 1
+    receiver_count = num_dram_banks * recv_per_bank
+    dtype = ttnn.bfloat16
+    tile_bytes = _bytes_per_tile(dtype)
+
+    # Gather: one K-tile per ring position at per_core_N=1, so a whole layer is
+    # receiver_count small pages.
+    gather_k_tiles = receiver_count
+    gather_weight = _make_krow_major_weight(
+        device,
+        torch.zeros(1, 1, gather_k_tiles * ttnn.TILE_SIZE, receiver_count * ttnn.TILE_SIZE),
+        num_dram_banks=num_dram_banks,
+        dtype=dtype,
+    )
+    gather_config = _krow_major_program_config(
+        num_dram_banks, recv_per_bank, recv_per_bank, in0_block_w=1, per_core_N=1, gather=True
+    )
+    gather_floor = receiver_count * (gather_k_tiles // receiver_count) * gather_config.per_core_N * tile_bytes
+
+    # Mcast: 4-tile K-blocks at per_core_N=4, so one page is 16x the gather's and only
+    # two need to be resident.
+    mcast_k_tiles = 8
+    mcast_in0_block_w = 4
+    mcast_per_core_N = 4
+    mcast_weight = _make_krow_major_weight(
+        device,
+        torch.zeros(1, 1, mcast_k_tiles * ttnn.TILE_SIZE, mcast_per_core_N * receiver_count * ttnn.TILE_SIZE),
+        num_dram_banks=num_dram_banks,
+        dtype=dtype,
+    )
+    mcast_config = _krow_major_program_config(
+        num_dram_banks,
+        recv_per_bank,
+        recv_per_bank,
+        in0_block_w=mcast_in0_block_w,
+        per_core_N=mcast_per_core_N,
+        gather=False,
+    )
+    mcast_page = mcast_in0_block_w * mcast_per_core_N * tile_bytes
+    mcast_floor = 2 * mcast_page
+
+    min_size = max(gather_floor, mcast_floor)
+    bank_to_receivers = [
+        (b, _bank_receivers_row_major(b, recv_per_bank, num_dram_banks)) for b in range(num_dram_banks)
+    ]
+    # The cross-config product (largest page x largest block count) would demand this much.
+    assert mcast_page * receiver_count > min_size
+
+    # Accepted: the size clears every consumer's own floor.
+    ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [gather_config, mcast_config],
+        [gather_weight, mcast_weight],
+        bank_to_receivers=bank_to_receivers,
+        size=min_size,
+    )
+
+    # One byte under, and the config that needs the larger window is the one named.
+    with expect_error(RuntimeError, r"must be at least num_blocks.*program_configs\[1\]"):
+        ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+            device,
+            [gather_config, mcast_config],
+            [gather_weight, mcast_weight],
+            bank_to_receivers=bank_to_receivers,
+            size=min_size - 1,
+        )
+
+
+def test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout(device, expect_error):
+    """A K-row-major weight needs every GCB sender to drive the same receiver count.
+
+    The sender slices its bank's shard by one receivers-per-bank number, so an uneven
+    fan-out that still averages out — (1, 3, 2, 2, ...) over the banks — would be sliced
+    at the average and deliver the wrong pages. The matmul-1d factory enforces uniformity
+    where it builds the mapping; this covers a hand-built GCB reaching the matmul through
+    the block-count entry point instead.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    if num_dram_banks < 3:
+        pytest.skip(f"uneven fan-out needs at least 3 DRAM banks; device has {num_dram_banks}")
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    dtype = ttnn.bfloat16
+
+    # Same total receivers as a uniform recv_per_bank=2 mapping, redistributed so bank 0
+    # gives up a receiver to bank 1.
+    uneven_receiver_counts = [1, 3] + [recv_per_bank] * (num_dram_banks - 2)
+    bank_to_receivers = []
+    next_ring_pos = 0
+    for bank, count in enumerate(uneven_receiver_counts):
+        cores = []
+        for pos in range(next_ring_pos, next_ring_pos + count):
+            core = ttnn.CoreCoord(pos % num_dram_banks, pos // num_dram_banks)
+            cores.append(ttnn.CoreRange(core, core))
+        bank_to_receivers.append((bank, ttnn.CoreRangeSet(cores)))
+        next_ring_pos += count
+
+    k_tiles = 2 * receiver_count
+    per_core_N = 1
+    weight = _make_krow_major_weight(
+        device,
+        torch.zeros(1, 1, k_tiles * ttnn.TILE_SIZE, receiver_count * ttnn.TILE_SIZE),
+        num_dram_banks=num_dram_banks,
+        dtype=dtype,
+    )
+    program_config = _krow_major_program_config(
+        num_dram_banks, recv_per_bank, recv_per_bank, in0_block_w=1, per_core_N=per_core_N, gather=False
+    )
+
+    # The generic factory takes the mapping as given (a dual-sender split legitimately
+    # produces uneven per-sender counts), so the weight-vs-GCB rule is checked here.
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        size=4 * per_core_N * _bytes_per_tile(dtype),
+    )
+    with expect_error(RuntimeError, "same fan-out of num_global_cb_receivers"):
+        ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, gcb)
+
+
 # ---------------------------------------------------------------------------
 # Multi-tensor smoke (discard receiver)
 # ---------------------------------------------------------------------------

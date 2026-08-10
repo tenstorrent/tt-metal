@@ -98,7 +98,9 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
 //   * receiver-contiguous: an NdShardSpec DRAM tensor with one full-K, N/receiver_count shard per
 //     receiver;
 //   * legacy K-row-major: a WIDTH_SHARDED DRAM tensor with one full-K, N/num_senders shard per bank,
-//     each bank's per-receiver N split evenly across its num_global_cb_receivers cores;
+//     each bank's per-receiver N split evenly across its num_global_cb_receivers cores, and a `gcb`
+//     whose senders each drive exactly num_global_cb_receivers receivers (this layout's sender slices
+//     its shard by one receivers-per-bank number, so an uneven fan-out delivers the wrong pages);
 // and, for either layout:
 //   * weight K-tiles divides the consumer's block count exactly;
 //   * the weight's per-receiver N (in tiles) equals program_config.per_core_N — otherwise the

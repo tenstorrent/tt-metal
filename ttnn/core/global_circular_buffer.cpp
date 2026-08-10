@@ -4,7 +4,6 @@
 
 #include "ttnn/global_circular_buffer.hpp"
 
-#include <algorithm>
 #include <memory>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -149,14 +148,42 @@ void validate_grid_for_consumer(
     }
 }
 
-// Shared GCB size validation: the caller-supplied size must clear the floor its consumers need — a
-// full layer for a batched gather matmul (it does wait_front(num_blocks)), or a double-buffered
-// window when every consumer sharing the GCB reads K-blocks FIFO — and fit the remote-CB cap.
+// One consumer's own floor on the GCB window: a batched gather matmul does wait_front(block_count)
+// and needs a whole layer resident, while a FIFO consumer takes K-blocks as they land and needs only
+// a double-buffered window.
+//
+// Checked per (config, weight) as the builders walk them, rather than once against the largest page
+// and the largest block count over all configs — those two maxima can come from different configs,
+// and their product demands a buffer neither consumer asked for. A GCB shared by a batched gather
+// (small page, whole layer) and an mcast (large page, two blocks) is the case that bites: the
+// product can exceed kMaxCbPagesBytes and make the mix unconstructible even though each consumer
+// fits on its own.
 //
 // No L1 budget check here — receivers may have very different L1 usage on top of the GCB (matmul
 // in0/in1/out/interm CBs etc.) and we don't have enough context at the factory to compute a real cap.
 // Callers must size the GCB to fit their own L1.
-//
+void validate_gcb_size_for_config(
+    uint32_t size,
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config,
+    size_t config_index,
+    uint32_t page_bytes,
+    uint32_t block_count) {
+    const bool fifo = is_fifo_consumer(config);
+    const uint32_t num_blocks = fifo ? kFifoMinWindowBlocks : block_count;
+    const uint32_t min_size = page_bytes * num_blocks;
+    TT_FATAL(
+        size >= min_size,
+        "GCB size ({} B) must be at least num_blocks * page ({} * {} = {} B) for program_configs[{}]. {}",
+        size,
+        num_blocks,
+        page_bytes,
+        min_size,
+        config_index,
+        fifo ? "A FIFO consumer takes K-blocks as they arrive but still needs a double-buffered window."
+             : "A batched gather matmul does wait_front(num_blocks), so it needs that many pages "
+               "buffered before it consumes.");
+}
+
 // kMaxCbPagesBytes is a cap on fifo_aligned_num_pages = fifo_size /
 // REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE. Two reasons it exists:
 //   1. The NoC stream overlay's STREAM_REMOTE_DEST_BUF_SIZE register holds the buffer size in
@@ -171,20 +198,8 @@ void validate_grid_for_consumer(
 //      difference can never misfire.
 // 2 MB satisfies both — it's the hardware overlay-field max, and ~5 orders of magnitude under the
 // counter wrap.
-void validate_gcb_size(uint32_t size, uint32_t max_page_bytes, uint32_t max_block_count, bool all_configs_fifo) {
+void validate_gcb_size_cap(uint32_t size) {
     constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
-    const uint32_t num_blocks = all_configs_fifo ? kFifoMinWindowBlocks : max_block_count;
-    const uint32_t min_size = max_page_bytes * num_blocks;
-    TT_FATAL(
-        size >= min_size,
-        "GCB size ({} B) must be at least num_blocks * largest page ({} * {} = {} B). {}",
-        size,
-        num_blocks,
-        max_page_bytes,
-        min_size,
-        all_configs_fifo ? "A FIFO consumer takes K-blocks as they arrive but still needs a double-buffered window."
-                         : "A batched gather matmul does wait_front(num_blocks), so it needs that many pages "
-                           "buffered before it consumes.");
     TT_FATAL(
         size <= kMaxCbPagesBytes,
         "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",
@@ -373,6 +388,37 @@ uint32_t validate_krow_major_weight_for_matmul_1d(
     return block_count;
 }
 
+// The K-row-major sender slices a bank's shard by a single receivers-per-bank number — the manager
+// derives it as total_receivers / num_banks in serialize_request_pages
+// (impl/buffers/tensor_prefetcher_manager.cpp) — so every sender must own the same receiver count.
+// The manager already rejects split and partial-bank sender topologies and requires the total to
+// divide evenly across banks, but a mapping whose per-bank counts are uneven yet still average out
+// ((1, 3, 2, 2) over four banks) clears both of those and then gets sliced at the average, silently
+// delivering the wrong pages. The GCB factory enforces uniformity where it builds the mapping
+// (build_matmul_1d_gcb_krow_major below); this is the same rule for a caller-supplied GCB, which
+// reaches the matmul through the entry point below rather than through the factory.
+//
+// Only meaningful for K-row-major: a receiver-contiguous weight takes its geometry from the shard
+// shape and tolerates non-uniform per-bank receivers (that's what the dual-sender split produces).
+void validate_krow_major_gcb_topology(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const GlobalCircularBuffer& gcb) {
+    const uint32_t recv_per_bank = static_cast<uint32_t>(program_config.num_global_cb_receivers);
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    for (size_t s = 0; s < mapping.size(); ++s) {
+        const uint32_t sender_recv_count = mapping[s].second.num_cores();
+        TT_FATAL(
+            sender_recv_count == recv_per_bank,
+            "global_cb sender {} (core {}) drives {} receivers, but the legacy K-row-major layout gives every bank "
+            "the same fan-out of num_global_cb_receivers ({}); the sender would slice its shard at the average "
+            "receiver count and deliver the wrong pages",
+            s,
+            mapping[s].first.str(),
+            sender_recv_count,
+            recv_per_bank);
+    }
+}
+
 }  // namespace
 
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
@@ -381,9 +427,14 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const GlobalCircularBuffer& gcb) {
     const uint32_t receiver_count = gcb.receiver_cores().num_cores();
     TT_FATAL(receiver_count > 0, "global_cb has no receivers");
-    return is_receiver_contiguous_weight(weight)
-               ? validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count)
-               : validate_krow_major_weight_for_matmul_1d(program_config, weight, receiver_count);
+    if (is_receiver_contiguous_weight(weight)) {
+        return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+    }
+    // Weight checks first: they establish num_global_cb_receivers > 0 and that it divides the
+    // receiver count, which is what the per-sender rule below is stated against.
+    const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(program_config, weight, receiver_count);
+    validate_krow_major_gcb_topology(program_config, gcb);
+    return block_count;
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the
@@ -429,11 +480,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
             num_recv_per_bank);
     }
 
-    // Validate every (config, weight) pair against the matmul invariants, and collect
-    // the largest in1_block_size to size the buffer.
-    uint32_t max_in1_block_size = 0;
-    uint32_t max_block_count = 0;
-    bool all_configs_fifo = true;
+    // Validate every (config, weight) pair against the matmul invariants, including the GCB window
+    // that pair needs on its own.
     for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cfg = program_configs[i];
         const auto& w = weights[i];
@@ -460,15 +508,13 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
 
         // ---- Per-(config, weight) K-row-major cross-checks and consumer-specific K-block count ----
         const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(cfg, w, receiver_count);
-        max_block_count = std::max(max_block_count, block_count);
-        all_configs_fifo = all_configs_fifo && is_fifo_consumer(cfg);
 
         const uint32_t in1_block_size = gcb_page_bytes(cfg, w, block_count);
         TT_FATAL(in1_block_size > 0, "config[{}] in1_block_size computed as 0", i);
-        max_in1_block_size = std::max(max_in1_block_size, in1_block_size);
+        validate_gcb_size_for_config(size, cfg, i, in1_block_size, block_count);
     }
 
-    validate_gcb_size(size, max_in1_block_size, max_block_count, all_configs_fifo);
+    validate_gcb_size_cap(size);
 
     return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device, bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
@@ -500,24 +546,19 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
 
     // All matmuls share the GCB receiver rectangle, so they must agree on the ring shape, and that
     // ring must match bank_to_receivers' total receiver count.
-    uint32_t max_page_bytes = 0;
-    uint32_t max_block_count = 0;
-    bool all_configs_fifo = true;
     for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cfg = program_configs[i];
         validate_grid_for_consumer(cfg, i, receiver_count);
 
         // Per-(config, weight) recv-contig cross-checks and consumer-specific K-block count.
         const uint32_t block_count = validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count);
-        max_block_count = std::max(max_block_count, block_count);
-        all_configs_fifo = all_configs_fifo && is_fifo_consumer(cfg);
 
         const uint32_t page_bytes = gcb_page_bytes(cfg, weights[i], block_count);
         TT_FATAL(page_bytes > 0, "program_configs[{}] page_bytes computed as 0", i);
-        max_page_bytes = std::max(max_page_bytes, page_bytes);
+        validate_gcb_size_for_config(size, cfg, i, page_bytes, block_count);
     }
 
-    validate_gcb_size(size, max_page_bytes, max_block_count, all_configs_fifo);
+    validate_gcb_size_cap(size);
 
     return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);

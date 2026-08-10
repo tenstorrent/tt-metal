@@ -101,7 +101,7 @@ def make_recv_contig_weight(
     """
     K = pt_weight.shape[-2]
     N = pt_weight.shape[-1]
-    assert N % ring_size == 0, f"N={N} must divide ring_size={ring_size}"
+    assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
     n_per_recv = N // ring_size
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
@@ -130,7 +130,7 @@ def make_krow_major_weight(device, pt_weight, num_dram_banks: int, dtype):
     """
     K = pt_weight.shape[-2]
     N = pt_weight.shape[-1]
-    assert N % num_dram_banks == 0, f"N={N} must divide num_dram_banks={num_dram_banks}"
+    assert N % num_dram_banks == 0, f"N={N} must be divisible by num_dram_banks={num_dram_banks}"
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
     )
