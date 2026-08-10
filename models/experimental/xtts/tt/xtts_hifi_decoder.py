@@ -121,6 +121,7 @@ class TtLatentUpsampler(LightweightModule):
             program_config=program_config,
             compute_kernel_config=self._compute_kernel_config,
             memory_config=self._out_memory_config(program_config),
+            dtype=ttnn.bfloat16,  # the whole vocoder chain downstream is bf16
         )
         ttnn.deallocate(x)
         # Return the TILE result directly. conv_pre (ttnn.conv1d) consumes a TILE input as-is (the
@@ -136,10 +137,10 @@ class TtHifiDecoder(LightweightModule):
     Output is ``[1, L_out*256, 1]`` (the waveform).
     """
 
-    def __init__(self, device, state_dict, bf16_stages=None):
+    def __init__(self, device, state_dict):
         super().__init__()
         self.upsampler = TtLatentUpsampler(device)
-        self.generator = TtHifiganGenerator(device, state_dict, bf16_stages=bf16_stages)
+        self.generator = TtHifiganGenerator(device, state_dict)
 
     def forward(self, latents, g):
         return self.generator(self.upsampler(latents), g)
