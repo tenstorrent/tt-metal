@@ -121,8 +121,10 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
                 shared_variables.rs_shared_variables.mm_progress_counters_addr,
                 tensor_args.mm_progress_counters->buffer()->address());
         }
-        // Likewise the credit-counter address
-        if (tensor_args.mm_credit_counters.has_value()) {
+        // Likewise the credit-counter address, but only when a window is configured: the address is
+        // recorded (and consumed) only on the windowed path, so an unwindowed call carries an array
+        // that nothing reads and a recorded address of 0.
+        if (tensor_args.mm_credit_counters.has_value() && attributes.mm_window_blocks.has_value()) {
             TT_FATAL(
                 static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address()) ==
                     shared_variables.rs_shared_variables.rs_credit_counters_addr,
