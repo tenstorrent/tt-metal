@@ -57,6 +57,7 @@ struct GridParams {
     uint32_t num_blocks = 0;
     bool use_mcast = false;
     bool use_two_stage_reduce = false;
+    bool grid_is_rectangular = true;
 
     static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };
@@ -83,9 +84,11 @@ struct CoreRanges {
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
+    CoreRangeSet mcast_dest_cores;
+    CoreRangeSet inactive_cores;
+    uint32_t num_mcast_dests = 0;
     uint32_t num_cores_x_mcast = 0;
     uint32_t num_cores_y_mcast = 0;
-    uint32_t num_mcast_dests = 0;
 
     static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers);
 };

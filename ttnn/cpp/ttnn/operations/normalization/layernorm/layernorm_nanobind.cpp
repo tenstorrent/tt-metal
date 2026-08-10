@@ -380,7 +380,21 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
         "layernorm_select_program_factory_for_python",
         &ttnn::for_python::select_layernorm_program_factory,
         nb::arg("operation_attributes"),
-        nb::arg("tensor_args"));
+        nb::arg("tensor_args"),
+        R"doc(
+            Selects the frozen layer norm program factory for the given inputs.
+
+            Returns the sharded factory when the input tensor is sharded and the multi-core factory
+            otherwise, mirroring the production selection so callers do not depend on the live
+            operation's select_program_factory.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters.
+                tensor_args (LayerNormInputs): Input tensors.
+
+            Returns:
+                LayerNormMultiCoreProgramFactoryForPython or LayerNormShardedProgramFactoryForPython.
+            )doc");
 
     // The live prim factories keep their existing Python names alongside the frozen ones; tests and
     // callers already bind to these, so the for_python surface is additive.
@@ -397,7 +411,20 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
             nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none())
+            nb::arg("core_range_set") = nb::none(),
+            R"doc(
+            Creates a program descriptor for layer norm multi-core operation.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
+                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
+                tensor_return_value (ttnn.Tensor): Output tensor reference.
+                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set to restrict the program to specific cores.
+                    If not provided, uses device's compute grid.
+
+            Returns:
+                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+            )doc")
         .def_static(
             "default_core_range", &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range, nb::arg("device"));
 
@@ -414,7 +441,28 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
             nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none());
+            nb::arg("core_range_set") = nb::none(),
+            R"doc(
+            Creates a program descriptor for sharded layer norm operation.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
+                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
+                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
+                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
+                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set restricting the cores this
+                    descriptor may use. If provided, validates that every core the program touches lies within it.
+                    Because the reduction multicasts over the bounding box of the shard grid, that footprint is the
+                    whole bounding box: for a non-rectangular shard grid the holes inside the box also get kernels,
+                    circular buffers and semaphores, so they must be included too.
+
+            Returns:
+                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
+
+            Raises:
+                RuntimeError: If core_range_set is provided and the bounding box of the sharded tensor's shard grid
+                    is not entirely contained within it.
+            )doc");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {

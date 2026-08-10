@@ -26,6 +26,11 @@ import ttnn
 
 
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+    non_rectangular_width_shard_config,
+    NON_RECTANGULAR_GRID_CASES,
+    NON_RECTANGULAR_GRID_IDS,
+)
 
 
 def stress_test_program_cache(fn):
@@ -167,6 +172,56 @@ def make_multi_norm_tensors(device):
 # ===========================================================================
 # TestInfrastructure
 # ===========================================================================
+# TestFrozenShardedNonRectangular
+# ===========================================================================
+
+
+class TestFrozenShardedNonRectangular:
+    """The frozen sharded factory must place kernels on the holes of a non-rectangular shard grid.
+
+    The reduction multicasts over the bounding box of the shard grid, so the holes inside that box
+    must also get kernels (production marks them IDLE_CORE). Without them the sender signals cores
+    the program never configured. This is asserted on the descriptor rather than by running the op:
+    it is deterministic, needs no device execution, and it is exactly the property a frozen copy of
+    the production factory can silently lose."""
+
+    @pytest.mark.parametrize(
+        "full_lines, cores_in_last_line, origin, line_length",
+        NON_RECTANGULAR_GRID_CASES,
+        ids=NON_RECTANGULAR_GRID_IDS,
+    )
+    def test_frozen_factory_covers_bounding_box(self, device, full_lines, cores_in_last_line, origin, line_length):
+        h, shard_width = 32, 32
+        grid, mem_config, w = non_rectangular_width_shard_config(
+            device, full_lines, cores_in_last_line, h, shard_width, origin=origin, line_length=line_length
+        )
+        bbox = ttnn.CoreRangeSet({grid.bounding_box()})
+        holes = bbox.subtract(grid)
+        assert holes.num_cores() > 0, "case must actually be non-rectangular"
+
+        tt_input = ttnn.from_torch(
+            torch.randn(1, 1, h, w, dtype=torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_config,
+        )
+        params = ttnn.LayerNormParams()
+        params.norm_type = ttnn.LayerNormType.LAYERNORM
+        params.distributed_norm_stage = ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED
+        params.eps = 1e-5
+        params.output_mem_config = mem_config
+        params.program_config = ttnn.create_layernorm_program_config(mem_config.shard_spec)
+        params.compute_kernel_config = ttnn.layernorm_default_compute_config(device.arch())
+        inputs = ttnn.LayerNormInputs(tt_input)
+
+        output = ttnn.LayerNormDeviceOperation.create_output_tensors(params, inputs)
+        desc = ttnn.LayerNormShardedProgramFactoryForPython.create_descriptor(params, inputs, output, None)
+
+        covered = [k.core_ranges for k in desc.kernels]
+        assert any(cr == holes for cr in covered), (
+            f"no kernel placed on the {holes.num_cores()} hole core(s) {holes} of bounding box {bbox}; "
+            f"kernels cover {[str(c) for c in covered]}"
+        )
 
 
 class TestInfrastructure:

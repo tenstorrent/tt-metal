@@ -23,9 +23,9 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace ttnn::prim;
-
 namespace ttnn::for_python {
+
+using namespace ttnn::prim;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
