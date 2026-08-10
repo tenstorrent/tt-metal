@@ -437,6 +437,76 @@ def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
         assert usage.peak_total == usage.peak_dataflow_buffer + usage.peak_l1
 
 
+# Metal 2.0 program-scope L1 comes in three kinds and each is reported under its own node type.
+# These traces are hand-built because the accounting has to be covered for kinds no Wormhole-reachable
+# op produces: kernel scratchpads only appear in Quasar factories today.
+
+
+def _l1_node(counter, node_type, size, **params):
+    all_params = {"size": str(size), "address": "0", "core_range_set": "{[0-0 - 0-0]}", "device_id": "0"}
+    all_params.update({key: str(value) for key, value in params.items()})
+    return {"counter": counter, "node_type": node_type, "params": all_params, "connections": []}
+
+
+def _cb(counter, size):
+    return _l1_node(counter, "circular_buffer_allocate", size, globally_allocated=0)
+
+
+def _dfb(counter, size, borrows_memory=0):
+    return _l1_node(counter, "dataflow_buffer_allocate", size, borrows_memory=borrows_memory)
+
+
+def _scratchpad(counter, size):
+    return _l1_node(counter, "scratchpad_allocate", size)
+
+
+def _dealloc_all(counter):
+    return {"counter": counter, "node_type": "circular_buffer_deallocate_all", "params": {}, "connections": []}
+
+
+def test_resource_usage_reports_each_program_l1_kind_separately():
+    """Each kind gets its own peak, and every kind lands in the total."""
+    trace = [_cb(0, 1024), _dfb(1, 2048), _scratchpad(2, 512)]
+
+    usage = ttnn.graph.extract_resource_usage_per_core(trace)
+
+    assert usage.peak_cb == 1024
+    assert usage.peak_dataflow_buffer == 2048
+    assert usage.peak_scratchpad == 512
+    # peak_total is what an L1 budget check reads, so it must not miss a kind.
+    assert usage.peak_total == 3584
+
+
+def test_resource_usage_excludes_borrowed_dataflow_buffer():
+    """A borrowed buffer is a view onto a tensor's L1, which the tensor already reports."""
+    trace = [_dfb(0, 4096, borrows_memory=1), _dfb(1, 256)]
+
+    usage = ttnn.graph.extract_resource_usage_per_core(trace)
+
+    assert usage.peak_dataflow_buffer == 256
+    assert usage.peak_total == 256
+
+
+def test_resource_usage_releases_every_l1_kind_between_programs():
+    """All three kinds are program-scope and are released together, so two programs do not stack."""
+    one_program = [_cb(0, 1024), _dfb(1, 2048), _scratchpad(2, 512)]
+    trace = one_program + [_dealloc_all(3), _cb(4, 1024), _dfb(5, 2048), _scratchpad(6, 512)]
+
+    usage = ttnn.graph.extract_resource_usage_per_core(trace)
+
+    assert usage.peak_cb == 1024
+    assert usage.peak_dataflow_buffer == 2048
+    assert usage.peak_scratchpad == 512
+    assert usage.peak_total == 3584
+
+
+def test_peak_l1_memory_usage_includes_every_program_l1_kind():
+    """The single-figure legacy API has to count the new kinds too, or it under-reports."""
+    trace = [_dfb(0, 2048), _scratchpad(1, 512)]
+
+    assert ttnn.graph.extract_peak_L1_memory_usage(trace) == 2560
+
+
 def test_extract_resource_usage_per_core_deprecated_kwarg():
     """The legacy interleaved_storage_cores kwarg must still be accepted (with a
     DeprecationWarning) until the removal date 2026-06-07."""
