@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Padded V2A cross configs so the large transport-bound shapes RUN on the ring8 (SP=8) mesh.
 
 The committed cross test skips stage2_1080p_6s / _14s on SP=8 because their global q/kv dims
