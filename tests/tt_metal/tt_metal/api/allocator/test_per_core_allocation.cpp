@@ -203,7 +203,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
     ASSERT_TRUE(per_core::is_per_core_allocation(*data_buffer));
 
     // The FIFO occupies L1 only on the receiver core, at a valid per-core address.
-    auto pc_addr = per_core::get_per_core_address(*data_buffer, receiver_core);
+    auto pc_addr = per_core::get_per_core_address(*data_buffer, distributed::MeshCoordinate(0, 0), receiver_core);
     EXPECT_GT(pc_addr, 0u) << "Receiver per-core address should be above the L1 base";
     EXPECT_LT(pc_addr, device->l1_size_per_core()) << "Receiver per-core address exceeds L1 size";
 
@@ -220,7 +220,8 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
     const uint32_t fifo_size = 2048;
 
     auto [send_socket, recv_socket] = make_per_core_socket(md, sender_core, receiver_core, fifo_size);
-    auto pc_addr = per_core::get_per_core_address(*recv_socket.get_data_buffer(), receiver_core);
+    auto pc_addr = per_core::get_per_core_address(
+        *recv_socket.get_data_buffer(), distributed::MeshCoordinate(0, 0), receiver_core);
 
     // A subsequent lockstep L1 buffer spanning the receiver core must not alias the per-core socket FIFO.
     CoreRange grid(CoreCoord(0, 0), CoreCoord(1, 0));
@@ -239,7 +240,8 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
     const uint32_t fifo_size = 2048;
 
     auto [send_socket, recv_socket] = make_per_core_socket(md, sender_core, receiver_core, fifo_size);
-    auto pc_addr = per_core::get_per_core_address(*recv_socket.get_data_buffer(), receiver_core);
+    auto pc_addr = per_core::get_per_core_address(
+        *recv_socket.get_data_buffer(), distributed::MeshCoordinate(0, 0), receiver_core);
 
     // The receiver's on-device config must point read_ptr/fifo_addr at the receiver core's per-core address.
     std::vector<receiver_socket_md> recv_config_readback;

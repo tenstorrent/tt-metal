@@ -275,14 +275,15 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             socket_mem_config.socket_storage_type == BufferType::L1,
             "Per-core socket allocation is only supported for L1 storage (got {}).",
             socket_mem_config.socket_storage_type);
-        std::set<CoreCoord> receiver_cores;
+        std::unordered_set<MeshCoreCoord> receiver_cores;
         for (const auto& connection : config.socket_connection_config) {
-            receiver_cores.insert(connection.receiver_core.core_coord);
+            receiver_cores.insert(connection.receiver_core);
         }
         TT_FATAL(
             receiver_cores.size() == 1,
-            "Per-core socket allocation (v1) supports exactly one distinct receiver core per socket, but the "
-            "connection config resolves to {} distinct receiver cores.",
+            "Per-core socket allocation (v1) supports exactly one distinct receiver core (device + core) per "
+            "socket, but the connection config resolves to {} distinct (device, core) receivers. A per-core "
+            "socket may not span multiple receiver cores or devices.",
             receiver_cores.size());
 
         TT_FATAL(
@@ -290,7 +291,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
 
-        shard_grid = CoreRangeSet(*receiver_cores.begin());
+        shard_grid = CoreRangeSet(receiver_cores.begin()->core_coord);
         num_data_cores = 1;
     } else if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
         // Allocate DRAM Sharded Buffer
@@ -492,8 +493,9 @@ DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
     TT_FATAL(
         !config.socket_connection_config.empty(),
         "Per-core socket has no connections; cannot resolve receiver data buffer address.");
-    const auto& receiver_core = config.socket_connection_config.front().receiver_core.core_coord;
-    return experimental::per_core_allocation::get_per_core_address(data_buffer, receiver_core);
+    const auto& receiver_core = config.socket_connection_config.front().receiver_core;
+    return experimental::per_core_allocation::get_per_core_address(
+        data_buffer, receiver_core.device_coord, receiver_core.core_coord);
 }
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
