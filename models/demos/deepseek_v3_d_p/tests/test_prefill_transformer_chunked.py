@@ -1491,11 +1491,21 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
+    # Log and drain the device at every layer boundary (TtPrefillTransformer.forward honours these), so
+    # a device-side failure is attributable to an exact (iter, chunk, layer). debug_layer_sync_pos
+    # carries the (iter, chunk) context the transformer cannot know. Serializes host and device, so the
+    # chunk/iteration timings below are not comparable to an un-instrumented run.
+    transformer.debug_layer_sync = True
+    transformer.debug_layer_sync_pos = (-1, -1)
+    logger.info(f"[layer-trace] per-layer sync+log enabled across {len(transformer.layers)} layers")
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
+            transformer.debug_layer_sync_pos = (it, c)
+            logger.info(f"[layer-trace] chunk start: iter={it} chunk={c}")
             kv_actual = preload_isl + c * CHUNK
             if use_trace:
                 ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
@@ -1540,6 +1550,9 @@ def run_chunked_transformer_updated(
                     f"host_submit={fused_host_seconds * 1000:.2f} ms "
                     f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
                 )
+        # Drain the device before closing out the iteration so iter_total covers all device work and
+        # the next iteration starts from a known-idle device.
+        ttnn.synchronize_device(mesh_device)
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")

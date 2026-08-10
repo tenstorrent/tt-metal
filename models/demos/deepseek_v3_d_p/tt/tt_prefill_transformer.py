@@ -445,8 +445,18 @@ class TtPrefillTransformer(LightweightModule):
                 self.indexer_types[self.first_layer_idx] == "full"
             ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
         indexer_indices = None
+        # Opt-in debug instrumentation (off by default, set by tests): log every layer as it starts and
+        # drain the device once it finishes, so a device-side failure pins to an exact (iter, chunk,
+        # layer) rather than to whatever the host was submitting. debug_layer_sync_pos carries the
+        # (iter, chunk) context the transformer cannot know; the caller updates it per chunk.
+        # Serializes host and device, so it invalidates perf numbers — debug only.
+        debug_layer_sync = getattr(self, "debug_layer_sync", False)
+        debug_iter, debug_chunk = getattr(self, "debug_layer_sync_pos", (-1, -1))
+
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
+            if debug_layer_sync:
+                logger.info(f"[layer-trace] iter={debug_iter} chunk={debug_chunk} layer={i} start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
             inject = indexer_indices if (reuse and mode == "shared") else None
             ret = layer(
@@ -477,6 +487,9 @@ class TtPrefillTransformer(LightweightModule):
                     indexer_indices = new_idx
             else:
                 h, _ = ret
+            if debug_layer_sync:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"[layer-trace] iter={debug_iter} chunk={debug_chunk} layer={i} done (synced)")
             signpost(f"forward_layer_{i}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only — KV cache filled, migration callback

@@ -33,6 +33,16 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 # The test driver resets and reads the counters once per chunk.
 _fused_ring_host_timing = {"calls": 0, "seconds": 0.0}
 
+# !!! TEMPORARY DEBUG HACK — DO NOT COMMIT !!!
+# Skips exactly ONE op: the indexer's ring scoring kernel (ttnn.experimental.ring_indexer_score_dsa),
+# substituting zero logits of the shape it would have produced. Everything else in the model runs for
+# real — including topk_large_indices on those logits, sparse_sdpa on the resulting indices, the whole
+# rest of MLA, and the MoE FFN. Isolates that single kernel as a hang / DRAM-corruption suspect.
+# DESTROYS accuracy; set back to False to restore the model.
+_INDEXER_SCORE_DISABLED = True
+if _INDEXER_SCORE_DISABLED:
+    logger.warning("*** DEBUG: ring_indexer_score_dsa is DISABLED in indexer.py (zero logits substituted). ***")
+
 
 def _fused_ring_host_timing_enabled() -> bool:
     # The focused Galaxy prefill pipeline already gives every run a unique summary directory, so enable
@@ -646,28 +656,43 @@ class TtIndexer:
         # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
         # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
         # by kv_len; the score reader addresses its own shard directly in the original ND cache.
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
-        host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
-        logits = ttnn.experimental.ring_indexer_score_dsa(
-            q_dev,
-            k_full,
-            weights,
-            index_kv_cache,
-            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            cluster_axis=self.sp_axis,
-            topology=self.sp_ccl_topology,
-            num_links=self.ccl_num_links,
-            chunk_start_idx=start_pos,
-            program_config=cfg,
-            seq_subshard_axis=self.tp_axis if tpsp else None,
-            cache_batch_idx=cache_batch_idx,
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,
-            kv_len=end_pos,
-        )
-        if host_start is not None:
-            _fused_ring_host_timing["calls"] += 1
-            _fused_ring_host_timing["seconds"] += time.perf_counter() - host_start
+        if _INDEXER_SCORE_DISABLED:
+            # Isolation mode: skip ONLY the score op. top-k below still runs for real, on substitute
+            # logits: bfloat16 ROW_MAJOR zeros (the layout/dtype topk_large_indices expects), width
+            # end_pos rather than the preallocated T — legal because valid_length=end_pos bounds topk
+            # to [0, end_pos) and it never reads the stale tail the real op leaves behind.
+            # All-equal logits means topk resolves ties to k distinct indices, so the downstream
+            # sparse_sdpa still sees a well-formed, in-range index set.
+            logits = ttnn.zeros(
+                [1, 1, q_dev.shape[2], end_pos],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
+            host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
+            logits = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_full,
+                weights,
+                index_kv_cache,
+                self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                cluster_axis=self.sp_axis,
+                topology=self.sp_ccl_topology,
+                num_links=self.ccl_num_links,
+                chunk_start_idx=start_pos,
+                program_config=cfg,
+                seq_subshard_axis=self.tp_axis if tpsp else None,
+                cache_batch_idx=cache_batch_idx,
+                block_cyclic_sp_axis=self.sp_axis,
+                block_cyclic_chunk_local=seq_len,
+                kv_len=end_pos,
+            )
+            if host_start is not None:
+                _fused_ring_host_timing["calls"] += 1
+                _fused_ring_host_timing["seconds"] += time.perf_counter() - host_start
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
