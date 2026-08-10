@@ -11,20 +11,12 @@
 
 #include <tt-metalium/device_types.hpp>
 
-namespace tt::tt_metal {
-class DeviceProfiler;
-}
-
 class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;
 
 public:
     ProfilerOptionalMetadata(std::map<std::pair<tt::ChipId, RuntimeID>, std::string>&& runtime_map) :
         runtime_id_to_opname_(std::move(runtime_map)) {}
-
-private:
-    // Internal lookup used only by DeviceProfiler when dumping results.
-    friend class tt::tt_metal::DeviceProfiler;
 
     const std::string& get_op_name(tt::ChipId device_id, RuntimeID runtime_id) const {
         static const std::string empty_string;
@@ -36,5 +28,6 @@ private:
         return empty_string;
     }
 
+private:
     std::map<std::pair<tt::ChipId, RuntimeID>, std::string> runtime_id_to_opname_;
 };
