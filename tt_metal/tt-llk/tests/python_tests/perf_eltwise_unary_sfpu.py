@@ -15,6 +15,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
+from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -85,6 +86,14 @@ def _get_stable_sort_modes(mathop):
     return [StableSort.No]
 
 
+# Every op with a unary SFPU kernel, taken from the same registry the correctness sweep
+# in test_sfpu_unary.py drives, so an op cannot be added there and silently skip perf.
+# _UNARY_OPS_NOT_SWEPT is deliberately *not* subtracted: those ops (the topk halves) are
+# exempt from the correctness sweep precisely because they are perf-only, so they belong
+# here. Sorted so the parametrize ids are stable across runs.
+PERF_SWEEP_OPS = sorted(sfpu_unary_ops(), key=lambda op: op.name)
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -99,26 +108,7 @@ def _get_stable_sort_modes(mathop):
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
-        MathOperation.Reciprocal,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Silu,
-        MathOperation.Gelu,
-        MathOperation.GeluTanh,
-        MathOperation.Exp,
-        MathOperation.Lrelu,
-        MathOperation.ReluMin,
-        MathOperation.Erfinv,
-        MathOperation.Heaviside,
-        MathOperation.Softshrink,
-        MathOperation.Softsign,
-        MathOperation.Square,
-        MathOperation.Log,
-        MathOperation.TopKLocalSort,
-        MathOperation.TopKMerge,
-        MathOperation.TopKRebuild,
-    ],
+    mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
     loop_factor=[
         16,
