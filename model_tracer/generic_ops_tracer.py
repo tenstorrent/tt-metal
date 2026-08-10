@@ -695,7 +695,52 @@ def _extract_hardware_and_mesh(machine_info):
                 except Exception:
                     pass
 
+    # Current-format fallback. convert_json_to_master_format() promotes the mesh onto
+    # machine_info as mesh_device_shape/device_count, and only the legacy tensor_placements
+    # form was read above -- so for every trace written in the current format the mesh came
+    # back None and dropped out of the identity entirely. Two executions of the same op with
+    # the same arguments on a [1, 8] and a [2, 4] mesh then produced the SAME config_hash and
+    # collapsed into one configuration, silently attaching both meshes' trace and performance
+    # records to whichever hardware/mesh the first execution happened to carry.
+    #
+    # Read the promoted fields when the legacy placements are absent or unusable. Placement
+    # type/shard dim are per-tensor and live in the operation arguments, not here, so they stay
+    # None on this path rather than being invented; the mesh SHAPE is what distinguishes these
+    # executions and it is what identity needs.
+    if mesh_config is None and machine_info:
+        mesh_shape_value = machine_info.get("mesh_device_shape")
+        mesh_shape = _normalize_mesh_shape(mesh_shape_value)
+        if mesh_shape:
+            mesh_config = {
+                "mesh_shape": mesh_shape,
+                "placement_type": None,
+                "shard_dim": None,
+            }
+
     return hardware, mesh_config
+
+
+def _normalize_mesh_shape(mesh_shape_value):
+    """Return a mesh shape as a plain list of ints, or None if it is absent/unusable.
+
+    Accepts the encodings that appear in traced machine_info -- a list/tuple, or a JSON string
+    such as "[4, 8]" -- so equivalent encodings of the same mesh normalize to one identity
+    instead of hashing differently.
+    """
+    if mesh_shape_value is None:
+        return None
+    if isinstance(mesh_shape_value, str):
+        try:
+            mesh_shape_value = json.loads(mesh_shape_value)
+        except Exception:
+            return None
+    if isinstance(mesh_shape_value, (list, tuple)):
+        try:
+            shape = [int(d) for d in mesh_shape_value]
+        except (TypeError, ValueError):
+            return None
+        return shape or None
+    return None
 
 
 def _canonicalize_for_storage(obj):
@@ -813,10 +858,32 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
             args_str = json.dumps(op_args, sort_keys=True, default=str)
             arg_signature = hashlib.md5(args_str.encode()).hexdigest()
 
-        # Check if this configuration already exists
+        # Configuration identity is operation + arguments + hardware + mesh. Matching on the
+        # arguments (or sweep_source_hash) ALONE appended an execution to the first config with
+        # the same arguments regardless of where it ran, so a [1, 8] and a [2, 4] execution
+        # landed in one configuration under one config_hash. Require the hardware/mesh identity
+        # to agree as well; when it differs this is a genuinely different configuration and gets
+        # its own entry and hash.
+        incoming_identity = _extract_hardware_and_mesh(operation.get("machine_info"))
+
+        def _config_identity(config):
+            """The (hardware, mesh) a stored configuration represents, from its executions.
+
+            Uses the first execution's machine_info, which is exact for configurations written
+            by this function -- every execution in one now shares an identity. A pre-existing
+            MIXED configuration (written before this rule) reports its first execution's
+            identity, so a later execution that disagrees will no longer be merged into it.
+            """
+            for execution in config.get("executions", []) or []:
+                if isinstance(execution, dict) and execution.get("machine_info"):
+                    return _extract_hardware_and_mesh(execution["machine_info"])
+            return (None, None)
+
         matching_config = None
         for existing_config in master_data["operations"][op_name]["configurations"]:
             if isinstance(existing_config, dict):
+                if _config_identity(existing_config) != incoming_identity:
+                    continue
                 if sweep_source_hash and existing_config.get("sweep_source_hash") == sweep_source_hash:
                     matching_config = existing_config
                     break
@@ -1400,6 +1467,7 @@ def recompute_config_hashes(json_file):
         data = json.load(f)
 
     updated = 0
+    mixed = []
     for op_name, op_data in data.get("operations", {}).items():
         for config in op_data.get("configurations", []):
             old_hash = config.get("config_hash")
@@ -1410,6 +1478,21 @@ def recompute_config_hashes(json_file):
                 executions = config.get("executions", [])
                 if executions and isinstance(executions[0], dict):
                     machine_info = executions[0].get("machine_info")
+
+            # A configuration written before hardware/mesh were part of the match may hold
+            # executions from SEVERAL identities. Rehashing it from executions[0] would silently
+            # stamp one execution's hardware/mesh onto all of them and look like a clean result,
+            # so report those instead of quietly picking a winner. Splitting them is a data
+            # migration and is deliberately not attempted here.
+            identities = {
+                json.dumps(_extract_hardware_and_mesh(execution.get("machine_info")), sort_keys=True, default=str)
+                for execution in (config.get("executions") or [])
+                if isinstance(execution, dict) and execution.get("machine_info")
+            }
+            if len(identities) > 1:
+                mixed.append((op_name, config.get("config_id"), old_hash, len(identities)))
+                continue
+
             new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
@@ -1420,6 +1503,16 @@ def recompute_config_hashes(json_file):
         json.dump(data, f, indent=2, sort_keys=True)
 
     print(f"✅ Recomputed hashes: {updated} changed")
+    if mixed:
+        print(
+            f"⚠️  {len(mixed)} configuration(s) span more than one hardware/mesh identity and were "
+            "left unchanged -- rehashing them would attribute every execution to whichever one "
+            "happens to be first. They need splitting per identity:"
+        )
+        for op_name, config_id, config_hash, count in mixed[:10]:
+            print(f"     {op_name} config_id={config_id} hash={str(config_hash)[:12]} identities={count}")
+        if len(mixed) > 10:
+            print(f"     ... and {len(mixed) - 10} more")
     return updated
 
 
