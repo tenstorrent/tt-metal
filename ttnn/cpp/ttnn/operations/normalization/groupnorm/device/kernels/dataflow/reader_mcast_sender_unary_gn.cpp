@@ -315,13 +315,11 @@ void kernel_main() {
                     uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                        uint32_t out_block_h_actual, out_block_hw_actual;
+                        uint32_t out_block_h_actual;
                         if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                             out_block_h_actual = out_block_h_last;
-                            out_block_hw_actual = out_block_hw_last;
                         } else {
                             out_block_h_actual = out_block_h_normal;
-                            out_block_hw_actual = out_block_hw_normal;
                         }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
@@ -429,15 +427,18 @@ void kernel_main() {
 
                             for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                    noc.async_read(
-                                        dst_a,
-                                        CoreLocalMem<uint32_t>(l1_write_addr),
-                                        single_tile_size_bytes,
-                                        {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                            index_b_offset + index_g_offset},
-                                        {});
+                                    // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr to stay aligned.
+                                    if ((index_g_offset + nt) < per_core_N) {
+                                        noc.async_read(
+                                            dst_a,
+                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            single_tile_size_bytes,
+                                            {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                                index_b_offset + index_g_offset},
+                                            {});
+                                        noc.async_read_barrier();
+                                    }
                                     l1_write_addr += dst_tile_bytes;
-                                    noc.async_read_barrier();
                                 }
                             }
                             dfb_reread_out.push_back(out_block_hw_normal);

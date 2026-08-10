@@ -106,6 +106,7 @@ void kernel_main() {
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
     constexpr uint32_t largest = get_compile_time_arg_val(12);
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
+    constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
     // Runtime args
     uint32_t direction_init = get_arg_val<uint32_t>(0);
@@ -138,7 +139,7 @@ void kernel_main() {
         bool ascending = !largest;  // Sort direction for bitonic sequence properties
 
         // Initial bitonic sort on local width chunk
-        process_and_sort_tiles(
+        process_and_sort_tiles<stable_sort>(
             input_dfb_index,             // Input values buffer (double-buffered)
             index_dfb_index,             // Input indices buffer (double-buffered)
             input_transposed_dfb_index,  // Transposed values staging buffer
@@ -157,7 +158,7 @@ void kernel_main() {
         // - Iteration n: Compare tiles with distance 2^n → groups of 64*(2^(n+1)) elements
         // Final iteration produces locally sorted TopK results for this width chunk.
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration(
+            process_iteration<stable_sort>(
                 m_iter,                      // Current merge iteration (0 to logWt-1)
                 K,                           // TopK value (number of elements to find)
                 Wt,                          // Width tiles in local chunk

@@ -67,11 +67,20 @@ class MemoryTrackerCallback(TrainerCallback):
     snapshots are included); this callback only adds the per-step snapshots and closes the session.
     """
 
+    def __init__(self) -> None:
+        self._micro_step = 0
+
+    def _snapshot_name(self, trainer: SFTTrainer, name: str) -> str:
+        if trainer.config.gradient_accumulation_steps > 1:
+            return f"{name}_micro_{self._micro_step}"
+        return name
+
     def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
-        MemoryUsageTracker.snapshot("FORWARD_PASS")
+        MemoryUsageTracker.snapshot(self._snapshot_name(trainer, "FORWARD_PASS"))
 
     def on_after_backward(self, trainer: SFTTrainer, batch: Batch) -> None:
-        MemoryUsageTracker.snapshot("BACKWARD_PASS")
+        MemoryUsageTracker.snapshot(self._snapshot_name(trainer, "BACKWARD_PASS"))
+        self._micro_step += 1
 
     def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")

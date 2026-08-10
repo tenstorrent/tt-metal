@@ -252,7 +252,7 @@ FORCE_INLINE void matmul_phase(
     // Down matmul left SrcA on down weights (bf4), SrcB on activated (bf8).
     // Reconfig SrcA=partials (Float16_b), SrcB=down_bias before the bcast init.
     reconfig_data_format(partials_cb_id, down_bias_cb_id);
-    add_bcast_rows_init_short(partials_cb_id, down_bias_cb_id);
+    add_bcast_rows_init(partials_cb_id, down_bias_cb_id);
 #else
     (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
@@ -610,7 +610,7 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
     // before the init (add_bcast uses both operands, unlike the copy path).
     reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
-    add_bcast_rows_init_short(gate_partials_cb_id, gate_bias_cb_id);
+    add_bcast_rows_init(gate_partials_cb_id, gate_bias_cb_id);
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;
@@ -675,13 +675,13 @@ FORCE_INLINE void multiply_phase(
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
     // SrcA was configured for partials_gu but SrcB still points at the
-    // old cb_in0_x (bf8) from matmul — mul_tiles_init's full_init only
+    // old cb_in0_x (bf8) from matmul — mul_init's full_init only
     // reprograms the unpack MOP, not the data formats. Without the
     // explicit reconfig SrcB reads bf16 up_intermed bytes as bf8 and the
     // multiply collapses to denormal magnitudes.
     pack_reconfig_data_format(activated_cb_id);
     reconfig_data_format(gate_cb_id, up_cb_id);
-    mul_tiles_init(gate_cb_id, up_cb_id);
+    mul_init(gate_cb_id, up_cb_id);
 
     const uint32_t num_subblocks = EFF_OUT / out_subblock_num_tiles;
     uint32_t base = 0;

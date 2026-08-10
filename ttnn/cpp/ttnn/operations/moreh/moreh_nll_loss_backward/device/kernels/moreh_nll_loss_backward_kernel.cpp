@@ -58,7 +58,7 @@ void kernel_main() {
         dfb_tmp2_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(dfb_tmp_weight_obj, dfb_output_grad_obj);
+        mul_bcast_scalar_init_with_dt(dfb_tmp_weight_obj, dfb_output_grad_obj);
         mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
         negative_tile_init();
         negative_tile(dst0);
@@ -76,7 +76,7 @@ void kernel_main() {
         dfb_tmp1_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(dfb_tmp2_obj, dfb_tmp1_obj);
+        mul_bcast_scalar_init_with_dt(dfb_tmp2_obj, dfb_tmp1_obj);
         mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
         tile_regs_commit();
 
@@ -93,7 +93,7 @@ void kernel_main() {
         dfb_input_grad_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(dfb_tmp_weight_obj, dfb_output_grad_obj);
+        mul_bcast_scalar_init_with_dt(dfb_tmp_weight_obj, dfb_output_grad_obj);
         mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
         negative_tile_init();
         negative_tile(dst0);

@@ -45,21 +45,21 @@ ALWI void add_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    add_tiles_init(icb0, icb1);
+    add_init(icb0, icb1);
 }
 
 ALWI void sub_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    sub_tiles_init(icb0, icb1);
+    sub_init(icb0, icb1);
 }
 
 ALWI void mul_tiles_init_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_tiles_init(icb0, icb1);
+    mul_init(icb0, icb1);
 }
 
 // Binary tile->CB orchestrators (in namespace ckernel).

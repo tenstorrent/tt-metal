@@ -204,7 +204,7 @@ void calculate_sum_exp_x() {
     reconfig_data_format(cb_input, cb_max_value_after_reduction);
     for (uint32_t col = 0; col < Wt;) {
         tile_regs_acquire();
-        sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+        sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             sub_tiles_bcast<BroadcastType::COL>(
                 cb_input,
@@ -278,7 +278,9 @@ void calculate_sum_exp_x() {
 
     const uint32_t max_value_register = 2U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt;) {
@@ -379,7 +381,7 @@ void kernel_main() {
     }
     cb_wait_front(cb_reduction_scaler, onetile);
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
     copy_init(cb_input);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -403,7 +405,9 @@ void kernel_main() {
 
             tile_regs_acquire();
             reconfig_data_format(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
-            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction);
             unary_bcast<BroadcastType::COL>(
                 cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
 
@@ -417,7 +421,7 @@ void kernel_main() {
 #else
                 const uint32_t input_tile_idx = block_idx;
                 reconfig_data_format(cb_input, cb_max_value_after_reduction);
-                sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+                sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
                 sub_tiles_bcast<BroadcastType::COL>(
                     cb_input,
                     cb_max_value_after_reduction,

@@ -126,7 +126,12 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         if constexpr (activation_reuse_enabled) {
             l1_write_addr_act = cb_start_addr;
+#ifndef ARCH_QUASAR
+            // evil_set_write_ptr is WH/BH-only FIFO-cursor surgery (dataflow_buffer.h: "Not declared on
+            // Quasar"). cb_act is a concrete DataflowBuffer here, so two-phase lookup name-checks this even
+            // though the branch is dead on Quasar (activation_reuse is force-off in the factory). Guard it.
             cb_act.evil_set_write_ptr(l1_write_addr_act);
+#endif
         }
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {

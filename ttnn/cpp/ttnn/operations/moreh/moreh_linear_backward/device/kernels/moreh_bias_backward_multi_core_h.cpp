@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(cb_in0, cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out0);
     dfb_scaler_obj.wait_front(onetile);
 
     if (do_mask_h || do_mask_w) {

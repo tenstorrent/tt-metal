@@ -452,7 +452,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -599,8 +601,13 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        # Always have a fresh build when compiling. Under xdist, only the
+        # controller may remove the shared artifact tree; workers can already
+        # be compiling variants under it.
+        if (
+            TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
+            and worker_id == "master"
+        ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
     # === Instance fields and methods ===

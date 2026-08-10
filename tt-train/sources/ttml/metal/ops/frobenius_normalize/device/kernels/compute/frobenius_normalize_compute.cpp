@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr uint32_t accum_reg = 0;
     constexpr uint32_t work_reg = 1;
 
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
     copy_init(cb_input);
 
     // =========================================================================

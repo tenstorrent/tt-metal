@@ -325,9 +325,8 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);  // Runtime arg for balanced mode
 #endif
 
-    binary_op_init_common(cb_query, cb_key, cb_value);
+    compute_kernel_hw_startup(cb_query, cb_key, cb_value);
     copy_init(cb_query);
-    // binary_op_init_common above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 

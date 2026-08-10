@@ -1072,6 +1072,15 @@ inline bool is_quasar_cq_dram_backed() {
     return !rtoptions.is_dram_backed_cq_specified() || rtoptions.get_dram_backed_cq();
 }
 
+struct CompletionQueuePtrToggle {
+    uint32_t ptr_16B = 0;
+    uint32_t toggle = 0;
+};
+
+inline CompletionQueuePtrToggle split_ptr_toggle(uint32_t ptr_and_toggle) {
+    return {ptr_and_toggle & 0x7fffffffu, ptr_and_toggle >> 31};
+}
+
 // Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
 // sets quasar_simulator_variant_ before gtest's SetUp() reads it.
 template <class FDFixture>
@@ -1115,13 +1124,7 @@ protected:
     // Test Config defaults
     DispatchTestConfig cfg_;
 
-    void SetUp() override {
-        if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        tt_metal::GenericMeshDeviceFixture::SetUp();
-
-        // Setup Config
+    virtual DispatchPayloadGenerator::Config payload_generator_config() const {
         DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = cfg_.use_coherent_data;
         pgcfg.perf_test = cfg_.perf_test;
@@ -1131,8 +1134,17 @@ protected:
         // Handle Seeding
         std::random_device rd;
         pgcfg.seed = rd();
+        return pgcfg;
+    }
+
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        tt_metal::GenericMeshDeviceFixture::SetUp();
 
         // Initialize Generator
+        const DispatchPayloadGenerator::Config pgcfg = payload_generator_config();
         payload_generator_ = std::make_unique<DispatchPayloadGenerator>(pgcfg);
         log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
 
@@ -1213,12 +1225,12 @@ protected:
         const auto start = std::chrono::steady_clock::now();
         uint32_t avail = 0;
         while (avail < total_expected_cq_payload) {
-            const uint32_t completion_queue_write_ptr_and_toggle =
-                mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition);
-            const uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
-            const uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
+            const auto [completion_q_write_ptr_16B, completion_q_write_toggle] =
+                split_ptr_toggle(mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition));
+            const uint32_t completion_q_write_ptr = completion_q_write_ptr_16B << 4;
             const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
             const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
+            const uint32_t completion_q_base = mgr_->get_issue_queue_limit(fdcq_->id());
             const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
 
             if (completion_q_write_toggle == completion_q_read_toggle) {
@@ -1226,7 +1238,7 @@ protected:
                             ? completion_q_write_ptr - completion_q_read_ptr
                             : 0u;
             } else {
-                avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
+                avail = (limit - completion_q_read_ptr) + (completion_q_write_ptr - completion_q_base);
             }
 
             if (timeout_ms > 0 && !Common::is_quasar_sim()) {
