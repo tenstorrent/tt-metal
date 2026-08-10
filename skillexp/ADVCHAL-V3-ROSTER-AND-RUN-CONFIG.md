@@ -139,28 +139,37 @@ of every measurement, records both, and the gate surfaces any hit. A shared host
 evidence — `tt-smi` reports board presence, not utilisation — and two reference cells can never be shown
 clean. The container running `ttnn-advise` maps the same device, so a capture during a timed run appears here.
 
-### The dry run — half done, and the other half is a readiness blocker
+### The dry run — passes, and it caught a defect that would have failed every cell
 
-**Static half passes:** every prompt substitution resolves, no placeholder is left dangling, and the gate and
-skill the prompt names both exist. *(Noted, unchanged: the drivers pass `--replace HF_MODEL=…`, which neither
-the v2 nor the v3 prompt consumes. Pre-existing and harmless.)*
+⚠ **Retraction.** An earlier revision of this file reported `openai_codex` missing from every interpreter,
+called it an environment drift since v2, and listed it as the one blocking readiness item. **That was wrong,
+and it was my own invocation.** multigoal's help says it needs the openai-codex package *"unless
+`--codex-bin` points at a Codex binary explicitly"*; the drivers pass `--codex-bin` and my dry run omitted
+it. The binary is present and healthy — `codex-cli 0.144.4` at `/home/mvasiljevic/.local/bin/codex`. Nothing
+disappeared and nothing needs installing.
 
-**The runner half cannot run.** `openai_codex` is absent from every interpreter in both containers — the
-tt-metal `python_env`, the toolchain venv and system python — so `multigoal` exits **1** with *"openai-codex
-is required for multigoal's app-server runner"*. v2 ran 15 cells through this same script, so **the
-environment has drifted since**.
+That is `ANALYST-PITFALLS` Pattern 2 — *"I blamed the tool for my own reconstruction's failure"* — which that
+document calls the worst error in the corpus, and whose prescribed order is: your own setup first, the tool
+second. I inverted it and published the conclusion.
 
-Deliberately **not** installed: adding a dependency to the measurement venv immediately before a perf run is
-how the v2 corpus ended up with *"a toolchain whose provenance was an accident"* (B1/P30 — a package
-installed mid-run by an agent, recorded nowhere, and every subsequent run inherited it). This needs
-`pip install -r .agents/requirements.txt` as a deliberate, recorded step, followed by a re-run of the dry
-run and a toolchain fingerprint.
+**Invoked correctly, the dry run immediately found a real defect: the v3 objective was 4049 characters
+against codex app-server's 4000-character limit.** Every cell would have been rejected at launch, before any
+device time. v2's prompt was 2278 characters; mine had grown to 3998 in the file and 4049 after `MODEL_DIR`
+substitution.
+
+The prompt is now **2885 characters — 2906–2938 as the substituted objective across the roster**, with all 16
+non-negotiables intact and each still mapping to a gate check. What came out was the rationale, which belongs
+in `SKILL.md`; a contract rather than a method restatement was v2's own rule for this file, and v3 had
+drifted from it. `--dry-run` returns **rc=0** for the four longest model dirs.
+
+Both halves of the dry run therefore earned their keep, exactly as `FUTURE-RUNS` predicted — *three of four
+harness bugs in the v2 prototype were caught this way in seconds*. Two here, counting mine.
 
 ## 5. Readiness
 
 | | |
 |---|---|
-| **Blocking** | `openai_codex` missing → `pip install -r .agents/requirements.txt`, then re-run the dry run |
-| ready | the stage, its gate, step 0, the roster, the run config, the isolation state, the agent pin |
+| **Blocking** | nothing |
+| ready | the stage, its gate, the dry run, step 0, the roster, the run config, the isolation state, the agent pin |
 | first device work | `phiFN` at batch 32 — must reach −10.43 % or the rebuild is wrong |
 | run the control early | `llama-3.1-8B exp17` must still report 0.0 % |
