@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint_pages.h"
 
 using fn_compute_5 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -33,14 +33,17 @@ using fn_compute = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 struct LLK_Node {
     fn_init* llk_init;
     FN_compute llk;
-    uint32_t CB_A;
-    uint32_t CB_B;
-    uint32_t CB_OUT;
+    // Dataflow-buffer handles. Declared as uint32_t so a dfb::<name> binding token converts
+    // straight in at constexpr time, and so the LLK entry points, which still take raw ids,
+    // can be called with the field directly.
+    uint32_t DFB_A;
+    uint32_t DFB_B;
+    uint32_t DFB_OUT;
     // If we do not want a fixed index
     // 0xFFFF: read and pop
     // 0xDDDD: read only, no pop
-    // else: use a fixed index for CB_B
-    uint32_t fixed_CB_B_index;
+    // else: use a fixed index for DFB_B
+    uint32_t fixed_DFB_B_index;
     // Note: These values were chosen for readability, and can be changed if wanted
     // If we do not want a fixed index 0xFFFF is the default value
     uint32_t fixed_dest_reg;
@@ -49,47 +52,47 @@ struct LLK_Node {
     uint32_t debug_mode;
 };
 template <typename cur_llk_type>
-uint32_t cb_b_index_policy(uint32_t j, uint32_t wt) {
+uint32_t dfb_b_index_policy(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
-    if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
+    if constexpr (cur_llk.fixed_DFB_B_index == 0xFFFF) {
         return j;
-    } else if constexpr (cur_llk.fixed_CB_B_index == 0xDDDD) {
+    } else if constexpr (cur_llk.fixed_DFB_B_index == 0xDDDD) {
         return wt + j;
     } else {
-        return cur_llk.fixed_CB_B_index;
+        return cur_llk.fixed_DFB_B_index;
     }
 }
 
-template <uint32_t cb_length, bool is_fp_32, typename cur_llk_type>
+template <uint32_t dfb_length, bool is_fp_32, typename cur_llk_type>
 void unroll_llk();
 
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops);
 
-template <uint32_t total_tiles, uint32_t cb_length, bool is_fp_32, typename... llk_nodes>
+template <uint32_t total_tiles, uint32_t dfb_length, bool is_fp_32, typename... llk_nodes>
 void chain_llk(llk_nodes...) {
-    constexpr uint32_t iterations = total_tiles / cb_length;
-    constexpr uint32_t leftovers = total_tiles % cb_length;
+    constexpr uint32_t iterations = total_tiles / dfb_length;
+    constexpr uint32_t leftovers = total_tiles % dfb_length;
     for (uint32_t i = 0; i < iterations; i++) {
-        (..., unroll_llk<cb_length, is_fp_32, llk_nodes>());
+        (..., unroll_llk<dfb_length, is_fp_32, llk_nodes>());
     }
     (..., unroll_llk<leftovers, is_fp_32, llk_nodes>());
 }
 
 // basecase for recursion
 
-template <uint32_t cb_length, bool is_fp_32, typename cur_llk_type>
+template <uint32_t dfb_length, bool is_fp_32, typename cur_llk_type>
 void unroll_llk() {
     constexpr auto cur_llk = cur_llk_type::node;
     constexpr uint32_t num_dst_regs = (is_fp_32 ? 4 : 8);
 
-    constexpr uint32_t cb_iterations = cb_length / num_dst_regs;
-    constexpr uint32_t cb_leftovers = cb_length % num_dst_regs;
+    constexpr uint32_t dfb_iterations = dfb_length / num_dst_regs;
+    constexpr uint32_t dfb_leftovers = dfb_length % num_dst_regs;
 
-    reconfig_data_format(cur_llk.CB_A, cur_llk.CB_B);
-    pack_reconfig_data_format(cur_llk.CB_OUT);
-    cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B, __builtin_LINE());
-    for (uint32_t i = 0; i < cb_iterations; i++) {
+    reconfig_data_format(cur_llk.DFB_A, cur_llk.DFB_B);
+    pack_reconfig_data_format(cur_llk.DFB_OUT);
+    cur_llk.llk_init(cur_llk.DFB_A, cur_llk.DFB_B, __builtin_LINE());
+    for (uint32_t i = 0; i < dfb_iterations; i++) {
         if constexpr (cur_llk.debug_mode == 1) {
             // DPRINT_UNPACK("=============START NODE=============\n");
         }
@@ -99,55 +102,55 @@ void unroll_llk() {
             // DPRINT_UNPACK("=============END NODE=============\n");
         }
     }
-    unroll_inner_loop<cb_leftovers, cur_llk_type>(cb_iterations);
+    unroll_inner_loop<dfb_leftovers, cur_llk_type>(dfb_iterations);
 }
 
 template <typename cur_llk_type>
-void print_input_CBs(uint32_t j, uint32_t wt) {
+void print_input_DFBs(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
     // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-    // DPRINT_UNPACK("=============CB_A=============\n");
-    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
-    // DPRINT_UNPACK("=============CB_B=============\n");
-    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
+    // DPRINT_UNPACK("=============DFB_A=============\n");
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.DFB_A, j, true));
+    // DPRINT_UNPACK("=============DFB_B=============\n");
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.DFB_B, dfb_b_index_policy<cur_llk_type>(j, wt), true));
 }
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops) {
     constexpr auto cur_llk = cur_llk_type::node;
     uint32_t wt = register_loops * num_dst_regs;
-    CircularBuffer cb_a(cur_llk.CB_A);
-    CircularBuffer cb_b(cur_llk.CB_B);
-    CircularBuffer cb_out(cur_llk.CB_OUT);
+    DataflowBuffer dfb_a(cur_llk.DFB_A);
+    DataflowBuffer dfb_b(cur_llk.DFB_B);
+    DataflowBuffer dfb_out(cur_llk.DFB_OUT);
     tile_regs_acquire();
-    cb_a.wait_front(num_dst_regs);
-    if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
-        cb_b.wait_front(num_dst_regs);
-    } else if constexpr (cur_llk.fixed_CB_B_index == 0xDDDD) {
-        cb_b.wait_front(num_dst_regs + (wt));
+    dfb_a.wait_front(num_dst_regs);
+    if constexpr (cur_llk.fixed_DFB_B_index == 0xFFFF) {
+        dfb_b.wait_front(num_dst_regs);
+    } else if constexpr (cur_llk.fixed_DFB_B_index == 0xDDDD) {
+        dfb_b.wait_front(num_dst_regs + (wt));
     } else {
-        cb_b.wait_front(cur_llk.fixed_CB_B_index + 1);
+        dfb_b.wait_front(cur_llk.fixed_DFB_B_index + 1);
     }
     for (uint32_t j = 0; j < num_dst_regs; j++) {
         if constexpr (cur_llk.debug_mode == 1) {
-            print_input_CBs<cur_llk_type>(j, wt);
+            print_input_DFBs<cur_llk_type>(j, wt);
         }
-        cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cb_b_index_policy<cur_llk_type>(j, wt), j);
+        cur_llk.llk(cur_llk.DFB_A, cur_llk.DFB_B, j, dfb_b_index_policy<cur_llk_type>(j, wt), j);
         if constexpr (cur_llk.debug_mode == 1) {
             // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
             //  DPRINT_MATH("=============DEST_OUT=============\n");
             //  dprint_tensix_dest_reg(j);
         }
     }
-    cb_a.pop_front(num_dst_regs);
-    if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
-        cb_b.pop_front(num_dst_regs);
+    dfb_a.pop_front(num_dst_regs);
+    if constexpr (cur_llk.fixed_DFB_B_index == 0xFFFF) {
+        dfb_b.pop_front(num_dst_regs);
     }
     tile_regs_commit();
     tile_regs_wait();
-    cb_out.reserve_back(num_dst_regs);
+    dfb_out.reserve_back(num_dst_regs);
     for (uint32_t j = 0; j < num_dst_regs; j++) {
-        pack_tile(j, cur_llk.CB_OUT);
+        pack_tile(j, cur_llk.DFB_OUT);
     }
-    cb_out.push_back(num_dst_regs);
+    dfb_out.push_back(num_dst_regs);
     tile_regs_release();
 }

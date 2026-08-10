@@ -28,6 +28,7 @@ from helpers.llk_params import (
     L1Accumulation,
     MathFidelity,
     MathOperation,
+    ReduceDimension,
     Transpose,
     UnpackToDest,
 )
@@ -46,6 +47,7 @@ from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.reduce_tilize_a import UnpackReduceTilize
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
@@ -150,6 +152,16 @@ _forced_unpacker = lambda name: (
     f"unpacker must be {name}",
 )
 
+_forced_unpackers = lambda names: (
+    lambda s, a, b: s.unpacker is not None and s.unpacker not in names,
+    f"unpacker must be one of: {', '.join(names)}",
+)
+
+_reduce_col_only = (
+    lambda s, a, b: s.operation != "Reduce" or s.reduce_dim != ReduceDimension.Column,
+    "unpacker can only be paired with a column reduce (operation: Reduce, reduce_dim: REDUCE_COL)",
+)
+
 _matmul_dim_check = (
     lambda s, a, b: a.dimensions[1] != b.dimensions[0],
     "Matmul: incompatible dimensions for src_a and src_b",
@@ -199,6 +211,10 @@ UNPACKER_MAP = {
         lambda s: UnaryBroadcastUnpacker(),
         [_broadcast_required, _no_transpose, _no_unpack_to_dest],
     ),
+    "UnpackReduceTilize": (
+        lambda s: UnpackReduceTilize(),
+        [_no_transpose, _no_unpack_to_dest, _reduce_col_only, _only_32x32_tile],
+    ),
 }
 
 FPU_MAP = {
@@ -240,7 +256,7 @@ FPU_MAP = {
             _no_reuse_dest,
             _no_broadcast,
             _reduce_params,
-            _forced_unpacker("ReduceUnpacker"),
+            _forced_unpackers(("ReduceUnpacker", "UnpackReduceTilize")),
         ],
     ),
     "TransposeDest": (
