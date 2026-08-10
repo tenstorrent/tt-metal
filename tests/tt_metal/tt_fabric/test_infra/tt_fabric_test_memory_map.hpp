@@ -232,6 +232,13 @@ struct SenderMemoryMap {
     BaseMemoryRegion global_sync_region;
     BaseMemoryRegion local_sync_region;
 
+    // [DEBUG SCRATCH] One aligned region the sync core can use as a NoC read destination.
+    // Needed because the sync core has no spare L1: every other region (result / local_args /
+    // kernel_config / sync) is live, and borrowing one would corrupt the state being measured.
+    // Used to remote-read the router's doorbell register (stream 22 AVAILABLE) right after writing
+    // it, so the worker can see for itself whether its own decrement took effect.
+    BaseMemoryRegion debug_scratch;
+
     // Calculated values needed for kernel arguments
     uint32_t highest_usable_address;
 
@@ -243,6 +250,7 @@ struct SenderMemoryMap {
         payload_buffers(0, 0),
         global_sync_region(0, 0),
         local_sync_region(0, 0),
+        debug_scratch(0, 0),
         highest_usable_address(0) {}
 
     SenderMemoryMap(uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment) :
@@ -283,6 +291,13 @@ struct SenderMemoryMap {
         current_addr += local_sync_region_size;
         local_sync_region = BaseMemoryRegion(local_sync_region_base, local_sync_region_size);
 
+        // [DEBUG SCRATCH] one alignment unit, carved before payload_buffers so it does not disturb
+        // any existing region's address (payload_buffers is sized from whatever is left).
+        uint32_t debug_scratch_base = current_addr;
+        uint32_t debug_scratch_size = l1_alignment;
+        current_addr += debug_scratch_size;
+        debug_scratch = BaseMemoryRegion(debug_scratch_base, debug_scratch_size);
+
         // Payload buffers - use small fixed size per config since sender buffer is virtual
         // needs to be after the sync regions to avoid overflow
         uint32_t payload_buffer_base = current_addr;
@@ -308,6 +323,8 @@ struct SenderMemoryMap {
         args.push_back(packet_headers.start);
         args.push_back(payload_buffers.start);
         args.push_back(highest_usable_address);
+        // [DEBUG SCRATCH] appended last so existing arg indices are unchanged
+        args.push_back(debug_scratch.start);
 
         return args;
     }
@@ -315,6 +332,7 @@ struct SenderMemoryMap {
     uint32_t get_credit_addresses_base() const { return credit_addresses.start; }
     uint32_t get_credit_addresses_size() const { return credit_addresses.size; }
 
+    uint32_t get_debug_scratch_address() const { return debug_scratch.start; }
     uint32_t get_global_sync_address() const { return global_sync_region.start; }
     uint32_t get_local_sync_address() const { return local_sync_region.start; }
 

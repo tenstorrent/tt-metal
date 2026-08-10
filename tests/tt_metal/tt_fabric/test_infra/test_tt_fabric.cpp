@@ -145,11 +145,11 @@ private:
     // Dump the debug slot every ~30s (kPollIntervalMs * 150).
     static constexpr int kSlotDumpEveryRounds = 150;
     static constexpr uint64_t kDbgSlotBase =
-        0x6F200;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
+        0x6F1F8;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
                   // DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so changing
                   // MEM_AERISC_RESUME_PHASE_SIZE MOVES this base. (SIZE=96 -> base 0x6F200.)
     // 24 words: 16 original + 16/17 send-gate, 18/19 sync tx/rx, 20/21 slot, 22 sync-seen, 23 min-free.
-    static constexpr std::size_t kDbgSlotWords = 24;
+    static constexpr std::size_t kDbgSlotWords = 26;
     static constexpr uint64_t kErisc0Heartbeat = 0x7CC70;
 
     void dump_slots(const std::vector<MonitoredCore>& cores) {
@@ -185,10 +185,10 @@ private:
 // `run_link_control dump_dbg_slot` produces, so one parser handles both.
 void dump_erisc_debug_slots_from_host() {
     constexpr uint64_t DBG_SLOT_BASE =
-        0x6F200;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
+        0x6F1F8;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
                   // region grows DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so
                   // changing MEM_AERISC_RESUME_PHASE_SIZE MOVES this base. (SIZE=96 -> 0x6F200.)
-    constexpr std::size_t DBG_SLOT_WORDS = 24;  // incl. 16/17 send-gate, 18/19 tx/rx, 20/21 slot, 22 seen, 23 min-free
+    constexpr std::size_t DBG_SLOT_WORDS = 26;  // incl. 16/17 send-gate, 18/19 tx/rx, 20/21 slot, 22 seen, 23 min-free
     constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -231,6 +231,64 @@ void dump_erisc_debug_slots_from_host() {
             }
             line += fmt::format(" 0x{:x} 0x{:x}", hb[0], hb[1]);
             log_info(tt::LogTest, "{}", line);
+        }
+    }
+}
+
+// [STREAM REG DUMP] Read the doorbell counter directly, from an INDEPENDENT vantage point.
+//
+// Every observation of this counter so far has come from a single source: the router's own
+// get_ptr_val(). That is an uncached NOC_STREAM_READ_REG so it should be trustworthy, but it has
+// never been cross-checked, and the worker's write to it has never been read back from anywhere at
+// all -- we only know the write was correctly addressed and NIU-acked, which says nothing about the
+// counter actually updating.
+//
+// Stream 22 is the sender-channel free-slots ("doorbell") stream. Two registers form the
+// increment-on-write pair:
+//     UPDATE    idx 270 -> 0xFFB40000 + 22*0x1000 + 270*4 = 0xFFB56438  (what the WORKER writes)
+//     AVAILABLE idx 297 -> 0xFFB40000 + 22*0x1000 + 297*4 = 0xFFB564A4  (what the ROUTER reads)
+// Hardware is meant to apply an UPDATE write to the AVAILABLE counter.
+//
+// Interpretation at the barrier hang (num_buffers == 32):
+//   AVAILABLE == 32  -> counter genuinely never moved; the write is acked but not applied
+//   AVAILABLE == 31  -> counter DID update and the router's own read is somehow stale -- a different bug
+// Immune to the L1 data-cache staleness affecting the slot/header probes, since these are register
+// reads over NOC, not L1 dereferences.
+void dump_sender_credit_stream_regs() {
+    constexpr uint64_t NOC_OVERLAY_START = 0xFFB40000;
+    constexpr uint64_t STREAM_REG_SPACE = 0x1000;
+    constexpr uint32_t SENDER_CREDITS_STREAM_ID = 22;
+    constexpr uint32_t UPDATE_REG_IDX = 270;
+    constexpr uint32_t AVAILABLE_REG_IDX = 297;
+
+    const uint64_t update_addr =
+        NOC_OVERLAY_START + SENDER_CREDITS_STREAM_ID * STREAM_REG_SPACE + (UPDATE_REG_IDX << 2);
+    const uint64_t available_addr =
+        NOC_OVERLAY_START + SENDER_CREDITS_STREAM_ID * STREAM_REG_SPACE + (AVAILABLE_REG_IDX << 2);
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    log_info(
+        tt::LogTest,
+        "Stream {} credit regs: UPDATE=0x{:X} AVAILABLE=0x{:X} (host-side independent read)",
+        SENDER_CREDITS_STREAM_ID,
+        update_addr,
+        available_addr);
+    for (auto chip_id : cluster.all_chip_ids()) {
+        for (const auto& logical_core : control_plane.get_active_ethernet_cores(chip_id)) {
+            const auto virtual_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
+            uint32_t upd = 0xDEADBEEF;
+            uint32_t avail = 0xDEADBEEF;
+            try {
+                cluster.read_reg(&upd, tt_cxy_pair(chip_id, virtual_core), update_addr);
+                cluster.read_reg(&avail, tt_cxy_pair(chip_id, virtual_core), available_addr);
+            } catch (...) {
+                continue;
+            }
+            log_info(
+                tt::LogTest, "STREAMREG {} {} update=0x{:x} available=0x{:x}", chip_id, logical_core.y, upd, avail);
         }
     }
 }
@@ -623,6 +681,7 @@ int main(int argc, char** argv) {
                 // [L1 SCAN] Where the sync packet's bytes actually are, independent of any pointer or
                 // ack. Prints only matches, so it stays compact.
                 scan_eth_l1_for_sync_headers();
+                dump_sender_credit_stream_regs();
 
                 if (test_context.did_last_test_hang()) {
                     log_error(

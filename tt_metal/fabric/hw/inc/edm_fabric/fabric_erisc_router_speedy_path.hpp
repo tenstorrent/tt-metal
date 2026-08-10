@@ -127,6 +127,10 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // including when the gate says the channel is empty. That is the whole point: if the gate claims
     // nothing is queued but the slot contains an atomic-inc header, the packet demonstrably arrived
     // and the router just isn't picking it up, proven from memory contents rather than a NoC ack.
+    // [DOORBELL CROSS-CHECK] Record the stream id we poll and the raw uncached value we read from it,
+    // so both can be compared against an independent host-side read of the same hardware register.
+    fabric_dbg_set_polled_doorbell(sender_channel_free_slots_stream_id, free_slots);
+
     fabric_dbg_set_next_slot_content(
         local_sender_channel.get_cached_next_buffer_slot_addr(), sender_channel_free_slots_stream_id);
 
@@ -148,7 +152,10 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // [DECREMENT-LOST vs DECREMENT-RESET PROBE] Min free_slots seen while the sync packet occupies the
     // slot (payload demonstrably landed via L1 scan, but free_slots reads 32). ==32 => the worker's
     // doorbell decrement never landed; <32 => it landed then got reset. See eth_fw_api.h.
-    fabric_dbg_track_sync_min_free(local_sender_channel.get_cached_next_buffer_slot_addr(), free_slots);
+    // Min free_slots since the last transmitted packet. Reset on every TX (see fabric_dbg_inc_tx_pkt_count),
+    // so after traffic stops it isolates the barrier window, where only the sync packet can ring the
+    // doorbell. Reads no L1 -> immune to the cache staleness that broke the header-gated version.
+    fabric_dbg_track_min_free_since_tx(free_slots);
 #endif
 
     if (can_send) {
