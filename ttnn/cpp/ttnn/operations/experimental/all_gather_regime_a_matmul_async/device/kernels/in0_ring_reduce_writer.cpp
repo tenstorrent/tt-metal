@@ -19,6 +19,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#if defined(AGMM_PROFILE)
+#include "tools/profiler/kernel_profiler.hpp"  // DeviceTimestampedData (TT_AGMM_PROFILE_STEPS=1 only)
+#endif
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
@@ -332,6 +335,17 @@ void kernel_main() {
     //
     // RELAY cores deliberately keep the eager prologue wait. Deferring theirs would push the next device's
     // arrival out by however long this core computes first, which is strictly worse than the stall it saves.
+#if defined(AGMM_PROFILE)
+    // Cycles spent BLOCKED at each wait site, emitted once at the end. The point is to split the whole-op
+    // "waiting" term by CAUSE and by CORE: fabric arrival (own chunk) vs on-chip propagation (ring receive).
+    // 32-bit low word of the wall clock is what the profiler itself reads; it wraps every ~3.2 s at 1.35 GHz,
+    // far longer than any single wait, and unsigned subtraction handles a wrap correctly anyway.
+    uint32_t agmm_wait_own = 0, agmm_wait_ring = 0;
+    auto agmm_clk = []() -> uint32_t {
+        volatile tt_reg_ptr uint32_t* p = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        return p[0];
+    };
+#endif
     uint32_t dl1_own_pending = 0;  // 1 => we still owe our own chunk (wait if remote, then relay it onward)
     uint32_t dl1_recv_sem = 0;     // arrival semaphore address
     // The fabric relay moved out of the prologue and into the ring loop, so the values it needs come with it.
@@ -855,7 +869,13 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem);
             if (dl1_h_dist != 0u) {
 #if !defined(ABLATE_NOWAIT)
+#if defined(AGMM_PROFILE)
+                const uint32_t t0 = agmm_clk();
+#endif
                 noc_semaphore_wait_min(dl1_recv, 1);
+#if defined(AGMM_PROFILE)
+                agmm_wait_own += agmm_clk() - t0;
+#endif
 #endif
                 // Re-arm for the next invocation: a GLOBAL semaphore is not zeroed by program launch, which is
                 // exactly why the cross-chip credit lives in one.
@@ -957,7 +977,13 @@ void kernel_main() {
         if (step == ring_own_slot) {
             ensure_own();
         } else {
+#if defined(AGMM_PROFILE)
+            const uint32_t tr0 = agmm_clk();
+#endif
             noc_semaphore_wait_min(fwd_ptr, recv_needed(step));
+#if defined(AGMM_PROFILE)
+            agmm_wait_ring += agmm_clk() - tr0;
+#endif
         }
         // Relay that same chunk onward. src_slot == step by construction; the sentinel marks the single step
         // whose chunk is the successor's own, which it already has.
@@ -1071,6 +1097,11 @@ void kernel_main() {
     }
 #endif                          // !DIRECT_L1 ring loop
     noc_async_write_barrier();  // all ring forwards landed
+#if defined(AGMM_PROFILE)
+    // One value per site per core. Read back per (device, core, RISC) from the profiler CSV's data column.
+    DeviceTimestampedData("agmm_wait_own", agmm_wait_own);
+    DeviceTimestampedData("agmm_wait_ring", agmm_wait_ring);
+#endif
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----
     constexpr uint32_t out_blk_bytes = out_blk * tile_bytes;

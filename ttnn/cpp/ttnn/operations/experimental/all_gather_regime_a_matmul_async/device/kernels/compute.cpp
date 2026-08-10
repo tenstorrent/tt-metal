@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#if defined(AGMM_PROFILE)
+#include "tools/profiler/kernel_profiler.hpp"  // DeviceTimestampedData (TT_AGMM_PROFILE_STEPS=1 only)
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
@@ -598,6 +601,16 @@ void kernel_main() {
     constexpr uint32_t broadcast_ternary_b = 1;
 #endif
 
+#if defined(AGMM_PROFILE)
+    // Cycles compute spends STARVED, split by which operand it is starved on. This is the measurement that
+    // says whether the residual wait is the gather (in0) or DRAM streaming (in1) -- the whole-op median
+    // cannot tell those apart.
+    uint32_t agmm_wait_in0 = 0, agmm_wait_in1 = 0;
+    auto agmm_clk = []() -> uint32_t {
+        volatile tt_reg_ptr uint32_t* p = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        return p[0];
+    };
+#endif
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
@@ -669,9 +682,21 @@ void kernel_main() {
                 // reuse (below). The writer pushes W blocks at a time, so a wait for a mid-batch boundary is
                 // simply satisfied when that W-batch lands.
                 if (m_block_iter == 0 && n_block_iter == 0) {
+#if defined(AGMM_PROFILE)
+                    const uint32_t t0_in0 = agmm_clk();
+#endif
                     cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);
+#if defined(AGMM_PROFILE)
+                    agmm_wait_in0 += agmm_clk() - t0_in0;
+#endif
                 }
+#if defined(AGMM_PROFILE)
+                const uint32_t t0_in1 = agmm_clk();
+#endif
                 cb_wait_front(in1_cb, in1_block_num_tiles);
+#if defined(AGMM_PROFILE)
+                agmm_wait_in1 += agmm_clk() - t0_in1;
+#endif
 
                 matmul_blocks(
                     in0_cb,
@@ -821,4 +846,8 @@ void kernel_main() {
         }
     }
     cb_pop_front(in0_cb, K_num_blocks * in0_block_num_tiles);
+#if defined(AGMM_PROFILE)
+    DeviceTimestampedData("agmm_wait_in0", agmm_wait_in0);
+    DeviceTimestampedData("agmm_wait_in1", agmm_wait_in1);
+#endif
 }

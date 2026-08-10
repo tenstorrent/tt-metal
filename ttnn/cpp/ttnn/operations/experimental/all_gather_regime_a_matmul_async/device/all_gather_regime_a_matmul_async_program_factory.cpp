@@ -1227,6 +1227,17 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
     std::map<std::string, std::string> cdefs_extra;
+    // PER-CORE STALL ATTRIBUTION (TT_AGMM_PROFILE_STEPS=1). Adds DeviceTimestampedData emissions that count
+    // cycles spent BLOCKED at each wait site, so the whole-op "waiting" term can be split by cause and by core
+    // instead of inferred from medians. Off by default: it costs a clock read per wait and consumes device
+    // profiler buffer, which overflows on long runs.
+    //
+    // Requires TT_METAL_DEVICE_PROFILER=1 to record anything.
+    const bool profile_steps = std::getenv("TT_AGMM_PROFILE_STEPS") != nullptr;
+    if (profile_steps) {
+        wdefs["AGMM_PROFILE"] = "1";
+        cdefs_extra["AGMM_PROFILE"] = "1";
+    }
 
     // ---- INTERNAL REDUCTION STRATEGY: linear chain (default) vs ring REDUCE-SCATTER. ----
     // The chain sends each of the Pk-1 non-root bands' FULL output block one hop up, so the last partial only
