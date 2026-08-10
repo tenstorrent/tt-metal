@@ -191,11 +191,14 @@
 #define MEM_NOC_CAS_RET_SIZE 64
 
 // Per-semaphore EXTERNAL down() lock words (4-bit NoC-CAS spinlock; values only 0/1).
-// 16 semaphores x 4B = exactly one 64B line, no headroom (grow MEM_NOC_SEM_LOCK_SIZE with
-// NUM_SEMAPHORES; id 16's lock word would land on the cached pool). Touched only by NoC atomics. Zeroed once by
-// DM firmware at boot (dm.cc hart 0); the lock protocol returns each word to 0 on release.
+// 16 semaphores x 16B: one lock per 16B row, so the CAS always addresses 32-bit LANE 0 of its
+// row. Lane 0 is keystone-proven (TestSelfCasLockDrain); a 4B-packed layout would put ids with
+// id % 4 == 2 on lane 2, which showed an anomalous CAS return on the emulator RTL
+// (DISABLED_TestSelfCasLockLane2Anomaly) -- 192B of reserved L1 buys independence from that.
+// Touched only by NoC atomics. Zeroed once by DM firmware at boot (dm.cc hart 0); the lock
+// protocol returns each word to 0 on release. Grow with NUM_SEMAPHORES.
 #define MEM_NOC_SEM_LOCK_BASE (MEM_NOC_CAS_RET_BASE + MEM_NOC_CAS_RET_SIZE)
-#define MEM_NOC_SEM_LOCK_SIZE 64  // keep >= NUM_SEMAPHORES * 4
+#define MEM_NOC_SEM_LOCK_SIZE 256  // NUM_SEMAPHORES * 16 (one 16B row per lock)
 
 // Dedicated cached-only DM-local semaphore pool. DM_LOCAL_CACHED semaphores live HERE, in
 // node L1 but physically disjoint from (and below) the NoC-written kernel_config ring, which
