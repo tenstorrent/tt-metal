@@ -1124,12 +1124,21 @@ static std::vector<Tensor> pool2d(
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
         //
-        // Ask the reduce for the caller's layout so the to_layout below is a no-op. Two cases can't:
-        // batch>1, whose reshape moves batch into H (a 1-tile-row TILE output can't express it), and
-        // block-float ROW_MAJOR, which the reduce rejects since untilizing would widen the dtype.
-        // Both keep the native result and convert below.
+        // Forwarding output_layout into pool_sum makes the to_layout below a no-op, but only pays
+        // off in some cases; nullopt keeps the native reduce layout and defers the conversion.
+        //
+        // batch==1: reduce returns (1, 1, 1, C) and the following view does not fold axes, so the
+        // requested layout survives unchanged and forwarding removes the conversion entirely.
+        //
+        // batch>1: the post-reduce reshape folds N into H, (N, 1, 1, C) -> (1, 1, N, C). The fold
+        // handles either layout, but it is a free view on a ROW_MAJOR result and a device op on a
+        // TILE one, so the layout is not forwarded here — nullopt keeps whatever the reduce emits
+        // natively (still TILE on the tilized path) and the conversion happens after.
+        //
+        // block-float + ROW_MAJOR: reduce rejects it (block-float exists only as TILE). The native
+        // TILE result reaches the to_layout below, which untilizes it and widens to BFLOAT16.
         const bool reduce_can_emit_layout =
-            output_layout == Layout::TILE || !tt::tt_metal::is_block_float(input.dtype());
+            output_layout == Layout::TILE || !tt::tt_metal::is_block_float(canonical.dtype());
         const std::optional<Layout> reduce_output_layout =
             (batch_size == 1 && reduce_can_emit_layout) ? std::optional<Layout>(output_layout) : std::nullopt;
         Tensor output = ttnn::operations::reduction::pool_sum(

@@ -102,9 +102,10 @@ void reduce_rm_writer() {
         //
         // ROW_MAJOR extracts tile-row 0 into the (n, c, slice) page; TILE writes the tile whole.
         //
-        // These slots are only consumed here. The indices embed DIM so they stay value-dependent: a
-        // literal index would be instantiated even in this discarded branch and trip the range check
-        // on the W path, which never passes these slots.
+        // Wt, W_logical, and wt_tiles_per_chunk are only consumed here, so they live in this branch.
+        // The indices embed DIM to make them value-dependent: a literal `get_compile_time_arg_val(N)`
+        // is non-dependent and would be eagerly instantiated even in this discarded branch, tripping
+        // the index range check for the W path (which never passes these slots).
         constexpr uint32_t Wt = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 1 : 0);
         constexpr uint32_t W_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 2 : 0);
         constexpr uint32_t wt_tiles_per_chunk =
