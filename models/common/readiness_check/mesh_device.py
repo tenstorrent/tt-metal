@@ -16,6 +16,9 @@ MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N300": (1, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
+    # Blackhole QuietBox 2: two p300 boards, two chips each. Label matches the
+    # tt-inference-server device enum (P300x2, MESH_DEVICE "(1, 4)").
+    "P300x2": (1, 4),
 }
 
 FABRIC_CONFIG_CHOICES = ("FABRIC_1D", "FABRIC_1D_RING", "FABRIC_2D")

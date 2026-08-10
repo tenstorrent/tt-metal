@@ -1,0 +1,32 @@
+/goal Use $optimize and $tt-device-usage for the HF_MODEL multichip decoder in the current tt-metal checkout.
+
+Subagents are authorized when a selected skill requests or recommends them.
+
+This creates optimized-multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed multichip decoder and optimize it in place; do not begin full-model or vLLM work.
+
+Goal completion requirements:
+- The measured path is the multichip decoder path on the target mesh. Single-chip or replicated fallback does not satisfy completion.
+- Multi-chip prefill and decode PCC remain at the accepted baseline for every meaningful layer kind.
+- Warmed prefill and traced warmed decode latency are reported before and after this multichip optimization pass.
+- tt-perf-report tables and CSV/provenance logs exist. Actionable advice is tried. Rejections have before/after evidence. A first TTNN/API error is not enough to reject an optimization that would remove a material op, collective, reshard, or layout conversion.
+- The pass starts with an operation-topology audit: repeated same-input matmuls, material collectives, reshard/layout conversions, fused/packed projections, fused matmul-CCL paths, lower-movement residual layouts, action taken, and evidence.
+- Dominant multi-device costs are compared as coherent families: residual layout, collective placement, fused CCL+matmul, packed vs separate projections, activation/CCL dtype, and persistent buffers. A lower-movement family is not rejected by measuring it only with an immediate restore to the old replicated residual contract.
+- Model-applicable async CCLs, fused matmul-CCL paths, collective placement, preallocated buffers, residual layout, activation sharding, DRAM-sharded decode matmuls, and precision/fidelity reductions have evidence. For material rejections, adapt shape/layout/padding/weights and retry, or use `$autofix`.
+- Preserve or improve the multichip context contract. If KV-cache dtype/layout, activation sharding, or per-device memory changes max context, update doc/context_contract.json. Reductions require hard physical evidence and the largest feasible value.
+- Preserve support for valid non-aligned logical sequence lengths; optimization may add internal alignment, but it must own padding/masking/slicing rather than requiring aligned public inputs.
+- The final path avoids gather/reshard/all-reduce between decoder layers. Any remaining inter-layer collective has measured evidence showing it is faster overall. Write down the inter-layer residual layout contract so full-model bringup can preserve it instead of rediscovering it.
+- Runtime fallback audit is clean, stress coverage matches risk, and watcher-clean evidence exists.
+- models/autoports/<model>/doc/optimized_multichip_decoder/README.md and work_log.md record commands, before/after PCC/perf, CCL findings, rejected options, limitations, and artifacts.
+- Every applicable item in this prompt and `$optimize` has been tried with evidence. No optimization is deferred.
+- For MoE models, the final path keeps gate-selected active-expert execution. Dense all-expert execution does not satisfy completion unless evidence proves it is faster during decode.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+- Final optimized numbers come from the final default path, not from an earlier candidate that the default no longer reproduces.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
+
+Model-specific scoping for HF_MODEL (this section overrides generic assumptions):
+- HF_MODEL is a vision-language checkpoint (MuseGlimmerForConditionalGeneration, model_type muse_glimmer, requires transformers >= 5.15.0, already installed in python_env). THIS STAGE TARGETS THE TEXT DECODER ONLY: text_config / the language-model weights. The vision tower, projector, and image inputs are handled in a later dedicated stage; do not implement or test them here, and do not count their absence as a capability reduction.
+- Load the HF reference via AutoModelForImageTextToText — AutoModelForCausalLM rejects this config. models/common/readiness_check/generate.py:load_reference_causal_lm already handles the fallback; use it (or the same pattern) everywhere a reference model is loaded.
+- Text-decoder features that must not be missed (all from config.json text_config): interleaved attention layer_types — repeating [sliding, sliding, sliding, full] with sliding_window=2048; per-layer RoPE via layer_rope_theta = 500000.0 on sliding layers and 0 on full_attention layers, which means NoPE — full-attention layers apply NO rotary embedding at all (models/tt_transformers/tt/decoder.py:244 shows the per-layer rope dispatch hook to extend); gated attention (see the HF muse_glimmer modeling code for the gate math); qk_scale_factor=3.87; final_logit_softcapping=20.0 (working TTNN reference: models/demos/gemma4/tt/model.py lm-head softcap); output_multiplier=0.19611613513818404; sandwich norms (rms_norm_eps=1e-5, post_norm_eps=1e-8); GQA 32 Q heads / 2 KV heads, head_dim 128; hidden 6656; SwiGLU intermediate 19968; vocab 202048; tie_word_embeddings=false; max_position_embeddings 131072.
+- Closest in-repo references: models/demos/gemma4/ (hybrid sliding/full attention, per-layer rope, softcapping, Blackhole workarounds and its README support matrix), models/tt_transformers/tt/attention.py (is_sliding / sliding_window_size plumbing), models/demos/gpt_oss/ (hybrid pattern + Blackhole notes).
+- Target hardware: 4 Blackhole chips (two p300 boards), mesh shape (1, 4), readiness-check mesh label P300x2 (already added to models/common/readiness_check/mesh_device.py). This is Blackhole, NOT Wormhole: use architecture-appropriate compute-kernel config classes and sweep legal Blackhole core grids instead of copying 8x8/8x4 Wormhole layouts.

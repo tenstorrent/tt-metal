@@ -1,0 +1,33 @@
+/goal Use $tti-release and $tt-device-usage for the HF_MODEL optimized vLLM model in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the TTI release handoff state. Start only after optimized-vLLM has completed or any recoverable optimized-vLLM hardware blocker has been recovered.
+
+Goal completion requirements:
+- Optimized vLLM artifacts already exist under models/autoports/<model>/doc/optimized_vllm/.
+- The TTI release workflow evaluates the generated `models/autoports/<model>` implementation of HF_MODEL. Do not run stock `tt-transformers`, `models/demos`, or another packaged implementation. Such a report is invalid even if `run.py` exits 0.
+- Prefer TTI client-side workflows against the already-working autoport vLLM server from optimized-vLLM. Use Docker only as an explicit fallback after investigating why the external-server path cannot work.
+- The TTI model spec or equivalent release wiring points at `models/autoports/<model>` and the server path imports that autoport code.
+- For custom TTI model specs, make the embedded spec `cli_args` correct before running: `docker_server=false`, `local_server=false`, the right `service_port`, and the intended workflow. Do not rely on command-line flags alone to override a loaded JSON spec.
+- The release spec, server, evals, and benchmarks preserve doc/context_contract.json. Do not cap context or request length to hide a model bug. Only reject mathematically invalid prompt+completion requests.
+- If TTI sends a valid prompt length that is not divisible by an internal prefill chunk/page/tile/trace size, the autoport must handle it. Do not waive the failure or align the benchmark; fix the model/generator/adapter path.
+- Use the reservation container for `tt-smi` health/reset and autoport vLLM serving. Use the physical loudbox host only for Docker fallback or host-level recovery. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
+- Before full release, run a tiny no-Docker TTI smoke against the autoport server: health check, one OpenAI-compatible request, then one small TTI benchmark with `disable_trace_capture=true`.
+- Run `run.py --workflow release --no-auth` for the no-Docker autoport spec after the smoke passes, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
+- Recover ARC/ERISC/remote-Ethernet/reset failures before stopping; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
+- Copy the final release report and small JSON/CSV/log artifacts to models/autoports/<model>/doc/tti_release/.
+- RUN_NOTES.md records server mode, host/context, TTI tag/SHA, Docker image if used, command, key env, recovery, report path, pass/fail summary, and autoport implementation check.
+- The copied TTI run spec or report data proves the evaluated code path is `models/autoports/<model>` and does not identify stock `models/tt_transformers`, `models/demos`, or another packaged implementation.
+- Skim the release report; fix or issue-waive failed accuracy/API/benchmark/missing metric rows. Unwaived `meta_ifeval` or `meta_gpqa_cot` failures are blocking. Leave no servers, tmux sessions, or containers.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
+
+Model-specific scoping for HF_MODEL (this section overrides generic assumptions):
+- HF_MODEL is a vision-language checkpoint (MuseGlimmerForConditionalGeneration, model_type muse_glimmer, requires transformers >= 5.15.0, already installed in python_env). THIS STAGE TARGETS THE TEXT DECODER ONLY: text_config / the language-model weights. The vision tower, projector, and image inputs are handled in a later dedicated stage; do not implement or test them here, and do not count their absence as a capability reduction.
+- Load the HF reference via AutoModelForImageTextToText — AutoModelForCausalLM rejects this config. models/common/readiness_check/generate.py:load_reference_causal_lm already handles the fallback; use it (or the same pattern) everywhere a reference model is loaded.
+- Text-decoder features that must not be missed (all from config.json text_config): interleaved attention layer_types — repeating [sliding, sliding, sliding, full] with sliding_window=2048; per-layer RoPE via layer_rope_theta = 500000.0 on sliding layers and 0 on full_attention layers, which means NoPE — full-attention layers apply NO rotary embedding at all (models/tt_transformers/tt/decoder.py:244 shows the per-layer rope dispatch hook to extend); gated attention (see the HF muse_glimmer modeling code for the gate math); qk_scale_factor=3.87; final_logit_softcapping=20.0 (working TTNN reference: models/demos/gemma4/tt/model.py lm-head softcap); output_multiplier=0.19611613513818404; sandwich norms (rms_norm_eps=1e-5, post_norm_eps=1e-8); GQA 32 Q heads / 2 KV heads, head_dim 128; hidden 6656; SwiGLU intermediate 19968; vocab 202048; tie_word_embeddings=false; max_position_embeddings 131072.
+- Closest in-repo references: models/demos/gemma4/ (hybrid sliding/full attention, per-layer rope, softcapping, Blackhole workarounds and its README support matrix), models/tt_transformers/tt/attention.py (is_sliding / sliding_window_size plumbing), models/demos/gpt_oss/ (hybrid pattern + Blackhole notes).
+- Target hardware: 4 Blackhole chips (two p300 boards), mesh shape (1, 4), readiness-check mesh label P300x2 (already added to models/common/readiness_check/mesh_device.py). This is Blackhole, NOT Wormhole: use architecture-appropriate compute-kernel config classes and sweep legal Blackhole core grids instead of copying 8x8/8x4 Wormhole layouts.
+- TTI specifics: use --mesh-device P300x2 (not T3K) wherever the skill's examples say T3K; TTI device name for the spec is P300x2. The tt-inference-server checkout location guidance in the skill assumes a /localdev loudbox layout — use /home/jashan/tti-release/<run-name> on this machine instead. Text evals (meta_ifeval, meta_gpqa_cot) apply as-is: the serving target of this bringup is text-first.

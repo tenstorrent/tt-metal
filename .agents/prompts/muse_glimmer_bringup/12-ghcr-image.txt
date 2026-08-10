@@ -1,0 +1,20 @@
+/goal Use $vllm-integration and $tt-device-usage to package the completed HF_MODEL autoport as a Docker image pushed to GHCR that serves the model and is deployable by tt-studio.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+Deliverable: a pushed, pull-back-verified image at ghcr.io/jashansinghtt/vllm-tt-metal-src-release-ubuntu-22.04-amd64:<VERSION>-<tt-metal-sha7>-<vllm-sha7> (VERSION: use 0.1.0 unless doc evidence says otherwise). Model the Dockerfile on tt-inference-server's vllm-tt-metal/vllm.tt-metal.src.dev.Dockerfile (fetch it from github.com/tenstorrent/tt-inference-server to read the pattern), with these deviations:
+- COPY the LOCAL tt-metal checkout (it contains models/autoports/<model>, which exists nowhere upstream) instead of git-cloning tt-metal by SHA. Exclude build artifacts, .git, and weight caches via .dockerignore; build tt-metal + python_env inside the image for Blackhole.
+- COPY the LOCAL vLLM checkout from /home/jashan/vllm (it contains the muse_glimmer arch registrations in plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py added in the vllm stage) instead of cloning by SHA. Install with VLLM_TARGET_DEVICE=empty plus the vllm-tt-plugin, per the upstream Dockerfile.
+- Bake a model_spec.json whose entry for HF_MODEL has impl.code_path=models/autoports/<model>, inference_engine vLLM, device P300x2, max_context exactly matching models/autoports/<model>/doc/context_contract.json, and transformers>=5.15.0 in the image python env.
+- Do NOT bake weights and do NOT bake any HF token or other secret into any layer or ENV (verify with docker history --no-trunc and docker inspect; automated check will fail on any hf_ prefixed value). Weights come at runtime via a mounted cache volume and HF_TOKEN env, per tt-inference-server convention.
+- The container entrypoint serves an OpenAI-compatible vLLM API (tt-inference-server's run_vllm_api_server.py pattern) on port 8000 with GET /health and JWT bearer auth via JWT_SECRET env (tt-studio's contract).
+
+Goal completion requirements:
+- docker login ghcr.io as jashansinghtt succeeds using the token from `gh auth token`. If that token lacks write:packages scope, STOP and report blocked with exactly what scope is missing — do not try other credentials.
+- Image builds, is pushed, and `docker manifest inspect <image-ref>` succeeds against the registry after a `docker pull` round-trip.
+- On-hardware smoke from the PUSHED image (not the local build cache): run with /dev/tenstorrent and hugepages mounted, a weights cache volume, HF_TOKEN and JWT_SECRET env; GET /health returns 200; a JWT-authed POST /v1/chat/completions returns coherent non-degenerate text. Save the full transcript to models/autoports/<model>/doc/ghcr_image/serve_smoke.json and stop the container afterwards.
+- A ready-to-use tt-studio catalog entry is written to models/autoports/<model>/doc/ghcr_image/tt_studio_catalog_entry.json matching tt-studio's models_from_inference_server.json schema: model_name, model_type CHAT, hf_model_id, inference_engine vLLM, docker_image = the pushed ref, device_configurations including P300x2, service_route /v1/chat/completions, health_route /health, and the standard vLLM env_vars block.
+- models/autoports/<model>/doc/ghcr_image/README.md and work_log.md record the image ref + digest, exact build/push/run commands, Dockerfile path, and smoke evidence. The Dockerfile and .dockerignore are committed under models/autoports/<model>/docker/.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push git; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

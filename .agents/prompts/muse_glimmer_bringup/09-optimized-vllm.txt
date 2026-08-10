@@ -1,0 +1,36 @@
+/goal Use $vllm-integration, $optimize, and $tt-device-usage for HF_MODEL vLLM serving in this tt-metal checkout.
+
+Subagents are authorized when a selected skill requests or recommends them.
+
+Start from completed vLLM integration and the selected datatype-sweep config; optimize serving in place.
+
+Goal completion requirements:
+- The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py.
+- vLLM sampling tests, qualitative outputs, primary single-user benchmarks, and CI serving-burst benchmarks pass.
+- Warmed primary single-user TTFT, TPOT, ITL, aggregate throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, generation mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
+- CI serving-burst metrics are measured before and after as capacity/nightly-parity evidence. Do not use CI burst as headline decode t/s/u.
+- Preserve the context contract. Do not lower `max_model_len`, benchmark context, or eval context below doc/context_contract.json except for a proven hard physical limit.
+- Preserve valid non-aligned prompt-length serving support while optimizing. Do not trade it away for an aligned-only faster path.
+- Optimized vLLM decode is about as fast as optimized full-model traced decode for comparable work.
+- The adapter implements async decode: `decode_forward(..., read_from_device=False)` returns device tensors; deferred reads are minimal; `supports_async_decode` is true only when vLLM exercises it.
+- Serving decode reuses persistent trace inputs and calls ttnn.execute_trace(..., blocking=False). Any synchronization or host read happens after the async boundary and is limited to the plugin contract.
+- sample_on_device_mode=all keeps sampling on device. The measured path has no host greedy/top-1 argmax, full-logits readback, or eager sampling.
+- Serving reuses full-model greedy split sampling. Do not accept force-argmax or slow generic sampling; if sampler work dominates token-out decode, fix the generator LM-head/sampling contract, not the adapter.
+- Token, position, RoPE, page-table, cache, and sampler trace inputs are persistent device tensors. Refresh them only when scheduler state changes. Stale-input tests cover changed token/current-position and changed/unchanged page tables.
+- Do not collect Tracy, tt-perf-report, live-server device profiler, adapter profiler, or ReadDeviceProfiler here. Use benchmark JSON, sampling tests, stale-input checks, async evidence, and no-host-fallback evidence.
+- Runtime fallback and cleanup are clean: no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, blocking readback, standalone-cache assumption, or leftover vLLM/EngineCore process.
+- optimized_vllm README/work_log record commands, before/after single-user metrics, CI burst metrics, full-model comparison, trace/async decisions, rejected options, limitations, and artifacts.
+- Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
+- Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
+- README.md leads with primary single-user vLLM TTFT and decode t/s/u; CI serving-burst metrics are secondary. Workload shapes sit next to every number.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
+
+Model-specific scoping for HF_MODEL (this section overrides generic assumptions):
+- HF_MODEL is a vision-language checkpoint (MuseGlimmerForConditionalGeneration, model_type muse_glimmer, requires transformers >= 5.15.0, already installed in python_env). THIS STAGE TARGETS THE TEXT DECODER ONLY: text_config / the language-model weights. The vision tower, projector, and image inputs are handled in a later dedicated stage; do not implement or test them here, and do not count their absence as a capability reduction.
+- Load the HF reference via AutoModelForImageTextToText — AutoModelForCausalLM rejects this config. models/common/readiness_check/generate.py:load_reference_causal_lm already handles the fallback; use it (or the same pattern) everywhere a reference model is loaded.
+- Text-decoder features that must not be missed (all from config.json text_config): interleaved attention layer_types — repeating [sliding, sliding, sliding, full] with sliding_window=2048; per-layer RoPE via layer_rope_theta = 500000.0 on sliding layers and 0 on full_attention layers, which means NoPE — full-attention layers apply NO rotary embedding at all (models/tt_transformers/tt/decoder.py:244 shows the per-layer rope dispatch hook to extend); gated attention (see the HF muse_glimmer modeling code for the gate math); qk_scale_factor=3.87; final_logit_softcapping=20.0 (working TTNN reference: models/demos/gemma4/tt/model.py lm-head softcap); output_multiplier=0.19611613513818404; sandwich norms (rms_norm_eps=1e-5, post_norm_eps=1e-8); GQA 32 Q heads / 2 KV heads, head_dim 128; hidden 6656; SwiGLU intermediate 19968; vocab 202048; tie_word_embeddings=false; max_position_embeddings 131072.
+- Closest in-repo references: models/demos/gemma4/ (hybrid sliding/full attention, per-layer rope, softcapping, Blackhole workarounds and its README support matrix), models/tt_transformers/tt/attention.py (is_sliding / sliding_window_size plumbing), models/demos/gpt_oss/ (hybrid pattern + Blackhole notes).
+- Target hardware: 4 Blackhole chips (two p300 boards), mesh shape (1, 4), readiness-check mesh label P300x2 (already added to models/common/readiness_check/mesh_device.py). This is Blackhole, NOT Wormhole: use architecture-appropriate compute-kernel config classes and sweep legal Blackhole core grids instead of copying 8x8/8x4 Wormhole layouts.
+- vLLM specifics: same registration and P300x2 mesh notes as the vllm stage; the plugin checkout is the VLLM_CHECKOUT env var (/home/jashan/vllm).

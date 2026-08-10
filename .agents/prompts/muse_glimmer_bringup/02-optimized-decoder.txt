@@ -1,0 +1,33 @@
+/goal Use $optimize and $tt-device-usage for the HF_MODEL functional decoder in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed functional decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
+
+Goal completion requirements:
+- models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
+- The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
+- The optimized decoder preserves the context contract from functional decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- The optimized decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
+- Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
+- Warmed prefill and traced warmed decode latency are reported before and after optimization.
+- Final code must beat the best correct traced-decode baseline/candidates; fewer ops or cleaner topology is not enough.
+- If MLP/expert matmuls dominate decode, try BFP4/LoFi across material core/shard geometries; synthetic/random PCC cannot veto real-weight wins; perf rows must prove it.
+- tt-perf-report tables/CSV exist for prefill and decode. Try actionable advice; rejected advice has before/after evidence. A first TTNN/API error is not enough to reject a material op, reshard, layout, or host-fallback optimization.
+- The optimization pass starts with an operation-topology audit of the measured path: repeated same-input matmuls, avoidable reshard/layout conversions, candidate fused/packed projections, optimized composite ops, and lower-movement replacements. The README or work log records current ops, candidate replacements, action taken, and evidence.
+- The optimization pass addresses model-applicable decoder opportunities now: canonical precision/fidelity policy, sharded layouts, fused or packed same-input projections, DRAM-sharded decode matmuls, large prefill program configs, SDPA/composite ops, memory/program/compute-kernel configs, runtime data movement, and MoE active-expert execution. Completed and rejected options have evidence. Keep packed/fused same-input projections only when they beat a well-tuned legal separate candidate or the separate candidate is invalid.
+- The final optimized runtime path has no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, or host fallback in measured prefill/decode.
+- Stress or repeated-run coverage and a watcher-clean optimized correctness run exist.
+- models/autoports/<model>/doc/optimized_decoder/README.md and work_log.md record commands, before/after PCC and perf, chosen configs, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
+- The checklist in the $optimize skill has been completed with evidence
+- The decoder is genuinely optimized for the current hardware within TTNN's available capabilities. No remaining decoder optimization work is deferred to a later stage.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
+
+Model-specific scoping for HF_MODEL (this section overrides generic assumptions):
+- HF_MODEL is a vision-language checkpoint (MuseGlimmerForConditionalGeneration, model_type muse_glimmer, requires transformers >= 5.15.0, already installed in python_env). THIS STAGE TARGETS THE TEXT DECODER ONLY: text_config / the language-model weights. The vision tower, projector, and image inputs are handled in a later dedicated stage; do not implement or test them here, and do not count their absence as a capability reduction.
+- Load the HF reference via AutoModelForImageTextToText — AutoModelForCausalLM rejects this config. models/common/readiness_check/generate.py:load_reference_causal_lm already handles the fallback; use it (or the same pattern) everywhere a reference model is loaded.
+- Text-decoder features that must not be missed (all from config.json text_config): interleaved attention layer_types — repeating [sliding, sliding, sliding, full] with sliding_window=2048; per-layer RoPE via layer_rope_theta = 500000.0 on sliding layers and 0 on full_attention layers, which means NoPE — full-attention layers apply NO rotary embedding at all (models/tt_transformers/tt/decoder.py:244 shows the per-layer rope dispatch hook to extend); gated attention (see the HF muse_glimmer modeling code for the gate math); qk_scale_factor=3.87; final_logit_softcapping=20.0 (working TTNN reference: models/demos/gemma4/tt/model.py lm-head softcap); output_multiplier=0.19611613513818404; sandwich norms (rms_norm_eps=1e-5, post_norm_eps=1e-8); GQA 32 Q heads / 2 KV heads, head_dim 128; hidden 6656; SwiGLU intermediate 19968; vocab 202048; tie_word_embeddings=false; max_position_embeddings 131072.
+- Closest in-repo references: models/demos/gemma4/ (hybrid sliding/full attention, per-layer rope, softcapping, Blackhole workarounds and its README support matrix), models/tt_transformers/tt/attention.py (is_sliding / sliding_window_size plumbing), models/demos/gpt_oss/ (hybrid pattern + Blackhole notes).
+- Target hardware: 4 Blackhole chips (two p300 boards), mesh shape (1, 4), readiness-check mesh label P300x2 (already added to models/common/readiness_check/mesh_device.py). This is Blackhole, NOT Wormhole: use architecture-appropriate compute-kernel config classes and sweep legal Blackhole core grids instead of copying 8x8/8x4 Wormhole layouts.

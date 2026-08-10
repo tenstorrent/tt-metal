@@ -47,6 +47,25 @@ except ImportError:
 
 from models.common.readiness_check.schema import Reference, ReferenceEntry, save_reference
 
+
+def load_reference_causal_lm(hf_model_id: str, **from_pretrained_kwargs):
+    """Load the HF reference model for text generation.
+
+    Vision-language checkpoints (``*ForConditionalGeneration`` archs such as
+    muse_glimmer) are not loadable through ``AutoModelForCausalLM``; their
+    text path still generates from plain ``input_ids``, so fall back to
+    ``AutoModelForImageTextToText`` and use the full model.
+    """
+    try:
+        return AutoModelForCausalLM.from_pretrained(hf_model_id, trust_remote_code=True, **from_pretrained_kwargs)
+    except ValueError:
+        from transformers import AutoModelForImageTextToText
+
+        return AutoModelForImageTextToText.from_pretrained(
+            hf_model_id, trust_remote_code=True, **from_pretrained_kwargs
+        )
+
+
 DEFAULT_K = 100
 DEFAULT_PROMPT_LEN = 128
 DEFAULT_GEN_LEN = 100
@@ -320,7 +339,7 @@ def generate_reference(
 
     print(f"Loading model {hf_model_id} on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(hf_model_id, trust_remote_code=True).eval().to(device)
+    model = load_reference_causal_lm(hf_model_id).eval().to(device)
 
     # Get token IDs
     stop_ids = _generation_stop_ids(tokenizer, model)

@@ -1,0 +1,17 @@
+/goal Use $full-model, $vllm-integration and $tt-device-usage to bring up the vision tower of HF_MODEL in the current tt-metal checkout, on top of the completed text-decoder autoport under models/autoports/<model>.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This is a BEST-EFFORT stage: the text-only serving path already works and must not regress. If a hard Blackhole limitation blocks part of the vision path, record the evidence and deliver the largest working subset rather than blocking.
+
+Goal completion requirements:
+- models/autoports/<model>/tt/vision_tower.py (or equivalent modules) implements the muse_glimmer vision encoder in TTNN: 50 layers, hidden 1536, 16 heads, window/full attention interleave per vision_config.layer_types, patch_size 14, temporal patch 2, merge_size 2, GELU, rope_theta 10000, max 4096 visual tokens per image; plus the multimodal projector (projector_hidden_size 4096, GELU, out_hidden_size 6144) and the image-token merge into the text embedding stream (image_token_id 200092). Reconcile out_hidden_size 6144 vs text hidden 6656 exactly the way the HF muse_glimmer modeling code does — read it first; do not guess padding.
+- HF-vs-TTNN vision tower + projector PCC >= 0.99 on real weights with real image inputs (use AutoProcessor / MuseGlimmerImageProcessor for preprocessing on host; host-side image preprocessing is NOT a runtime fallback violation).
+- The vLLM adapter accepts image inputs following the Qwen2.5-VL pattern (models/demos/qwen25_vl/tt/generator_vllm.py: MULTIMODAL_REGISTRY processor registration, pixel_values/image_grid_thw-style kwargs consumed in prefill_forward, embeddings spliced into the text path). Closest projector reference: models/tt_transformers/tt/multimodal/mistral_24b/vision_mmp.py. Windowed vision attention reference: models/demos/qwen25_vl/tt/ and its tests/test_windowed_sdpa.py.
+- An end-to-end image+text request served through the autoport vLLM server (mesh P300x2) returns coherent, non-degenerate text that reflects the image content; save the exact request and response transcript to models/autoports/<model>/doc/vision_tower/vllm_image_smoke.json.
+- Known risk to plan around: fabric CCLs in existing vision attention paths have an open Blackhole gap (see models/tt_transformers/tt/multimodal/mistral_24b/vision_attention.py:240). Running the vision tower on a single chip with the text decoder on the (1,4) mesh is an acceptable design; record the choice.
+- Text-only serving still passes: rerun the vllm-stage degenerate-output check and record it.
+- models/autoports/<model>/doc/vision_tower/README.md and work_log.md record commands, PCC, perf, design decisions, limitations, and exact artifacts.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
