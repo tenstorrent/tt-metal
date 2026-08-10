@@ -508,8 +508,16 @@ def bsum(rows):
     }
 
 
-CLIFF_MAX_CORES = 2        # "on the cliff" = a reduction that never got off one or two cores
-CLIFF_MIN_SHARE_PCT = 2.0  # and is big enough for the first step off it to be measurable
+# THE TWO CONSTANTS, AND WHAT A SENSITIVITY SWEEP OVER 21 CORPUS KIND-RUNS SAYS ABOUT THEM.
+#
+#   CLIFF_MAX_CORES  1, 2 and 3 flag IDENTICAL cell sets. The parameter has no observed effect on this
+#                    corpus -- it is not tuned, it is inert. Kept at 2 because an op on 3 cores is not
+#                    obviously "on the cliff", but nothing here rests on the value.
+#   CLIFF_MIN_SHARE  1.0 and 2.0 are identical (5 of 12 cells, 4 of 4 known win cells, precision 0.80);
+#                    3.0 drops to 4 cells and LOSES a win cell. So 2.0 is the largest value that still
+#                    catches every win -- a derived choice rather than a guessed one.
+CLIFF_MAX_CORES = 2
+CLIFF_MIN_SHARE_PCT = 2.0
 
 
 def main() -> int:
@@ -841,18 +849,37 @@ def main() -> int:
             continue
         if r["share_pct"] < CLIFF_MIN_SHARE_PCT:
             continue
-        width_tiles = None
-        for o in ir_ops:
-            if o["op"] == r["op"] and o.get("logical_shape"):
-                width_tiles = -(-o["logical_shape"][-1] // 32)
-                break
-        lad = legal_ladder(width_tiles, row_width=a.grid_row_width) if width_tiles else None
+        # THE LADDER ONLY APPLIES WHERE THE ADVICE IS A SHARD OVER THE TILE AXIS.
+        #
+        # `(C-1)*ceil(W/C) < W` models a width shard over tiles. On the first cell to run this, `topk` was
+        # advised `l1/interleaved/10x11` -- not sharded at all, so there is no shard width to enumerate --
+        # and the ladder printed `[1]` while the change that shipped and passed its oracle ran on **110**
+        # cores. `[1]` reads as "1 is the only legal value" and meant "this model does not apply", so the
+        # ladder could have suppressed the win it exists to find. Decide from the advised layout, never from
+        # an op-name list: an allowlist would be fitted to the ops we happen to have seen.
+        width_tiles, lad, not_modelled = None, None, None
+        advised_layout = str(r.get("advised") or "")
+        if "sharded" not in advised_layout:
+            not_modelled = (f"the advice for this op is {advised_layout.split()[0] if advised_layout else '?'}, "
+                            "not a shard, so there is no shard width to enumerate. Sweep whatever the "
+                            "decoder's own knob accepts and record what you tried.")
+        else:
+            for o in ir_ops:
+                if o["op"] == r["op"] and o.get("logical_shape"):
+                    width_tiles = -(-o["logical_shape"][-1] // 32)
+                    break
+            if not width_tiles or width_tiles < 2:
+                not_modelled = (f"width is {width_tiles} tile(s); a shard ladder needs at least 2 to be "
+                                "meaningful. Sweep the knob's own accepted values instead.")
+            else:
+                lad = legal_ladder(width_tiles, row_width=a.grid_row_width)
         cliff.append({
             "device": r["device"], "op": r["op"], "chain": r.get("chain"),
             "us": r["us"], "share_pct": r["share_pct"], "per_model_us": round(r["us"] * a.layers_of_kind, 3),
             "shipped_cores": sc, "advised_cores": ac,
             "advised_shard_shape": r.get("advised_shard_shape"),
             "width_tiles": width_tiles, "legal_ladder": (lad or {}).get("ladder"),
+            "ladder_not_modelled": not_modelled,
             "verdict": None, "measured_ms": None, "repeats_ms": None,
             "how": f"{r['op']} runs on {sc} core(s) at {r['share_pct']}% of the window and the advisor wants "
                    f"{ac}. Sweep the ladder on both sides of {ac}. The first step off {sc} core(s) is where "
@@ -1213,7 +1240,8 @@ def main() -> int:
         print(f"   ** CLIFF: {c['op']} on {c['shipped_cores']} core(s), {c['us']:.3f} us "
               f"({c['share_pct']} % of window, {c['per_model_us']:.1f} us/model), advisor wants "
               f"{c['advised_cores']}"
-              + (f", legal ladder {c['legal_ladder']}" if c["legal_ladder"] else "")
+              + (f", legal ladder {c['legal_ladder']}" if c["legal_ladder"]
+                 else f", NO LADDER MODELLED: {c['ladder_not_modelled']}")
               + " -- SCREEN THIS FIRST")
     for line in textwrap.wrap(f["advice"], 108):
         print("      " + line)
@@ -1377,6 +1405,35 @@ def self_test() -> int:
               bbox_cores("l1/height_sharded/32x1 cores=(0,0)-(10,1)") == 22 and
               grid_cores("l1/interleaved/10x11") == 110,
               "advised cores come from the grid string, and an interleaved layout has one")
+
+        # 8b. a ladder is NOT emitted where its model does not apply. The first cell to run this advised
+        # `topk` as l1/interleaved and shipped it on 110 cores while the ladder said [1].
+        rep = json.loads(report_of(["rms_norm", "topk"]))
+        rep["ops"][0]["layout"] = "l1/width_sharded/1x22 cores=(0,0)-(10,1)"
+        rep["ops"][1]["layout"] = "l1/interleaved/10x11"
+        (d / "inc_ladder.json").write_text(json.dumps({"incumbent_ms": 0.06,
+                                                       "repeats_ms": [0.0600, 0.0602]}))
+        # a minimal IR, because the tile width the ladder needs comes from the op's RESULT TYPE and
+        # nowhere else -- 2048 wide is 64 tiles, the width measured on north-mini
+        (d / "ladder.mlir").write_text(
+            "#ttnn_layout0 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x22>, "
+            "memref<1x3x!ttcore.tile<32x32, bf16>, #l1>, <width_sharded>, "
+            "core_ranges = <[#ttnn.core_range<(0,0), (10,1)>]>>\n"
+            '  %0 = "ttnn.rms_norm"(%a) : (tensor<1x1x32x2048xbf16, #ttnn_layout0>)'
+            " -> tensor<1x1x32x2048xbf16, #ttnn_layout0>\n")
+        r = run(json.dumps(rep),
+                "OP CODE,DEVICE KERNEL DURATION [ns],CORE COUNT,INPUT 0 MEMORY\n"
+                "LayerNormDeviceOperation,30000,1,DEV_0_L1_WIDTH_SHARDED\n"
+                "TopKDeviceOperation,30000,1,DEV_0_L1_WIDTH_SHARDED\n",
+                ["--incumbent", str(d / "inc_ladder.json"), "--ir", str(d / "ladder.mlir")])
+        check(r.returncode == 0, "the ladder fixture's own inputs are valid")
+        o = load()
+        by = {c["op"]: c for c in o["cliff_candidates"]}
+        check("topk" in by and by["topk"]["legal_ladder"] is None
+              and by["topk"]["ladder_not_modelled"] and "not a shard" in by["topk"]["ladder_not_modelled"],
+              "interleaved advice gets no ladder, and says why")
+        check("rms_norm" in by and by["rms_norm"]["legal_ladder"],
+              "sharded advice still gets its ladder")
 
         # 8. the legal ladder reproduces the one measured on north-mini, and excludes what hard-failed
         lad = legal_ladder(64)

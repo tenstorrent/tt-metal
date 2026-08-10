@@ -432,6 +432,56 @@ if not isinstance(apv, dict):
                 "'not tried' must not look like 'tried and lost'.")
 elif apv.get("measured_ms") is None and not apv.get("hard_error"):
     crit.append("advised_plan_verbatim has neither measured_ms nor hard_error, so it was not actually tried.")
+# EVERY MEASUREMENT MUST BE ACCOUNTED FOR BY THE DECISION.
+#
+# This is the failure that survived from v2 into v3's first cell, twice, by two different routes. In v2 a
+# cell measured 0.700120 and shipped 0.768104. In v3's first cell a candidate was measured FOUR TIMES at
+# 0.543590 -- faster than the 0.550052 that shipped -- and never oracle-checked, while the two slower rungs
+# both got real-weight oracles and both passed. The gate passed it because the "final_ms is worse than the
+# best measured set" check reads combination.measured_sets, which held ONE of seventeen measurements.
+#
+# So: compare against every measurement on disk, and state the population. Scoped PER LAYER KIND, because
+# measurements of different kinds have different incumbents and comparing across them is meaningless -- an
+# unscoped version of this check would fire on every multi-kind cell. Disconfirmation runs are exempt by
+# name: order-swap and knob-off are SUPPOSED to sit at the incumbent.
+mdir = os.path.join(os.environ["CH_D"], "measurements")
+kinds = {}
+for k in (f.get("model_estimate") or {}).get("per_kind", {}) or {}:
+    kinds[k] = None
+faster, pop = [], 0
+if os.path.isdir(mdir):
+    for fn in sorted(os.listdir(mdir)):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            m = json.load(open(os.path.join(mdir, fn)))
+        except Exception:
+            crit.append(f"measurements/{fn} does not parse. A measurement the gate cannot read is a "
+                        "measurement nobody reconciled against the decision.")
+            continue
+        pop += 1
+        med = m.get("median_ms")
+        lbl = str(m.get("label") or fn)
+        if not isinstance(med, (int, float)):
+            continue
+        if any(t in lbl.lower() for t in ("knob_off", "order_swap", "warmup", "discard", "incumbent")):
+            continue                      # disconfirmation and control runs, exempt by design
+        # per-kind: only compare with the shipped number when the label names the same kind
+        same_kind = [k for k in kinds if k and k.split("_")[0].lower() in lbl.lower()] or None
+        if isinstance(fm, (int, float)) and med < fm - 1e-9 and (same_kind or not kinds):
+            faster.append((lbl, med, m.get("oracle_pcc"), m.get("verdict")))
+if pop == 0 and f.get("changed"):
+    warn.append("no measurements/ directory to reconcile against the decision. Every timed run belongs "
+                "there, or nothing can check that the fastest candidate is the one that shipped.")
+for lbl, med, pcc, verdict in faster:
+    if verdict or pcc is not None:
+        warn.append(f"measurements/{lbl} is faster than what shipped ({med} < {fm}) and carries "
+                    f"verdict={verdict!r} pcc={pcc!r} -- state in the README why it did not ship.")
+    else:
+        crit.append(f"measurements/{lbl} measured {med}, FASTER than the shipped {fm}, and carries no "
+                    "verdict and no oracle result. The stage's output is 'the best measured decoder': a "
+                    "faster measurement must either ship or record why it did not. "
+                    f"(population checked: {pop} measurement file(s).)")
 if f.get("changed") and not f.get("disconfirmation"):
     warn.append("no disconfirmation recorded for a shipped change. Two cheap measurements: an ORDER SWAP "
                 "(re-measure the incumbent in a fresh process AFTER the candidate -- a candidate that only "

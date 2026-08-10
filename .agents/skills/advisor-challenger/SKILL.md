@@ -53,7 +53,13 @@ below it, and the two cells that swept only at and above the advice both shipped
 response to core count is flat over a wide middle and falls off a cliff at one core: 8→44 cores varied by
 0.2 % where 1 core cost 13.7 %. Almost all the value is the **first step off one core**. You do not need the
 optimum — you need to notice the op is on the cliff (which `reconcile.py` now tells you before you spend any
-device time) and land anywhere on the ladder. Which middle rung you pick is worth about 1 pp.
+device time) and land anywhere on the ladder.
+
+**Which middle rung you pick is worth about 0.1 pp, not 1 pp.** Measured on the first v3 cell: 16 / 22 / 32
+cores gave 0.543590 / 0.544064 / 0.544007 ms — a spread of 0.08 pp, with 22 and 32 inside each other's noise,
+against 1 core at 0.553349. So sweep the ladder to confirm you are on the plateau and to find the knee, not
+because the rungs differ much. An earlier draft of this file said 1 pp; that came from a summary sentence
+rather than from the measurement beside it.
 
 ⚠ **Before calling a low core count starved, ask what the op's sharding semantics are.**
 `nlp_create_qkv_heads_decode` height-shards over *batch*, so its core count **is** the batch size —
@@ -84,11 +90,24 @@ the advisor's placement, and the four worst never applied it.
 
 **So the procedure is:**
 
+**⚠ Bounded by what the decoder can express, and that bound is a measurement.** The advice is per-op
+memory configs and shard shapes; the decoder exposes **policy knobs**. Where no knob exists, the placement
+cannot be applied at all — the first cell to run this returned `hard_error: no generic final_ir-to-decoder
+execution bridge exists`, and in the reference corpus **0 of 15 cells** applied a plan, the one success being
+a hand-written per-model patch. So apply the **maximal expressible subset**, and make the remainder a number:
+
+> `inexpressible[]` — every advised placement with no knob, each with **its op cost from the profile**. The
+> cost is what stops this being a loophole: a cell that declares everything inexpressible has to show that
+> the excuse covers most of the window, and that is then a finding about the decoder's knob surface rather
+> than about the advisor.
+
 ```
-1. apply_all -- every advised placement at once, built from `advised_plan.ops` in the reconciliation,
-   which reads final_ir.mlir. NOT from report.json: it has no shard shape, and a plan rebuilt with a
-   guessed shard width is a different plan (a guessed (32,48) for a specified (32,64) cost one analysis
-   a week and produced a retracted "the advice is illegal" finding)
+1. apply_all = every advised placement THE DECODER CAN EXPRESS, at once, built from `advised_plan.ops` in
+   the reconciliation, which reads final_ir.mlir. NOT from report.json: it has no shard shape, and a plan
+   rebuilt with a guessed shard width is a different plan (a guessed (32,48) for a specified (32,64) cost
+   one analysis a week and produced a retracted "the advice is illegal" finding). Adding a knob is IN scope
+   when it is a memory-config or program-config change; out of scope when it needs a graph rewrite -- say
+   which
 2. first drop every op in `unfixable_ops` -- the advisor has already declared those impossible, with the
    exact runtime error it got from tt-metal's own constraint machinery
 3. if what remains will not run, remove ONLY the failing item, and record the isolated single-op test that
@@ -268,7 +287,12 @@ What the template enforces, and why:
 5. **Never time a candidate after the incumbent in the same process.** With any residual ramp the later run
    is simply warmer, which hands the candidate a free win under a non-overlap rule that assumes exchangeable
    samples.
-6. **The first process of a session is not comparable to the rest, so throw one away.** Measured: the first
+6. **The first process of a session may not be comparable to the rest — recommended, not required.**
+   ⚠ The evidence is **a single cell**: one observation of 11.838 µs against 0.196 µs. That is a 60×
+   difference and worth avoiding, but n=1 does not support a mandate, and the first v3 cell's three controls
+   (ordinals 3, 4, 5; floors 0.284 / 0.926 / 0.490 µs) show no ordinal trend either way. So record
+   `process_ordinal` always — it is free and it makes the question answerable — and prefer to discard a warm
+   process, without treating its absence as a defect. Measured: the first
    harness process of a session recorded a floor of **11.838 µs** where the identical configuration in a
    later process recorded **0.196 µs** — a **60×** difference from JIT-cache warmth *between* processes, which
    no amount of per-process warm-up can remove. Since the floor decides `feasibility.verdict`, a cell whose
@@ -342,10 +366,12 @@ L1. That is the one place it can see the inter-layer handoff at all. Declare it 
 The cost is L1 capacity: `spill.ran` is true in every corpus cell at **one** layer, with up to 4 spills, so
 2–3 layers will spill more and a spilled plan applies piecemeal less well.
 
-**Do it once per cell, on one kind, and record the choice.** `layers_in_window` was 1 in 23 of 23 reference
-reconciliations while `spill.ran` was true in 8 of 8 — the exact condition v2 cited for going to N=2, so that
-recommendation was dead text. Pick the kind that spills least (0–1) and run N=2 there; if no kind qualifies,
-record `layers_in_window_reason` saying so. It answers one question: does the advisor keep the interior layer
+**This is an OPTIONAL experiment, not a requirement — and that is a change from an earlier draft.** Which
+made it conditional on `spill.ran`; re-derived over 21 corpus kind-runs, **`spill.ran` is true in 21 of 21**,
+so the condition selects every cell and is no condition at all. And there is **no evidence anywhere that N≥2
+helps** — the corpus never ran it. Requiring it would cost every cell a re-capture to answer a question one
+cell can answer, so: run it on **one** cell, on the kind that spills least, and only when someone wants the
+answer. Record `layers_in_window_reason` either way. It answers one question: does the advisor keep the interior layer
 boundary in L1? If it does, that is a directly attributable win worth `(N-1)/N` of the handoff cost
 (§`model_estimate.layer_handoff`) and justifies a larger N; if not, the DRAM hardcoding is not the binding
 constraint and the idea is closed cheaply. Requiring N≥2 everywhere is *not* the rule — it would cost every
