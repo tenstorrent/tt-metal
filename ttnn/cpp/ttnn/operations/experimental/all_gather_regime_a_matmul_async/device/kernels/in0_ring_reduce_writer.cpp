@@ -331,8 +331,12 @@ void kernel_main() {
     //
     // RELAY cores deliberately keep the eager prologue wait. Deferring theirs would push the next device's
     // arrival out by however long this core computes first, which is strictly worse than the stall it saves.
-    uint32_t dl1_own_pending = 0;  // 1 => we still owe a wait for our own chunk
-    uint32_t dl1_recv_sem = 0;     // arrival semaphore address, hoisted so the ring loop can reach it
+    uint32_t dl1_own_pending = 0;  // 1 => we still owe our own chunk (wait if remote, then relay it onward)
+    uint32_t dl1_recv_sem = 0;     // arrival semaphore address
+    // The fabric relay moved out of the prologue and into the ring loop, so the values it needs come with it.
+    // dl1_mux_fa is where this core's mux client block starts in the runtime args.
+    std::size_t dl1_mux_fa = 0;
+    uint32_t dl1_h_dist = 0, dl1_h_send_fwd = 0, dl1_h_send_bwd = 0, dl1_h_packet_bytes = 0;
 #endif
 
     // ---- PHASE 0: fused fabric all-gather (Phase 1 of the design spec; DRAM-staged) ----
@@ -570,106 +574,21 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
             } else {
-                // RELAY / LEAF. Our slot is filled by the upstream device; wait for its credit.
-                // ABLATE_NOWAIT skips exactly this wait, so the delta against the real number is the pure
-                // DEPENDENCY STALL on THIS path. The staged path's ablation hooks live in the step-0 read
-                // that direct-L1 compiles out, so without this hook TT_AGMM_ABLATE would silently do
-                // nothing here and report the unablated time as the ablated one.
-                // A leaf defers this to the ring step that consumes the chunk; a relay must have it now.
-                dl1_recv_sem = dl1_recv_sem_addr;
-                if (dl1_defer != 0u) {
-                    dl1_own_pending = 1u;
-                } else {
-#if !defined(ABLATE_NOWAIT)
-                    noc_semaphore_wait_min(dl1_recv, 1);
-#endif
-                }
+                // RELAY / LEAF. Our chunk is written by the upstream device. We do NOT wait for it here:
+                // waiting in the prologue is what froze the on-chip ring, because a core stuck here forwards
+                // nothing and every core behind it starves. The wait -- and the relay that follows it -- move
+                // to the ring step that first needs this chunk (see ensure_own below).
             }
-            if (dl1_send_fwd || dl1_send_bwd) {
-                // Packet headers from the per-RISC PacketHeaderPool (12 on Blackhole), allocated ONCE: one
-                // per in-flight payload (the header stays live until the send drains) plus a separate one
-                // for the credit, since to_noc_unicast_write and to_noc_unicast_atomic_inc overwrite the
-                // same command_fields union.
-                constexpr uint32_t kDl1Batch = 8;
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr[kDl1Batch];
-                for (uint32_t j = 0; j < kDl1Batch; ++j) {
-                    hdr[j] = PacketHeaderPool::allocate_header();
-                }
-                auto* hdr_sem = PacketHeaderPool::allocate_header();
-                // Same core index on the peer: core i holds the same slot of the same Pk group on every
-                // device, so core i credits core i and each core's counter is its own private arrival flag.
-                // NOC0 coords (my_x[0], not my_x[noc_index]): the packet-header setter re-encodes the
-                // address with its own mirroring, so an already-noc1-mirrored coordinate mirrors twice and
-                // aims at the mirror-image core. Invisible on Blackhole, a hang on Wormhole.
-                const uint64_t peer_sem = safe_get_noc_addr(my_x[0], my_y[0], dl1_recv_sem_addr, 0);
-                // A LINE origin drives BOTH muxes (the stripe has to fan out either way from its owner);
-                // every other core drives exactly one. The host appends the client blocks in this same
-                // fwd-then-bwd order, and only for directions this core actually sends in, so reading them
-                // in order off `fa` lands on the right one.
-                for (uint32_t dir = 0; dir < 2u; ++dir) {
-                    if ((dir == 0u) ? (dl1_send_fwd == 0u) : (dl1_send_bwd == 0u)) {
-                        continue;
-                    }
-                    // Each neighbour has its own schedule, so its slot for this chunk differs.
-                    const uint32_t dl1_peer_base =
-                        base0 + (dir == 0u ? ring_peer_slot_fwd : ring_peer_slot_bwd) * shard_bytes;
-                    auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
-                    sender.open();
-                    // ABLATE_NOPAYLOAD sends no bytes but still opens, credits and closes -- so the mux
-                    // plumbing, the credit traffic and the arrival dependency all stay, and only the payload
-                    // disappears. Timing only: consumers get a credit for data that never arrived.
-#if defined(ABLATE_NOPAYLOAD)
-                    constexpr uint32_t dl1_payload_bytes = 0u;
-#else
-                    constexpr uint32_t dl1_payload_bytes = slot0_bytes;
-#endif
-                    // Slot 0 is CONTIGUOUS in L1, so the transfer is bounded only by the fabric packet, not
-                    // by the tile. dl1_packet_bytes is as many whole bf16 tiles as one packet holds (the host
-                    // derives it from the fabric's own max payload), which halves the packet count -- and with
-                    // it the headers, mux slot handoffs and NoC transactions -- versus sending tile by tile.
-                    // The last packet is short whenever slot0_bytes is not a whole multiple.
-                    for (uint32_t off0 = 0; off0 < dl1_payload_bytes; off0 += kDl1Batch * dl1_packet_bytes) {
-                        uint32_t j = 0;
-                        for (uint32_t off = off0; off < dl1_payload_bytes && j < kDl1Batch;
-                             off += dl1_packet_bytes, ++j) {
-                            const uint32_t n = ((dl1_payload_bytes - off) < dl1_packet_bytes)
-                                                   ? (dl1_payload_bytes - off)
-                                                   : dl1_packet_bytes;
-                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
-                                &sender,
-                                hdr[j],
-                                dl1_my_base + off,
-                                n,
-                                tt::tt_fabric::NocUnicastCommandHeader{
-                                    safe_get_noc_addr(my_x[0], my_y[0], dl1_peer_base + off, 0)},
-                                /*num_hops=*/1);
-                        }
-                        // One flush per batch: the headers (not the source, which is never rewritten) are
-                        // what has to be free before the next batch reuses them.
-                        noc_async_writes_flushed();
-                    }
-                    // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
-                    // the peer drain every prior write on this channel before applying the increment.
-                    // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
-                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
-                        &sender,
-                        hdr_sem,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_sem, 1, /*flush=*/true},
-                        /*num_hops=*/1);
-                    // Drain writes AND non-posted atomics before closing, or the kernel exits with pending
-                    // NOC transactions. close() is mandatory: the v2 mux self-terminates only once every
-                    // client has closed, so skipping it hangs the mux kernels.
-                    noc_async_write_barrier();
-                    noc_async_atomic_barrier();
-                    sender.close();
-                }
+            dl1_recv_sem = dl1_recv_sem_addr;
+            if (dl1_active) {
+                dl1_own_pending = 1u;
             }
-            if (dl1_active && dl1_dist != 0u && dl1_own_pending == 0u) {
-                // Re-arm for the next invocation. A GLOBAL semaphore is not zeroed by program launch (that
-                // is exactly why the credit lives in one), so whoever consumed it has to reset it. A leaf
-                // that deferred its wait re-arms in the ring loop instead, right after consuming it.
-                noc_semaphore_set(dl1_recv, 0);
-            }
+            // Publish what the deferred relay will need; the send itself happens in ensure_own().
+            dl1_mux_fa = fa;
+            dl1_h_dist = dl1_dist;
+            dl1_h_send_fwd = dl1_send_fwd;
+            dl1_h_send_bwd = dl1_send_bwd;
+            dl1_h_packet_bytes = dl1_packet_bytes;
         }
 #else
         // The 8 master-ring cores split the shard by M tiles; bank_id picks the slice. Ceil-divide so the
@@ -918,14 +837,115 @@ void kernel_main() {
     //  * A LEAF's own-chunk wait lands here (dl1_own_pending), at the step that actually consumes it, instead
     //    of in the prologue.
     for (uint32_t step = 0; step < G; ++step) {
+        // Our own chunk: wait for it if it comes over the fabric, then IMMEDIATELY relay it onward. Runs at the
+        // first ring step that needs this chunk, and exactly once (dl1_own_pending guards it), so the mux still
+        // sees exactly one open and one close -- which is what mux v2 counts to self-terminate.
+        //
+        // Fires at step 0 for an ORIGIN, because an origin's own chunk has 0 fabric hops and 0 on-chip hops, so
+        // availability order always sorts it first. Origins therefore still relay as eagerly as before, while
+        // every other core gets to forward and push the chunks that are already in hand first.
         auto ensure_own = [&]() {
-            if (dl1_own_pending != 0u) {
-                volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem);
+            if (dl1_own_pending == 0u) {
+                return;
+            }
+            dl1_own_pending = 0u;
+            volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem);
+            if (dl1_h_dist != 0u) {
 #if !defined(ABLATE_NOWAIT)
-                noc_semaphore_wait_min(r, 1);
+                noc_semaphore_wait_min(dl1_recv, 1);
 #endif
-                noc_semaphore_set(r, 0);  // re-arm; the prologue skipped this for us
-                dl1_own_pending = 0u;
+                // Re-arm for the next invocation: a GLOBAL semaphore is not zeroed by program launch, which is
+                // exactly why the cross-chip credit lives in one.
+                noc_semaphore_set(dl1_recv, 0);
+            }
+            const uint32_t dl1_dist = dl1_h_dist;
+            const uint32_t dl1_send_fwd = dl1_h_send_fwd;
+            const uint32_t dl1_send_bwd = dl1_h_send_bwd;
+            const uint32_t dl1_packet_bytes = dl1_h_packet_bytes;
+            const uint32_t dl1_my_base = base0 + ring_own_slot * shard_bytes;
+            constexpr uint32_t slot0_tiles = W * in0_blk;
+            constexpr uint32_t slot0_bytes = slot0_tiles * tile_bytes;
+            const uint32_t dl1_recv_sem_addr = dl1_recv_sem;
+            std::size_t fa = dl1_mux_fa;
+            (void)dl1_dist;
+            if (dl1_send_fwd || dl1_send_bwd) {
+                // Packet headers from the per-RISC PacketHeaderPool (12 on Blackhole), allocated ONCE: one
+                // per in-flight payload (the header stays live until the send drains) plus a separate one
+                // for the credit, since to_noc_unicast_write and to_noc_unicast_atomic_inc overwrite the
+                // same command_fields union.
+                constexpr uint32_t kDl1Batch = 8;
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr[kDl1Batch];
+                for (uint32_t j = 0; j < kDl1Batch; ++j) {
+                    hdr[j] = PacketHeaderPool::allocate_header();
+                }
+                auto* hdr_sem = PacketHeaderPool::allocate_header();
+                // Same core index on the peer: core i holds the same slot of the same Pk group on every
+                // device, so core i credits core i and each core's counter is its own private arrival flag.
+                // NOC0 coords (my_x[0], not my_x[noc_index]): the packet-header setter re-encodes the
+                // address with its own mirroring, so an already-noc1-mirrored coordinate mirrors twice and
+                // aims at the mirror-image core. Invisible on Blackhole, a hang on Wormhole.
+                const uint64_t peer_sem = safe_get_noc_addr(my_x[0], my_y[0], dl1_recv_sem_addr, 0);
+                // A LINE origin drives BOTH muxes (the stripe has to fan out either way from its owner);
+                // every other core drives exactly one. The host appends the client blocks in this same
+                // fwd-then-bwd order, and only for directions this core actually sends in, so reading them
+                // in order off `fa` lands on the right one.
+                for (uint32_t dir = 0; dir < 2u; ++dir) {
+                    if ((dir == 0u) ? (dl1_send_fwd == 0u) : (dl1_send_bwd == 0u)) {
+                        continue;
+                    }
+                    // Each neighbour has its own schedule, so its slot for this chunk differs.
+                    const uint32_t dl1_peer_base =
+                        base0 + (dir == 0u ? ring_peer_slot_fwd : ring_peer_slot_bwd) * shard_bytes;
+                    auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
+                    sender.open();
+                    // ABLATE_NOPAYLOAD sends no bytes but still opens, credits and closes -- so the mux
+                    // plumbing, the credit traffic and the arrival dependency all stay, and only the payload
+                    // disappears. Timing only: consumers get a credit for data that never arrived.
+#if defined(ABLATE_NOPAYLOAD)
+                    constexpr uint32_t dl1_payload_bytes = 0u;
+#else
+                    constexpr uint32_t dl1_payload_bytes = slot0_bytes;
+#endif
+                    // Slot 0 is CONTIGUOUS in L1, so the transfer is bounded only by the fabric packet, not
+                    // by the tile. dl1_packet_bytes is as many whole bf16 tiles as one packet holds (the host
+                    // derives it from the fabric's own max payload), which halves the packet count -- and with
+                    // it the headers, mux slot handoffs and NoC transactions -- versus sending tile by tile.
+                    // The last packet is short whenever slot0_bytes is not a whole multiple.
+                    for (uint32_t off0 = 0; off0 < dl1_payload_bytes; off0 += kDl1Batch * dl1_packet_bytes) {
+                        uint32_t j = 0;
+                        for (uint32_t off = off0; off < dl1_payload_bytes && j < kDl1Batch;
+                             off += dl1_packet_bytes, ++j) {
+                            const uint32_t n = ((dl1_payload_bytes - off) < dl1_packet_bytes)
+                                                   ? (dl1_payload_bytes - off)
+                                                   : dl1_packet_bytes;
+                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                                &sender,
+                                hdr[j],
+                                dl1_my_base + off,
+                                n,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    safe_get_noc_addr(my_x[0], my_y[0], dl1_peer_base + off, 0)},
+                                /*num_hops=*/1);
+                        }
+                        // One flush per batch: the headers (not the source, which is never rewritten) are
+                        // what has to be free before the next batch reuses them.
+                        noc_async_writes_flushed();
+                    }
+                    // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
+                    // the peer drain every prior write on this channel before applying the increment.
+                    // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
+                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                        &sender,
+                        hdr_sem,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_sem, 1, /*flush=*/true},
+                        /*num_hops=*/1);
+                    // Drain writes AND non-posted atomics before closing, or the kernel exits with pending
+                    // NOC transactions. close() is mandatory: the v2 mux self-terminates only once every
+                    // client has closed, so skipping it hangs the mux kernels.
+                    noc_async_write_barrier();
+                    noc_async_atomic_barrier();
+                    sender.close();
+                }
             }
         };
         // Number of received chunks needed before slot `sl` is filled: every slot below it except our own.
