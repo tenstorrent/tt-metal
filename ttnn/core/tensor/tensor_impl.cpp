@@ -322,8 +322,8 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
     const auto& dist_buffer = row_major_tensor.host_storage().buffer();
     std::stringstream ss;
     bool first = true;
-    // `shard_coords()` spans the whole mesh, but only shards local to this host are materialized, so a
-    // buffer must be consumed per populated coordinate rather than per position.
+    // `shard_coords()` records the requested coordinates, but only shards local to this host are materialized, so
+    // each buffer must be retrieved by its coordinate rather than inferred from position.
     for (const auto& coord : dist_buffer.shard_coords()) {
         const std::optional<tt::tt_metal::HostBuffer> shard = dist_buffer.get_shard(coord);
         if (!shard.has_value() || !mesh_device.is_local(coord)) {
