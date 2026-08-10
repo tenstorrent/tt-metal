@@ -470,6 +470,14 @@ jobs:
           # but not /work which is mounted from the host. Git commands from /work fail due to
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
+          # CPM-fetched git dependencies (e.g. kissat) live under /work/.cpmcache/<name>/<hash>
+          # as their own separate git repos; safe.directory requires an exact match per repo
+          # root, so marking /work safe doesn't cover them. Their own build scripts sometimes
+          # shell out to `git show` (e.g. kissat's generate-build-header.sh) and silently fail
+          # under the same dubious-ownership check. Trust all directories in this ephemeral
+          # CI container rather than enumerating every CPM package's cache path.
+          # REPRO-ONLY: not for landing, see issue #44472.
+          git config --global --add safe.directory '*'
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
