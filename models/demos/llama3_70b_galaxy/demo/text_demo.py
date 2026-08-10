@@ -1746,28 +1746,37 @@ def test_demo_text(
     test_id = request.node.callspec.id
     if "ci-eval-1" in test_id:
         sku = get_current_device_sku_name()
+        # Key the target on the prompt the metrics were actually measured from. Every value in
+        # `measurements` comes from batch 0 (get_duration() defaults to iteration 0, and
+        # num_tokens_generated_decode[0]/prefill_lens[0] are batch 0), whereas `input_prompts` is
+        # left pointing at the *last* repeat batch by the loop above.
+        target_seq_len = len(repeat_batch_prompts[0][0])
         resolved_targets = resolve_perf_targets(
             model_name=model_args.base_model_name,
             sku=sku,
             batch_size=batch_size,
-            seq_len=len(input_prompts[0]),
+            seq_len=target_seq_len,
         )
         if resolved_targets:
             verify_perf(
                 measurements,
+                # Use the prefill_time_to_first_token alias: both alias to the same measured TTFT,
+                # but per-metric tolerance keys are resolved from the requested name only, so
+                # requesting prefill_time_to_token would silently ignore a
+                # prefill_time_to_first_token_tolerance in the centralized targets.
                 expected_measurements={
-                    "prefill_time_to_token": True,
+                    "prefill_time_to_first_token": True,
                     "decode_t/s/u": True,
                 },
                 model_name=model_args.base_model_name,
                 sku=sku,
                 batch_size=batch_size,
-                seq_len=len(input_prompts[0]),
+                seq_len=target_seq_len,
             )
         else:
             logger.warning(
                 f"No centralized performance targets found for model={model_args.base_model_name}, "
-                f"sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+                f"sku={sku}, batch_size={batch_size}, seq_len={target_seq_len}"
             )
     else:
         logger.info(f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks...")
