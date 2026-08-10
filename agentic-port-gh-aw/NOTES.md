@@ -698,26 +698,33 @@ gap is `graphviz`, which `ttnn.graph` imports unconditionally during `import ttn
 installs that one dependency and asserts every import the harness needs, so a missing dependency
 fails at a named step instead of surfacing as a `blocked` verdict three steps later.
 
-### 12.9 The ccache miss is an image mismatch, not a network problem
+### 12.9 The ccache miss looks like an image mismatch — SUPERSEDED, see 14.3
 
-Both instrumented builds reported **0 hits on 1395 remote lookups**, and adding `--network host`
-changed nothing. The remote is being reached — ccache records 1395 remote *misses*, not errors —
-so the cache simply holds no entries matching these compilations.
+**This section's conclusion is wrong. Kept for the record because the reasoning is a good example
+of a plausible story fitting under-read evidence.** The correction is in 14.3.
 
-The cause is the image. `build-artifact.yaml`, which populates the shared cache and compiled in
-**2.6 minutes**, builds in `ubuntu-22.04-ci-build-amd64`. This workflow builds in
+What was observed: both instrumented builds reported **0 hits on 1395 remote lookups**, and adding
+`--network host` changed nothing. That was read as "the remote is being reached — ccache records
+1395 remote *misses*, not errors — so the cache simply holds no entries matching these
+compilations." The full statistics block also reports `Errors: 1395` on the same lookups, which was
+not read, and which says the opposite: every request failed.
+
+The inferred cause was the image. `build-artifact.yaml`, which populates the shared cache and
+compiled in **2.6 minutes**, builds in `ubuntu-22.04-ci-build-amd64`; this workflow builds in
 `ubuntu-22.04-dev-amd64`, chosen because it also carries the runtime needed to execute on the card.
-Different toolchain binaries and paths hash to different ccache keys, so the two never share
-entries and every build here is cold at roughly 70 minutes.
+Different toolchain binaries and paths do hash to different ccache keys, so that mechanism is real
+— it is just not what is happening here.
 
-**The v2 fix is two containers over one workspace**: build in the cache-compatible `ci-build`
-image, measure in the `dev` image, both mounting the same checkout. That should recover the
-2.6-minute build while keeping a working runtime, and it costs only a second `docker run`. Worth
-doing before this is used in anger — a 70-minute pre-step dominates the run and burns card time.
+The proposed fix was two containers over one workspace: build in `ci-build`, measure in `dev`.
+**Do not do this yet.** It cannot help while remote storage errors on every request, and 14.3
+argues the pool is the actual variable.
 
 ---
 
 ## 13. HANDOFF — pick up here (2026-08-07, end of day)
+
+**Superseded by section 14.** The blocker named below is resolved; the run that was in flight when
+this was written finished and failed for an unrelated reason.
 
 ### State
 
@@ -765,10 +772,131 @@ Expect roughly 70 minutes of cold build before the agent starts (see 12.9 — wo
 
 - `mcp-scripts` tools reach the card; the agent's own bash cannot (section 9).
 - An N150 card runner reaches the Garage ccache endpoint, and a cache-compatible build compiles in
-  2.6 minutes (12.1).
+  2.6 minutes (12.1). **Narrower than written — see 14.3: that was the `civ2` pool, not the
+  `cloud-virtual-machine` pool this workflow runs on.**
 - `CODEGEN_REPO_TOKEN` checks out tt-dm-codegen from within the workflow.
 - The container starts with the card visible, and `scaffold.py` produces byte-identical CMake
   registration to the hand-written port.
 - `build_metal.sh` completes inside that container on a card runner.
 - The whole harness — ledger, correctness, wall, device, gate arithmetic, profiler attribution —
   is validated end-to-end on real silicon against the hand-written pad port (12.3).
+
+---
+
+## 14. RUN #10 POST-MORTEM AND FIXES (2026-08-10)
+
+Run [31218783110](https://github.com/tenstorrent/tt-metal/actions/runs/31218783110) was in flight
+when section 13 was written. It failed after 35 minutes — but not on anything section 13 was
+worried about, and it answers the question section 13 called "the last gate before the agent runs
+at all".
+
+### 14.1 The uv fix works, and the baseline is real — handoff item 1 is closed
+
+`Prepare the Python environment` passed: `uv pip install --python "$(command -v python3)"` put
+graphviz into `/opt/venv`, and `import ttnn, torch, yaml, graphviz` printed `harness imports OK`.
+`Native baseline` then ran on the card and produced a genuine verdict rather than `blocked`:
+
+```json
+{"op": "pad", "band": "performance",
+ "notes": ["op codes: generic=GenericOpDeviceOperation, native=PadDeviceOperation"],
+ "ledger_counts": {"in": 140, "out": 44, "dropped": 56},
+ "performance": {"verdict": "back-to-translate", "has_strict_win": false, ...}}
+```
+
+The ledger counts reproduce 12.3's local numbers exactly, and the op-code note means the native and
+generic legs really dispatched and the profiler rows lined up positionally with them. Every
+per-case failure is `ttnn.pad has no implementation kwarg in this build -- the port is not wired
+up`, which is the correct pre-agent state: the stubs are empty, so the codegen leg cannot run.
+
+The deterministic half of the design is now proven end to end in CI, not just locally.
+
+### 14.2 The failure: gh-aw's gateway lost a race for port 8080
+
+The job died at gh-aw's own `Start MCP Gateway`:
+
+```
+docker: Error response from daemon: failed to bind host port for
+127.0.0.1:8080:172.17.0.2:8080/tcp: address already in use
+```
+
+`actions/setup/sh/start_mcp_gateway.sh` clears a leftover gateway before starting a new one, and
+prints only on success (`docker rm -f awmg-mcpg 2>/dev/null && echo 'Removed stale awmg-mcpg
+container' || true`). It printed, so a leftover really existed. Then:
+
+| Timestamp | Event |
+|---|---|
+| `21:41:06.8243633` | `Removed stale awmg-mcpg container` |
+| `21:41:06.8256909` | `Starting gateway with container: docker run … -p 127.0.0.1:8080:8080` |
+
+1.3 ms apart. The removed container's port binding had not been released, so the new one could not
+bind. The port is hardcoded by the compiler (`export MCP_GATEWAY_PORT="8080"`) and is not settable
+from frontmatter, so this cannot be dodged by moving ports.
+
+Why there was a leftover at all: **these are persistent VMs.** The run landed on
+`tt-metal-ci-vm-71`, which had also hosted run #8 that afternoon. `port-op` is the only gh-aw
+workflow in the repo with a self-hosted `runs-on`; the other four default to `ubuntu-slim`, so
+nothing else was competing — the runner simply carries state between jobs. Worth reporting
+upstream: remove-then-immediately-rebind with no wait and no retry.
+
+### 14.3 The ccache remote is *erroring*, not missing — 12.9 corrected
+
+Same run, credentials present (no `::warning::Garage S3 credentials missing` anywhere in the log):
+
+```
+Remote storage:
+  Hits:  0 / 1395 ( 0.00%)
+  Misses: 1395 / 1395 (100.0%)
+  Reads: 0   Writes: 0   Errors: 1395
+```
+
+`Errors: 1395` is the line 12.9 missed. Every remote request *failed*; the cache is not being
+consulted and found wanting, it is unreachable. So the image-hash story cannot be the explanation,
+and the planned two-container fix would not have recovered anything.
+
+The likely cause is the one section 6 predicted before being talked out of it:
+`garage.garage.svc.cluster.local` is cluster-internal DNS, and `[N150, in-service,
+cloud-virtual-machine]` VMs sit outside that cluster. 12.1's 2.6-minute warm build ran on
+`tt-ubuntu-2204-n150-viommu-stable-cr4wt-runner-gbq26` — an in-cluster ARC pod from the
+`wh_n150_civ2` sku, a **different pool**. That also explains why `--network host` changed nothing:
+the host itself cannot resolve the name, so sharing its namespace cannot help.
+
+Not yet proven, which is why the workflow now probes DNS and TCP to that endpoint explicitly and
+sets `CCACHE_LOGFILE` — an error count with no reason is what caused the misreading in the first
+place.
+
+### 14.4 The workflow was leaking `portdev`
+
+Nothing ever removed the toolchain container, and H8's `tt-smi -r` was specified in section 10 and
+never implemented. Four failed runs each left a container holding `/dev/tenstorrent` and the host
+network namespace on a shared VM. Besides being antisocial, a surviving `portdev` makes the next
+run's `docker run --name portdev` fail outright on the name — and it is the same class of leftover
+that broke 14.2.
+
+### 14.5 What changed on the branch
+
+| Change | Why |
+|---|---|
+| `pre-steps:` guard clearing `awmg-mcpg`/`portdev`, then waiting up to 30 s for 8080 | Runs ~500 lock-file lines before the gateway, so the stale binding has minutes to drop instead of 1.3 ms. Fails fast and names the holder, distinguishing leftover state from a host service on that port. |
+| `post-steps:` `tt-smi -r` then `docker rm -f portdev`, `if: always()` | Stops the leak; implements H8. |
+| `Native baseline` is no longer `continue-on-error` | It now asserts the verdict is not `blocked`, the ledger has in-scope cases, and the native leg was attributed an op code. Tested against this run's real report (passes) and against blocked / empty / attribution-inconclusive reports (all fail). |
+| Non-fatal `getent`+`curl` probe of the Garage endpoint; `CCACHE_LOGFILE` | Turns 14.3 from inference into evidence. |
+| Dropped `CCACHE_REMOTE_ONLY=true` | While the remote errors, it left ccache doing nothing at all; local storage still helps across the agent's rebuilds within a job. |
+
+Compiles clean under strict mode with gh-aw v0.85.4. The extension was pinned locally at v0.84.2
+while the committed lock was built by v0.85.4 — repin before recompiling, or the lock regresses.
+
+### 14.6 Next
+
+1. Push to `ebanerjee/port-op-dryrun` and watch two things: the guard reports 8080 free, and
+   `Native baseline` passes its new assertion.
+2. Read the ccache probe output. If DNS does not resolve, 14.3 is confirmed and the decision below
+   becomes the real fix rather than an optimisation.
+3. Then the agent's first real attempt (section 13's item 3, still the interesting one).
+
+**Open decision: the runner pool.** `wh_n150_civ2` (`tt-ubuntu-2204-N150-viommu-stable`) would fix
+both problem classes at once — ephemeral runners carry no leftover containers, and being in-cluster
+they reach Garage. The catch is that they are ARC pods, so Docker is likely DinD, and gh-aw has an
+open issue ([#34896](https://github.com/github/gh-aw/issues/34896)) documenting that ARC/DinD still
+needs workflow-level workarounds — which is exactly the nesting problem 12.2 avoided by keeping the
+job on the host. Also drop the hugepages mount on `viommu` labels (section 6). Not a free win;
+worth a spike before committing to it.
