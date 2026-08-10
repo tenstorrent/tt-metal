@@ -139,8 +139,8 @@ GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor&
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
 
-    const auto padded_input = input_tensor.padded_shape();
-    const auto padded_index = input_index_tensor.padded_shape();
+    const auto& padded_input = input_tensor.padded_shape();
+    const auto& padded_index = input_index_tensor.padded_shape();
     const auto& index_shape = input_index_tensor.logical_shape();
 
     uint32_t Ht = 1;

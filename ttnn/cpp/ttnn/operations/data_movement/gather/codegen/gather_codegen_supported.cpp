@@ -99,10 +99,7 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
     const bool on_device = input_tensor.storage_type() == StorageType::DEVICE &&
                            input_index_tensor.storage_type() == StorageType::DEVICE &&
                            input_tensor.buffer() != nullptr && input_index_tensor.buffer() != nullptr;
-    if (on_device && !ttnn::prim::gather_min_plan_fits_l1(input_tensor, input_index_tensor)) {
-        return false;
-    }
-    return true;
+    return !(on_device && !ttnn::prim::gather_min_plan_fits_l1(input_tensor, input_index_tensor));
 }
 
 bool is_demoted(const Tensor& /*input_tensor*/, int8_t /*dim*/, const Tensor& /*input_index_tensor*/) {
