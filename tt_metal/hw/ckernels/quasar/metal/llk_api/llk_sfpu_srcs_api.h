@@ -50,31 +50,27 @@ inline void llk_sfpu_srcs_init(
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
 
+    // One SrcS slice = ydim rows x XDIM datums, single face (x=16, y=ydim, z=1).
+    const ckernel::TensorShape srcs_shape = ckernel::make_tensor_shape(
+        static_cast<std::uint8_t>(ydim), static_cast<std::uint8_t>(ckernel::trisc::srcs_dims::XDIM), 1, 1);
+
     // Unpack BD: L1 input -> SrcS
-    buffer_descriptor_u bd_unpack = {0};
-    tdma_descriptor_t td_unpack;
-    bd_unpack.f.l1_addr_16B = l1_in_addr_16B;
-    bd_unpack.f.format = static_cast<std::uint8_t>(unpack_S_src_format);
-    bd_unpack.f.x_dim = ckernel::trisc::srcs_dims::XDIM;
-    bd_unpack.f.y_dim = ydim;
-    bd_unpack.f.z_dim = ckernel::trisc::srcs_dims::ZDIM;
-    td_unpack.buf_desc = bd_unpack;
-    td_unpack.buf_desc_id = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(unpack_S_dst_format);
+    const tdma_descriptor_t td_unpack = ckernel::trisc::construct_tdma_desc(
+        srcs_shape,
+        l1_in_addr_16B,
+        static_cast<std::uint32_t>(unpack_S_src_format),
+        buf_desc_id_unpack,
+        static_cast<std::uint32_t>(unpack_S_dst_format));
     ckernel::trisc::_configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
 
     // Pack BD: SrcS -> L1 output
-    buffer_descriptor_u bd_pack = {0};
-    tdma_descriptor_t td_pack;
-    bd_pack.f.l1_addr_16B = l1_out_addr_16B;
-    bd_pack.f.format = static_cast<std::uint8_t>(pack_S_dst_format);
-    bd_pack.f.x_dim = ckernel::trisc::srcs_dims::XDIM;
-    bd_pack.f.y_dim = ydim;
-    bd_pack.f.z_dim = ckernel::trisc::srcs_dims::ZDIM;
-    td_pack.buf_desc = bd_pack;
-    td_pack.buf_desc_id = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<std::uint8_t>(pack_S_src_format);
+    const tdma_descriptor_t td_pack = ckernel::trisc::construct_tdma_desc(
+        srcs_shape,
+        l1_out_addr_16B,
+        static_cast<std::uint32_t>(pack_S_dst_format),
+        buf_desc_id_pack,
+        static_cast<std::uint32_t>(pack_S_src_format));
     ckernel::trisc::_configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
 

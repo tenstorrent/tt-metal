@@ -103,6 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_sfpu_srcs_api.h"
 #include "llk_srcs.h"
 #include "params.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -135,15 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         buf_desc_id_unpack,
         buf_desc_id_pack,
         [](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
-        {
-#pragma GCC unroll 8
-            for (int d = 0; d < num_sfpu_iterations; d++)
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
-                TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
-            }
-        });
+        { _calculate_exp_srcs_(load_base_addr, store_base_addr, num_sfpu_iterations); });
 
     wait_sfpu_idle();
     wait_unpack_idle();
