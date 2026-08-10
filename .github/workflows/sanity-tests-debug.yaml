@@ -69,14 +69,13 @@ jobs:
           fi
 
   # sanity-tests.yaml now builds its own artifacts and covers both the Wormhole and
-  # Blackhole suites, so this workflow only invokes sanity-tests.yaml. Note: because
-  # sanity-tests.yaml treats scheduled (cron) runs as Blackhole + sim only, the nightly
-  # schedule below exercises the Blackhole + sim suite; the Wormhole suite is reachable
-  # here only via a manual workflow_dispatch with run-wormhole-tests enabled.
+  # Blackhole suites, so this workflow only invokes sanity-tests.yaml. The nightly schedule
+  # below exercises every suite: the crons pass no inputs, and sanity-tests.yaml honours what a
+  # caller sends rather than inferring the suite set from the event, so it is stated here.
   sanity-nightly-debug-ubuntu-22:
     name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
     needs: [determine-debug-flags]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests || inputs.run-ttsim-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
@@ -85,15 +84,9 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-      run-ttsim-tests: false
-      dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
-      packages-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.packages-artifact-name }}
-      run-wormhole: ${{ inputs.run-wormhole-tests || false }}
-      run-blackhole: ${{ inputs.run-blackhole-tests || false }}
-      run-sim: ${{ inputs.run-ttsim-tests || false }}
+      run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
+      run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
+      run-sim: ${{ inputs.run-ttsim-tests || github.event_name == 'schedule' }}
 
   sanity-nightly-debug-ubuntu-24:
     name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
@@ -113,6 +106,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.wheel-artifact-name }}
       packages-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.packages-artifact-name }}
-      run-wormhole: ${{ inputs.run-wormhole-tests || false }}
-      run-blackhole: ${{ inputs.run-blackhole-tests || false }}
+      run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
+      run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
       run-sim: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
