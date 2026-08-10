@@ -1010,11 +1010,6 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    # TT_DIT_CACHE_DIR lives in the container, so the cache is cold on every run
-    # and both 14B experts are re-converted from the HF state dict each time
-    # (~11.5 min each, measured in run 31430830829) before ~13 min of pipeline
-    # work. 50 covers that; drop this back to ~25 once the TT-DiT cache is
-    # persisted on the runner.
     bh_quietbox_2:
       timeout: 50
       tier: 1
