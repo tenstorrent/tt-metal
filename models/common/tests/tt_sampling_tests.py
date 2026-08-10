@@ -579,12 +579,12 @@ class TestPrefillWithDifferentParams:
         assert_tokens_in_vocab(outputs[0], args.vocab_size)
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    def test_extract_tokens_invalid_device_idx_raises(self, mesh_device):
+    def test_extract_tokens_invalid_device_idx_raises(self, mesh_device, expect_error):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[84, 85, 86])
         params = SamplingParams(temperature=1.0, top_k=3, top_p=1.0)
         invalid_device_idx = mesh_device.get_num_devices()
-        with pytest.raises(ValueError, match=r"device_idx .* out of range"):
+        with expect_error(ValueError, r"device_idx .* out of range"):
             run_sampling_generator(
                 mesh_device,
                 args,
@@ -596,17 +596,17 @@ class TestPrefillWithDifferentParams:
             )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    def test_build_hot_logits_rejects_out_of_vocab_token(self, mesh_device):
+    def test_build_hot_logits_rejects_out_of_vocab_token(self, mesh_device, expect_error):
         args = make_sampling_args(mesh_device)
         bad_token = args.vocab_size
-        with pytest.raises(ValueError, match=r"out of range"):
+        with expect_error(ValueError, r"out of range"):
             build_hot_logits(args, hot_tokens=[bad_token])
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    def test_build_penalty_logits_rejects_out_of_vocab_target(self, mesh_device):
+    def test_build_penalty_logits_rejects_out_of_vocab_target(self, mesh_device, expect_error):
         args = make_sampling_args(mesh_device)
         bad_token = args.vocab_size
-        with pytest.raises(ValueError, match=r"out of range"):
+        with expect_error(ValueError, r"out of range"):
             build_penalty_logits(args, target_token=bad_token)
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -913,12 +913,12 @@ class TestFrequencyPenaltyPerRequest:
 # --- Test: seed behavior ---
 class TestSeededSamplingPerRequest:
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    def test_run_sampling_generator_rejects_seed_vector_longer_than_max_batch(self, mesh_device):
+    def test_run_sampling_generator_rejects_seed_vector_longer_than_max_batch(self, mesh_device, expect_error):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[990, 991, 992])
         params = SamplingParams(temperature=1.0, top_k=3, top_p=1.0)
         too_many_seeds = list(range(BATCH_SIZE + 1))
-        with pytest.raises(ValueError, match=r"cannot exceed BATCH_SIZE"):
+        with expect_error(ValueError, r"cannot exceed BATCH_SIZE"):
             run_sampling_generator(
                 mesh_device,
                 args,
@@ -930,12 +930,12 @@ class TestSeededSamplingPerRequest:
             )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    def test_run_sampling_generator_rejects_seed_vector_longer_than_effective_batch(self, mesh_device):
+    def test_run_sampling_generator_rejects_seed_vector_longer_than_effective_batch(self, mesh_device, expect_error):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, batch_size=2, hot_tokens=[993, 994, 995])
         params = SamplingParams(temperature=[1.0, 1.0], top_k=[3, 3], top_p=[1.0, 1.0])
         too_many_for_active_batch = [11, 12, 13]
-        with pytest.raises(ValueError, match=r"active batch size"):
+        with expect_error(ValueError, r"active batch size"):
             run_sampling_generator(
                 mesh_device,
                 args,
