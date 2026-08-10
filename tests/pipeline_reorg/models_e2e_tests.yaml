@@ -972,10 +972,14 @@
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+    test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
@@ -984,14 +988,14 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1008,10 +1012,14 @@
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+    test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
@@ -1020,14 +1028,14 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
