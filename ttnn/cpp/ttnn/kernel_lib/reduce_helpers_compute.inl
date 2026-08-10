@@ -143,8 +143,12 @@ constexpr bool waits_per_tile(ReduceInputPolicy p) { return p == ReduceInputPoli
 constexpr bool waits_bulk(ReduceInputPolicy p) { return p == ReduceInputPolicy::BulkWaitBulkPop; }
 constexpr bool waits_upfront(ReduceInputPolicy p) { return p == ReduceInputPolicy::WaitUpfrontNoPop; }
 constexpr bool no_wait(ReduceInputPolicy p) { return p == ReduceInputPolicy::NoWaitNoPop; }
+constexpr bool waits_block(ReduceInputPolicy p) {
+    return p == ReduceInputPolicy::BlockWaitBlockPop || p == ReduceInputPolicy::BlockWaitNoPop;
+}
 constexpr bool should_pop(ReduceInputPolicy p) {
-    return p == ReduceInputPolicy::WaitAndPopPerTile || p == ReduceInputPolicy::BulkWaitBulkPop;
+    return p == ReduceInputPolicy::WaitAndPopPerTile || p == ReduceInputPolicy::BulkWaitBulkPop ||
+           p == ReduceInputPolicy::BlockWaitBlockPop;
 }
 constexpr bool manages_cb(ReduceInputPolicy p) {
     // Returns true if the reduce function manages CB wait/reserve/push (not preloaded)
@@ -236,8 +240,49 @@ ALWI void assert_input_dfb_size(uint32_t input_dfb_id, uint32_t tiles_per_bulk, 
     } else if constexpr (waits_bulk(input_policy)) {
         ASSERT(get_dfb_num_pages(input_dfb_id) >= tiles_per_bulk);
         ASSERT(get_dfb_num_pages(input_dfb_id) % tiles_per_bulk == 0);
+    } else if constexpr (waits_block(input_policy)) {
+        // Block-granular: the pop variant only needs one block resident, the no-pop variant keeps
+        // the whole reduce dimension. Checked against the block size at the call site instead of
+        // here, since block_size is a runtime value.
+        ASSERT(get_dfb_num_pages(input_dfb_id) >= (should_pop(input_policy) ? 1u : total_tiles));
     } else {  // waits_upfront or no_wait
         ASSERT(get_dfb_num_pages(input_dfb_id) >= total_tiles);
+    }
+}
+
+// Walk one row of `Wt` tiles in blocks of block_config.block_size, folding each into dst_idx.
+//
+// Shared by reduce()'s REDUCE_ROW body and reduce_multi_input(), so the block/pop/partial-scaler
+// rules live in exactly one place. `index_offset` is the resident-block offset of this row for the
+// no-pop policies (0 when popping, since popping keeps the tiles of interest at the CB front).
+//
+// sync_full_block covers producers that pad their pushes to a whole number of blocks: the last,
+// short block is still waited and popped as a whole block, but only its real tiles are reduced, so
+// the padding never contributes to the result.
+template <PoolType reduce_type, ReduceDim reduce_dim, ReduceInputPolicy input_policy>
+ALWI void reduce_row_block_walk(
+    DataflowBuffer& input_dfb,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t Wt,
+    uint32_t index_offset,
+    uint32_t dst_idx,
+    ReducePartialScaler partial_scaler,
+    ReduceBlockConfig block_config) {
+    const uint32_t bs = block_config.block_size;
+    for (uint32_t base = 0; base < Wt; base += bs) {
+        const uint32_t real = (Wt - base) < bs ? (Wt - base) : bs;
+        const uint32_t synced = block_config.sync_full_block ? bs : real;
+        const uint32_t front = should_pop(input_policy) ? 0 : (index_offset + base);
+        input_dfb.wait_front(front + synced);
+        for (uint32_t j = 0; j < real; ++j) {
+            const uint32_t wt = base + j;
+            const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.last_tile_scaler_idx : 0;
+            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, front + j, scaler_idx, dst_idx);
+        }
+        if constexpr (should_pop(input_policy)) {
+            input_dfb.pop_front(synced);
+        }
     }
 }
 
@@ -272,7 +317,8 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReducePartialScaler partial_scaler) {
+    ReducePartialScaler partial_scaler,
+    ReduceBlockConfig block_config) {
     // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
@@ -373,6 +419,17 @@ ALWI void reduce(
     }
     if constexpr (is_sfpu) {
         ASSERT(partial_scaler.last_tile_scaler_idx == 0);
+    }
+    // The BlockWait* policies walk the reduce dimension in chunks; a block size is mandatory there
+    // and meaningless everywhere else. Currently implemented for REDUCE_ROW only — the COL and
+    // SCALAR bodies index a 2-D block and would need their own blocking scheme.
+    if constexpr (waits_block(input_policy)) {
+        static_assert(
+            reduce_dim == ReduceDim::REDUCE_ROW,
+            "BlockWaitBlockPop / BlockWaitNoPop are implemented for REDUCE_ROW only. REDUCE_COL and "
+            "REDUCE_SCALAR walk a 2-D block and need their own blocking scheme.");
+        static_assert(!is_sfpu, "BlockWait* policies are not implemented for the Int32 SFPU fold path.");
+        ASSERT(block_config.block_size > 0);
     }
     scaler_dfb.wait_front(partial_scaler.last_tile_scaler_idx + 1);  // Wait for scaler tile(s)
     if constexpr (is_sfpu) {
@@ -508,7 +565,12 @@ ALWI void reduce(
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
+                if constexpr (waits_block(input_policy)) {
+                    reduce_row_block_walk<reduce_type, reduce_dim, input_policy>(
+                        input_dfb, input_dfb_id, scaler_dfb_id, Wt, index_offset, dst_idx, partial_scaler,
+                        block_config);
+                }
+                for (uint32_t wt = 0; !waits_block(input_policy) && wt < Wt; ++wt) {
                     if constexpr (is_sfpu) {
                         constexpr uint32_t sfpu_work_dst = 1;
                         const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
@@ -729,6 +791,108 @@ ALWI void reduce(
     } else {
         reduce_uninit();
     }
+}
+
+// =============================================================================
+// Multi-input reduce: fold several CBs into one DST accumulator, pack one tile.
+// See the header for why this is not the same as one reduce() per input CB.
+// =============================================================================
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    uint32_t format_ref_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    uint32_t num_inputs,
+    ReduceInputPolicy input_policy,
+    ReduceDataFormatReconfigMode reconfig_mode,
+    typename PostReduceOp>
+ALWI void reduce_multi_input(
+    const uint32_t (&input_dfb_ids)[num_inputs],
+    ReduceInputBlockShape input_block_shape,
+    ReducePartialScaler partial_scaler,
+    ReduceBlockConfig block_config,
+    PostReduceOp post_reduce_op) {
+    static_assert(
+        reduce_dim == ReduceDim::REDUCE_ROW,
+        "reduce_multi_input currently supports REDUCE_ROW only. REDUCE_COL/REDUCE_SCALAR walk a 2-D "
+        "block and would need their own multi-input accumulation shape.");
+    static_assert(num_inputs >= 1, "reduce_multi_input needs at least one input CB");
+    static_assert(is_post_reduce_op_v<PostReduceOp>, "PostReduceOp must be callable with a uint32_t argument");
+
+    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[format_ref_dfb_id]);
+    static_assert(
+        !is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>(),
+        "reduce_multi_input does not support the Int32 SFPU fold path (different accumulation shape).");
+
+    const uint32_t Wt = input_block_shape.cols;
+    constexpr uint32_t dst_idx = 0;
+
+    DataflowBuffer scaler_dfb(scaler_dfb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+
+    if constexpr (waits_block(input_policy)) {
+        ASSERT(block_config.block_size > 0);
+    }
+    ASSERT(Wt > 0);
+    // REDUCE_SCALAR is rejected above, so a partial scaler is always expressible here.
+    scaler_dfb.wait_front(partial_scaler.last_tile_scaler_idx + 1);
+
+    constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, /*is_sfpu=*/false>();
+
+    tile_regs_acquire();
+
+    // Each input is a full pass into the SAME dst register. reduce_init is re-issued per CB because
+    // the unpacker operand binding changes; the accumulator in DST is untouched by that.
+    for (uint32_t k = 0; k < num_inputs; ++k) {
+        const uint32_t in_id = input_dfb_ids[k];
+        DataflowBuffer in_dfb(in_id);
+
+        if constexpr (reconfig_input(reconfig_mode)) {
+            if constexpr (swap_operands) {
+                reconfig_data_format(scaler_dfb_id, in_id);
+            } else {
+                reconfig_data_format(in_id, scaler_dfb_id);
+            }
+        }
+        reduce_init<reduce_type, reduce_dim>(in_id, scaler_dfb_id, output_dfb_id);
+
+        if constexpr (waits_block(input_policy)) {
+            reduce_row_block_walk<reduce_type, reduce_dim, input_policy>(
+                in_dfb, in_id, scaler_dfb_id, Wt, /*index_offset=*/0, dst_idx, partial_scaler, block_config);
+        } else {
+            if constexpr (waits_bulk(input_policy) || waits_upfront(input_policy)) {
+                in_dfb.wait_front(Wt);
+            }
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.last_tile_scaler_idx : 0;
+                if constexpr (waits_per_tile(input_policy)) {
+                    in_dfb.wait_front(1);
+                    reduce_tile<reduce_type, reduce_dim>(in_id, scaler_dfb_id, 0, scaler_idx, dst_idx);
+                    in_dfb.pop_front(1);
+                } else {
+                    reduce_tile<reduce_type, reduce_dim>(in_id, scaler_dfb_id, wt, scaler_idx, dst_idx);
+                }
+            }
+            if constexpr (waits_bulk(input_policy)) {
+                in_dfb.pop_front(Wt);
+            }
+        }
+    }
+
+    post_reduce_op(dst_idx);
+
+    tile_regs_commit();
+    tile_regs_wait();
+    output_dfb.reserve_back(1);
+    if constexpr (reconfig_output(reconfig_mode)) {
+        pack_reconfig_data_format(output_dfb_id);
+    }
+    pack_tile(dst_idx, output_dfb_id);
+    tile_regs_release();
+    output_dfb.push_back(1);
+
+    reduce_uninit();
 }
 
 }  // namespace compute_kernel_lib

@@ -101,7 +101,43 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB).
  *   For REDUCE_COL tiles are accessed in row-major order, same as WaitUpfrontNoPop.
  */
-enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
+enum class ReduceInputPolicy {
+    WaitAndPopPerTile,
+    BulkWaitBulkPop,
+    WaitUpfrontNoPop,
+    NoWaitNoPop,
+    // Block-granular streaming: wait (and optionally pop) `block_size` tiles at a time instead of
+    // one-at-a-time or all-at-once. Needed when the producer hands tiles over in blocks and the CB
+    // is too small to hold the whole reduce dimension — BulkWaitBulkPop would deadlock there, and
+    // WaitAndPopPerTile works but replaces one handshake per block with one per tile.
+    // Both require a ReduceBlockConfig (see below); reduce() asserts that block_size > 0.
+    BlockWaitBlockPop,
+    BlockWaitNoPop,
+};
+
+/**
+ * @brief Block granularity for the BlockWait* input policies.
+ *
+ * Mirrors the block loop that normalization kernels drive by hand: the reduce dimension is walked in
+ * chunks of `block_size`, waiting for one chunk before reducing it.
+ *
+ * `sync_full_block` covers the case where the producer pads its pushes up to a whole number of
+ * blocks — it reserves/pushes `block_size` for the final short block but only fills the real tiles.
+ * The consumer must then wait and pop `block_size` for that block too, or the CB desynchronises.
+ * Only the real tiles are ever reduced, so the padding never affects the result. With
+ * `sync_full_block = false` the last block waits/pops only its real tiles.
+ *
+ * Usage:
+ *   reduce<SUM, REDUCE_ROW, cb_in, cb_scaler, cb_out, ReduceInputPolicy::BlockWaitBlockPop>(
+ *       ReduceInputBlockShape::row(Wt), ..., ReduceBlockConfig::of(block_size));
+ */
+struct ReduceBlockConfig {
+    uint32_t block_size = 0;      // 0 = unset; the BlockWait* policies require a non-zero value
+    bool sync_full_block = true;  // wait/pop a whole block even when the last one is short
+
+    static constexpr ReduceBlockConfig none() { return {0, true}; }
+    static constexpr ReduceBlockConfig of(uint32_t bs, bool sync_full = true) { return {bs, sync_full}; }
+};
 
 // =============================================================================
 // Configuration Types
@@ -362,6 +398,8 @@ struct NoOp {
  *        uses scaler tile `idx` for the last reduce-dim iteration. Pair with
  *        dataflow_kernel_lib::prepare_partial_reduce_scalers on the reader.
  *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
+ * @param block_config Block granularity for the BlockWait* input policies
+ *        (default: ReduceBlockConfig::none()). Ignored by every other policy.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -447,7 +485,74 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
-    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none(),
+    ReduceBlockConfig block_config = ReduceBlockConfig::none());
+
+/**
+ * @brief Reduce SEVERAL input CBs into ONE output tile, folding them all into a single DST register.
+ *
+ * Each input CB is streamed in full and reduced into the same accumulator; the post-op then runs
+ * once and a single tile is packed. This is not the same as calling reduce() per CB: there is no
+ * intermediate pack/reload between inputs, so the running sum never leaves DST and never round-trips
+ * through an output CB's data format.
+ *
+ * The use case is a reduction over the elementwise sum of several tensors, exploiting linearity:
+ *
+ *     E[x + b] = (1/N) * sum(x_i + b_i) = (1/N) * (sum(x_i) + sum(b_i))
+ *
+ * so the elementwise sum never has to be materialised. That matters when the reduce dimension does
+ * not fit in L1 and there is no room for a temporary of that size — the whole reason the fused
+ * "pre-add" form exists in the layernorm kernels.
+ *
+ * IMPORTANT: only valid for reduce types where folding partial reductions is equivalent to reducing
+ * the concatenation — i.e. SUM/AVG (linear) and MAX/MIN (associative). It is NOT a generic
+ * "reduce(a + b)"; for a non-linear elementwise combination you must materialise the combination.
+ *
+ * All input CBs must share a data format; `format_ref_dfb_id` names the one used to derive it.
+ *
+ * Currently REDUCE_ROW only (the dim the layernorm mean/variance reductions use), and the FPU path
+ * only — the Int32 SFPU fold has a different accumulation shape.
+ *
+ * @tparam reduce_type Pool type (SUM / AVG / MAX)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW only)
+ * @tparam format_ref_dfb_id One of the input CBs; supplies the compile-time data format
+ * @tparam scaler_dfb_id Scaler CB
+ * @tparam output_dfb_id Output CB (one tile is pushed)
+ * @tparam num_inputs Number of input CBs
+ * @tparam input_policy CB consumption policy; the BlockWait* policies need a block_config
+ * @tparam reconfig_mode Data-format reconfig mode
+ * @tparam PostReduceOp Callback run once on the accumulator before packing
+ *
+ * @param input_dfb_ids The input CB ids, reduced in order
+ * @param input_block_shape Block shape; only `cols` (the reduce extent) is used
+ * @param partial_scaler Partial-scaler selector for a non-tile-aligned reduce dim
+ * @param block_config Block granularity for the BlockWait* policies
+ * @param post_reduce_op Runs once on the accumulator (e.g. the 1/N of a mean)
+ *
+ * @example
+ *   constexpr uint32_t inputs[] = {cb_x, cb_b};
+ *   reduce_multi_input<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_x, cb_scaler, cb_ex, 2,
+ *                      ReduceInputPolicy::BlockWaitBlockPop>(
+ *       inputs, ReduceInputBlockShape::row(Wt), ReducePartialScaler::last_tile_at(1),
+ *       ReduceBlockConfig::of(block_size),
+ *       [](uint32_t dst) { mul_unary_tile(dst, inv_n_bits); });
+ */
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    uint32_t format_ref_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    uint32_t num_inputs,
+    ReduceInputPolicy input_policy = ReduceInputPolicy::BlockWaitBlockPop,
+    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    typename PostReduceOp = NoOp>
+ALWI void reduce_multi_input(
+    const uint32_t (&input_dfb_ids)[num_inputs],
+    ReduceInputBlockShape input_block_shape,
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none(),
+    ReduceBlockConfig block_config = ReduceBlockConfig::none(),
+    PostReduceOp post_reduce_op = PostReduceOp{});
 
 }  // namespace compute_kernel_lib
 
