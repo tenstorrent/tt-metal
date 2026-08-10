@@ -7,6 +7,8 @@ Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -14,6 +16,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+# TEMPORARY: which candidate TtHCA._write_compressed uses, so the same test can measure each without a
+# code edit. Removed once one of them wins on program count and device perf.
+COMPRESSED_WRITE = os.environ.get("HCA_COMPRESSED_WRITE", "slice_write")
 
 
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
@@ -617,18 +623,25 @@ class TtHCA(_TtHCABase):
         """Append this call's entries to the cache at row ``state.entry_count``.
 
         One entry is one row, so the append offset advances by ``chunk/compress_rate`` per chunk --
-        tile-aligned only when that is a multiple of TILE_SIZE, i.e. chunks of 4096 tokens.
-        ``fill_cache_for_user_`` requires the alignment (update_cache_device_operation.cpp:96);
-        ``slice_write`` does not, at the cost of taking the cache through ROW_MAJOR and back.
+        tile-aligned only when that is a multiple of TILE_SIZE, i.e. chunks of 4096 tokens. That rules
+        out ``fill_cache_for_user_``, which requires the alignment
+        (update_cache_device_operation.cpp:96), for the runner's default chunk_size of 5120.
 
         The whole padded width is written, not just the real entries: the width is then constant across
-        chunks, and the attention mask -infs everything past ``total_entries`` anyway."""
+        chunks, and the attention mask -infs everything past ``total_entries`` anyway.
+
+        TEMPORARY: two candidates are kept side by side while their program-cache and device-perf cost is
+        measured; the loser goes away."""
         width = new_entries.shape[2]
         assert state.entry_count + width <= state.compressed_kv.shape[2], (
             f"compressed cache full: writing {width} entries at {state.entry_count} exceeds capacity "
             f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
         )
+        _COMPRESSED_WRITERS[COMPRESSED_WRITE](self, state, new_entries, width)
 
+    def _write_slice(self, state, new_entries, width):
+        """``slice_write`` places rows at any offset, but folds the offset into its own program hash, so
+        this compiles one program per chunk."""
         cache_rm = ttnn.untilize(state.compressed_kv)
         entries_rm = ttnn.untilize(new_entries)
         cache_rm = ttnn.experimental.slice_write(
@@ -639,6 +652,19 @@ class TtHCA(_TtHCABase):
             [1, 1, 1, 1],
         )
         state.compressed_kv = ttnn.tilize(cache_rm)
+
+    def _write_token_at_a_time(self, state, new_entries, width):
+        """``update_cache_for_token_`` keeps update_index and batch_offset out of its program hash
+        (update_cache_device_operation.cpp:160), so a varying offset costs no program -- but it moves one
+        row per call, and batch_offset only reaches 32 rows of the input, so wide chunks also need the
+        input split into 32-row blocks."""
+        for base in range(0, width, ttnn.TILE_SIZE):
+            end = min(base + ttnn.TILE_SIZE, width)
+            block = ttnn.slice(new_entries, [0, 0, base, 0], [1, 1, end, self.head_dim])
+            for i in range(end - base):
+                ttnn.kv_cache.update_cache_for_token_(
+                    state.compressed_kv, block, state.entry_count + base + i, batch_offset=i
+                )
 
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
@@ -751,3 +777,9 @@ class TtHCA(_TtHCABase):
         state.kv_actual += real_len
         state.sliding_carry = next_carry
         return self._o_proj(attn)
+
+
+_COMPRESSED_WRITERS = {
+    "slice_write": TtHCA._write_slice,
+    "token_at_a_time": TtHCA._write_token_at_a_time,
+}

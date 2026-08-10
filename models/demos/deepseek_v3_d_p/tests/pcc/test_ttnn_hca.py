@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4HCACompressor,
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import COMPRESSED_WRITE, TtHCA, TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -280,10 +280,10 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
 # must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
 
-# Programs the compressed-cache write compiles per chunk. slice_write folds its offsets into its own
-# program hash, so the append offset moving by one chunk's entries costs a program every time. Drops to
-# 0 once the write stops varying any op attribute.
-_WRITE_COMPILES_PER_CHUNK = 1
+# Programs the compressed-cache write compiles per chunk, per candidate. slice_write folds its offsets
+# into its own program hash, so a moving append offset costs a program every chunk; update_cache keeps
+# update_index and batch_offset out of the hash (update_cache_device_operation.cpp:160).
+_WRITE_COMPILES_PER_CHUNK = {"slice_write": 1, "token_at_a_time": 0}[COMPRESSED_WRITE]
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", [_CHUNK_SIZE, _CHUNK_SIZE]),
     ("2chunk-ragged", [_CHUNK_SIZE, 3000]),
