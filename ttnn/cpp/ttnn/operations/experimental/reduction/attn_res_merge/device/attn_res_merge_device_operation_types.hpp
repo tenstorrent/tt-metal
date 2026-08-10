@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -22,6 +23,16 @@ struct AttnResMergeParams {
     float eps;
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+    // `site` shapes no kernel — it resolves to page offsets the reader takes as
+    // common runtime args — so it is kept out of the hash and re-applied per
+    // dispatch via get_dynamic_runtime_args. Without that, a caller batching R
+    // read sites compiles and caches R copies of one program.
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("num_partials", "inv_hidden_size", "eps", "output_mem_config", "compute_kernel_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(num_partials, inv_hidden_size, eps, output_mem_config, compute_kernel_config);
+    }
 };
 
 // partial - [R, 1, H, W], TILE layout. prefix_sum - [1, 1, H, W]: the live
