@@ -147,9 +147,10 @@
         {
             "branch": "silencer/demote-num-routing-planes-override-warning",
             "pattern": "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override - warning fires on every legacy dispatch-fallback device open (185x in one t3000-e2e-tests job sample)",
-            "status": "open-pr-validation-dispatched",
-            "note": "PR opened (draft) 2026-08-10. Fix demotes log_warning->log_debug in metal_env.cpp set_fabric_config; no behavior change. Dispatched t3000-e2e-tests on branch to validate. Awaiting run result + maintainer review.",
-            "workflow": "t3000-e2e-tests.yaml"
+            "status": "resolved",
+            "note": "Validation run 31373536678 (t3000-e2e-tests) completed/failure - unrelated CCL/dispatch-timeout & trace-buffer-overflow failures, not num_routing_planes. Grepped t3k_ccl_tests job 93409757009 logs: 0 occurrences of num_routing_planes confirmed. Outcome commented and marked ready for review (2026-08-10).",
+            "workflow": "t3000-e2e-tests.yaml",
+            "number": 52705
         }
     ],
     "backlog_cursor": {
