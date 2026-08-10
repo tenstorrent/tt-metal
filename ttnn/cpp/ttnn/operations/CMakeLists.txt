@@ -42,6 +42,7 @@ add_subdirectory(index_fill)
 add_subdirectory(kv_cache)
 add_subdirectory(loss)
 add_subdirectory(prefetcher)
+add_subdirectory(qr)
 add_subdirectory(rand)
 add_subdirectory(randn)
 add_subdirectory(uniform)
@@ -75,6 +76,7 @@ target_link_libraries(
         TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
         TTNN::Ops::Prefetcher
+        TTNN::Ops::QR
         TTNN::Ops::Rand
         TTNN::Ops::Randn
         TTNN::Ops::Reduction
@@ -116,6 +118,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::PointToPoint>
         $<TARGET_OBJECTS:TTNN::Ops::Pool>
         $<TARGET_OBJECTS:TTNN::Ops::Prefetcher>
+        $<TARGET_OBJECTS:TTNN::Ops::QR>
         $<TARGET_OBJECTS:TTNN::Ops::Rand>
         $<TARGET_OBJECTS:TTNN::Ops::Randn>
         $<TARGET_OBJECTS:TTNN::Ops::Reduction>

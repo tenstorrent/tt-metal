@@ -39,6 +39,7 @@
 #include "ttnn/distributed/distributed_nanobind.hpp"
 #include "ttnn/graph/graph_nanobind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
+#include "ttnn/operations/qr/qr_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
 #include "ttnn/operations/creation/creation_nanobind.hpp"
@@ -208,6 +209,9 @@ void py_module(nb::module_& mod) {
 
     auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
+
+    auto m_qr = mod.def_submodule("qr", "qr operations");
+    qr::bind_qr_operation(m_qr);
 
     auto m_generic = mod.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
