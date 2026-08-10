@@ -51,12 +51,7 @@ class DFlashDrafterConfig:
 
     @classmethod
     def from_hf_config(cls, c) -> "DFlashDrafterConfig":
-        """Build the device drafter config from an already-loaded HF config object: extracts dims + rope
-        params (+ ``dflash_config.target_layer_ids``); defaults fill anything the checkpoint config omits.
-        Only the numeric rope params are extracted — the device rope is built from these scalars (via
-        ``utils.build_drafter_rope_hf_config``), NOT the transformers ROPE_INIT_FUNCTIONS, so no rope-type
-        remapping is needed on the device side. Shared by :meth:`from_pretrained` and the test conftest so the
-        production runtime, the standalone test, and the HF reference all consume identical dims/rope."""
+        """Build the device drafter config from an already-loaded HF config object."""
         rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
         dfc = dict(getattr(c, "dflash_config", None) or {})
         d = cls()  # defaults fill anything the checkpoint config omits

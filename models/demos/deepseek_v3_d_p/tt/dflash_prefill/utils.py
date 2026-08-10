@@ -2,16 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Free-function helpers for the DFlash drafter prefill path (Kimi-K2.6-DFlash).
-
-Kept out of ``tt_dflash_drafter.py`` so that module stays about the ``TtDFlashDrafter`` class:
-  * ``build_drafter_rope_hf_config`` — shape the drafter's scalar rope params into the ``hf_config`` that
-    ``rope.get_cos_sin_matrix`` consumes (used by ``TtDFlashDrafter``);
-  * ``load_drafter_state_dict`` — read exactly the prefill-subset weights each pipeline rank needs from
-    the HF checkpoint (used by the prefill runtime).
-See issue #49586.
-"""
-
 from __future__ import annotations
 
 import types
@@ -49,10 +39,7 @@ def load_drafter_state_dict(path: str, *, build_kv_tail: bool = True) -> dict:
       * ``hidden_norm.weight`` + per-draft-layer ``self_attn.{k_proj,v_proj,k_norm}.weight`` — only when
         ``build_kv_tail`` (the last rank, which builds the KV tail). Non-tail ranks accumulate + forward
         the FC partial and skip the tail, so only ``fc.weight`` is read into host RAM.
-
-    The drafter's decode-only weights (q_proj/o_proj/mlp/embeddings/lm_head) are never read here. Uses
-    ``safe_open`` so unwanted tensors stay on disk. Mirrors the test conftest's safetensors reader so the
-    device drafter and the HF reference consume identical weights."""
+    """
     import os
 
     from safetensors import safe_open

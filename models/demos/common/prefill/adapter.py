@@ -66,7 +66,7 @@ class PrefillRunParams:
     num_links: int
     gate_mode_name: str  # GateComputeMode enum name
     kv_only_last_layer: bool
-    dflash_enabled: bool  # build the DFlash drafter context-KV cache during this prefill (opt-in)
+    dflash_enabled: bool  # build the DFlash drafter context-KV cache
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1

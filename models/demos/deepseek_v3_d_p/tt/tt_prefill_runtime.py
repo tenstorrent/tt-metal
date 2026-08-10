@@ -190,7 +190,7 @@ class TtPrefillRuntime:
             self._build_dflash_drafter()
 
     def _build_dflash_drafter(self) -> None:
-        """Build this rank's DFlash speculative-drafter (issue #49586) when ``config.dflash_enabled``.
+        """Build this rank's DFlash speculative-drafter when ``config.dflash_enabled``.
 
         Each rank taps only the target layers it owns; the last rank also builds the KV tail and allocates
         the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
@@ -219,8 +219,6 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
-        # The drafter is single-shot: its context cache and rope table are SP-sharded over ONE chunk, so
-        # size them to chunk_size, not the verifier's max_seq_len. Multi-chunk is issue #50725 (out of scope).
         dflash_seq = self.config.chunk_size
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
@@ -235,8 +233,6 @@ class TtPrefillRuntime:
             build_kv_tail=self.config.is_last_rank,
         )
 
-        # on_layer_hidden fires post-FFN with the sharded residual h; tap only owned target layers. No clone:
-        # tap only READS h into the FC matmul (must not free/mutate it) and does not retain it.
         owned_set = set(owned)
 
         def on_layer_hidden(global_idx: int, h: ttnn.Tensor) -> None:
@@ -287,7 +283,7 @@ class TtPrefillRuntime:
         """
         chunk_per_chip = self.config.chunk_size // self.config.sp_factor
         # DFlash packs [hidden ‖ drafter-partial] into the D2D activation, so a non-first rank receives a
-        # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H, byte-identical.
+        # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
         zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
@@ -397,8 +393,6 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = self._on_layer_complete
 
-        # DFlash: reset the per-chunk FC accumulator; a non-first rank also unpacks the drafter partial the
-        # previous rank packed with the hidden and imports it. First/single rank's input (token IDs) is unchanged.
         model_input = input_tensor
         if self.config.dflash_enabled:
             self.drafter.reset()

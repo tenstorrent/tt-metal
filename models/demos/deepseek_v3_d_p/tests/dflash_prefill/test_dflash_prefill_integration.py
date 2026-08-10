@@ -147,17 +147,13 @@ def test_dflash_prefill_integration(
     drafter.reset()
     target_ids = set(dcfg.target_layer_ids)
     tapped = []  # records the GLOBAL layer indices that actually fire a tap — asserted == EXPECTED_TARGET_LAYERS
-    # Sliced FC consumes each tap into the FC accumulator (it does NOT retain the raw hidden), so the test
-    # keeps its OWN clone of every target-layer hidden here to feed the HF ground-truth fc(concat) below.
-    tapped_hiddens = {}  # global_idx -> device tensor [1,1,seq/sp,H/tp] (test-owned, ON DEVICE, DRAM)
+    tapped_hiddens = {}
 
     def on_layer_hidden(global_idx, h):
-        # Keep the 6 target-layer hiddens on device (DRAM). Leave h SP-sharded on seq — clone the verifier's
-        # live residual and tap this chip's slice (no gather); tap only READS it, so the test retains the clone.
         if global_idx not in target_ids:
             return
         tapped.append(global_idx)
-        hc = ttnn.clone(h)  # private copy of the live SP-sharded residual slice; test-owned
+        hc = ttnn.clone(h)
         tapped_hiddens[global_idx] = hc
         drafter.tap(hc, global_idx)
 
@@ -279,8 +275,6 @@ def test_dflash_prefill_integration(
         )
         return host.reshape(1, isl_total, H).float()
 
-    # Reference fc input: concat the captured target-layer hiddens in target-layer order (matches the fc
-    # weight's column blocks). The device drafter has already streamed these same hiddens through fc_slice_i.
     target_hiddens = [_to_host(tapped_hiddens[tid]) for tid in dcfg.target_layer_ids]
     ctx = torch.cat(target_hiddens, dim=-1)  # [1, seq, n*H] — the fc input (concat over target layers)
     assert ctx.shape[-1] == dcfg.target_feature_size, f"ctx feature {ctx.shape[-1]} != {dcfg.target_feature_size}"
