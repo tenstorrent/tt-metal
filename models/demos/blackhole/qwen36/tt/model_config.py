@@ -224,22 +224,26 @@ class Qwen36ModelArgs(ModelArgs):
         self.decode_grid_w = mesh_device.compute_with_storage_grid_size().x
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
-        # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6, which
+        # -- like gdn_qkvz and attn_wo below -- was never independently tuned there. MEASURED (WH,
+        # M=32 K=4096 N~5504, representative intermediate/tp shape): full 8x8=64-core grid beats 44
+        # by -3.5% (w1/gate) and -3.2% (w3/up), same PCC.
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
             self.hidden_dim // tp,
-            num_cores=44,
+            num_cores=44 if tpc.is_blackhole() else 64,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.hidden_dim // tp, num_cores=44 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
-        # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.
+        # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5; MEASURED full 8x8 grid is
+        # -1.4% vs 33, smaller than gate/up but consistently faster, same PCC.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.hidden_dim // tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.hidden_dim // tp, self.dim, num_cores=33 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
 
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
@@ -249,16 +253,23 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
-        # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
+        # vs the old 8x5). On WH (decode_grid_w=8), 44 was never independently tuned -- it only ever
+        # fell back to whatever min(grid_w, 44) -> 8x6=48 cores happened to produce. MEASURED (WH,
+        # M=32 K=4096 N=6176, same fp32_dest_acc_en=True/PCC as today): the full 8x8=64-core grid is
+        # 150.4us vs 8x6's 156.5us, -3.9%, zero accuracy cost -- matches attn_qkv_decode_1d_progcfg
+        # above, which already uses num_cores=64 for the same reason.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
         # attn_wo: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
-        # vs the old 8x4). On WH (decode_grid_w=8) this falls back to 8x5.
+        # vs the old 8x4). On WH (decode_grid_w=8) 33 falls back to 8x5, again never independently
+        # tuned there. MEASURED (WH, M=32 K=2048 N=4096): 8x5 is 51.8us vs 8x6 (num_cores>=40) at
+        # 51.0us -- only ~1.5%, much smaller than gdn_qkvz's -3.9% and close to noise, but
+        # consistently the faster side across 48/56/64 cores, zero accuracy cost either way.
         self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.attn_out_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.attn_out_dim_tp, self.dim, num_cores=33 if tpc.is_blackhole() else 48, grid_w=self.decode_grid_w
         )
         # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
         # vs the old 8x4; same 1536x5120 shape as attn_wo). On WH (decode_grid_w=8) this falls back to 8x5.
