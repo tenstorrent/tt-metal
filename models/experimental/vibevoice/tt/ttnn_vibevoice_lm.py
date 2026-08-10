@@ -1070,40 +1070,34 @@ class TTVibeVoiceLM:
                 S_total = S
                 k_src, v_src = k, v
 
-            # GQA: slice each KV head straight from the (cache or chunk) prefix and repeat it into
-            # [B, n_heads, S_total, hd].  The per-head slice bounds both the head and S_total, so the
-            # old full-width k_all/v_all intermediate slices are redundant and dropped (byte-identical).
+            # GQA without materializing the KV heads.  Instead of replicating each of the n_kv KV heads
+            # `repeat` times into a [B, n_heads, S_total, hd] tensor (n_kv slices + a 12-way concat, per
+            # k and v), bound the cache prefix to [B, n_kv, S_total, hd] and fold q's n_heads into the seq
+            # axis as (n_kv groups × repeat): reshape q to [B, n_kv, repeat*S, hd] so the QKᵀ/PV matmuls
+            # batch over the n_kv groups and read each KV head exactly once.  The head↔seq reshapes are
+            # free views (head-major tiles are contiguous) and q/k/v stay bf16 into the fp32-accumulating
+            # HiFi4 matmuls.  Byte-identical (maxabsdiff==0) to the materialized path — the QKᵀ/PV
+            # reductions are over hd regardless of how the heads are batched, and scores are reshaped back
+            # to [B, n_heads, S, S_total] so the causal mask / softmax are untouched.
             repeat = n_heads // n_kv
-            k_slices, v_slices = [], []
-            for kv_idx in range(n_kv):
-                kh = ttnn.slice(
-                    k_src, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                vh = ttnn.slice(
-                    v_src, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                for _ in range(repeat):
-                    k_slices.append(kh)
-                    v_slices.append(vh)
-            k_rep = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v_rep = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            # q/k/v are bf16-valued; feeding them straight into the fp32-accumulating HiFi4
-            # matmuls (dtype=fp32 out) is byte-identical (maxabsdiff==0) to widening each to
-            # fp32 first, so the three widen typecasts are dropped.  scores/mask/softmax stay
-            # fp32 exactly as before.
-            k_t = ttnn.permute(k_rep, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
+            k_g = ttnn.slice(k_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_g = ttnn.slice(v_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q_g = ttnn.reshape(q, [B, n_kv, repeat * S, head_dim])  # fold repeat heads onto seq, per group
+            k_t = ttnn.permute(k_g, (0, 1, 3, 2))  # [B, n_kv, hd, S_total]
             scores = ttnn.matmul(
-                q, k_t, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                q_g, k_t, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            scores = ttnn.reshape(scores, [B, n_heads, S, S_total])  # back to per-head for mask/softmax
             scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             scores = ttnn.add(scores, self._causal_mask(S, S_total), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_g = ttnn.reshape(attn, [B, n_kv, repeat * S, S_total])
             out = ttnn.matmul(
-                attn, v_rep, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                attn_g, v_g, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            out = ttnn.reshape(out, [B, n_heads, S, head_dim])
             out = ttnn.typecast(out, ttnn.bfloat16)
             # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape.
             out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
