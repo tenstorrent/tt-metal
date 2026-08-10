@@ -1987,6 +1987,24 @@ Capture is 0.034 s per utterance. `TRACE_REGION_SIZE = 0` falls back to the eage
 left at 0 it destroys the prompt's position 0 and produces garbage audio — see STATUS.md §6.65,
 which also records why a single-frame correctness check did not catch it.
 
+**Four smaller decisions inside the graph, each load-bearing:**
+
+- **`ttnn.clone(buf["xin"])`.** The first layer's residual add is in place ([gpt-25]/[gpt-27]), so
+  without the clone it would overwrite the persistent input buffer.
+- **`cos`/`sin` copy in INTERLEAVED and are resharded inside the graph.** RoPE decode needs them
+  sharded, but `copy_host_to_device_tensor` into a sharded destination is a layout constraint not
+  worth fighting. The reshard is inside the trace, so it costs no dispatch.
+- **`pos` is a device TENSOR, not a Python int.** `paged_update_cache` and `sdpa_decode` both read
+  it at execution time, which is what lets ONE recording serve every position; baked in as a
+  number it would need a trace per frame. That was already true of the shipped code.
+- **`begin`/`end` capture is wrapped in `try/finally`.** An exception escaping between them leaves
+  the capture open and wedges the card for every later run in every later process, not just this
+  one.
+
+**The per-frame replay must not allocate.** `_traced_frame` builds its host tensors with
+`from_torch` WITHOUT `device=`, then writes them with `copy_host_to_device_tensor` into buffers
+that already exist. Adding any `device=` there reintroduces the hazard above.
+
 ### [gpt-27] `_layer_step` / `_mlp` — the residual rides in as the matmul's bias
 
 Both Block 1 residuals become `linear(..., bias=x)` instead of `add_(x, linear(...))`.

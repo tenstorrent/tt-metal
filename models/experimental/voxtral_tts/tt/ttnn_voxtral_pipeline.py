@@ -22,19 +22,12 @@ FRAME_RATE = 12.5
 
 # L1 scratch every caller needs: the codec's convs fail with "bank size is 0 B" without it.
 L1_SMALL_SIZE = 65536
-# NOTES.md [pipe-05] -- the frame loop is TRACED, and the region has to exist at open_device time.
-# 250 MB holds the whole per-frame graph (Block 1's 26 layers + the semantic projection + Block 2's
-# 7 Euler steps). Set to 0 to run everything eagerly. STATUS.md 6.65.
+# NOTES.md [pipe-05] -- the frame loop is TRACED. 0 falls back to eager.
 TRACE_REGION_SIZE = 250 * 1024 * 1024
 
 
 def open_device(device_id=0, trace_region_size=TRACE_REGION_SIZE):
-    """Open a device configured the way every entry point here needs it.
-
-    `trace_region_size` must be non-zero for generate()'s traced frame loop. NOTE that merely
-    allocating it shifts the allocator enough to move a free-running trajectory (95dc26363f), so a
-    run opened with it is not frame-count comparable to one opened without.
-    """
+    """Open a device configured the way every entry point here needs it. See NOTES.md [pipe-05]."""
     return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE,
                             trace_region_size=trace_region_size)
 
@@ -58,15 +51,7 @@ class TtVoxtralPipeline:
     # TRACED FRAME LOOP -- NOTES.md [pipe-05], STATUS.md 6.65
     # ------------------------------------------------------------------
     def _trace_capture(self, cfg_alpha, n_steps):
-        """Capture the WHOLE per-frame device graph: Block 1, the semantic projection, Block 2.
-
-        It has to be all of it. Once a trace exists, any later device ALLOCATION may be corrupted
-        when the trace runs -- ttnn warns, then it hangs, then the board needs `tt-smi -r` (6.64).
-        Leaving Block 1 or semantic_code eager would allocate every frame, so nothing is left out.
-
-        Both halves are computed unconditionally and the [END_AUDIO] masking stays on host, which
-        is where 6.31/6.50 put it: the acoustic decode does not depend on the semantic argmax.
-        """
+        """Capture the WHOLE per-frame device graph. See NOTES.md [pipe-05]."""
         import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
         from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM, HEAD_DIM
         from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
@@ -84,9 +69,7 @@ class TtVoxtralPipeline:
         }
 
         def graph():
-            # cos/sin arrive INTERLEAVED and are resharded here: copy_host_to_device_tensor into a
-            # sharded destination is a layout constraint not worth fighting, and the reshard is
-            # inside the trace so it costs no dispatch.
+            # resharded here, not on the host -- NOTES.md [pipe-05]
             cos = ttnn.to_memory_config(buf["cos"], gpt._ROPE_SHARD)
             sin = ttnn.to_memory_config(buf["sin"], gpt._ROPE_SHARD)
             x = ttnn.clone(buf["xin"])
@@ -101,12 +84,8 @@ class TtVoxtralPipeline:
             return lg, fl._solve(buf["x0"], pair, B, n_steps, cfg_alpha)
 
         pos0 = bb.pos
-        # POINT THE CAPTURE AT THE SLOT THE FIRST TRACED FRAME WILL OVERWRITE ANYWAY.
-        # graph() runs twice here (warm-up + capture) and each run WRITES K/V through
-        # paged_update_cache at whatever `pos` holds. Left at 0 that destroys the prefilled
-        # prompt's position 0 and every later attention reads the wreckage -- which is exactly the
-        # garbage the first gate produced (WER 1 -> 1320). Aimed at pos0 the writes land where the
-        # first real frame writes moments later, so they are harmless.
+        # AIM THE CAPTURE'S CACHE WRITES AT pos0 -- NOTES.md [pipe-05]. Left at 0 this corrupts the
+        # prompt and the audio is garbage.
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([pos0], dtype=torch.int32)), buf["pos"])
         graph()                                   # populate the program cache before capturing
@@ -116,9 +95,7 @@ class TtVoxtralPipeline:
         try:
             lg, xr = graph()
         finally:
-            # An exception escaping between begin and end capture wedges the card for every later
-            # run, so the close is unconditional.
-            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            ttnn.end_trace_capture(dev, tid, cq_id=0)   # never leave a capture open -- [pipe-05]
         ttnn.synchronize_device(dev)
         bb.pos = pos0
         self._tr = (tid, buf, lg, xr)
@@ -129,7 +106,7 @@ class TtVoxtralPipeline:
             self._tr = None
 
     def _traced_frame(self, codes, cfg_alpha):
-        """One frame through the trace. Only copies, execute and D2H -- nothing allocates."""
+        """One frame through the trace. NOTHING here may allocate -- NOTES.md [pipe-05]."""
         import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
         from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM, HEAD_DIM
         from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
@@ -171,9 +148,7 @@ class TtVoxtralPipeline:
 
         frames, t0 = [], time.perf_counter()
         stopped = False
-        # NOTES.md [pipe-05] -- FRAME 0 IS EAGER AND MUST COME BEFORE THE CAPTURE. Its hidden state
-        # comes from prefill rather than from a Block 1 step, so it does not fit the traced graph;
-        # and running it after the capture would allocate, which is the thing that wedges the card.
+        # NOTES.md [pipe-05] -- frame 0 is EAGER and must come BEFORE the capture
         codes = self.flow(h[:, 0], cfg_alpha=cfg_alpha)
         traced = TRACE_REGION_SIZE > 0
         if traced:
@@ -197,9 +172,7 @@ class TtVoxtralPipeline:
                     print(f"[pipeline]   {i+1} frames ({(i+1)/FRAME_RATE:.1f}s audio) "
                           f"| {el/(i+1):.2f}s/frame")
         finally:
-            # Released unconditionally: the next generate() starts with a prefill, which allocates,
-            # and a live trace makes that unsafe.
-            self._trace_release()
+            self._trace_release()      # the next generate() prefills, which allocates -- [pipe-05]
         if verbose and not stopped:
             print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
         if not frames:

@@ -71,22 +71,9 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
     q_chunk_size=TILE, k_chunk_size=512,
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 2))
 
-# NOTES.md [gpt-26] -- DECODE matmul program configs. Two separate p150 findings, one fix:
-#   * activation="silu" IS NOT FUSED. It costs 98.8 us against a plain matmul's 85.5 -- the same
-#     +14.9 as writing ttnn.silu() as its own op, which is what it evidently does. Passing
-#     UnaryWithParam or UnaryOpType instead changes nothing (100.6 / 100.2). ONLY a program
-#     config's fused_activation actually folds it in, at 88.1. That one op is worth 2.42 ms/frame
-#     over the 47 w1 calls in the two blocks, and is slightly MORE accurate besides (PCC
-#     0.9999984 vs 0.9999970) because the value stays in the dest registers.
-#   * the ttnn heuristic collapses on deep reductions -- 144-147 GB/s at Kt=128/288 against 352 at
-#     Kt=96, under half of this chip's measured 367 GB/s. A tuned in0_block_w recovers ~350.
-# ONE 12x6 grid serves all four shapes: it ties a set of per-shape isolated winners in the block
-# (36.99 vs 37.04 ms, against a 0.070 noise floor), so no shape earns its own grid. Whole-block
-# A/B, three runs: -4.66 / -4.38 / -4.24 ms/frame. STATUS.md 6.52.
-#
-# DECODE ONLY. per_core_M=1 and fuse_batch=True assume ONE tile of rows -- true for Block 1's 1
-# row and Block 2's 3-or-6, false for prefill. _mlp is shared with prefill, so the configs are
-# passed IN rather than read from module scope; prefill passes nothing and keeps the heuristic.
+# NOTES.md [gpt-26] -- DECODE matmul program configs, -4.24 ms/frame. DECODE ONLY: per_core_M=1
+# and fuse_batch=True assume one tile of rows, which prefill violates, so _mlp takes them as an
+# argument rather than reading module scope. activation="silu" never fused; fused_activation does.
 _MM_GRID = (12, 6)                    # 72 of the 130 cores; 13x10 measured 0.31 ms WORSE
 
 
@@ -94,10 +81,8 @@ def _mm1d(in0_block_w, per_core_n, activation=None):
     """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=_MM_GRID, in0_block_w=in0_block_w, out_subblock_h=1,
-        # Largest legal width. Two hard rules, both TT_FATAL in ttnn: osh*osw <= 4 (8
-        # normally -- fp32_dest_acc_en halves the dest register file), and per_core_N must
-        # be divisible by it. 3 belongs in this list: ttnn's own SUBBLOCK_HW_CHOICES has
-        # {3,1}, and leaving it out dropped wqkv (per_core_N=3) to 1. STATUS.md 6.61.
+        # largest legal width -- NOTES.md [gpt-26]. osh*osw <= 4 and per_core_N % osw == 0,
+        # both TT_FATAL. 3 belongs here; omitting it silently dropped wqkv to 1.
         out_subblock_w=next(s for s in (4, 3, 2, 1) if per_core_n % s == 0),
         per_core_M=1, per_core_N=per_core_n, fuse_batch=True,
         fused_activation=activation, mcast_in0=True)
@@ -254,10 +239,7 @@ class TtVoxtralGPT:
     def _mlp(self, x, h, w, mc, prg=None):
         """Residual + SwiGLU over an ALREADY-NORMED `h`. Shared by prefill and decode.
 
-        `prg` is DECODE_PRG on the decode path and None on the prefill one -- see NOTES.md
-        [gpt-26]; those configs assume a single tile of rows, which prefill violates.
-
-        See NOTES.md [gpt-14].
+        `prg` is DECODE_PRG on decode, None on prefill. See NOTES.md [gpt-14], [gpt-26], [gpt-27].
         """
         prg = prg or {}
         # NOTES.md [gpt-22] -- w1 and w3 stay SEPARATE -- fusing them is 4x SLOWER, and why...
@@ -272,10 +254,8 @@ class TtVoxtralGPT:
         # bit-identical. 6.37 measured this at +0.001 ms on the N150. STATUS.md 6.47.
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
                                           memory_config=mc, **_pc(prg, "w3")))
-        # NOTES.md [gpt-27] -- the residual rides in as the matmul's BIAS, not a separate add.
-        # `prg` is non-empty only on the decode path, and that is load-bearing: a matmul bias is a
-        # ROW VECTOR broadcast over rows, so it is the residual only when there is exactly one row.
-        # Prefill has many, each with its own residual, and would be silently WRONG.
+        # NOTES.md [gpt-27] -- residual as BIAS. `prg` non-empty means decode, i.e. one row; a
+        # bias broadcasts over rows and would be silently WRONG for prefill's many.
         if prg:
             return ttnn.linear(u, w["w2"], bias=ttnn.reshape(x, [1, DIM]),
                                program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG,
