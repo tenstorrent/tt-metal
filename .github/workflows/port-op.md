@@ -193,29 +193,66 @@ steps:
       done
       echo "${RUNNER_TEMP}/shims" >> "$GITHUB_PATH"
 
-      # Prove the pair answers gh-aw's actual question -- "is a server listening on this port, and
-      # does it respond on /health" -- against a server this step starts and stops itself. A shim
-      # that silently sees nothing would turn a loud failure back into the silent one above.
       export PATH="${RUNNER_TEMP}/shims:$PATH"
+
+      # gh-aw reaches its own servers as `http://localhost:$PORT`, so `localhost` has to resolve and
+      # has to be exempt from the proxy. Neither is a given here: this pool reaches the network
+      # through the restricted proxy, and a proxy that is honoured for `localhost` sends a loopback
+      # request out to a host that cannot answer it. Both are cheap to assert and cheap to repair,
+      # and both failures present identically -- as a connection that does not happen.
+      if ! command -v getent >/dev/null; then
+        echo "no getent here, so leaving name resolution alone; the curl check below still decides"
+      elif getent hosts localhost >/dev/null; then
+        echo "localhost resolves to: $(getent hosts localhost | tr '\n' ' ')"
+      else
+        echo "localhost does not resolve; adding it to /etc/hosts"
+        printf '127.0.0.1 localhost\n::1 localhost\n' | sudo -n tee -a /etc/hosts >/dev/null \
+          || echo "::warning::could not write /etc/hosts"
+        echo "localhost now resolves to: $(getent hosts localhost | tr '\n' ' ' || echo NOTHING)"
+      fi
+
+      # Appended rather than assigned, so an existing no_proxy from the pool survives. Written to
+      # GITHUB_ENV because the step that needs it is gh-aw's, several steps later.
+      loopback="localhost,127.0.0.1,::1"
+      no_proxy_value="${no_proxy:+$no_proxy,}${loopback}"
+      {
+        echo "no_proxy=${no_proxy_value}"
+        echo "NO_PROXY=${no_proxy_value}"
+      } >> "$GITHUB_ENV"
+      export no_proxy="${no_proxy_value}" NO_PROXY="${no_proxy_value}"
+      echo "proxy settings seen here: http_proxy=${http_proxy:-unset} https_proxy=${https_proxy:-unset} no_proxy=${no_proxy}"
+
+      # Prove the pair answers gh-aw's actual question -- "is a server listening on this port, and
+      # does it respond over http" -- against a server this step starts and stops itself. A probe
+      # that silently sees nothing is what made the original failure so hard to read, so this one
+      # keeps curl's error text and says which address worked.
       python3 -m http.server 3999 --bind 127.0.0.1 >/dev/null 2>&1 &
       probe=$!
       trap 'kill $probe 2>/dev/null || true' EXIT
       for _ in $(seq 1 10); do
-        curl -s -f "http://localhost:3999/" >/dev/null 2>&1 && break
+        curl -sS -f -m 5 "http://127.0.0.1:3999/" >/dev/null 2>&1 && break
         sleep 1
       done
-      if ! curl -s -f "http://localhost:3999/" >/dev/null 2>&1; then
-        echo "::error::cannot reach a local HTTP server that is listening, which is what gh-aw does next"
-        curl -s -f "http://localhost:3999/" || true
-        netstat -tuln || true
-        exit 1
-      fi
+
       if ! netstat -tuln | grep -q ':3999'; then
         echo "::error::netstat cannot see a port that is listening"
         netstat -tuln || true
         exit 1
       fi
-      echo "curl reaches a local server and netstat can see it"
+
+      for target in "http://127.0.0.1:3999/" "http://localhost:3999/"; do
+        if curl -sS -f -m 5 "$target" >/dev/null; then
+          echo "curl reached $target"
+        else
+          echo "::error::curl cannot reach $target, which is the call gh-aw makes to check its servers"
+          curl -sS -f -m 5 -v "$target" 2>&1 | sed 's/^/    /' | head -30 || true
+          echo "    --- /etc/hosts ---"
+          sed 's/^/    /' /etc/hosts || true
+          netstat -tuln || true
+          exit 1
+        fi
+      done
+      echo "loopback http works by address and by name, and netstat can see the port"
 
   - name: Record the base commit
     run: |
