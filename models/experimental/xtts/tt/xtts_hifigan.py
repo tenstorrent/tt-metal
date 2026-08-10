@@ -55,20 +55,18 @@ _SHARD_RESBLOCKS = True
 #
 # NOT bit-exact: PCC moves 0.993110 -> 0.993252 (len 32) because the MRF sum accumulates in a
 # different order. Given this model's history of audible artifacts that aggregate PCC did not predict
-# (see the bf16_stages note above), listen before shipping.
+# (see the precision note in the generator), listen before shipping.
 #
 # Empty set reverts every stage to height sharding.
 _BLOCK_SHARD_STAGES = {0}
 
-# Conv math fidelity. The bf16 stages run HiFi2 (2x math throughput vs HiFi4): validated on REAL
+# Conv math fidelity for the whole decoder: HiFi2 (2x math throughput vs HiFi4), validated on REAL
 # GPT latents (a full sampled utterance) to be perceptually identical to HiFi4 — spectrogram-mag
 # PCC 0.9995 vs the torch reference (same as HiFi4), worst-window 0.9889, and Whisper CER 0.000
 # (identical transcription); HiFi2-vs-HiFi4 directly is spec-PCC 0.9998. An earlier caution against
-# HiFi2 came from random N(0, 2.3) latents (a pessimistic proxy — the bf16 stages are far more
-# accurate on real, structured latents), which don't reflect inference. The fp32 stage-0 conv stays
-# HiFi4 (widest channels, most accumulation depth). Kept split (bf16/fp32) to tune separately.
-_CONV_FIDELITY_BF16 = ttnn.MathFidelity.HiFi2
-_CONV_FIDELITY_FP32 = ttnn.MathFidelity.HiFi4
+# HiFi2 came from random N(0, 2.3) latents (a pessimistic proxy — bf16 activations are far more
+# accurate on real, structured latents), which don't reflect inference.
+_CONV_FIDELITY = ttnn.MathFidelity.HiFi2
 
 # Full double-buffering (activations + weights) for the INTERLEAVED convs — the ones NOT kept in an
 # L1-resident resblock chain (stage-0 resblocks, conv_pre/post, ups, conds). A per-stage config sweep
@@ -129,9 +127,10 @@ class TtCondProj(LightweightModule):
     in0 (from test_hifi_decoder_matmul_sweep.py) is ~2.9x faster on these shapes at PCC >=0.9999.
     Pure device matmul with a fused bias epilogue — trace-safe (no host transfer)."""
 
-    def __init__(self, device, weight, bias):
+    def __init__(self, device, weight, bias, dtype=ttnn.float32):
         super().__init__()
         self.device = device
+        self.dtype = dtype
         out_ch, in_ch, k = weight.shape
         assert k == 1, f"cond proj expects a 1x1 conv weight, got k={k}"
         assert out_ch in _COND_MM_CFG, f"no tuned cond-matmul config for N={out_ch}"
@@ -147,7 +146,7 @@ class TtCondProj(LightweightModule):
         if bias is not None:
             self.tt_bias = ttnn.from_torch(
                 bias.reshape(1, -1).float(),
-                dtype=ttnn.float32,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -186,15 +185,24 @@ class TtCondProj(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.float32,
+            dtype=self.dtype,
         )
 
 
 # Lowest upsample stage that emits its residual pre-activation as a second fused add instead of a
-# standalone unary (see TtResBlock1._forward_sharded). Stage 0's shard geometry inverts the win —
-# A/B'd end-to-end at 2520us with stage 0 included vs 2512us without — so it stays on the unary.
-# Set to 0 to re-run that A/B, or to num_upsamples to disable the trick entirely.
-_FUSED_PRE_ACT_MIN_STAGE = 1
+# standalone unary (see TtResBlock1._forward_sharded). Now 0 — EVERY stage takes the trick.
+#
+# Stage 0 used to be excluded because its shard geometry inverted the win (A/B'd end-to-end at 2520us
+# with it vs 2512us without, on the then-current fp32 activation over a 35-core HEIGHT shard, where
+# standalone leaky_relu was 2.6us against 4.4us for add+fused-leaky_relu). Both of those variables
+# have since changed — the stage is bf16 (half the bytes) and BLOCK-sharded over 80 cores
+# (_BLOCK_SHARD_STAGES) — and re-running the A/B on 2026-08-10 flips the verdict: 1900.2 -> 1893.1us
+# (-7.1us), from the 6 stage-0 unaries (14.4 -> 2.1us over the block-sharded group, 7 ops -> 1) being
+# replaced by 6 fused adds (7.0 -> 14.8us, 11 -> 17). Per op that is 2.05us of unary for 1.28us of
+# add. Bit-exact (PCC identical to the last digit), op count unchanged, no L1 clash.
+#
+# Set to num_upsamples to disable the trick entirely, or back to 1 to restore the old stage-0 split.
+_FUSED_PRE_ACT_MIN_STAGE = 0
 
 # Hand each stage's MRF output to the next conv (ups[i+1], or conv_post for the last stage) still
 # L1-sharded, instead of gathering it to DRAM for the conv to immediately scatter back.
@@ -461,51 +469,56 @@ class TtHifiganGenerator(LightweightModule):
     ``[N, 1, 512]``. Output is ``[N, T*256, 1]``.
     """
 
-    def __init__(self, device, state_dict, bf16_stages=None):
+    def __init__(self, device, state_dict):
         super().__init__()
         self.device = device
         self.num_kernels = len(RESBLOCK_KERNEL_SIZES)  # 3
         self.num_upsamples = len(UPSAMPLE_RATES)  # 4
         self.inv_num_kernels = 1.0 / self.num_kernels
 
-        # Mixed precision: stages listed in ``bf16_stages`` run their ups/conds/resblocks
-        # in bf16, the rest in fp32. The late stages carry the largest activations (most
-        # DRAM eltwise traffic) and the least remaining accumulation depth, so bf16 there
-        # buys the most device time for the least PCC drift. Default = the last three
-        # stages: on *real* GPT latents (std ~2.3, large outliers) this holds PCC ~0.995
-        # up to ~100 mel frames (-24.7% device time vs stage-3-only), where random
-        # latents ~N(0, 0.5) misleadingly suggested it fails — see tests. Stage 0 stays
-        # fp32 (its wide 256-ch conv is where bf16 costs the most PCC for the least time).
+        # EVERY activation in this decoder is bf16 — all four upsample stages' ups/conds/resblocks,
+        # conv_pre, conv_post, cond_layer, and the latent-upsample matmul that feeds conv_pre. Only
+        # the ``conds[i]`` outputs stay fp32, because they are combined with each ups conv's fp32 raw
+        # bias in the cond-bias fold (xtts_conv.py); they are [1,1,1,C] constants cached after the
+        # first call, so fp32 there is free. Weights are bf16 throughout (TtConv1d's default) and
+        # ``fp32_dest_acc_en`` stays ON — see below for why that is not optional.
         #
-        # Widening this to all four stages was tried and REJECTED on listening: it measured
-        # -10.9% decoder device time and looked fine on aggregate metrics (spectrogram-mag PCC
-        # 0.99707 vs 0.99747, and it even improved end-to-end spec PCC), but it added an audible
-        # robotic/metallic edge. Reverting only conv_pre/cond_layer/conv_post to fp32 (keeping
-        # stage 0 bf16) did NOT clear it either, so stage 0 is implicated, not just the output
-        # convs. Corroborating spectral evidence: broadband spectral flatness rose 0.30739 ->
-        # 0.30958 and >6kHz energy share 0.19720 -> 0.19873. Aggregate PCC — waveform OR
-        # spectrogram — did not predict this; only listening did.
-        if bf16_stages is None:
-            bf16_stages = {i for i in range(1, self.num_upsamples)}
-
-        def act_dtype(i):
-            return ttnn.bfloat16 if i in bf16_stages else ttnn.float32
-
-        def conv_fid(i):
-            # fidelity follows the stage's activation dtype (see _CONV_FIDELITY_* above)
-            return _CONV_FIDELITY_BF16 if i in bf16_stages else _CONV_FIDELITY_FP32
-
+        # Measured 2026-08-10 against the previous fp32-stage-0 mix: 2116 -> 1931 us (-8.8%), of
+        # which -126 us is stage 0's block-sharded convs alone, at an unchanged op count (268) and
+        # PCC 0.98986 (len 16) / 0.99329 (len 32, marginally BETTER than the fp32 mix's 0.99311).
+        # Demo render listened OK. The earlier fp32-stage-0 mix was itself chosen because the late
+        # stages carry the largest activations and the least remaining accumulation depth, and on
+        # *real* GPT latents (std ~2.3, large outliers) held PCC ~0.995 up to ~100 mel frames where
+        # random latents ~N(0, 0.5) misleadingly suggested they fail.
+        #
+        # HISTORY, because this had to be re-litigated: an earlier attempt at the same widening was
+        # REJECTED on listening — same ballpark device win (-10.9%), aggregate metrics fine
+        # (spectrogram-mag PCC 0.99707 vs 0.99747), but an audible robotic/metallic edge that
+        # reverting conv_pre/cond_layer/conv_post to fp32 did NOT clear, with broadband spectral
+        # flatness 0.30739 -> 0.30958 and >6kHz energy share 0.19720 -> 0.19873 as corroboration.
+        # The model has moved since (block-sharded stage 0, conditioning memo, eltwise fusion).
+        # The lesson stands regardless of the verdict: aggregate PCC — waveform OR spectrogram — did
+        # not predict that artifact, only listening did, so re-listen after touching dtypes.
+        #
+        # Two adjacent knobs measured and REJECTED the same day: dropping ``fp32_dest_acc_en`` on the
+        # convs (PCC 0.9651/0.9590 — bf16 activations still need the fp32 accumulator) and converting
+        # the caller-owned entry tensors (latents, g, the resample matrix) to bf16 (-0.3%, inside
+        # run-to-run noise; g's single-core TilizeWithValPadding was dtype-insensitive and got fixed
+        # a different way — see _conditioning).
         self.conv_pre = TtConv1d(
             device,
             state_dict["conv_pre.weight"],
             state_dict["conv_pre.bias"],
             padding=3,
-            math_fidelity=_CONV_FIDELITY_FP32,
+            activations_dtype=ttnn.bfloat16,
+            math_fidelity=_CONV_FIDELITY,
             conv_config_overrides=_INTERLEAVED_CONV_DB,
         )
         # Speaker-conditioning projections (1x1 convs over the length-1 embedding g) run as
         # per-shape-tuned explicit matmuls — see TtCondProj / _COND_MM_CFG.
-        self.cond_layer = TtCondProj(device, state_dict["cond_layer.weight"], state_dict["cond_layer.bias"])
+        self.cond_layer = TtCondProj(
+            device, state_dict["cond_layer.weight"], state_dict["cond_layer.bias"], dtype=ttnn.bfloat16
+        )
 
         # ups[i] consumes the *previous* stage's MRF mean (stages >=1) via leaky_relu; fold that
         # mean's 1/num_kernels scale into ups[i>=1]'s weights so the per-stage ttnn.mul is dropped
@@ -516,8 +529,8 @@ class TtHifiganGenerator(LightweightModule):
                 state_dict[f"ups.{i}.weight"],
                 state_dict[f"ups.{i}.bias"],
                 stride=UPSAMPLE_RATES[i],
-                activations_dtype=act_dtype(i),
-                math_fidelity=conv_fid(i),
+                activations_dtype=ttnn.bfloat16,
+                math_fidelity=_CONV_FIDELITY,
                 weight_scale=self.inv_num_kernels if i >= 1 else 1.0,
                 conv_config_overrides=_ups_conv_overrides(i),
             )
@@ -559,10 +572,10 @@ class TtHifiganGenerator(LightweightModule):
                         f"resblocks.{i * self.num_kernels + j}.",
                         k,
                         d,
-                        activations_dtype=act_dtype(i),
+                        activations_dtype=ttnn.bfloat16,
                         sharded=sharded,
                         act_double_buffer=act_double_buffer,
-                        math_fidelity=conv_fid(i),
+                        math_fidelity=_CONV_FIDELITY,
                         conv_config_overrides=db_ov,
                         fused_pre_act=_fused_pre_act_plan(i, sharded),
                         block_shard=i in _BLOCK_SHARD_STAGES,
@@ -580,7 +593,8 @@ class TtHifiganGenerator(LightweightModule):
             None,
             padding=3,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
-            math_fidelity=_CONV_FIDELITY_FP32,
+            activations_dtype=ttnn.bfloat16,
+            math_fidelity=_CONV_FIDELITY,
             weight_scale=self.inv_num_kernels,
             conv_config_overrides=_INTERLEAVED_CONV_DB,
         )
@@ -625,7 +639,21 @@ class TtHifiganGenerator(LightweightModule):
             return hit[1], hit[2]
         # Reshape g to [1, 512] and tile it ONCE, shared by all five projections, and read it from
         # L1 (18.2 -> 14.2us over the five; see _COND_MM_CFG).
-        g_mm = ttnn.to_layout(ttnn.reshape(g, [1, g.shape[-1]]), ttnn.TILE_LAYOUT)
+        #
+        # Tiling a single row is spelled pad -> tilize -> slice rather than the obvious
+        # to_layout(TILE), because to_layout on a 1-row input lowers to TilizeWithValPadding, whose
+        # kernel runs on ONE core and cost 39.7us here — 7x a plain TilizeDeviceOperation of the very
+        # same [32, 512] output (5.5us), and it ignores sub_core_grids. Padding to 32 rows first in
+        # ROW_MAJOR (PadDeviceOperation spreads over 32 cores, 3.1us) leaves an unpadded tilize, and
+        # the slice restores the logical [1, K] the five reshapes below need (ttnn.pad makes the
+        # padding logical). 41.5 -> 12.6us, bit-identical (maxdiff 0.0), all device ops so still
+        # trace-safe. Slicing g once beats slicing all five matmul outputs.
+        g_rm = ttnn.reshape(g, [1, g.shape[-1]])
+        g_pad = ttnn.pad(g_rm, [(0, TILE - 1), (0, 0)], 0.0)
+        g_tiled = ttnn.tilize(g_pad)
+        ttnn.deallocate(g_pad)
+        g_mm = ttnn.slice(g_tiled, [0, 0], [1, g.shape[-1]])
+        ttnn.deallocate(g_tiled)
         g_l1 = ttnn.to_memory_config(g_mm, self._g_mem_config)
         ttnn.deallocate(g_mm)
         cond_global = ttnn.reshape(self.cond_layer(g_l1), [1, 1, self.cond_layer.n])  # [1,1,512], broadcasts over T
