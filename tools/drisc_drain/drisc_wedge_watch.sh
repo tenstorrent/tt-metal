@@ -152,7 +152,7 @@ devsta_read(){ [ "$DEVSTA_OK" = 1 ] || { echo "unavail"; return 0; }
   sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w 2>/dev/null || echo "readfail"; }
 
 # Everything worth knowing about a wedged card, captured BEFORE recovery touches it.
-wedge_dump(){ local k=$1 d=$OUT/wedge_${k}.txt
+wedge_dump(){ local k=$1 d=$OUT/wedge_${SWEEP_ID}_${k}.txt
   {
     echo "=== wedge dump: run k=$k  $(date -Is) ==="
     echo "--- link state (endpoint is unreliable once wedged; root port is the witness) ---"
@@ -202,7 +202,9 @@ log "    NOTE 2.5GT/s on either side = a DEGRADED link (cold power cycle), a dif
 
 nclean=0; nwedge=0; nteardown=0; nmasked=0; nmmio=0; nabort=0; nconsec=0
 for k in $(seq 1 "$N"); do
-  RUNLOG=$OUT/${k}.log
+  # Namespaced by sweep: two sweeps in one dir both numbered k from 1, so bare ${k}.log meant the second
+  # silently overwrote the first's evidence and reclassification could no longer attribute a log to a row.
+  RUNLOG=$OUT/${SWEEP_ID}_${k}.log
   devsta_clear
   t0=$SECONDS
   ( cd "$REPO" && timeout -k 15 "$RUN_TIMEOUT" env \
@@ -265,7 +267,7 @@ for k in $(seq 1 "$N"); do
     wedge_dump "$k"
     if [ "$STOP_ON_WEDGE" = "1" ]; then
       log "=== WEDGE CAPTURED at k=$k -- stopping with the card left wedged for inspection ==="
-      log "    dump: $OUT/wedge_${k}.txt     recover with: $TT_SMI -r"
+      log "    dump: $OUT/wedge_${SWEEP_ID}_${k}.txt     recover with: $TT_SMI -r"
       break
     fi
     recover || break
@@ -274,12 +276,18 @@ for k in $(seq 1 "$N"); do
     # unrecovered is what let a sweep grind out 16 identical 46 s masked runs in a row.
     recover || break
   elif [ "$class" = MMIO_STALL ]; then
-    # Deliberately NO reset. The card reads healthy immediately after these, and resetting anyway is
-    # exactly what stopped us learning whether this mode self-clears: every observation so far is
-    # confounded by a tt-smi -r we did not need. Leave it alone and let the NEXT run answer it -- a
-    # CLEAN successor means no intervention was required at all.
-    log "  [mmio] transient wedge; NO reset by design -- next run tests self-recovery (ALLOW_MMIO_RESET=1 to reset)"
-    if [ "${ALLOW_MMIO_RESET:-0}" = "1" ]; then recover || break; fi
+    # DO reset, despite the card reading healthy afterwards. FINDINGS is explicit that a hung card reads
+    # HEALTHY for several runs -- current_link_speed stayed 32.0 GT/s through four cascade runs and only
+    # collapsed to Unknown after the block ended -- so "Unknown" is a LATE symptom and a harness that
+    # keys recovery off card state UNDER-resets and lets cascades run. Key off the PROCESS outcome, which
+    # for this class is the ~210 ms non-completing read that aborted the run.
+    # MMIO_NO_RESET=1 skips it, for deliberately testing whether the mode self-clears -- but expect a
+    # cascade if it does not, and read the successor runs, not the link speed.
+    if [ "${MMIO_NO_RESET:-0}" = "1" ]; then
+      log "  [mmio] MMIO_NO_RESET=1 -- not resetting; watch the NEXT runs, not the link speed"
+    else
+      recover || break
+    fi
   fi
 
   if [ "$MAX_CONSEC_FAIL" != "0" ] && [ "$nconsec" -ge "$MAX_CONSEC_FAIL" ]; then
