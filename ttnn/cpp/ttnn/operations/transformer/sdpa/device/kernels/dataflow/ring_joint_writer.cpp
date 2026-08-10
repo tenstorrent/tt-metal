@@ -488,14 +488,9 @@ inline QChunkInfo get_q_chunk_info(
     if constexpr (has_joint_q) {
         info.is_joint_q = q_chunk >= num_local_q_chunks;
         if (info.is_joint_q) {
-            const uint32_t joint_out_row_start_tile =
-#ifdef Q_TINY_PAIR
-                (q_chunk - num_local_q_chunks) / 2;
-#else
-                (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-#endif
+            const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
             info.out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
-            info.stats_seq_start_tile = q_local_extent_t + joint_out_row_start_tile;
+            info.stats_seq_start_tile = q_local_extent_t + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
             info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
             info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_extent_t + joint_extent_t);
             info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_extent_t + joint_extent_t);
@@ -504,14 +499,9 @@ inline QChunkInfo get_q_chunk_info(
     } else {
         info.is_joint_q = false;
     }
-    const uint32_t out_row_start_tile =
-#ifdef Q_TINY_PAIR
-        q_chunk / 2;
-#else
-        q_chunk * Sq_chunk_t;
-#endif
+    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
     info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-    info.stats_seq_start_tile = out_row_start_tile;
+    info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
     info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
     info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_extent_t);
     info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_extent_t);
@@ -540,12 +530,6 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t q_iter_step =
-#ifdef Q_TINY_PAIR
-        2;
-#else
-        1;
-#endif
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
@@ -812,10 +796,10 @@ void kernel_main() {
             // Sliding compute consumes every local/halo source for a Q in one pass. There is
             // therefore no intermediate state to restore or save: wait for the final result,
             // write it once, and advance directly to the next assigned Q.
-            const bool single_q_chunk = (global_q_end - global_q_start == q_iter_step);
-            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; q_index += q_iter_step) {
-                const auto decoded_q = decompose_global_q_index_grouped(
-                    global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
+            const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t nb = decoded_q.nb;
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;
@@ -850,7 +834,7 @@ void kernel_main() {
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
             const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
-            const bool single_q_chunk = (global_q_end - global_q_start == q_iter_step);
+            const bool single_q_chunk = (global_q_end - global_q_start == 1);
 #ifdef Q_TINY_TILE
             constexpr uint32_t sum_offset = (q_local_padded_Nt + Lt) * 2;
 #else
@@ -859,7 +843,7 @@ void kernel_main() {
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
             const uint32_t q_per_core = global_q_end - global_q_start;
-            const uint32_t last_q_index = q_per_core - q_iter_step;
+            const uint32_t last_q_index = q_per_core - 1;
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
 
             // TRID assignment by Q position: Q[0] -> TRID_FIRST, Q[N-1] -> TRID_LAST,
@@ -876,8 +860,8 @@ void kernel_main() {
                 if (barrier_first) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = pf_trid});
                 }
-                const auto decoded_q = decompose_global_q_index_grouped(
-                    global_q_start + pf_q_index, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + pf_q_index, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t nb_pf = decoded_q.nb;
                 const uint32_t nq_pf = decoded_q.nq;
                 const uint32_t qc_pf = decoded_q.q_chunk;
@@ -959,9 +943,9 @@ void kernel_main() {
                 deferred.pending = false;
             };
 
-            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; q_index += q_iter_step) {
-                const auto decoded_q = decompose_global_q_index_grouped(
-                    global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
+            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t nb = decoded_q.nb;
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;
@@ -1005,7 +989,7 @@ void kernel_main() {
                 // runs after write_out to break the cycle.
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
                 if (!single_q_chunk && !is_first_active_iter && !defer_prefetch) {
-                    prefetch_intra_ring(q_index + q_iter_step);
+                    prefetch_intra_ring(q_index + 1);
                 }
                 // Cross-ring: Q[N-1] -> Q[0] of next ring iter.
                 if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
@@ -1065,7 +1049,7 @@ void kernel_main() {
                 // cycling cb_prev_out <-> cb_out with compute's normalize. Now cb_out has been
                 // drained by write_out above, and compute's normalize has fully freed cb_prev_out.
                 if (defer_prefetch && !single_q_chunk) {
-                    prefetch_intra_ring(q_index + q_iter_step);
+                    prefetch_intra_ring(q_index + 1);
                 }
             }
             // Hoisted DRAM-arrival barrier: on the last ring iter, write_block_row_grouped_trid
@@ -1076,9 +1060,9 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         } else {
-            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; q_iter += q_iter_step) {
-                const auto decoded_q = decompose_global_q_index_grouped(
-                    global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
+            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t nb = decoded_q.nb;
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;

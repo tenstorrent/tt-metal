@@ -174,8 +174,8 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) {
 #ifdef Q_TINY_TILE
     // The Blackhole multi-tile pack MOP advances through 16x32 DEST planes rather than
-    // the full 32x32 slots used by matmul, which drops every odd output tile.  Pack each
-    // tiny tile from its explicit DEST slot until the blocked pack path is tile-shape-aware.
+    // the full 32x32 slots used by matmul, which drops every odd output tile. Pack each
+    // tiny tile from its explicit DEST slot.
     return false;
 #else
     return pack_width >= MIN_BLOCKED_PACK_TILES;
@@ -410,6 +410,50 @@ void inplace_v_matmul_pack_batched(
         configure_row_pack_width(out_cb, cols);
         pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
         tile_regs_release();
+    }
+}
+
+// Blackhole's matmul unpack MOP normally advances the streamed in1 operand by one
+// page for each output column. Latent V lives in K^T, so adjacent V columns are
+// KT_stride pages apart. Reprogram only that replay stride; initial tile addressing
+// and the contraction-dimension walk continue to use the CB's real page size.
+ALWI void set_matmul_streamed_in1_stride(uint32_t in1_cb, uint32_t tile_stride) {
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
+    const uint32_t in1_id = get_operand_id(in1_cb);
+    const uint32_t stride_bytes = get_local_cb_interface(in1_id).fifo_page_size * tile_stride;
+    TT_SETDMAREG(0, LOWER_HALFWORD(stride_bytes), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+#else
+    (void)in1_cb;
+    (void)tile_stride;
+#endif
+}
+
+template <uint32_t vDHt, uint32_t subblock_w, uint32_t subblock_h>
+void inplace_v_matmul_pack_strided_wide(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t inner_dim,
+    uint32_t KT_stride) {
+    static_assert(subblock_h == 1, "strided latent-V path requires one tiny Q row");
+    static_assert(vDHt % subblock_w == 0, "latent V width must divide the output width");
+    set_matmul_streamed_in1_stride(in1_cb, KT_stride);
+    configure_row_pack_width(out_cb, subblock_w);
+    for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += subblock_w) {
+        blocked_matmul_and_pack<false, 1, vDHt>(
+            in0_cb,
+            in1_cb,
+            out_cb,
+            in0_index_start,
+            vs0 * KT_stride,
+            0,
+            vs0,
+            subblock_w,
+            subblock_h,
+            inner_dim,
+            KT_stride,
+            /*skip_pack_configure=*/true);
     }
 }
 
@@ -1029,6 +1073,7 @@ static void apply_lightweight_mask_streaming(
     constexpr uint32_t trailing_remainder = has_sliding_window && !is_causal_sdpa ? (half_window % TILE_HEIGHT) : 0;
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
+
         // Causal / sliding mask: per-row diagonal stamps plus full-neginf regions.
         if constexpr (is_causal_sdpa || has_sliding_window) {
             if (apply_causal || apply_sliding_window || kv_pad_rotation_enabled) {
@@ -1658,6 +1703,15 @@ static void sdpa_inner_loop_step(
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+#ifdef Q_TINY_TILE
+                    inplace_v_matmul_pack_strided_wide<vDHt, qktv_subblock_w, qktv_h>(
+                        cb_qkt_im,
+                        cb_v_in,
+                        out_cb,
+                        qktv_in0_index_offset,
+                        /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
+                        KT_stride);
+#else
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
                         cb_v_in,
@@ -1665,6 +1719,7 @@ static void sdpa_inner_loop_step(
                         qktv_in0_index_offset,
                         /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
                         KT_stride);
+#endif
                     sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
             }
@@ -2461,47 +2516,34 @@ void sdpa_ring_v2(
 
     // -----------------------------------------------------------------------
 
-    constexpr uint32_t q_iter_step =
-#ifdef Q_TINY_PAIR
-        2;
-#else
-        1;
-#endif
-    for (uint32_t q = global_q_start; q < global_q_end; q += q_iter_step) {
+    for (uint32_t q = global_q_start; q < global_q_end; q++) {
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index_grouped(q, num_q_chunks, use_zigzag_balancing, q_iter_step) % num_q_chunks;
-#ifdef Q_TINY_PAIR
+        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+#ifdef Q_TINY_TILE
         const uint32_t q_chunk_full_tile = q_chunk / 2;
-        constexpr uint32_t q_chunk_half = 0;
+        const uint32_t q_chunk_half = q_chunk & 1u;
 #else
         const uint32_t q_chunk_full_tile = q_chunk;
         constexpr uint32_t q_chunk_half = 0;
 #endif
-        constexpr uint32_t q_chunk_full_stride =
-#ifdef Q_TINY_PAIR
-            1;
-#else
-            Sq_chunk_t;
-#endif
-        constexpr uint32_t q_full_tile_rows = q_chunk_full_stride;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
         uint32_t q_start_tile = 0;
         if constexpr (has_sliding_window) {
             q_start_tile = logical_nt - ring_size * q_local_padded_Nt + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk_full_tile * q_chunk_full_stride;
+                           q_chunk_full_tile * Sq_chunk_t;
         } else if constexpr (is_causal_sdpa) {
             if (is_causal_iter) {
-                q_start_tile = q_chunk_full_tile * q_chunk_full_stride;
-                causal_k_limit = (q_start_tile + q_full_tile_rows + Sk_chunk_t - 1) / Sk_chunk_t;
+                q_start_tile = q_chunk_full_tile * Sq_chunk_t;
+                causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk_full_tile * q_chunk_full_stride;
+            q_start_tile =
+                chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk_full_tile * Sq_chunk_t;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2688,13 +2730,13 @@ void sdpa_ring_v2(
                     const uint32_t k_global_start =
                         kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                             source_ring_id, source_k_chunk * Sk_chunk_t);
-                    const uint32_t q_global_end = q_start_tile + q_full_tile_rows;
+                    const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }
                 } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
-                    const uint32_t causal_active = q_start_tile + q_full_tile_rows - k_chunk * Sk_chunk_t;
+                    const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
@@ -2728,7 +2770,7 @@ void sdpa_ring_v2(
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
-                           q_start_tile + q_full_tile_rows > step_k_start_tile;
+                           q_start_tile + Sq_chunk_t > step_k_start_tile;
                 }
                 return is_causal_iter;
             }();
@@ -2812,7 +2854,7 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk_full_tile * q_chunk_full_stride : q_start_tile,
+                kv_pad_rotation_enabled ? q_chunk_full_tile * Sq_chunk_t : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx + q_chunk_half,

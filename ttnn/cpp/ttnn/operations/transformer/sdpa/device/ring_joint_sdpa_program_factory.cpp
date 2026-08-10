@@ -1025,11 +1025,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     */
 
     const bool q_tiny_tile = q_chunk_size == tt::constants::FACE_HEIGHT;
-    // q16 is the logical scheduling unit. Adjacent chunks are issued together as one physical
-    // 32-row tile so the matrix engine retains full-row efficiency while the work splitter keeps
-    // the finer q16 distribution across the available SDPA cores.
-    const uint32_t q_tile_height = tt::constants::TILE_HEIGHT;
-    const uint32_t Sq_chunk_t = q_tiny_tile ? 1 : q_chunk_size / q_tile_height;
+    const uint32_t q_tile_height = q_tiny_tile ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
+    const uint32_t Sq_chunk_t = q_chunk_size / q_tile_height;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
     // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
@@ -1091,7 +1088,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t joint_l_partial_col = logical_l % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles =
         (compile_time_global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    const uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    const uint32_t edge_mask_tiles =
+        has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? (q_tiny_tile ? 2 : 1) : 0);
     // Single CB holds neginf, either the causal diagonal or sliding edge palette, and partial masks.
     const uint32_t total_lightweight_mask_tiles = 1 + edge_mask_tiles + partial_mask_tiles;
 
@@ -1099,11 +1097,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Q chunking uses L_local (per-device shard on sharded path, full L on replicated).
     const uint32_t num_joint_q_chunks = tt::div_up(L_local, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
-    TT_FATAL(
-        !q_tiny_tile || ((num_local_q_chunks % 2 == 0) && (num_joint_q_chunks % 2 == 0)),
-        "q16 paired scheduling requires even local and joint Q chunk counts; got local={}, joint={}",
-        num_local_q_chunks,
-        num_joint_q_chunks);
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     // Sharded joint: per-iteration K chunk count for one shard (L_local). Replicated: full L.
     // Kernels process this many joint K chunks on every ring iteration (sharded) or just the last (replicated).
@@ -1302,7 +1295,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         vDHt,
         dst_size,
         /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
-        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
+        /*max_subblock_w=*/(kt_inplace_v && !q_tiny_tile) ? 1u : UINT32_MAX);
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
@@ -1692,7 +1685,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (q_tiny_tile) {
-        defines["Q_TINY_PAIR"] = "1";
+        defines["Q_TINY_TILE"] = "1";
     }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
@@ -1957,8 +1950,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t base_chunks_per_core = 0;
     uint32_t extra_chunks_per_core = 0;
     uint32_t cores_doing_extra_work = 0;
-    if (enable_zigzag_balancing || q_tiny_tile) {
-        log_debug(tt::LogOp, "Enabling pair-aligned Q work splitting with num_q_chunks: {}", num_q_chunks);
+    if (enable_zigzag_balancing) {
+        log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
         const uint32_t total_pairs = total_q_chunks / 2;
         cores_doing_extra_work = total_pairs % num_cores;
         base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
