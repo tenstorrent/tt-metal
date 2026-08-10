@@ -24,7 +24,8 @@ import pytest
 ttnn = pytest.importorskip("ttnn")
 
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow  # noqa: E402
-from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: E402
+from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
+from models.experimental.voxtral_tts.tt import ttnn_voxtral_pipeline as pipeline  # noqa: E402
 
 
 def test_block1_weights_are_bfp8_except_w2():
@@ -194,6 +195,30 @@ def test_residual_rides_in_as_bias_on_the_decode_path_only():
         "the prefill fallback add is gone; prefill must NOT take the bias path")
     prefill = inspect.getsource(gpt.TtVoxtralGPT._layer)
     assert "bias=" not in prefill, "prefill is using residual-as-bias, which is WRONG for M>1"
+
+
+def test_trace_capture_aims_the_cache_write_at_the_first_frames_slot():
+    """_trace_capture runs graph() TWICE (warm-up + capture) and each run WRITES K/V through
+    paged_update_cache at whatever `pos` holds. Left at its initial 0 that destroys the prefilled
+    prompt's position 0, every later attention reads the wreckage, and the audio is garbage --
+    measured as WER 1 -> 1320 of 596 words, MOS 4.63 -> 1.98, 32822 clicks. Aiming it at pos0
+    puts those writes where the first real frame overwrites them moments later.
+
+    IT PASSED A SINGLE-FRAME BIT-EXACT CHECK. A trace exists to be REPLAYED, so verifying one
+    replay verifies nothing about replay -- the corruption only shows once a frame reads back
+    through the damaged slot. Verify traces over several frames. STATUS.md 6.65."""
+    import inspect
+
+    src = inspect.getsource(pipeline.TtVoxtralPipeline._trace_capture)
+    assert "copy_host_to_device_tensor" in src and "pos0" in src, (
+        "the capture no longer aims `pos` at pos0 -- it will corrupt KV cache slot 0")
+    # the CALL, not `def graph():` -- the definition necessarily comes first
+    i_call = src.index("\n        graph()")
+    i_aim = src.index('torch.tensor([pos0]')
+    assert i_aim < i_call, "`pos` must be aimed BEFORE the warm-up graph() runs"
+    gen = inspect.getsource(pipeline.TtVoxtralPipeline.generate)
+    assert "finally:" in gen and "_trace_release" in gen, (
+        "the trace must be released in a finally -- the next generate() prefills, which allocates")
 
 
 def test_decode_matmul_configs_assume_one_tile_of_rows():

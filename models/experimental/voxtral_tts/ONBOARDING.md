@@ -27,7 +27,7 @@ export TT_METAL_HOME=$PWD
 export PYTHONPATH=$PWD/ttnn:$PWD/tools:$PWD          # all three — see §2, $PWD alone is WRONG
 
 V=models/experimental/voxtral_tts
-python -m pytest $V/tests/ -q --noconftest                 # 129 tests, ~70 s   (--noconftest REQUIRED)
+python -m pytest $V/tests/ -q --noconftest                 # 132 tests, ~70 s   (--noconftest REQUIRED)
 python $V/tests/tt_gates.py --gate codes                   # blocks 1+2, integer codes
 python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes results{tag}.json
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
@@ -54,7 +54,7 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 | **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~19.1 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
-One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~39.1, RTF ~0.51.
+One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~33.2, RTF ~0.45.
 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
@@ -149,7 +149,7 @@ breaking `transformers` and taking the WER scorer with it. Without it, MOS is sk
 
 The sections below are the same checks run by hand, for when you want one of them in isolation.
 
-### Tests — 129 tests, ~70 s
+### Tests — 132 tests, ~70 s
 
 ```bash
 python -m pytest models/experimental/voxtral_tts/tests/ -q --noconftest

@@ -4125,6 +4125,64 @@ move trajectories (`95dc26363f`), so it needs the full WER gate rather than a ti
 a 3.7 ms wrapper whose uploads are all tiny. Not accounted for by dispatch (measured above), by
 host crossings (§6.63 removed them for +0.081), or by run-ahead (tested above).
 
+### 6.65 — the frame loop is TRACED: −4.244 ms/frame, RTF 0.4931 → 0.4514, every quality metric identical
+
+The largest single win on this fork, and it reverses two rejections at once.
+
+| | before | after | |
+|---|---|---|---|
+| **ms/frame** | 37.456 | **33.212** | **−4.244** |
+| **RTF** | 0.4931 | **0.4514** | −0.0417 |
+| long-form WER | 1 of 596 | **1 of 596** | identical |
+| MOS long-form | 4.6295 | **4.6295** | identical |
+| clicks / codes / terminated | 53 / 37 / 30 | **53 / 37 / 30** | identical |
+
+Paired `--tier audio`, both arms, 2 seeds: **0 metrics worse, 21 within tolerance** — and the
+quality metrics are not merely inside tolerance, they are **identical to the last digit**, because
+the traced graph is bit-exact.
+
+**§6.49 AND §6.26 BOTH REVERSE.** §6.49 measured dispatch at 2.8–3.9% in a tight loop and §6.26
+rejected trace-as-shipping as "three silent failure modes for 0.7%". On current HEAD Block 2 alone
+is **13.3% (2.294 ms)** — §6.52 made the device work faster and exposed dispatch that had been
+hiding behind slower matmuls. Fourth instance of that pattern (§6.47, §6.49, §6.50-considered,
+§6.26), and the only one where the stale rejection was worth this much.
+
+**THE DESIGN: ONE TRACE FOR THE WHOLE PER-FRAME GRAPH** — Block 1's 26 layers, the semantic
+projection, Block 2's 7 Euler steps. It has to be all of it. Once a trace exists **any later device
+allocation may be corrupted**; leaving Block 1 or `semantic_code` eager allocates every frame, and
+attempting exactly that hung the board and needed `tt-smi -r` (§6.64). It is possible only because
+the acoustic decode does not depend on the semantic argmax — both compute unconditionally and the
+`[END_AUDIO]` masking stays on host, where §6.31/§6.50 already put it.
+
+Three details that were not obvious:
+- **Frame 0 is eager and runs BEFORE capture.** Its hidden state comes from prefill, not a Block 1
+  step, so it does not fit the graph — and running it after capture would allocate.
+- **`cos`/`sin` copy in INTERLEAVED and reshard inside the trace.** `copy_host_to_device_tensor`
+  into a sharded destination is a layout fight, and the reshard costs no dispatch once traced.
+- **The trace is released in a `finally`.** The next `generate()` starts with a prefill, which
+  allocates. Capture costs **0.034 s** against ~2.1 s won on a long-form utterance.
+
+**THE BUG THAT REACHED A FULL GATE RUN, AND THE TEST THAT MISSED IT.** `_trace_capture` runs
+`graph()` twice — warm-up then capture — and each run **writes K/V through `paged_update_cache` at
+whatever `pos` holds**. Left at its initial 0 it destroyed the prefilled prompt's position 0, every
+later attention read the wreckage, and the gate came back **WER 1 → 1320 of 596 words, MOS 4.63 →
+1.98, 32822 clicks, 11.6% clipping, 6 of 30 utterances never terminating**. Fixed by aiming `pos`
+at `pos0`, where the first real frame overwrites it moments later.
+
+**It had already passed a single-frame bit-exact check** — logits and solver state matching to
+0.000e+00. **A trace exists to be REPLAYED, so verifying one replay verifies nothing about replay.**
+Re-verified over 8 frames teacher-forced: 0 of 288 acoustic differences, every semantic code
+matching. `test_trace_capture_aims_the_cache_write_at_the_first_frames_slot` guards it.
+
+**A HYPOTHESIS THAT WAS WRONG, recorded so nobody re-derives it.** The first suspect was
+`ttnn.zeros_like` inside the trace not being re-executed on replay, leaving the CFG uncond half
+holding stale data. Tested directly over three replays with dirtied memory in between: the uncond
+half stays exactly 0.000. Had that been "fixed" instead, the real bug would have shipped.
+
+**One signal shape worth keeping**: in the broken run `ms_per_frame` IMPROVED while `rtf` got
+WORSE, because six utterances stopped terminating and ran to the frame cap. **If those two ever
+disagree, something is broken rather than fast.**
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
