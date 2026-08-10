@@ -370,7 +370,11 @@ class MiniMaxH3Pipeline:
         dropped explicitly. It still holds its host state dict, so rebuilding is a re-upload rather
         than a re-read from disk.
 
-        **The text encoder is always evicted** --- it is 50 GB on disk and runs once per prompt.
+        **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh with the
+        precomputed AdaLN path: encoder, DiT and VAE fit together, and a novel prompt's Encoder row
+        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. The embedding cache only
+        spares repeated prompts, so this is on the critical path of essentially every served
+        request. `MINIMAX_H3_CORESIDENT=0` restores eviction for a mesh where they do not fit.
 
         **The DiT and the video VAE are kept co-resident**, which is measured, not assumed: on a 4x8
         Blackhole mesh they fit together with no allocation failure. Eviction costs a per-shape decoder
@@ -384,7 +388,7 @@ class MiniMaxH3Pipeline:
         # `self._resident`, which holds exactly one value. It reads like a fallthrough of independent
         # release actions and is not one.
         coresident = self.coresident
-        if self._resident == "text" and self._text_encoder is not None:
+        if self._resident == "text" and self._text_encoder is not None and not coresident:
             logger.info("releasing the text encoder")
             self._text_encoder.deallocate_weights()
             self._text_encoder = None
@@ -1687,6 +1691,7 @@ class MiniMaxH3Pipeline:
         # write mask matters, nothing re-imposes the anchors, and an overwritten anchor still denoises
         # into a plausible video that merely ignores the keyframe -- so no output metric would catch it.
         # `ref2va` needs the same guarantee on the audio rows, which it is the first task to have.
+        t_preamble = time.time()
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
         alignment = self.sp_factor * ttnn.TILE_SIZE
@@ -1702,7 +1707,9 @@ class MiniMaxH3Pipeline:
         # `num_cond_audio` on, and raises if a conditioning row moved. Hoisting them is
         # bit-identical and worth ~0 % of wall time, the upload having overlapped device work
         # (am. 133).
+        t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, padded_len)
+        t_rope = time.time() - t_rope
         tt_cond = []
         video_cursor = audio_cursor = 0
         for modality, rows in condition_spec:
@@ -1720,7 +1727,10 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        t_preamble = time.time() - t_preamble
+        t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
+            t_step = time.time()
             # Per-row noise levels, reduced to the (distinct timesteps, per-row index) pair the
             # model addresses its AdaLN table through.
             unique, row_index = build_row_timesteps(
@@ -1779,8 +1789,20 @@ class MiniMaxH3Pipeline:
             # rows, so `[0:]` is the whole tensor and this is bit-identical to writing it outright.
             video_rows[num_cond:] = scheduler.step(v, t, video_rows[num_cond:])
             audio_rows[num_cond_audio:] = audio_scheduler.step(a, audio_timesteps[i], audio_rows[num_cond_audio:])
+            t_step = time.time() - t_step
+            if i == 0:
+                t_first = t_step
+            else:
+                t_steady += t_step
             if i % 10 == 0 or i == len(timesteps) - 1:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
+
+        steady_steps = max(len(timesteps) - 1, 1)
+        logger.info(
+            f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
+            f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
+            f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+        )
 
         # RuntimeError, not AssertionError: these are real failures of the loop, not caller errors, and
         # they must not be strippable by `python -O`.
