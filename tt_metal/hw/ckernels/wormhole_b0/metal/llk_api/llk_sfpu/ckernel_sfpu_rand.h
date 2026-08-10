@@ -23,6 +23,7 @@ inline void rand_prng() {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
@@ -65,7 +66,7 @@ inline void begin_mix_uint32_fast() {
     // correlation across seeds, while keeping tile-mean dispersion near the
     // IID expectation after FP32 conversion. Finalists were also checked for
     // long-stream spatial ridges. Reusing shift 16 limits setup to four counts
-    // and keeps the replayed row at 18 instructions.
+    // and keeps the replayed row at 17 instructions.
     //
     // SFPSHFT2's independent source and destination registers avoid staging
     // each input. LREG4, LREG7, LREG12, and LREG13 hold -16, 10, -6, and 13,
@@ -106,8 +107,7 @@ inline void rand_row() {
     // LREG1 and writes LREG0, independently of SFPMAD's LREG6 result. The
     // speculative prime after the final row is harmless.
     begin_mix_uint32_fast();
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_3, 0);
-    TTI_INCRWC(0, 2, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -134,7 +134,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_fast();
 
-    constexpr std::uint32_t row_instruction_count = 18;
+    constexpr std::uint32_t row_instruction_count = 17;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7

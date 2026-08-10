@@ -25,6 +25,7 @@ inline void rand_prng() {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
@@ -99,8 +100,7 @@ inline void rand_row() {
     // LREG0 and writes LREG5, independently of SFPMAD's LREG6 result. The
     // speculative prime after the final row is harmless.
     begin_mix_uint32_mul24();
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_INCRWC(0, 2, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -120,7 +120,7 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    constexpr std::uint32_t row_instruction_count = 18;
+    constexpr std::uint32_t row_instruction_count = 17;
     TTI_REPLAY(0, row_instruction_count, 1, 1);
     rand_row();
 #pragma GCC unroll 7
