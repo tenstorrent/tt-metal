@@ -9,14 +9,17 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
-#ifdef TRISC_MATH
+// Blackhole-only: the rmsnorm LLKs live only in the Blackhole llk_api / llk_lib trees.
+#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse_api.h"
 #endif
-#ifdef TRISC_UNPACK
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_unpack_A_rmsnorm_api.h"
 #endif
 
 namespace ckernel {
+
+#if defined(ARCH_BLACKHOLE)
 
 template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
@@ -102,6 +105,9 @@ template <uint32_t num_tiles, uint32_t dst_capacity, PoolType reduce_type = Pool
 ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f) {
     static_assert(reduce_type == PoolType::SUM, "Only SUM reduction is currently supported");
     static_assert(dst_capacity >= 2 && dst_capacity <= 8, "Chunked reduction requires 2 to 8 DST slots");
+    static_assert(
+        dst_capacity <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        "dst_capacity exceeds the DST tiles available in this sync/accum mode");
     static_assert(num_tiles > dst_capacity, "Use mul_reduce_scalar_tile when the row fits DST");
 
     constexpr uint32_t batch_size = dst_capacity - 1;
@@ -159,4 +165,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         add_binary_tile(accumulator, 0, accumulator);
     }
 }
+
+#endif  // ARCH_BLACKHOLE
+
 }  // namespace ckernel

@@ -6,12 +6,15 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#ifdef TRISC_MATH
+// Blackhole-only: the add_rsqrt SFPU functor lives only in the Blackhole llk_api tree.
+#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
+
+#if defined(ARCH_BLACKHOLE)
 
 /**
  * Initialize for add + rsqrt operation: result = rsqrt(x + addend)
@@ -36,5 +39,7 @@ ALWI void add_rsqrt_tile(uint32_t idst, uint32_t addend) {
         vec_mode,
         addend));
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel

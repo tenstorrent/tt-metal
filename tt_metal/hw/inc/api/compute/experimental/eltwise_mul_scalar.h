@@ -18,6 +18,10 @@
 
 namespace ckernel {
 
+// Blackhole-only: the HiFi dest-reuse init workaround below calls the Blackhole
+// LLK primitive directly, and all current consumers are Blackhole kernels.
+#if defined(ARCH_BLACKHOLE)
+
 // ============================================================================
 // Scalar broadcast multiply
 // ============================================================================
@@ -100,5 +104,7 @@ ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index,
           MATH_FIDELITY,
           binary_reuse_dest>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel
