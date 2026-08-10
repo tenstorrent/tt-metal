@@ -42,7 +42,26 @@ PrefillVariant = Literal["regular-single", "regular-batched", "chunked"]
 
 @dataclass(frozen=True)
 class PrefillProgramSignature:
-    """Material values selecting one eager prefill program variant."""
+    """Material values selecting one eager prefill program variant.
+
+    Batched-prefill key-space note: when device sampling is on, top-k is
+    compiled into the prefill program (sampling_path is key material), so
+    every distinct (padded_batch_size, active_batch_size, ...) combination is
+    a separate program. Under async admission, a 15-request wave plans as
+    groups of 8 and 7, and active_batch_size 8 and 7 are different programs.
+    The set of reachable keys is effectively unbounded at runtime, and the
+    compiler freezes once trace mode activates. Batch-1 prefill collapses the
+    sampled-prefill key space to one warmed shape per seq bucket.
+
+    TODO(perf): This is a warmup-coverage/trace-memory budget decision, not a
+    kernel limitation — it could be lifted by pre-compiling the full admission
+    set (padded {2,4,8} x active 1..8 x seq {128,1024} ≈ 28 sampled variants
+    per lane) and paying the compile time + trace region. Nobody has chosen to
+    pay that. Cheaper middle grounds to evaluate: let vLLM tell the model
+    which batch sizes to capture traces for, or capture exactly two traces per
+    bucket — bs=1 (universal fallback when there are not enough users to fill
+    up to max_num_seqs) and bs=max_num_seqs.
+    """
 
     operation_variant: PrefillVariant
     padded_batch_size: int
@@ -270,6 +289,12 @@ class PrefillRuntime:
             max_batch_size=self.config.max_batch_size,
             max_prefill_chunk_size=self.config.max_prefill_chunk_size,
             supports_batched_prefill=self.config.supports_batched_prefill,
+            # Batched prefill makes prefill logits batch-variant (numerics
+            # depend on wave composition). On multi-chip Blackhole this is
+            # unverified: seeded token-accuracy/eval gates may break. Measure
+            # batched on vs off per BH SKU before enabling it there, and check
+            # whether https://github.com/tenstorrent/tt-metal/issues/47238
+            # (batch-invariant kernel fix) has landed.
             disable_batched_prefill=(
                 self.config.disable_batched_prefill
                 or bool(os.environ.get("DISABLE_BATCHED_PREFILL"))
