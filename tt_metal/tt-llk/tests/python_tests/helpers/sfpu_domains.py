@@ -883,24 +883,35 @@ def _validate_distribution_override(
 # unary op is actually driven, so an op added to the registry and to no test goes untested
 # silently.
 #
-# Recording the family closes that. It is a flat set rather than a field on OperandSpecs
-# because several entries are shared with the perf sweeps and the accuracy harness, and
-# those consumers do not want an arity opinion imposed on them.
+# Recording the family closes that. Each family is named positively, one set per
+# arity/engine, and the unary family is whatever is left over -- so an op registered
+# without being classified here lands in sfpu_unary_ops() and trips the unary sweep's
+# exhaustiveness assert, which is the prompt to put it in the right set below.
+#
+# They are flat sets rather than a field on OperandSpecs because several entries are shared
+# with the perf sweeps and the accuracy harness, and those consumers do not want an arity
+# opinion imposed on them.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Ops with no unary SFPU kernel, so they must not appear in the unary sweep. Relu is the
-# one that looks like it should: it has a domain entry, but `relu` is not a member of
-# SfpuType at all -- relu is applied by the packer (STACC_RELU), not the SFPU -- so driving
-# it through the unary test fails to compile.
-_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = frozenset(
+# Eltwise binary run on the FPU rather than the SFPU (test_eltwise_binary.py).
+_FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
     {
-        # FPU eltwise binary
         MathOperation.Elwadd,
         MathOperation.Elwmul,
         MathOperation.Elwsub,
-        # packer-applied relu
-        MathOperation.Relu,
-        # SFPU binary (test_sfpu_binary.py)
+    }
+)
+
+# Applied by the packer (STACC_RELU), not the SFPU. Relu is the entry that looks like it
+# should be a unary SFPU op: it has a domain, but `relu` is not a member of SfpuType at
+# all, so driving it through the unary test fails to compile.
+_PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
+
+# Binary SFPU ops (test_sfpu_binary.py). Registered ones only -- that suite also drives
+# ~30 int, comparison and bitwise ops that have no domain entry and so cannot be keys
+# here; they are declared in its own _UNREGISTERED_BINARY_OPS instead.
+_SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
         MathOperation.SfpuAddTopRow,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
@@ -912,11 +923,27 @@ _NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
-        # reduce family (test_sfpu_reduce*.py)
+    }
+)
+
+# Ternary SFPU ops (test_sfpu_ternary.py). Empty because no ternary op has a domain entry
+# yet: OperandSpecs carries A and B only, so that suite builds its own per-operand specs
+# and reuses B for C. The set exists so the first registered ternary op lands here rather
+# than silently in sfpu_unary_ops().
+_SFPU_TERNARY_OPS: FrozenSet[MathOperation] = frozenset()
+
+# Reduce family (test_sfpu_reduce*.py).
+_REDUCE_OPS: FrozenSet[MathOperation] = frozenset(
+    {
         MathOperation.ReduceColumn,
         MathOperation.ReduceRow,
         MathOperation.ReduceScalar,
     }
+)
+
+# Ops with no unary SFPU kernel, so they must not appear in the unary sweep.
+_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = (
+    _FPU_ELTWISE_OPS | _PACKER_OPS | _SFPU_BINARY_OPS | _SFPU_TERNARY_OPS | _REDUCE_OPS
 )
 
 # Unary SFPU ops that are registered but deliberately not in the correctness sweep.
@@ -930,9 +957,9 @@ _UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
 def sfpu_unary_ops() -> FrozenSet[MathOperation]:
     """Every registered op that has a unary SFPU kernel.
 
-    The unary sweep asserts its profiles cover exactly this set minus
-    _UNARY_OPS_NOT_SWEPT, so adding an op to the registry without adding it to a sweep
-    profile (or to one of the two exemption sets above) fails at collection.
+    Everything registered that is not claimed by one of the family sets above. The unary
+    sweep drives exactly this set minus _UNARY_OPS_NOT_SWEPT, so a newly registered op is
+    swept by default and only escapes by being classified into a family or exempted.
     """
     return frozenset(_OP_DOMAIN_REGISTRY) - _NON_SFPU_UNARY_OPS
 
