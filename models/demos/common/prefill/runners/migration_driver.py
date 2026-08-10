@@ -62,7 +62,7 @@ manifest, in RANK ORDER, and terminal C stays the same single line it always was
     migration:
       driver_hosts: [<H0>, <H1>]   # rank 0 FIRST, and it must be the runner's rank-0 host
 
-    # C) unchanged — the driver re-execs ITSELF under mpirun across driver_hosts (see
+    # C) unchanged — the driver relaunches ITSELF under mpirun across driver_hosts (see
     #    _maybe_relaunch_under_mpi). Equivalent overrides: --hosts / PREFILL_DRIVER_HOSTS.
     python3 -m models.demos.common.prefill.runners.migration_driver \
       --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
@@ -119,7 +119,7 @@ is warned about rather than honoured:
                                     (default /tmp/migration_done.sentinel).
   PREFILL_DRIVER_HOSTS              rank-ordered host list ("h0,h1") this driver spans, == --hosts and the
                                     manifest's ``migration.driver_hosts``. More than one host => the module
-                                    re-execs itself under mpirun, one process per host, so the read-backs
+                                    relaunches itself under mpirun, one process per host, so the read-backs
                                     cover every rank. Unset (default) => one process, this host only.
   Queues + client come from the runner's migration env, resolved via ``runners.migration``:
   PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
@@ -310,8 +310,8 @@ def _maybe_relaunch_under_mpi(args) -> None:
         python3 -m models.demos.common.prefill.runners.migration_driver --manifest <manifest>
 
     validates EVERY rank's layers instead of only this host's. Returns (doing nothing) when there is
-    nothing to relaunch for; otherwise it never returns — os.execv replaces this process with mpirun,
-    whose exit status is therefore the one the caller sees.
+    nothing to relaunch for; otherwise it never returns — it runs mpirun to completion and exits with
+    mpirun's status, so that is the status the caller sees.
 
     Why a relaunch at all: both read-backs go over UMD, which reaches only the chips attached to the host
     the process runs on, so covering an N-host pipeline needs N processes. Doing it here rather than in a
@@ -347,10 +347,10 @@ def _maybe_relaunch_under_mpi(args) -> None:
             "list the hosts in the SAME order you passed to run_pipeline_prefill.sh."
         )
 
-    # Resolve the launcher to an ABSOLUTE path here, and exec by that path below (os.execv, not execvp).
-    # PATH is consulted exactly once, in this lookup, instead of a second time inside the exec — so what
-    # runs is decided here and is visible in the log line, and a missing launcher is a clear error rather
-    # than a bare name handed to a PATH search at exec time.
+    # Resolve the launcher to an ABSOLUTE path here, and spawn by that path below. PATH is consulted
+    # exactly once, in this lookup, rather than again inside the spawn — so what runs is decided here and
+    # is visible in the log line, and a missing launcher is a clear error rather than a bare name handed
+    # to a PATH search.
     launcher = shutil.which("mpirun-ulfm") or shutil.which("mpirun")
     if not launcher:
         logger.error(
@@ -418,15 +418,31 @@ def _maybe_relaunch_under_mpi(args) -> None:
         f"rank verifies its own host's layers. (Set {_RELAUNCH_GUARD}=1 or clear migration.driver_hosts "
         "to stay single-process.)"
     )
-    logger.info(f"[migration_driver] exec: {' '.join(cmd)}")
-    # execv, NOT execvp or a shell: an argument VECTOR handed to an already-resolved absolute path. No
-    # shell is involved anywhere on this path, so nothing in `cmd` can be reinterpreted as a command,
-    # redirection or metacharacter -- each element arrives at mpirun as one literal argument. The three
-    # externally-sourced pieces are validated above (hosts: _HOST_TOKEN_RE, interface: _IFACE_RE,
-    # forwarded names: _ENV_NAME_RE); the rest is this module's own literals, sys.executable and
-    # sys.argv[1:], i.e. the operator's own command line. Replaces this process, so mpirun's exit status
-    # becomes ours.
-    os.execv(launcher, cmd)
+    logger.info(f"[migration_driver] launching: {' '.join(cmd)}")
+    # subprocess.run with an ARGUMENT VECTOR and no shell -- the same way ttnn/ttnn/distributed/ttrun.py
+    # spawns mpirun for the runner (see its `subprocess.run(mpi_cmd, ...)`), so the two launchers behave
+    # alike and this one is not the odd path out. Deliberately NOT os.exec*/shell=True: no shell is
+    # involved anywhere here, so nothing in `cmd` can be reinterpreted as a command, redirection or
+    # metacharacter -- each element arrives at mpirun as one literal argument. The three externally
+    # sourced pieces were validated above (hosts: _HOST_TOKEN_RE, interface: _IFACE_RE, forwarded names:
+    # _ENV_NAME_RE); the rest is this module's own literals, sys.executable, and sys.argv[1:] -- the
+    # operator's own command line.
+    #
+    # The cost of waiting rather than exec'ing is one idle parent (this process, with ttnn imported) on
+    # the launch host for the run's duration. It holds no device -- everything here is device-less -- so
+    # it cannot contend for the CHIP_IN_USE lock its own rank-0 child takes.
+    import subprocess
+
+    try:
+        result = subprocess.run(cmd)
+    except OSError as e:
+        logger.error(f"[migration_driver] could not launch {launcher}: {type(e).__name__}: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        # Ctrl-C reached mpirun through the foreground process group; it has already torn the ranks down.
+        logger.error("[migration_driver] interrupted")
+        sys.exit(130)  # 128 + SIGINT, matching ttrun
+    sys.exit(result.returncode)  # mpirun's status is the one the caller sees, exactly as with an exec
 
 
 class MigrationDriver:
@@ -1229,7 +1245,7 @@ def main() -> None:
         "--hosts",
         default=None,
         help="Rank-ordered host list to span, 'h0,h1,...' (rank 0 first, and it MUST be the host running "
-        "the runner's rank 0). With more than one host this module re-execs itself under mpirun, one "
+        "the runner's rank 0). With more than one host this module relaunches itself under mpirun, one "
         "process per host, so that the read-backs cover every rank's layers instead of only this host's "
         "— UMD can read no other host's chips. Overrides PREFILL_DRIVER_HOSTS and the manifest's "
         "migration.driver_hosts; unset/one host = plain single-process run.",
@@ -1277,7 +1293,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Multi-host coverage: re-exec under mpirun across migration.driver_hosts (one process per host) before
+    # Multi-host coverage: relaunch under mpirun across migration.driver_hosts (one process per host) before
     # touching the environment, so every rank applies the manifest itself from the same starting point.
     # No host list configured => no-op, and everything below runs exactly as it did single-process.
     _maybe_relaunch_under_mpi(args)
