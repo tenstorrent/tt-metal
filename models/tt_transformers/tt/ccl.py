@@ -182,7 +182,16 @@ def tt_all_reduce(
             memory_config=memory_config,
             intermediate_memory_config=rs_memory_config,
             topology=topology,
-            chunks_per_sync=chunks_per_sync,
+            # DIAGNOSTIC (do not merge): chunks_per_sync=1 instead of the caller's default of 10,
+            # to locate the Qwen3.6-27B P300X2 prefill-trace hang. tt-triage of run 31280919792
+            # shows devices 0/1/3 blocked in this op at
+            # ring_reduce_scatter_minimal_async_reader.cpp:420 (the reverse-direction credit wait on
+            # out2_ready_sem) while device 2 finished the same collective. chunks_per_sync paces how
+            # many chunks share one credit, so 1 sends a credit per chunk and changes the credit
+            # accounting in the writer's separate_even_odd_sems path (writer.cpp:740-747). Unlike a
+            # topology change this leaves routing untouched. If CI passes, the fault is in the credit
+            # pacing. This costs fabric bandwidth; revert after the run.
+            chunks_per_sync=1,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
