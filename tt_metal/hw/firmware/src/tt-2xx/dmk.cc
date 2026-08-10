@@ -48,8 +48,15 @@ uint32_t _start() {
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
     uint32_t thread_0_hartid = hartid;
+    // Tensix reserves DM0 and DM1; thread 0 search starts at 2.
+    // Dispatch engine DM cores don't reserve DM0/DM1, so search from 0.
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t first_candidate_hartid = 0;
+#else
+    constexpr uint32_t first_candidate_hartid = 2;
+#endif
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
+        for (uint32_t j = first_candidate_hartid; j < MaxDMProcessorsPerCoreType; j++) {
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;

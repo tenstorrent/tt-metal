@@ -522,7 +522,7 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        DataMovementProcessor dm_processor) :
+        const std::set<DataMovementProcessor>& dm_processors) :
         Kernel(
             HalProgrammableCoreType::DISPATCH,
             HalProcessorClassType::DM,
@@ -532,19 +532,21 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        dm_processors_{dm_processor} {
+        dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_threads_per_cluster == 1,
-            "DispatchEngineKernel requires num_threads_per_cluster=1");
+            config.num_threads_per_cluster == dm_processors_.size(),
+            "Number of dispatch engine DM threads specified in config must match the reserved processor count");
+        TT_FATAL(!dm_processors_.empty(), "DispatchEngineKernel requires at least one DM processor");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~DispatchEngineKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 

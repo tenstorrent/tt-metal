@@ -1134,6 +1134,20 @@ uint32_t experimental::quasar::DispatchEngineKernel::get_kernel_processor_type(i
     return enchantum::to_underlying(this->dm_processors_[0]);
 }
 
+std::vector<uint32_t> experimental::quasar::DispatchEngineKernel::get_processor_indices_for_binary(
+    int binary_index) const {
+    TT_ASSERT(binary_index == 0, "binary_index out of bounds");
+    const auto& hal = MetalContext::instance().hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    const auto proc_class = this->get_kernel_processor_class();
+    std::vector<uint32_t> indices;
+    indices.reserve(this->dm_processors_.size());
+    for (const auto& processor : this->dm_processors_) {
+        indices.push_back(hal.get_processor_index(core_type, proc_class, enchantum::to_underlying(processor)));
+    }
+    return indices;
+}
+
 void experimental::quasar::DispatchEngineKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
@@ -1205,7 +1219,8 @@ std::string_view experimental::quasar::DispatchEngineKernel::get_linker_opt_leve
 }
 
 std::string experimental::quasar::DispatchEngineKernel::config_hash() const {
-    return fmt::format("dispatch_{}", enchantum::to_string(this->dm_processors_[0]));
+    TT_ASSERT(std::is_sorted(this->dm_processors_.begin(), this->dm_processors_.end()));
+    return fmt::format("dispatch_{}", fmt::join(this->dm_processors_, "_"));
 }
 
 uint8_t experimental::quasar::DispatchEngineKernel::expected_num_binaries() const { return 1; }

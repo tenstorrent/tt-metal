@@ -5,6 +5,7 @@
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 
 #include <memory>
+#include <set>
 #include <string>
 
 #include <tt-metalium/core_coord.hpp>
@@ -25,15 +26,12 @@ KernelHandle create_dispatch_engine_kernel(
     Program& program,
     const std::string& file_name,
     const CoreCoord& core,
-    DataMovementProcessor dm_processor,
+    const std::set<DataMovementProcessor>& dm_processors,
     const experimental::quasar::QuasarDataMovementConfig& config) {
-    TT_FATAL(
-        config.num_threads_per_cluster == 1,
-        "CreateDispatchEngineKernel requires num_threads_per_cluster=1");
     const CoreRangeSet core_ranges = CoreRangeSet(core);
     const KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
-    std::shared_ptr<Kernel> kernel = std::make_shared<experimental::quasar::DispatchEngineKernel>(
-        kernel_src, core_ranges, config, dm_processor);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<experimental::quasar::DispatchEngineKernel>(kernel_src, core_ranges, config, dm_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DISPATCH);
 }
 
@@ -49,7 +47,7 @@ KernelHandle CreateDispatchEngineKernel(
     const auto free_dms = experimental::quasar::GetAvailableDataMovementProcessors(
         program, core_ranges, config.num_threads_per_cluster, HalProgrammableCoreType::DISPATCH);
     TT_FATAL(!free_dms.empty(), "No free data-movement processors on dispatch-engine core {}", core.str());
-    return create_dispatch_engine_kernel(program, file_name, core, *free_dms.begin(), config);
+    return create_dispatch_engine_kernel(program, file_name, core, free_dms, config);
 }
 
 KernelHandle CreateDispatchEngineKernel(
@@ -58,7 +56,7 @@ KernelHandle CreateDispatchEngineKernel(
     const CoreCoord& core,
     DataMovementProcessor dm_processor,
     const experimental::quasar::QuasarDataMovementConfig& config) {
-    return create_dispatch_engine_kernel(program, file_name, core, dm_processor, config);
+    return create_dispatch_engine_kernel(program, file_name, core, {dm_processor}, config);
 }
 
 }  // namespace tt::tt_metal::detail

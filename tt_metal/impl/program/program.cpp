@@ -898,6 +898,14 @@ KernelGroup::KernelGroup(
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
         }
+
+        if (auto* dispatch_kernel = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(kernel.get())) {
+            const std::vector<uint32_t> processor_indices = dispatch_kernel->get_processor_indices_for_binary(0);
+            for (uint32_t thread_idx = 0; thread_idx < processor_indices.size(); thread_idx++) {
+                kernel_config.num_sw_threads()[processor_indices[thread_idx]] = processor_indices.size();
+                kernel_config.kernel_thread_id()[processor_indices[thread_idx]] = thread_idx;
+            }
+        }
         // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
             auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
