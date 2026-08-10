@@ -6,7 +6,7 @@
  * Driver for Metal's llk_sfpu/ckernel_sfpu_sdpa.h.
  *
  * Those bodies have no LLK API of their own. Each consumer declares its own wrapper.
- * This tet declares the same one ttnn's SDPA uses.
+ * This test declares the same one ttnn's SDPA uses.
  *
  * Every body runs ITERATIONS_HALF_FACE = 4 iterations at a dst_reg stride of 2, on faces 0 and 2
  * under VectorMode::C. That writes columns {0,2,4,6,8,10,12,14} of all 32 rows and leaves the rest
