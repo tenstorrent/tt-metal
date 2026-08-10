@@ -31,6 +31,9 @@ and can be selected individually with pytest ``-k``:
                                        aligned to within ±20µs on the Tracy
                                        timeline (host anchor versus Tracy
                                        message stamp plus CI variance on WH).
+* ``test_mesh_device_teardown_no_segfault`` — Regression for #44472: a bare
+                                       open/close mesh-device pair must not
+                                       segfault on Python process exit.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -69,6 +73,7 @@ CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
 SYNC_WORKLOAD = WORKLOAD_DIR / "realtime_profiler_sync_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
+MESH_DEVICE_TEARDOWN_WORKLOAD = WORKLOAD_DIR / "mesh_device_teardown_workload.py"
 
 # Every test in this module runs its device-touching work in a subprocess.
 # The UMD ``CHIP_IN_USE_*_PCIe`` lock is held for the lifetime of the first
@@ -803,4 +808,27 @@ def test_sync_accuracy(tmp_path):
     print(
         f"\nAll {len(pairs)} sync pairs within ±{SYNC_DIFF_THRESHOLD_NS}ns "
         f"(min={min(diffs):+.0f}ns, max={max(diffs):+.0f}ns, mean={sum(diffs)/len(diffs):+.0f}ns)."
+    )
+
+
+def test_mesh_device_teardown_no_segfault():
+    """
+    Regression test for https://github.com/tenstorrent/tt-metal/issues/44472.
+
+    A bare open_mesh_device()/close_mesh_device() pair (no workload, no
+    profiling) segfaulted on Python process exit: the real-time profiler's
+    D2HSocket receiver thread was torn down after the Cluster destructor had
+    already unmapped the hugepage memory it read from. Run in a subprocess
+    so a regression only takes down this test, not the whole pytest session.
+    """
+    proc = subprocess.run(
+        [sys.executable, str(MESH_DEVICE_TEARDOWN_WORKLOAD)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    signal_note = f" (signal {-proc.returncode})" if proc.returncode < 0 else ""
+    assert proc.returncode == 0, (
+        f"mesh device teardown workload exited with returncode={proc.returncode}{signal_note}\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
     )
