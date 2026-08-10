@@ -89,12 +89,44 @@ def _process_ordinal(out_path: str) -> int:
         return sum(1 for _ in fh)
 
 
+def _device_users() -> dict:
+    """Which processes hold a Tenstorrent device open, right now.
+
+    Hosts are shared and `tt-smi` reports board presence rather than utilisation, so there is NO
+    retrospective evidence that a measurement had the device to itself -- two cells of the reference corpus
+    predate this instrumentation and can never be shown clean. Sampled at both ends of every measurement so
+    the question is answerable later instead of being argued about.
+
+    Read from /proc rather than by shelling out, so it costs nothing and cannot fail the run.
+    """
+    users = []
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit() or int(pid) == os.getpid():
+                continue
+            fd_dir = f"/proc/{pid}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    target = os.readlink(f"{fd_dir}/{fd}")
+                    if "tenstorrent" in target:
+                        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                            cmd = fh.read().replace(b"\0", b" ").decode(errors="replace").strip()
+                        users.append({"pid": int(pid), "device": target, "cmd": cmd[:160]})
+                        break
+            except (PermissionError, FileNotFoundError, OSError):
+                continue          # a process that exited, or one owned by someone else -- not our business
+    except Exception as exc:
+        return {"error": f"{exc}", "note": "device users could not be sampled; state that in the README"}
+    return {"count": len(users), "processes": users}
+
+
 def measure(label: str, out_path: str, policy_path: str) -> dict:
     if WARMUP < MIN_WARMUP or REPEATS < MIN_REPEATS or ITERS < MIN_ITERS:
         raise SystemExit(f"protocol floor: WARMUP>={MIN_WARMUP} REPEATS>={MIN_REPEATS} ITERS>={MIN_ITERS}; "
                          f"got {WARMUP}/{REPEATS}/{ITERS}. These are why the corpus floors differed 45x.")
 
     ordinal = _process_ordinal(out_path)
+    device_users_before = _device_users()
     frozen = json.load(open(policy_path))
     for k in ("shipped_policy", "shipped_weight_dtypes"):
         if k not in frozen:
@@ -144,6 +176,7 @@ def measure(label: str, out_path: str, policy_path: str) -> dict:
         ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(mesh)
         signpost(header="PERF_DECODE_END")
+        device_users_after = _device_users()
     finally:
         ttnn.close_mesh_device(mesh)
 
@@ -152,6 +185,11 @@ def measure(label: str, out_path: str, policy_path: str) -> dict:
         "decode_batch": BATCH, "requested_decode_batch": REQUESTED_BATCH,
         "warmup_replays": WARMUP, "iters_per_repeat": ITERS,
         "process_ordinal": ordinal,
+        # EXCLUSIVITY, sampled rather than assumed. Anything here beyond this process means the number
+        # shared the device -- including an advisor capture, since the container running ttnn-advise maps
+        # the same device. Sequence them; do not capture during a timed run.
+        "device_users_at_start": device_users_before,
+        "device_users_at_end": device_users_after,
         "repeats_ms": repeats_ms,
         "median_ms": statistics.median(repeats_ms),              # MEDIAN, not min
         "noise_floor_ms": max(repeats_ms) - min(repeats_ms),
@@ -171,6 +209,10 @@ def measure(label: str, out_path: str, policy_path: str) -> dict:
     print(f"{label}: median {record['median_ms']:.6f} ms over {REPEATS} blocks of {ITERS} "
           f"(+{WARMUP} warm-up), floor {floor_us:.3f} us "
           f"({100 * record['noise_floor_ms'] / record['median_ms']:.3f} %) -> {out_path}")
+    for when, du in (("start", device_users_before), ("end", device_users_after)):
+        if du.get("count"):
+            print(f"   !! NOT EXCLUSIVE at {when}: {du['count']} other process(es) hold a device open -- "
+                  + "; ".join(f"{u['pid']} {u['cmd'][:60]}" for u in du["processes"][:3]))
     if ordinal == 1:
         print("   !! this is the FIRST harness process of the session, so this floor carries cross-process "
                "JIT-cache warm-up (measured 60x on one cell). Re-run with --label warmup_discard first and "

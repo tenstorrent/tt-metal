@@ -74,6 +74,16 @@ if not isinstance(it, int):
 elif it < 50:
     soft.append(f"iters_per_repeat is {it}: each timed block averages too few replays to tighten the floor "
                 "much. The corpus cell that reached a 0.03% floor used 50.")
+for when in ("start", "end"):
+    du = d.get(f"device_users_at_{when}")
+    if du is None:
+        soft.append(f"device_users_at_{when} not recorded. A shared host leaves no retrospective evidence of "
+                    "exclusivity -- tt-smi reports board presence, not utilisation -- so it has to be sampled "
+                    "while the measurement runs. Two reference cells can never be shown clean.")
+    elif du.get("count"):
+        soft.append(f"{du['count']} other process(es) held a device open at {when} of the control "
+                    f"measurement. This number shared the device. Note that the container running "
+                    "ttnn-advise maps the same device, so a capture during a timed run is one of these.")
 po = d.get("process_ordinal")
 if po is None:
     soft.append("process_ordinal missing: record which harness process of the session this was. The first "
@@ -173,6 +183,17 @@ if not tp or not prov.get("tool_sha256") or not prov.get("host"):
 elif not os.path.isfile(str(tp)):
     bad.append(f"the capture says it ran {tp}, which does not exist on this host ({socket.gethostname()}). "
                "Either the artefact came from somewhere else, or its provenance is invented.")
+tm = prov.get("tracer_matches_checkout")
+if tm is None:
+    soft2.append("tracer_matches_checkout not recorded. advisor_commit describes the CHECKOUT, not the code "
+                 "that ran: ttnn_jit is installed into the toolchain venv as a plain directory, so a git "
+                 "checkout of another branch changes the commit while the imported tracer stays put.")
+elif tm is not True:
+    bad.append(f"the tracer that will be IMPORTED ({prov.get('tracer_imported_from')}) is not the one in the "
+               f"checkout ({prov.get('tracer_checkout_path')}). The tracer decides which layers the advisor "
+               "can see at all -- it is the difference between a real zero and a coverage zero -- so advice "
+               "captured through a different tracer than the pinned one is not this experiment's advice. "
+               "Reinstall ttnn_jit from the pinned checkout and re-capture.")
 elif str(prov.get("host")) != socket.gethostname():
     soft2.append(f"the capture was produced on {prov.get('host')} and this gate runs on "
                  f"{socket.gethostname()}. Legitimate for a re-check; not for a measurement.")

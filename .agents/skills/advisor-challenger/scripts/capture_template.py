@@ -181,11 +181,34 @@ def _record_traced_dtypes(out_dir: str) -> None:
     # provenance for a command that could not have run, and only byte-identity comparison caught it. The
     # gate verifies the tool exists at this path ON THIS HOST, which turns that into a hard failure.
     tool = shutil.which("ttnn-advise") or os.path.join(advisor_home, "build/bin/ttnn-advise")
+
+    def _sha(path):
+        try:
+            with open(path, "rb") as fh:
+                return hashlib.sha256(fh.read()).hexdigest()
+        except Exception as exc:
+            return f"UNKNOWN: {exc}"
+
+    tool_sha = _sha(os.path.realpath(tool))
+    # GIT PROVENANCE IS NOT TOOLCHAIN PROVENANCE, and this stage depends on the difference.
+    #
+    # advisor_commit above describes the CHECKOUT. It does not describe the code that runs: `ttnn_jit` is
+    # installed into the toolchain venv as a plain directory, not as an editable install, so `ttnn-advise`
+    # imports site-packages and a `git checkout` of another branch would change advisor_commit while the
+    # module that traces stays exactly as it was. There is also a build/lib.../ttnn_jit copy inside the
+    # checkout that predates the current tracer.
+    #
+    # The tracer is what decides whether a layer is visible to the advisor at all -- it is the difference
+    # between a real zero and a coverage zero -- so record the file that will actually be imported and
+    # compare it with the checkout. A mismatch means the advice describes a graph a different tracer saw.
     try:
-        with open(os.path.realpath(tool), "rb") as fh:
-            tool_sha = hashlib.sha256(fh.read()).hexdigest()
+        import ttnn_jit._src.ttnn_emit_tracer as _tracer
+        tracer_path = _tracer.__file__
     except Exception as exc:
-        tool_sha = f"UNKNOWN: {exc}"
+        tracer_path = f"UNIMPORTABLE: {exc}"
+    tracer_sha = _sha(tracer_path) if not tracer_path.startswith("UNIMPORTABLE") else tracer_path
+    checkout_tracer = os.path.join(advisor_home, "tools/ttnn-jit/_src/ttnn_emit_tracer.py")
+    checkout_sha = _sha(checkout_tracer)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "traced_dtypes.json"), "w") as fh:
         json.dump({"layer_kind": LAYER_KIND, "layer_idx": LAYER_IDX, "batch": BATCH,
@@ -200,6 +223,10 @@ def _record_traced_dtypes(out_dir: str) -> None:
                        if not changed_optimizer.startswith("UNKNOWN") else changed_optimizer),
                    "host": socket.gethostname(),
                    "tool_path": tool, "tool_realpath": os.path.realpath(tool), "tool_sha256": tool_sha,
+                   "tracer_imported_from": tracer_path, "tracer_sha256": tracer_sha,
+                   "tracer_checkout_path": checkout_tracer, "tracer_checkout_sha256": checkout_sha,
+                   "tracer_matches_checkout": (tracer_sha == checkout_sha
+                                               and not str(tracer_sha).startswith(("UNKNOWN", "UNIMPORT"))),
                    "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                    "capture_scope": CAPTURE_SCOPE}, fh, indent=2)
 

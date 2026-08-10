@@ -711,9 +711,20 @@ involved.
 **Less than v2 thought — check before you record a blocker.** Coverage, not placement, was the largest single
 limiter in the reference corpus: on **nine cell/kinds the advisor was never shown the layer**, discarding 58 to
 77 % of the window before it got a look, and one of those cells published a flat zero that two tracer handlers
-later turned into 11 candidates worth 632 µs/model. All five real gaps are now closed, in the tracer pin this
-stage runs (`sparse_matmul`, mutable-state `ttnn.copy`, `paged_fused_update_cache`, `ones_like`, `pow`, plus
-`TracedTensor.__getitem__` and `repeat_interleave`). Of the ten ops cells recorded as blockers, **four already
+later turned into 11 candidates worth 632 µs/model. All five real gaps are now closed in the tracer pin
+this stage runs. Verified handler by handler in the pinned checkout, and the split matters because only the
+first list belongs to the tracer this stage actually uses: **direct-TTNN (`ttnn_emit_tracer`, the default)** —
+`sparse_matmul`, mutable-state `ttnn.copy` (recorded in `cache_alias`, not `weight_cache`, or it orphans the
+destination's placeholder), `paged_fused_update_cache`, `ones_like`, `pow`/`pow_tensor`, `softplus` and
+`repeat_interleave`; **interception tracer only** — `TracedTensor.__getitem__`.
+
+⚠ **The tracer that runs is not necessarily the one in the checkout.** `ttnn_jit` is installed into the
+toolchain venv as a plain directory rather than as an editable install, so `ttnn-advise` imports
+site-packages: a `git checkout` of another tt-mlir branch changes the recorded `advisor_commit` while the
+module that traces stays exactly as it was. There is also a stale `build/lib.../ttnn_jit` copy inside the
+checkout. `capture_template.py` therefore fingerprints the **imported** tracer and compares it against the
+checkout's, and the gate fails a mismatch — the tracer is what decides whether a layer is visible at all,
+which is the difference between a real zero and a coverage zero. Of the ten ops cells recorded as blockers, **four already
 had handlers and one did not exist at all**. So: attempt the trace, read the traceback, and only then record a
 kind as unreachable — with its layer share.
 
