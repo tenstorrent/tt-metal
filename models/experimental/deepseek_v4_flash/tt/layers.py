@@ -715,6 +715,7 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         self.sharded = sharded
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        caller_shape = None
         if self.sharded:
             b, s, t, d = x.shape
             rows = b * s * t
@@ -727,6 +728,15 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
             # that the interleaved path is measurably faster past one tile-row. So only
             # shard while the whole tensor is a single tile-row.
             if rows <= ttnn.TILE_SIZE:
+                # A batched decode arrives one tile-row per user (``[B,1,1,D]``), so those
+                # ``rows`` sit in ``B`` separate tile-rows and a shard tall enough for the
+                # padding would be ``B`` times the one that holds the data. Pack them onto
+                # a single tile-row first -- the layout the projections already use, so a
+                # B-user norm costs what a one-user norm does -- and hand the caller its
+                # own shape back afterwards.
+                if x.shape[-2] != rows:
+                    caller_shape = list(x.shape)
+                    x = ttnn.reshape(x, [1, 1, rows, d])
                 x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, x.device()))
         # Keep the output in the same sharded layout the norm just
         # consumed, so the next op (LinearDecode / _apply_rope) doesn't round-trip
@@ -734,7 +744,8 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         # match the input's memory layout, so passing the input's own config is the
         # documented contract; for DRAM-interleaved inputs this is the default anyway.
         assert x.is_sharded(), "input must be sharded"
-        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
+        out = ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, memory_config=x.memory_config())
+        return out if caller_shape is None else ttnn.reshape(out, caller_shape)
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
