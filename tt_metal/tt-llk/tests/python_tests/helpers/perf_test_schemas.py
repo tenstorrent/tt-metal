@@ -953,7 +953,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unpack_reduce_col_tilizeA_strided_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -973,6 +973,10 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
             "pool_type",
             "tile_cnt",
             "unpack_to_dest",

@@ -28,9 +28,7 @@ public:
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr_), value);
     }
 
-    void set(uint32_t value) const {
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr_), value);
-    }
+    void consume(uint32_t value) const { noc_semaphore_inc(get_noc_addr(l1_addr_), uint32_t{0} - value); }
 
 private:
     address_t l1_addr_;
@@ -73,6 +71,7 @@ void kernel_main() {
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const address_t ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -80,6 +79,7 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb(cb0_id);
+    const DynamicL1Semaphore ready_sem(ready_sem_addr);
     const DynamicL1Semaphore data_valid_sem(data_valid_sem_addr);
 
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices, slice_step>
@@ -88,6 +88,16 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
+
+    // A remote writer can reach this device before this device has completed
+    // earlier input/output transfers on its own command queue. Gate the local
+    // writer's CB producer until the downstream device announces that its
+    // corresponding collective program has started. Each invocation owns and
+    // consumes one readiness credit.
+    if (num_iters > 0) {
+        ready_sem.wait_min(1);
+        ready_sem.consume(1);
+    }
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
@@ -166,7 +176,9 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    // Completion: wait for every chunk upstream delivers (relayed + sink),
+    // then atomically consume this invocation's credits.
     data_valid_sem.wait_min(total_chunks);
-    data_valid_sem.set(0);
+    data_valid_sem.consume(total_chunks);
+    noc.async_atomic_barrier();
 }

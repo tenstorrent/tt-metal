@@ -86,7 +86,7 @@ ttnn:
     bh_p150b_civ2: 545
     bh_quietbox_2: 65
     bh_p300: 15
-    wh_llmbox: 25
+    wh_llmbox_civ2: 40
     sim_wormhole_b0: 680
     sim_blackhole: 680
   unit:
@@ -95,8 +95,8 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 805
     bh_p150b_civ2: 1045
-    wh_n150_civ2: 1185
-    wh_n300_civ2: 1175
+    wh_n150_civ2: 1205
+    wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
     bh_quietbox_2: 60
@@ -160,15 +160,11 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
   unit:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 160
-    wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
     bh_galaxy_perf: 180
@@ -222,7 +218,7 @@ scaleout:
     wh_galaxy: 20
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_llmbox: 20
+    wh_llmbox_civ2: 30
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
@@ -318,8 +314,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 765
-    wh_n300: 765
+    wh_n150: 753
+    wh_n300: 735
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -340,23 +336,24 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
-    bh_sc1: 230
+    bh_sc1: 140
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 30
+    wh_n150: 41
+    wh_n300: 6
     bh_p150: 26
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
     wh_llmbox_perf: 64
-    wh_n150: 42
-    wh_n300: 15
+    wh_n150: 62
+    wh_n300: 60
     bh_p150: 7
     bh_p300: 8
-    bh_quietbox_2: 30
+    bh_quietbox_2: 42
   unit:
-    wh_llmbox: 100
+    wh_llmbox: 80
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
@@ -373,13 +370,15 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 55
+    wh_n150: 67
+    wh_n300: 30
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
+    wh_llmbox: 20
     wh_llmbox_perf: 58
-    wh_n150: 33
-    wh_n300: 15
+    wh_n150: 41
+    wh_n300: 33
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21
@@ -413,7 +412,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 280
+    bh_quietbox_2: 270
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30

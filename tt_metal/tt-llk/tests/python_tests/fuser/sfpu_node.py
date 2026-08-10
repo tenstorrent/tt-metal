@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING, Tuple
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.tilize_untilize import tilize_block, untilize_block
 
+from .base_sfpu import Sfpu
 from .block_data import BlockData
-from .fused_sfpu import Sfpu
 
 
 class SfpuNode:
@@ -22,7 +22,7 @@ class SfpuNode:
 
     def sfpu_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -32,7 +32,7 @@ class SfpuNode:
 
     def sfpu_run(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -42,7 +42,7 @@ class SfpuNode:
 
     def sfpu_uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -57,7 +57,7 @@ class SfpuNode:
         tensor_a,
         tensor_b,
         tensor_dst,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         tile_dims = (

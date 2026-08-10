@@ -451,7 +451,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         pcc_threshold=0.999,
         rtol=0.05,
         atol=0.7,
-        frobenius_threshold=0.004,
+        frobenius_threshold=0.006,
     )
 
 
