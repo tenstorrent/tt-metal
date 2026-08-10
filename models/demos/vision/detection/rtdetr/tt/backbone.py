@@ -30,7 +30,7 @@ class TtRTDetrConvEncoder:
             input_width=input_width,
         )
 
-        return [feature_maps[index - 1] for index in self.out_indices]
+        return feature_maps
 
 
 class TtRTDetrResNetBackBone:
@@ -157,131 +157,6 @@ class TtRTDetrResNetEmbeddings:
         return pixel_values, height, width
 
 
-class TtRTDetrResNetConvLayer:
-    def __init__(
-        self,
-        config,
-        parameters,
-        device,
-        dtype,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: tuple[int, int],
-        stride: tuple[int, int],
-        padding: tuple[int, int],
-        activation: str,
-    ):
-        self.device = device
-        self.dtype = dtype
-        self.config = config
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        if activation == "relu":
-            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-        elif activation == "silu":
-            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-        elif activation == "identity":
-            self.activation = None
-        else:
-            raise ValueError(f"Unsupported activation {activation}")
-
-        eps = config.batch_norm_eps
-
-        scale = parameters.normalization.weight * torch.rsqrt(parameters.normalization.running_var + eps)
-
-        self.conv_weight = ttnn.from_torch(
-            tensor=parameters.convolution.weight * scale[:, None, None, None],
-            dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.conv_bias = ttnn.from_torch(
-            parameters.normalization.bias - parameters.normalization.running_mean * scale[None, None, None, :],
-            dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        shard_layout = (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if out_channels <= 256 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        )
-        output_layout = (
-            ttnn.ROW_MAJOR_LAYOUT if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else ttnn.TILE_LAYOUT
-        )
-
-        self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=dtype,
-            activation=self.activation,
-            output_layout=output_layout,
-            shard_layout=shard_layout,
-            reshard_if_not_optimal=True,
-        )
-
-    def __call__(
-        self, x: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
-    ) -> tuple[ttnn.Tensor, int, int]:
-        if not ttnn.is_tensor_storage_on_device(self.conv_weight):
-            conv_kwargs = {
-                "input_memory_config": x.memory_config(),
-                "input_layout": x.get_layout(),
-                "in_channels": self.in_channels,
-                "out_channels": self.out_channels,
-                "batch_size": batch_size,
-                "input_height": input_height,
-                "input_width": input_width,
-                "kernel_size": self.kernel_size,
-                "stride": self.stride,
-                "padding": self.padding,
-                "dilation": (1, 1),
-                "groups": 1,
-                "device": self.device,
-                "input_dtype": self.dtype,
-                "conv_config": self.conv_config,
-            }
-            self.conv_weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weight,
-                weights_format="OIHW",
-                has_bias=True,
-                **conv_kwargs,
-            )
-            self.conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias,
-                **conv_kwargs,
-            )
-            self.conv_weight = ttnn.to_device(
-                self.conv_weight,
-                self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self.conv_bias = ttnn.to_device(
-                self.conv_bias,
-                self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        x, (output_height, output_width) = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.conv_weight,
-            bias_tensor=self.conv_bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            return_output_dim=True,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=(1, 1),
-            groups=1,
-            conv_config=self.conv_config,
-        )
-
-        return x, output_height, output_width
-
-
 class TtRTDetrResNetEncoder:
     def __init__(self, config, parameters, device, dtype):
         depths = config.backbone_config.depths
@@ -322,9 +197,12 @@ class TtRTDetrResNetEncoder:
     ) -> list[tuple[ttnn.Tensor, int, int]]:
         feature_maps = []
 
-        for stage in self.stages:
+        x, input_height, input_width = self.stages[0](x, batch_size, input_height, input_width)
+
+        for stage in self.stages[1:]:
             x, input_height, input_width = stage(x, batch_size, input_height, input_width)
-            feature_maps.append((x, input_height, input_width))
+            x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            feature_maps.append((x_dram, input_height, input_width))
 
         return feature_maps
 
@@ -538,6 +416,132 @@ class TtRTDetrResNetShortcut:
 
         x, output_height, output_width = self.projection(
             x, batch_size=batch_size, input_height=input_height, input_width=input_width
+        )
+
+        return x, output_height, output_width
+
+
+class TtRTDetrResNetConvLayer:
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: tuple[int, int],
+        stride: tuple[int, int],
+        padding: tuple[int, int],
+        activation: str,
+    ):
+        self.device = device
+        self.dtype = dtype
+        self.config = config
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        if activation == "relu":
+            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        elif activation == "silu":
+            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+        elif activation == "identity":
+            self.activation = None
+        else:
+            raise ValueError(f"Unsupported activation {activation}")
+
+        eps = config.batch_norm_eps
+
+        scale = parameters.normalization.weight * torch.rsqrt(parameters.normalization.running_var + eps)
+
+        self.conv_weight = ttnn.from_torch(
+            tensor=parameters.convolution.weight * scale[:, None, None, None],
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.conv_bias = ttnn.from_torch(
+            parameters.normalization.bias - parameters.normalization.running_mean * scale[None, None, None, :],
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        shard_layout, output_layout = None, None
+        if out_channels <= 256:
+            shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            output_layout = ttnn.ROW_MAJOR_LAYOUT
+        else:
+            shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            output_layout = ttnn.TILE_LAYOUT
+
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=dtype,
+            activation=self.activation,
+            output_layout=output_layout,
+            shard_layout=shard_layout,
+            reshard_if_not_optimal=True,
+        )
+
+    def __call__(
+        self, x: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
+    ) -> tuple[ttnn.Tensor, int, int]:
+        if not ttnn.is_tensor_storage_on_device(self.conv_weight):
+            conv_kwargs = {
+                "input_memory_config": x.memory_config(),
+                "input_layout": x.get_layout(),
+                "in_channels": self.in_channels,
+                "out_channels": self.out_channels,
+                "batch_size": batch_size,
+                "input_height": input_height,
+                "input_width": input_width,
+                "kernel_size": self.kernel_size,
+                "stride": self.stride,
+                "padding": self.padding,
+                "dilation": (1, 1),
+                "groups": 1,
+                "device": self.device,
+                "input_dtype": self.dtype,
+                "conv_config": self.conv_config,
+            }
+            self.conv_weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.conv_weight,
+                weights_format="OIHW",
+                has_bias=True,
+                **conv_kwargs,
+            )
+            self.conv_bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv_bias,
+                **conv_kwargs,
+            )
+            self.conv_weight = ttnn.to_device(
+                self.conv_weight,
+                self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.conv_bias = ttnn.to_device(
+                self.conv_bias,
+                self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        x, (output_height, output_width) = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.conv_weight,
+            bias_tensor=self.conv_bias,
+            device=self.device,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            return_output_dim=True,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=(1, 1),
+            groups=1,
+            conv_config=self.conv_config,
         )
 
         return x, output_height, output_width

@@ -360,7 +360,6 @@ def run_rtdetr_multiscale_deformable_attention_test(device, model_name, model_cl
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-
     tt_module = TtRTDetrMultiscaleDeformableAttention(
         config=torch_rtdetr.config,
         parameters=parameters,
@@ -471,7 +470,6 @@ def test_rtdetr_decoder_layer(device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-
     tt_module = TtRTDetrDecoderLayer(
         config=torch_rtdetr.config,
         parameters=parameters,
@@ -686,15 +684,15 @@ def run_rtdetr_model_test(device, model_name, model_class):
     torch_topk_ind = torch.topk(torch_scores, torch_rtdetr.config.num_queries, dim=1).indices
     tt_topk_ind = ttnn.to_torch(tt_module.topk_ind).long().reshape(torch_topk_ind.shape)
 
-    # Decoder queries are an unordered set. Align queries selected by both implementations.
-    matches = torch_topk_ind[0, :, None] == tt_topk_ind[0, None, :]
-    torch_positions, tt_positions = torch.nonzero(matches, as_tuple=True)
-    logger.info(f"Shared top-k proposals: {len(torch_positions)}")
-
     tt_last_hidden_state = ttnn.to_torch(tt_last_hidden_state)
     tt_intermediate_hidden_states = ttnn.to_torch(tt_intermediate_hidden_states)
     tt_intermediate_logits = ttnn.to_torch(tt_intermediate_logits)
     tt_intermediate_reference_points = ttnn.to_torch(tt_intermediate_reference_points)
+
+    # Decoder queries are an unordered set. Align queries selected by both implementations.
+    matches = torch_topk_ind[0, :, None] == tt_topk_ind[0, None, :]
+    torch_positions, tt_positions = torch.nonzero(matches, as_tuple=True)
+    logger.info(f"Shared top-k proposals: {len(torch_positions)}")
 
     _, last_hidden_state_pcc = assert_with_pcc(
         torch_outputs.last_hidden_state[:, torch_positions],

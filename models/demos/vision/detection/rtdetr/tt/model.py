@@ -7,7 +7,15 @@ from models.demos.vision.detection.rtdetr.tt.encoder import TtRTDetrHybridEncode
 
 
 class TtRTDetrModel:
-    def __init__(self, config, parameters, device, dtype, input_height=640, input_width=640):
+    def __init__(
+        self,
+        config,
+        parameters,
+        device,
+        dtype,
+        input_height=640,
+        input_width=640,
+    ):
         self.device = device
         self.dtype = dtype
 
@@ -18,6 +26,7 @@ class TtRTDetrModel:
         self.decoder_in_channels = config.decoder_in_channels
         self.decoder_hidden_dim = config.d_model
         self.num_queries = config.num_queries
+        self.topk_k = ((self.num_queries + 15) // 16) * 16
         self.layer_norm_eps = config.layer_norm_eps
 
         self.encoder_input_proj = [
@@ -217,15 +226,7 @@ class TtRTDetrModel:
         # Get features from backbone
         features = self.backbone(pixel_values)
 
-        dram_features = []
-        for feature, height, width in features:
-            dram_feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(feature)
-            dram_features.append((dram_feature, height, width))
-
-        features = dram_features
-
-        # Project features for the encoder, move each projection to DRAM
+        # Project features for the encoder
         projected_features = []
         for (feature, height, width), projection in zip(features, self.encoder_input_proj):
             feature, height, width = projection(
@@ -234,8 +235,10 @@ class TtRTDetrModel:
                 input_height=height,
                 input_width=width,
             )
+            # move projections to DRAM
             dram_feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(feature)
+
             projected_features.append((dram_feature, height, width))
 
         # Encoder
@@ -294,22 +297,29 @@ class TtRTDetrModel:
         enc_outputs_coord_logits = ttnn.add(enc_outputs_coord_logits, self.anchors)
 
         enc_outputs_class_max = ttnn.max(enc_outputs_class, dim=-1, keepdim=False)
+        enc_outputs_class_max = ttnn.to_layout(
+            enc_outputs_class_max,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        _, topk_ind = ttnn.topk(enc_outputs_class_max, self.num_queries, dim=1)
-        topk_ind = ttnn.typecast(topk_ind, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        topk_ind = ttnn.experimental.topk_large_indices(enc_outputs_class_max, k=self.topk_k)
+        topk_ind = ttnn.slice(topk_ind, (0, 0), (topk_ind.shape[0], self.num_queries))
 
         self.topk_ind = topk_ind  # TODO: remove after debugging
 
-        reference_points_unact = ttnn.gather(
+        reference_points_unact = ttnn.embedding(
+            topk_ind,
             enc_outputs_coord_logits,
-            dim=1,
-            index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, enc_outputs_coord_logits.shape[-1])),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        target = ttnn.gather(
+        target = ttnn.embedding(
+            topk_ind,
             output_memory,
-            dim=1,
-            index=ttnn.repeat(ttnn.unsqueeze(topk_ind, dim=-1), (1, 1, output_memory.shape[-1])),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         (
