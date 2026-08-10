@@ -7,8 +7,6 @@ Mirrors ``DeepseekV4Attention`` in ``reference/deepseek_v4/modeling_deepseek_v4.
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
@@ -17,10 +15,12 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
-# Which write TtHCA._write_compressed uses. token_at_a_time is the only one that compiles no program
-# per chunk, which chunked prefill needs; the others stay reachable so the same test can measure them.
-# TEMPORARY: the losers go away once the choice is settled.
-COMPRESSED_WRITE = os.environ.get("HCA_COMPRESSED_WRITE", "token_at_a_time")
+
+def _tail_tile_buf(chunk_tokens: int, compress_rate: int) -> int:
+    """Rows the tail_tile write assembles at once: the up to TILE_SIZE-1 entries already in the open tile
+    plus one chunk's worth, rounded to whole tiles. 64 for a 4096-token chunk, 96 for 5120."""
+    width = -(-int(chunk_tokens) // compress_rate)
+    return -(-(ttnn.TILE_SIZE - 1 + width) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
@@ -283,9 +283,12 @@ class TtHCAState:
     that is what lets one compiled program serve every chunk. The counters say how much is real;
     the attention mask -infs the rest."""
 
-    def __init__(self, compressed_kv, sliding_carry):
+    def __init__(self, compressed_kv, sliding_carry, tail=None):
         self.compressed_kv = compressed_kv  # [B, 1, compressed_capacity, head_dim]
         self.sliding_carry = sliding_carry  # [B, 1, sliding_window, head_dim]
+        # Entries of the cache tile that is only partly filled, right-aligned so one uniform shift places
+        # them and the new entries together. Only the tail_tile write uses it.
+        self.tail = tail  # [B, 1, TILE_SIZE, head_dim] or None
         self.entry_count = 0
         self.kv_actual = 0
 
@@ -378,16 +381,20 @@ class TtHCA(_TtHCABase):
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
 
-    def alloc_state(self, max_seq_len: int, batch: int = 1) -> TtHCAState:
+    def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
         every chunk. ``max_seq_len`` is the same serving-capacity knob the runner resolves for the KV
         cache. Contents start zeroed and nothing is read before it is written -- the mask -infs
         everything past ``entry_count`` / ``kv_actual``, including chunk 0's empty carry."""
         entries = -(-int(max_seq_len) // self.compressor.compress_rate)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
+        # The write rewrites whole tiles from the tile boundary below entry_count, so the last write can
+        # reach past the entries themselves. ``chunk_tokens`` sizes that headroom; single-shot is one chunk.
+        capacity += _tail_tile_buf(chunk_tokens or max_seq_len, self.compressor.compress_rate)
         return TtHCAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+            tail=self._from_torch(torch.zeros(batch, 1, ttnn.TILE_SIZE, self.head_dim)),
         )
 
     @classmethod
@@ -631,47 +638,56 @@ class TtHCA(_TtHCABase):
         The whole padded width is written, not just the real entries: the width is then constant across
         chunks, and the attention mask -infs everything past ``total_entries`` anyway.
 
-        TEMPORARY: two candidates are kept side by side while their program-cache and device-perf cost is
-        measured; the loser goes away."""
+        Writing at the tile boundary below the append offset and supplying that tile's whole content is
+        what keeps the offset tile-aligned; ``state.tail`` carries the open tile's entries across chunks."""
         width = new_entries.shape[2]
         assert state.entry_count + width <= state.compressed_kv.shape[2], (
             f"compressed cache full: writing {width} entries at {state.entry_count} exceeds capacity "
             f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
         )
-        _COMPRESSED_WRITERS[COMPRESSED_WRITE](self, state, new_entries, width)
+        self._write_tail_tile(state, new_entries, width)
 
-    def _write_fill_cache(self, state, new_entries, width):
-        """The write as it stood before: one op, but only legal while the append offset happens to be
-        tile-aligned, i.e. chunks of compress_rate * TILE_SIZE tokens. Kept as the perf baseline the two
-        candidates are measured against."""
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, new_entries, 0, update_idx=state.entry_count)
+    def _write_tail_tile(self, state, new_entries, width):
+        """fill_cache keeps update_idx out of its program hash but needs it tile-aligned, so this writes at
+        the tile boundary below entry_count and supplies that tile's whole content -- the entries already
+        in it come from ``state.tail``, which carries them across chunks right-aligned.
 
-    def _write_slice(self, state, new_entries, width):
-        """``slice_write`` places rows at any offset, but folds the offset into its own program hash, so
-        this compiles one program per chunk."""
-        cache_rm = ttnn.untilize(state.compressed_kv)
-        entries_rm = ttnn.untilize(new_entries)
-        cache_rm = ttnn.experimental.slice_write(
-            entries_rm,
-            cache_rm,
-            [0, 0, state.entry_count, 0],
-            [1, 1, state.entry_count + width, self.head_dim],
-            [1, 1, 1, 1],
+        Right-aligning the tail is what makes one uniform shift enough: both it and ``new_entries`` then sit
+        in ``src`` under the same rule, src row m holding entry ``entry_count - TILE_SIZE + m``, so placing
+        the merged block is a single shift by ``TILE_SIZE - r_e``.
+
+        The shift is a matmul against a one-hot matrix rather than a slice: a slice folds its offset into
+        its program hash, a matmul carries it as data. A matmul also never addresses a row -- it sums over
+        all of them -- so a shift that crosses a tile boundary is not a special case."""
+        tile = ttnn.TILE_SIZE
+        f, r_e = divmod(state.entry_count, tile)
+        buf = -(-(tile - 1 + width) // tile) * tile
+
+        src = ttnn.concat([state.tail, new_entries], dim=2)  # [B, 1, tile + width, head_dim]
+        merged = ttnn.matmul(self._shift_to_tile(r_e, width, buf), src, memory_config=self.memory_config)
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
+        state.tail = ttnn.matmul(
+            self._take_open_tile(state.entry_count + width, f, buf), merged, memory_config=self.memory_config
         )
-        state.compressed_kv = ttnn.tilize(cache_rm)
 
-    def _write_token_at_a_time(self, state, new_entries, width):
-        """``update_cache_for_token_`` keeps update_index and batch_offset out of its program hash
-        (update_cache_device_operation.cpp:160), so a varying offset costs no program -- but it moves one
-        row per call, and batch_offset only reaches 32 rows of the input, so wide chunks also need the
-        input split into 32-row blocks."""
-        for base in range(0, width, ttnn.TILE_SIZE):
-            end = min(base + ttnn.TILE_SIZE, width)
-            block = ttnn.slice(new_entries, [0, 0, base, 0], [1, 1, end, self.head_dim])
-            for i in range(end - base):
-                ttnn.kv_cache.update_cache_for_token_(
-                    state.compressed_kv, block, state.entry_count + base + i, batch_offset=i
-                )
+    def _shift_to_tile(self, r_e, width, buf):
+        """One-hot [buf, tile + width]: merged row i takes src row i + (tile - r_e), for the r_e + width
+        rows that carry entries. The rest stay zero, so nothing reads past src."""
+        tile = ttnn.TILE_SIZE
+        rows = torch.arange(r_e + width)
+        p = torch.zeros(1, 1, buf, tile + width)
+        p[0, 0, rows, rows + (tile - r_e)] = 1.0
+        return self._from_torch(p)
+
+    def _take_open_tile(self, entry_count, f, buf):
+        """One-hot [tile, buf] lifting the next open tile out of merged, right-aligned. Rows before the
+        first live entry stay zero -- that is what lets the next chunk's shift skip them by construction
+        instead of masking them."""
+        tile = ttnn.TILE_SIZE
+        rows = torch.arange(tile - entry_count % tile, tile)
+        b = torch.zeros(1, 1, tile, buf)
+        b[0, 0, rows, rows + (entry_count - f * tile) - tile] = 1.0
+        return self._from_torch(b)
 
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
@@ -788,10 +804,3 @@ class TtHCA(_TtHCABase):
         state.kv_actual += real_len
         state.sliding_carry = next_carry
         return self._o_proj(attn)
-
-
-_COMPRESSED_WRITERS = {
-    "fill_cache": TtHCA._write_fill_cache,
-    "slice_write": TtHCA._write_slice,
-    "token_at_a_time": TtHCA._write_token_at_a_time,
-}
