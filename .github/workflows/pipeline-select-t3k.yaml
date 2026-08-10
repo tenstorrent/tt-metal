@@ -31,7 +31,6 @@ on:
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
           - llama3.2-90b
-          - mistral
           - mixtral
           - grok
           - unet shallow
@@ -49,11 +48,9 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sentence_bert
           - sd35_large
           - flux1-dev
           - motif
-          - mistral
           - mixtral
           - whisper
           - qwen3
@@ -69,7 +66,6 @@ on:
           - disabled
           - all
           - resnet50
-          - sentence_bert
           - stable_diffusion_35_large
           - mochi
           - flux1-dev

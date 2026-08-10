@@ -4558,6 +4558,60 @@ class TopKGolden:
 
 
 @register_golden
+class GeneralizedMoeGateGolden:
+    """Golden generator for the generalized_moe_gate LLK.
+
+    The gate ranks experts by the score+bias sort key but emits the unbiased payload score of the
+    winners, normalized over the kept ranks and scaled. Grouped keeps the four column-pair groups
+    {2g, 2g+1} with the largest top-2 key sum, takes the top 8 of their 128 members, and pins topk
+    to 8 with linear output.
+
+    Args:
+        keys, payload, ids: [16, 16] DEST faces of the sort key, the emitted score and the id.
+        topk: how many ranks survive; ranks beyond it emit weight 0 and id 0.
+        eps: added to the normalization sum before the reciprocal. scale multiplies the reciprocal.
+    Returns:
+        float tensor [2, 8], the weight and id per rank, descending by key. One tensor, as the
+        golden cache requires.
+    """
+
+    def __call__(
+        self,
+        keys,
+        payload,
+        ids,
+        topk=8,
+        output_softmax=False,
+        eps=0.0,
+        scale=1.0,
+        grouped=False,
+    ):
+        keys = keys.reshape(-1).to(torch.float32)
+        payload = payload.reshape(-1).to(torch.float32)
+        ids = ids.reshape(-1).to(torch.float32)
+
+        candidates = torch.arange(keys.numel())
+        if grouped:
+            groups = candidates.reshape(16, 16).t().reshape(8, 32)
+            top2 = keys[groups].sort(dim=-1, descending=True).values[:, :2].sum(dim=-1)
+            candidates = groups[top2.argsort(descending=True)[:4]].reshape(-1)
+            topk, output_softmax = 8, False
+
+        order = candidates[keys[candidates].argsort(descending=True)[:8]]
+        weights = payload[order]
+        if output_softmax:
+            # The kernel subtracts rank 0's payload before the exp, not the largest payload.
+            # Softmax is shift invariant so the normalized result is the same either way.
+            weights = torch.exp(weights - weights[0])
+        weights[topk:] = 0.0
+
+        weights = weights * (scale / (weights[:topk].sum() + eps))
+        selected_ids = ids[order]
+        selected_ids[topk:] = 0.0
+        return torch.stack([weights, selected_ids])
+
+
+@register_golden
 class TopKXLGolden:
     """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
 
@@ -4688,3 +4742,207 @@ class ScalarBinopGolden:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
         return result.to(format_dict[data_format]).flatten()
+
+
+def truncate_to_bfloat16(values: torch.Tensor) -> torch.Tensor:
+    """SFPSTORE into a 16-bit Dest truncates rather than rounds.
+
+    Clearing the low 16 bits of the IEEE-754 pattern drops mantissa bits without
+    touching sign or exponent, i.e. moves toward zero for either sign.
+    """
+    return (
+        (values.to(torch.float32).contiguous().view(torch.int32) & ~0xFFFF)
+        .view(torch.float32)
+        .clone()
+    )
+
+
+def round_to_dest_width(
+    values: torch.Tensor, dest_acc: DestAccumulation
+) -> torch.Tensor:
+    """A value as it sits in Dest, at the width dest_acc selects."""
+    if dest_acc == DestAccumulation.Yes:
+        return values.to(torch.float32)
+    return values.to(torch.bfloat16).to(torch.float32)
+
+
+@register_golden
+class SoftmaxKGolden:
+    """Golden for the softmax_k SFPU entry (experimental/ckernel_sfpu_softmax_k.h).
+
+    Per-row softmax over the 16 columns of face 0's first row band, with the row
+    maximum supplied by the caller instead of being reduced on the fly:
+
+        out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
+        out[r][c] = 0                                                        c >= k
+
+    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
+    code from |even-column value| before subtracting the max and only re-enables all
+    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
+    reciprocal. Rows outside the processed band come back untouched.
+
+    The kernel round-trips through Dest three times -- x - max, exp(), and the
+    normalized result -- so the golden quantizes at each of those stores to the width
+    dest_acc selects. Plain SFPSTORE truncates; only the exp kernels round, via the
+    SFP_STOCH_RND(RND_EVEN, FP32_TO_FP16B) they do before their own store.
+    """
+
+    def __call__(self, input_tile, logits, k, dest_acc, rows=4, face_dim=16):
+        golden = input_tile.to(torch.float32).clone()
+
+        def stored(values):
+            """A plain SFPSTORE: truncating on a 16-bit Dest, exact on a 32-bit one."""
+            if dest_acc == DestAccumulation.Yes:
+                return values.to(torch.float32)
+            return truncate_to_bfloat16(values)
+
+        for row in range(rows):
+            shifted = stored(logits[row] - logits[row].max())
+            exponentials = round_to_dest_width(torch.exp(shifted), dest_acc)
+            golden[row, :k] = stored(exponentials / exponentials.sum())
+            golden[row, k:face_dim] = 0.0
+        return golden
+
+
+@register_golden
+class MoeGateTopkGolden:
+    """Golden for the generic MoE-gate top-k SFPU entry
+    (experimental/ckernel_sfpu_generic_moe_gate_topk.h).
+
+    The kernel sorts on the *biased* keys but carries the raw score as the payload, so
+    the winners are chosen by `sort_keys` and the expected scores are looked up from
+    `scores` by the winning id. That split is the whole point: reporting the key instead
+    of the score, or pairing a score with the wrong id, both show up here.
+
+    With normalize the kernel divides each winner score by the sum of the winners' raw
+    scores (plus eps) and multiplies by scale; without it the scores pass through.
+
+    Returns (winner_ids, expected_scores) where winner_ids is in descending-key order
+    and expected_scores[i] corresponds to winner_ids[i]. Callers that only know the
+    winners as an unordered set should reorder via `scores_for_ids`.
+    """
+
+    def __call__(
+        self,
+        sort_keys,
+        scores,
+        num_winners: int,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        winner_ids = torch.argsort(sort_keys, descending=True)[:num_winners].tolist()
+        return winner_ids, self.scores_for_ids(
+            winner_ids, winner_ids, scores, normalize, eps, scale
+        )
+
+    def scores_for_ids(
+        self,
+        ids,
+        winner_ids,
+        scores,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        """Expected scores for `ids`, normalized over the `winner_ids` set.
+
+        The normalization denominator is fixed by the winner set, not by `ids`, so a
+        caller can ask for the scores in the order the device returned them while
+        still dividing by the same total.
+        """
+        factor = 1.0
+        if normalize:
+            total = scores[winner_ids].to(torch.float32).sum()
+            factor = scale / (total + eps)
+        return torch.tensor(
+            [scores[i].item() * factor for i in ids], dtype=torch.float32
+        )
+
+
+@register_golden
+class SdpaExpUnclampedGolden:
+    """Golden for the upper-unclamped exp helpers
+    (experimental/ckernel_sfpu_sdpa_exp_unclamped.h).
+
+    The kernel is the accurate 21f exp with the upper input clamp removed, so across
+    the domain its caller uses -- val <= 0, and anywhere well below the clamp point
+    at val ~= 88.7 -- it is just exp(val * scale). The scale arrives as a *bfloat16*
+    bit pattern, which is what sfpi::sFloat16b() consumes, not an fp32 one.
+
+    The kernel static_asserts !is_fp32_dest_acc_en and then does
+    `convert<vFloat16b>(y, NearestEven)` unconditionally before the store, so the value
+    that reaches Dest is always bf16 regardless of the pack format -- hence the
+    round_to_dest_width(DestAccumulation.No) below. The pack format only decides
+    whether that value is converted a second time (a no-op) on the way to L1.
+    """
+
+    def __call__(self, operand, scale_bits: int, data_format: DataFormat):
+        scale = (
+            torch.tensor([scale_bits << 16], dtype=torch.int32)
+            .view(torch.float32)
+            .item()
+        )
+        result = torch.exp(operand.flatten().to(torch.float32) * scale)
+        return round_to_dest_width(result, DestAccumulation.No).to(
+            format_dict[data_format]
+        )
+
+
+@register_golden
+class SamplingGolden:
+    """Golden for the sampling SFPU helpers
+    (experimental/llk_sfpu/ckernel_sfpu_sampling.h).
+
+    Element-wise reference per op, followed by the store each one actually performs.
+    SFPSTORE into a 16-bit Dest truncates, and only recip_scalar compensates for that
+    (convert<vFloat16b>(Nearest), and only when !(DST_ACCUM_MODE || APPROX)); with a
+    32-bit Dest nothing rounds at all. Callers pass the scalar operand as a raw fp32
+    bit pattern so it decodes exactly the way Converter::as_float does on device.
+    """
+
+    # The only helper that converts before storing, so the only one that rounds
+    # rather than truncates on a 16-bit Dest.
+    ROUND_TO_NEAREST_OPS = {"recip_scalar"}
+
+    def __call__(
+        self,
+        op: str,
+        operand_a,
+        operand_b,
+        scalar_bits: int,
+        dest_acc: DestAccumulation,
+    ):
+        scalar = struct.unpack("<f", struct.pack("<I", scalar_bits & 0xFFFFFFFF))[0]
+        a = operand_a.to(torch.float32)
+        b = operand_b.to(torch.float32)
+
+        if op == "recip_scalar":
+            result = 1.0 / a
+        elif op == "clamp_max_scalar":
+            result = torch.minimum(a, torch.full_like(a, scalar))
+        elif op == "mul_unary_scalar":
+            result = a * scalar
+        elif op == "le":
+            result = (a <= b).to(torch.float32)
+        elif op == "lt":
+            result = (a < b).to(torch.float32)
+        elif op == "ge":
+            result = (a >= b).to(torch.float32)
+        elif op == "add":
+            result = a + b
+        elif op == "sub":
+            result = a - b
+        elif op == "mul":
+            result = a * b
+        else:
+            raise ValueError(f"Unsupported sampling operation: {op}")
+
+        return self._store(result, op, dest_acc)
+
+    def _store(self, values, op: str, dest_acc: DestAccumulation):
+        if dest_acc == DestAccumulation.Yes:
+            return values.to(torch.float32)  # the whole fp32 LReg lands in Dest
+        if op in self.ROUND_TO_NEAREST_OPS:
+            return values.to(torch.bfloat16).to(torch.float32)
+        return truncate_to_bfloat16(values)

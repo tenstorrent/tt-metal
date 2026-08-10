@@ -85,6 +85,22 @@ bool can_use_sharded_optimized_factories(
     if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
         return false;  // ND_SHARDED output should take the default factory.
     }
+    // [#48552] TilizeMultiCoreShardedProgramFactory borrows a single-push DFB over the resident shard, and that
+    // borrowed-DFB read path delivers correct data for only the FIRST 64 tiles/shard, then repeats -- a fixed
+    // 64-entry limit in the borrowed-DFB credit/tile-counter path (isolated repro:
+    // test_tilize_width_quasar.py::test_quasar_tilize_sharded; PCC == 64/num_tiles_per_shard, exact). Route
+    // HEIGHT_SHARDED shards with > 64 tiles to the NON-borrowed TilizeMultiCoreDefaultProgramFactory (real
+    // per-block stick reader, per-block DFB -> no 64 cap), which tilizes correctly at any size. WIDTH_SHARDED
+    // uses a different factory and is left unchanged (untested against this bug). Remove once the DFB team
+    // widens the 64-entry field. tiles-per-shard is layout-independent: shard_h * shard_w / TILE_HW.
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& in_shard_shape = input_tensor.shard_spec().value().shape;
+        const uint32_t in_tiles_per_shard =
+            (in_shard_shape[0] * in_shard_shape[1]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        if (in_tiles_per_shard > 64) {
+            return false;
+        }
+    }
     return true;
 }
 }  // namespace
@@ -238,6 +254,7 @@ ttnn::Tensor tilize(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
+    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -246,6 +263,7 @@ ttnn::Tensor tilize(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
+            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,
