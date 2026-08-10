@@ -47,6 +47,27 @@ inline uint32_t align_staging_size_bytes(uint32_t size_bytes) {
     return (size_bytes + alignment - 1) & ~(alignment - 1);
 }
 
+// Allocate a HEIGHT_SHARDED L1 buffer matching CreateCrossNodeDFB's data-ring layout.
+// Must use the same device pointer passed to CreateCrossNodeDFB so L1 allocation is
+// consistent with the runtime-allocated config buffer (esp. on MeshDevice).
+inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
+    IDevice* device,
+    const CoreRangeSet& all_cores,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    BufferType buffer_type = BufferType::L1) {
+    const uint32_t ring_size = entry_size * num_entries;
+    const uint32_t num_cores = all_cores.num_cores();
+    return CreateBuffer(ShardedBufferConfig{
+        .device = device,
+        .size = ring_size * num_cores,
+        .page_size = ring_size,
+        .buffer_type = buffer_type,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
+    });
+}
+
 inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
     if (write_primitive == 1) {
         return static_cast<uint32_t>(SenderDataPattern::StridedPerReceiver);

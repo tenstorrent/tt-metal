@@ -38,12 +38,21 @@ public:
         uint32_t num_entries,
         BufferType buffer_type = BufferType::L1);
 
+    // Borrowed-data constructor: uses `data_buffer` for the data ring (must outlive
+    // this object via shared ownership) and still allocates the config sideband.
+    CrossNodeDFB(
+        IDevice* device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+        uint32_t entry_size,
+        uint32_t num_entries,
+        Buffer& data_buffer);
+
     CrossNodeDFB(const CrossNodeDFB&) = default;
     CrossNodeDFB& operator=(const CrossNodeDFB&) = default;
     CrossNodeDFB(CrossNodeDFB&&) noexcept = default;
     CrossNodeDFB& operator=(CrossNodeDFB&&) noexcept = default;
 
-    // The data ring (sharded over all receiver cores, one ring FIFO per receiver).
+    // The data ring (sharded over all_cores, one ring FIFO page per core; receivers use theirs).
     const Buffer& dfb_buffer() const;
 
     // The config sideband (sharded over all_cores = senders ∪ receivers, one page per core).
@@ -70,6 +79,8 @@ public:
 
 private:
     void setup_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void setup_buffers_with_borrowed_data(Buffer& data_buffer, uint32_t max_num_receivers_per_sender);
+    void allocate_config_and_write_pages(uint32_t max_num_receivers_per_sender, BufferType config_buffer_type);
 
     distributed::AnyBuffer dfb_buffer_;
     distributed::AnyBuffer config_buffer_;
@@ -91,7 +102,7 @@ private:
  * @param sender_receiver_mapping M (sender, receivers) pairs; disjoint receiver sets.
  * @param entry_size Size of one entry in bytes; must be a multiple of L1_ALIGNMENT.
  * @param num_entries Number of entries per receiver ring.
- * @param buffer_type L1 buffer type (default L1).
+ * @param buffer_type L1 or L1_SMALL (default L1).
  */
 CrossNodeDFB CreateCrossNodeDFB(
     IDevice* device,
@@ -99,6 +110,21 @@ CrossNodeDFB CreateCrossNodeDFB(
     uint32_t entry_size,
     uint32_t num_entries,
     BufferType buffer_type = BufferType::L1);
+
+/**
+ * @brief Creates a CrossNodeDFB backed by a user-supplied sharded L1 data buffer.
+ *
+ * Config is still runtime-allocated. `data_buffer` must match the shard layout Create
+ * would allocate (HEIGHT_SHARDED over senders∪receivers, page_size = entry_size *
+ * num_entries). The buffer must remain alive for the CrossNodeDFB lifetime (keep a
+ * shared_ptr / AnyBuffer in scope).
+ */
+CrossNodeDFB CreateCrossNodeDFB(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    Buffer& data_buffer);
 
 /**
  * @brief Attach a CrossNodeDFB to a program on the specified cores.

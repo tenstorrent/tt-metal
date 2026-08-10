@@ -91,39 +91,66 @@ CrossNodeDFB::CrossNodeDFB(
     this->setup_buffers(buffer_type, max_num_receivers_per_sender);
 }
 
-void CrossNodeDFB::setup_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender) {
+CrossNodeDFB::CrossNodeDFB(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    Buffer& data_buffer) :
+    device_(device),
+    sender_receiver_mapping_(sender_receiver_mapping),
+    entry_size_(entry_size),
+    num_entries_(num_entries) {
+    uint32_t max_num_receivers_per_sender = 0;
+    initialize_cross_node_dfb(
+        device, sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender);
+
+    this->setup_buffers_with_borrowed_data(data_buffer, max_num_receivers_per_sender);
+}
+
+namespace {
+
+void validate_entry_geometry(IDevice* device, uint32_t entry_size, uint32_t num_entries) {
+    const auto context_id = extract_context_id(device);
+    const auto& hal = MetalContext::instance(context_id).hal();
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+
+    TT_FATAL(entry_size > 0, "entry_size must be > 0");
     TT_FATAL(
-        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        entry_size % l1_alignment == 0,
+        "entry_size {} must be a multiple of L1_ALIGNMENT {}",
+        entry_size,
+        l1_alignment);
+    TT_FATAL(num_entries > 0, "num_entries must be > 0");
+}
+
+bool is_compatible_borrowed_device(IDevice* expected, IDevice* buffer_device) {
+    if (expected == buffer_device) {
+        return true;
+    }
+    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(expected)) {
+        for (IDevice* local : mesh->get_devices()) {
+            if (local == buffer_device) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+void CrossNodeDFB::allocate_config_and_write_pages(
+    uint32_t max_num_receivers_per_sender, BufferType config_buffer_type) {
+    TT_FATAL(
+        config_buffer_type == BufferType::L1 || config_buffer_type == BufferType::L1_SMALL,
         "CrossNodeDFB can only use L1 buffer types");
 
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-
-    TT_FATAL(entry_size_ > 0, "entry_size must be > 0");
-    TT_FATAL(
-        entry_size_ % l1_alignment == 0,
-        "entry_size {} must be a multiple of L1_ALIGNMENT {}",
-        entry_size_,
-        l1_alignment);
-    TT_FATAL(num_entries_ > 0, "num_entries must be > 0");
-
     const uint32_t num_all_cores = all_cores_.num_cores();
-
-    // --- Data ring buffer (sharded over all cores) ---
-    // One ring FIFO per receiver: size = entry_size * num_entries.
     const uint32_t ring_size = entry_size_ * num_entries_;
-    auto shard_params_data =
-        ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
-    ShardedBufferConfig data_shard_cfg = {
-        .device = device_,
-        .size = ring_size * num_all_cores,
-        .page_size = ring_size,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_params_data),
-    };
-    dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
 
     // --- Config sideband buffer (sharded over all_cores = senders ∪ receivers) ---
     // Config page layout per core (words) — shared with future GlobalDFB header:
@@ -156,7 +183,7 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type, uint32_t max_num_receiv
         .device = device_,
         .size = config_page_size * num_all_cores,
         .page_size = config_page_size,
-        .buffer_type = buffer_type,
+        .buffer_type = config_buffer_type,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_params_cfg),
     };
@@ -228,6 +255,69 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type, uint32_t max_num_receiv
     }
 }
 
+void CrossNodeDFB::setup_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender) {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "CrossNodeDFB can only use L1 buffer types");
+    validate_entry_geometry(device_, entry_size_, num_entries_);
+
+    const uint32_t num_all_cores = all_cores_.num_cores();
+    const uint32_t ring_size = entry_size_ * num_entries_;
+    auto shard_params_data =
+        ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
+    ShardedBufferConfig data_shard_cfg = {
+        .device = device_,
+        .size = ring_size * num_all_cores,
+        .page_size = ring_size,
+        .buffer_type = buffer_type,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(shard_params_data),
+    };
+    dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
+    allocate_config_and_write_pages(max_num_receivers_per_sender, buffer_type);
+}
+
+void CrossNodeDFB::setup_buffers_with_borrowed_data(Buffer& data_buffer, uint32_t max_num_receivers_per_sender) {
+    validate_entry_geometry(device_, entry_size_, num_entries_);
+
+    const BufferType buffer_type = data_buffer.buffer_type();
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "Borrowed CrossNodeDFB data buffer must be L1 or L1_SMALL, got {}",
+        static_cast<int>(buffer_type));
+    TT_FATAL(
+        is_compatible_borrowed_device(device_, data_buffer.device()),
+        "Borrowed CrossNodeDFB data buffer device does not match Create device");
+    TT_FATAL(
+        data_buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Borrowed CrossNodeDFB data buffer must be HEIGHT_SHARDED");
+    TT_FATAL(data_buffer.has_shard_spec(), "Borrowed CrossNodeDFB data buffer must have a shard spec");
+
+    const uint32_t ring_size = entry_size_ * num_entries_;
+    const uint32_t num_all_cores = all_cores_.num_cores();
+    TT_FATAL(
+        data_buffer.page_size() == ring_size,
+        "Borrowed CrossNodeDFB data buffer page_size {} must equal entry_size * num_entries ({})",
+        data_buffer.page_size(),
+        ring_size);
+
+    const auto shard_spec = data_buffer.shard_spec();
+    TT_FATAL(
+        shard_spec.grid() == all_cores_,
+        "Borrowed CrossNodeDFB data buffer shard grid {} must match CrossNode all_cores {}",
+        shard_spec.grid().str(),
+        all_cores_.str());
+    TT_FATAL(
+        data_buffer.size() == static_cast<DeviceAddr>(ring_size) * num_all_cores,
+        "Borrowed CrossNodeDFB data buffer size {} must equal page_size * num_all_cores ({})",
+        data_buffer.size(),
+        static_cast<DeviceAddr>(ring_size) * num_all_cores);
+
+    dfb_buffer_ = distributed::AnyBuffer::borrow(data_buffer.shared_from_this());
+    // Config uses the same L1 bank class as the borrowed data buffer.
+    allocate_config_and_write_pages(max_num_receivers_per_sender, buffer_type);
+}
+
 // Accessors -------------------------------------------------------------------
 
 const Buffer& CrossNodeDFB::dfb_buffer() const { return *dfb_buffer_.get_buffer(); }
@@ -254,6 +344,15 @@ CrossNodeDFB CreateCrossNodeDFB(
     uint32_t num_entries,
     BufferType buffer_type) {
     return CrossNodeDFB(device, sender_receiver_mapping, entry_size, num_entries, buffer_type);
+}
+
+CrossNodeDFB CreateCrossNodeDFB(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    Buffer& data_buffer) {
+    return CrossNodeDFB(device, sender_receiver_mapping, entry_size, num_entries, data_buffer);
 }
 
 uint8_t AttachCrossNodeDFB(
