@@ -85,15 +85,19 @@ inline void finish_mix_uint32_mul24() {
     TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
 }
 
+template <bool NORMALIZE_PER_ROW>
 inline void rand_row() {
     finish_mix_uint32_mul24();
     // SFPCAST converts the low 31 bits as a sign-magnitude integer and rounds
-    // directly to FP32. Clear its arbitrary sign, then normalise by 2^-31.
-    // This gives a correctly rounded 31-bit uniform grid, including both
-    // mantissa parities and the half-width upper-bound rounding basin.
+    // directly to FP32. Clear its arbitrary sign; normalization by 2^-31 is
+    // applied here or folded exactly into scale. This gives a correctly
+    // rounded 31-bit uniform grid, including both mantissa parities and the
+    // half-width upper-bound rounding basin.
     TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPSETSGN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpsetsgn_mod1_arg_imm);
-    TTI_SFPMULI(one_over_2_pow_31_bf16, p_sfpu::LREG6, 0);
+    if constexpr (NORMALIZE_PER_ROW) {
+        TTI_SFPMULI(one_over_2_pow_31_bf16, p_sfpu::LREG6, 0);
+    }
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
     // Prime the following row's mixer in SFPMAD's dependency slot. This reads
@@ -103,8 +107,36 @@ inline void rand_row() {
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
 }
 
+template <bool NORMALIZE_PER_ROW>
+inline void rand_rows() {
+    constexpr std::uint32_t row_instruction_count = NORMALIZE_PER_ROW ? 17 : 16;
+
+    // One row fits in the 32-entry replay buffer. Record and execute it once,
+    // then replay it for the remaining rows without scalar loop-control gaps.
+    TTI_REPLAY(0, row_instruction_count, 1, 1);
+    rand_row<NORMALIZE_PER_ROW>();
+#pragma GCC unroll 7
+    for (int d = 1; d < 8; d++) {
+        TTI_REPLAY(0, row_instruction_count, 0, 0);
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
+    constexpr std::uint32_t exponent_shift = 23;
+    constexpr std::uint32_t exponent_mask = 0xFF;
+    constexpr std::uint32_t normalization_exponent = 31;
+    const std::uint32_t scale_exponent = (scale >> exponent_shift) & exponent_mask;
+    const bool normalize_per_row = scale_exponent <= normalization_exponent || scale_exponent == exponent_mask;
+
+    // For finite scales >= 2^-95, fold the exact power-of-two normalization
+    // into scale once per face. Retain the per-row multiply when the adjusted
+    // scale would be subnormal, or for non-finite inputs, preserving the
+    // existing rand_tile behavior in both cases.
+    if (!normalize_per_row) {
+        scale -= normalization_exponent << exponent_shift;
+    }
+
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, scale >> 16);
@@ -118,14 +150,10 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_mul24();
 
-    // One row fits in the 32-entry replay buffer. Record and execute it once,
-    // then replay it for the remaining rows without scalar loop-control gaps.
-    constexpr std::uint32_t row_instruction_count = 17;
-    TTI_REPLAY(0, row_instruction_count, 1, 1);
-    rand_row();
-#pragma GCC unroll 7
-    for (int d = 1; d < 8; d++) {
-        TTI_REPLAY(0, row_instruction_count, 0, 0);
+    if (normalize_per_row) {
+        rand_rows<true>();
+    } else {
+        rand_rows<false>();
     }
 }
 }  // namespace ckernel::sfpu

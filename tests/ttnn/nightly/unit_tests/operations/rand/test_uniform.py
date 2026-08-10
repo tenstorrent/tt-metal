@@ -214,6 +214,19 @@ def test_uniform_respects_narrow_fp32_range(device):
     assert torch.unique(data).numel() > 1
 
 
+def test_uniform_preserves_fp32_range_below_fold_threshold(device):
+    low, high = 0.0, 2.0**-95
+    npu = _zeros(device, (256, 256), ttnn.float32)
+
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
+    data = ttnn.to_torch(npu).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
 @pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
 def test_uniform_respects_bfloat16_ranges(device, low, high):
     npu = _zeros(device, (256, 256), ttnn.bfloat16)

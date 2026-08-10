@@ -18,8 +18,9 @@ namespace ckernel {
  * That is each element is overwritten with a randomly generated float.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
- * This operation records replay slots 0-17 on Blackhole and Wormhole. Callers
- * sharing the replay buffer with other SFPU operations must reinitialize it as needed.
+ * This operation records replay slots 0-15 when scale is finite and at least
+ * 2^-95, and slots 0-16 otherwise. Callers sharing the replay buffer with other
+ * SFPU operations must reinitialize it as needed.
  * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
  * restore those programmable constants before another SFPU operation relies on them.
  *
