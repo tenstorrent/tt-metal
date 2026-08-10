@@ -276,8 +276,9 @@ an all-zero short-circuit. `dst-golden` is not strictly stronger, it is differen
 per-model layout branch, needs the golden on disk, and its PCC is undefined over the pad tail. `both` is
 the honest answer when you want transport and model correctness reported separately.
 
-Both feed the **exit code**, alongside the source `check_pcc`: a driver run that migrates and exits 0 has
-verified the destination unless you passed `off`.
+For loopback migrations, both feed the **exit code**, alongside the source `check_pcc`: a driver run that
+migrates and exits 0 has verified the destination unless you passed `off`. Cross-endpoint verification is
+skipped as described below.
 
 Three limits are worth internalising before reading a PASS:
 
