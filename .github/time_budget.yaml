@@ -412,7 +412,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 270
+    bh_quietbox_2: 110
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30
