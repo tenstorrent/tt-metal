@@ -101,7 +101,7 @@ void kernel_main() {
     constexpr uint32_t stats_tiles = 2;
     constexpr uint32_t dfb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
-    binary_op_init_common(init_in_dfb, dfb_scaler_global, init_out_dfb);
+    compute_kernel_hw_startup(init_in_dfb, dfb_scaler_global, init_out_dfb);
     DataflowBuffer dfb_xmm_obj(dfb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
@@ -166,7 +166,7 @@ void kernel_main() {
             dfb_ex_sqr_obj.reserve_back(1);
             dfb_stats_reduced_obj.wait_front(1);
             tile_regs_acquire();
-            mul_tiles_init(dfb_stats_reduced, dfb_stats_reduced);
+            mul_init(dfb_stats_reduced, dfb_stats_reduced);
             mul_tiles(dfb_stats_reduced, dfb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
             tile_regs_commit();
             tile_regs_wait();
@@ -182,7 +182,7 @@ void kernel_main() {
             dfb_ex_sqr_obj.wait_front(1);
             dfb_var_obj.reserve_back(1);
             tile_regs_acquire();
-            sub_tiles_init(dfb_ex2, dfb_ex_sqr);
+            sub_init(dfb_ex2, dfb_ex_sqr);
             sub_tiles(dfb_ex2, dfb_ex_sqr, 0, 0, dst0);
             tile_regs_commit();
             tile_regs_wait();
@@ -200,7 +200,7 @@ void kernel_main() {
             dfb_eps_obj.wait_front(1);
             dfb_stats_reduced_obj.reserve_back(1);
 
-            add_tiles_init(dfb_var, dfb_eps);
+            add_init(dfb_var, dfb_eps);
             tile_regs_acquire();
             add_tiles(dfb_var, dfb_eps, 0, 0, dst0);
             tile_regs_wait();
@@ -221,7 +221,7 @@ void kernel_main() {
     reconfig_data_format(dfb_in0, dfb_ex_global);
     pack_reconfig_data_format(dfb_xmm);
     index_h_offset = 0;
-    sub_bcast_cols_init_short(dfb_in0, dfb_ex_global);
+    sub_bcast_cols_init(dfb_in0, dfb_ex_global);
     dfb_xmm_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -254,7 +254,7 @@ void kernel_main() {
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
     reconfig_data_format(dfb_xmm, dfb_ex_global);
-    mul_bcast_cols_init_short(dfb_xmm, dfb_ex_global);
+    mul_bcast_cols_init(dfb_xmm, dfb_ex_global);
     index_h_offset = 0;
     dfb_im_obj.reserve_back(num_tiles_per_block);
 #ifndef RMSNORM
@@ -292,7 +292,7 @@ void kernel_main() {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out);
         }
-        mul_bcast_rows_init_short(dfb_im, dfb_gamma);
+        mul_bcast_rows_init(dfb_im, dfb_gamma);
         dfb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
         dfb_outgamma_obj.reserve_back(num_tiles_per_block);
@@ -322,7 +322,7 @@ void kernel_main() {
         dfb_outgamma_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_fusion, dfb_beta);
         pack_reconfig_data_format(dfb_out);
-        add_bcast_rows_init_short(dfb_fusion, dfb_beta);
+        add_bcast_rows_init(dfb_fusion, dfb_beta);
         dfb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
         dfb_out_obj.reserve_back(num_tiles_per_block);

@@ -83,8 +83,28 @@ void report_result(const string& target_name, string_view op, const string& cmd,
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
+    if (!ec) {
+        return;
+    }
+    // Fall back to copying, but use the non-throwing overload so a failure is
+    // reported with both paths and both error codes instead of escaping as a bare
+    // std::filesystem_error.
+    //
+    // Note we deliberately do NOT treat an already-existing `link` as reusable, even
+    // when it is already equivalent to `target`. Temp object names are per-process
+    // (see FileRenamer::generate_temp_path) and the caller removes them once linking
+    // finishes, so adopting another process's temp file would let that process delete
+    // it while our LTO link still has it open.
+    const std::error_code link_ec = ec;
+    ec.clear();
+    std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
+        TT_THROW(
+            "Failed to hard link or copy {} to {}: copy failed with '{}' (hard link failed with '{}')",
+            target.string(),
+            link.string(),
+            ec.message(),
+            link_ec.message());
     }
 }
 
@@ -148,8 +168,17 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-        "-flto=auto -ffast-math "
+        // Use C++17, plus some specific C++20 features we've enabled
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        // Ban dynamic initializations, via a check we've added
+        "-ftt-no-dyninit "
+        // Rely on Link Time Optimization (removes globally unreachable code)
+        "-flto=auto "
+        // Fast math allows non-IEEE compliant optimizations ...
+        "-ffast-math "
+        // ... but we require these IEEE behaviors
+        "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+        // No exceptions or rtti emission, and no using cxa-atexit for cleanups
         "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
@@ -163,11 +192,14 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
+        // Extra warnings and make them fatal
         "-Wall -Werror "
+        // But don't die for these warnings
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
-        "-Wno-error=unused-but-set-variable -Wno-unused-variable "
-        "-Wno-unused-function ";
+        "-Wno-error=unused-but-set-variable "
+        // And don't detect these issues
+        "-Wno-unused-variable -Wno-unused-function ";
 
     // Defines
     this->defines_ = "";
@@ -242,6 +274,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_kernels_early_return()) {
         this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
+    }
+
+    if (rtoptions.get_measure_dfb_init_time_enabled()) {
+        this->defines_ += "-DDFB_INIT_TIMING_ENABLED ";
     }
 
     if (rtoptions.get_watcher_debug_delay()) {

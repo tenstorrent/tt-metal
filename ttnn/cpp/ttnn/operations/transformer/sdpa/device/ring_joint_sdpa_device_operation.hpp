@@ -27,12 +27,9 @@ struct RingJointSDPADeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
-    // Explicit override (rather than the default attribute-reflection hash): the trace-safe metadata path
-    // must key distinct programs on tensor_args.has_metadata() and on the per-layer (kv_cache_num_layers,
-    // kv_cache_layer_idx) that are baked into the readers' create-time args and NOT re-patched per dispatch.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
@@ -44,8 +41,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -64,9 +64,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
     std::optional<uint32_t> latent_v_head_dim = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::prim

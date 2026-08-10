@@ -47,6 +47,12 @@ namespace {
 // (different kernels like reader/writer/compute can legitimately run on the same cores)
 std::vector<CoreRange> collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
     std::vector<CoreRange> all_ranges;
+    size_t total_ranges = 0;
+    for (const auto& kernel : desc.kernels) {
+        total_ranges += kernel.core_ranges.ranges().size();
+    }
+    all_ranges.reserve(total_ranges);
+
     for (const auto& kernel : desc.kernels) {
         for (const auto& range : kernel.core_ranges.ranges()) {
             all_ranges.push_back(range);

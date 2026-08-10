@@ -40,19 +40,25 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
     return core_desc.logical_dispatch_cores;
 }
 
-// Quasar 1CQ fast dispatch places prefetch and dispatch HD on the same dispatch-engine tile.
-// dispatch_s shares that tile; dispatch_core_manager assigns prefetch/dispatch via separate pool
-// pops, mirroring interim Tensix YAML that lists the same logical coord twice. Free DMs are
-// auto-assigned at CreateDispatchEngineKernel time (same policy as Quasar Tensix CreateKernel).
+// Quasar FD places prefetch, dispatch HD, and dispatch_s on the same dispatch-engine tile
+// (one tile per CQ). dispatch_core_manager assigns prefetch/dispatch via separate pool pops;
+// dispatch_s is forced onto the dispatcher tile. Rebuild the soc DE list as
+// [DE0, DE0, DE1, DE1, ...] so each CQ's prefetch+dispatch share a tile. Extra DEs beyond
+// num_hw_cqs are unused; if fewer DEs than CQs, later CQs cycle through the DEs again.
+// Free DMs are auto-assigned at CreateDispatchEngineKernel time.
 void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     std::vector<tt::tt_metal::CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
-    if (logical_cores.size() != 1) {
+    if (logical_cores.empty() || num_hw_cqs == 0) {
         return;
     }
-    const size_t min_pool_entries = static_cast<size_t>(num_hw_cqs) * 2;
-    logical_cores.reserve(min_pool_entries);
-    while (logical_cores.size() < min_pool_entries) {
-        logical_cores.push_back(logical_cores.front());
+    const std::vector<tt::tt_metal::CoreCoord> available_des = std::move(logical_cores);
+    logical_cores.clear();
+    logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * 2);
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
+        const size_t de_index = static_cast<size_t>(cq_id) % available_des.size();
+        const auto& de = available_des[de_index];
+        logical_cores.push_back(de);
+        logical_cores.push_back(de);
     }
 }
 

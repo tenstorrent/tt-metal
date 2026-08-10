@@ -9,9 +9,9 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
+#include "tensor_impl.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
@@ -222,6 +222,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         // remote coordinates are a complete no-op here.
         const auto& view = mesh_device->get_view();
         std::vector<distributed::MeshCoordinate> local_coords;
+        local_coords.reserve(mesh_device->shape().mesh_size());
         distributed::MeshCoordinateRangeSet local_range;
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
             if (view.impl().is_local(coord)) {

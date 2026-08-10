@@ -7,6 +7,7 @@
 
 #include "host_tensor_impl.hpp"
 #include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -22,6 +23,12 @@ HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
         /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
     return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
+}
+
+HostTensor HostTensor::allocate_for_overwrite(TensorSpec spec) {
+    // Sequence allocate before moving spec: argument evaluation order is unspecified.
+    auto buffer = tensor_impl::allocate_host_buffer(spec);
+    return from_buffer(std::move(buffer), std::move(spec));
 }
 
 HostTensor::HostTensor(const HostTensor& other) :
@@ -88,6 +95,7 @@ std::size_t HostTensor::element_size() const {
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");

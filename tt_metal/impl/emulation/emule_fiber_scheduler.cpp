@@ -8,6 +8,8 @@
 
 #include <ucontext.h>
 #include <sys/mman.h>
+#include <dlfcn.h>   // dladdr, for the parked-fiber op census
+#include <cxxabi.h>  // demangle the op symbol
 #include <unistd.h>
 
 #include <atomic>
@@ -31,6 +33,10 @@
 // since one worker hosts many fibers. See tt-emule docs/fiber-engine.md.
 extern thread_local uint8_t my_x[2];
 extern thread_local uint8_t my_y[2];
+// Blaze-only experimental firmware-global shim (issue #50953) — global-scope,
+// unmangled names required by dlopen(-rdynamic) JIT-kernel symbol resolution.
+extern thread_local uint8_t my_logical_x_;
+extern thread_local uint8_t my_logical_y_;
 
 namespace tt::tt_metal::emule_fiber {
 
@@ -181,8 +187,10 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     __emule_self = f->owned_ctx.get();       // the single thread_local repoint
     my_x[0] = my_x[1] = f->id.phys_x;        // restore the silicon-named coords
     my_y[0] = my_y[1] = f->id.phys_y;
+    my_logical_x_ = static_cast<uint8_t>(f->id.logical_x);  // firmware LOGICAL coords (issue #50953)
+    my_logical_y_ = static_cast<uint8_t>(f->id.logical_y);
     // Per-fiber ASAN state (e.g. the Object-Intent resolved-range log) lives in the ctx
-    // above, so it swaps in with __emule_self — nothing else to restore here. See tt-emule #241.
+    // above, so it swaps in with __emule_self — no separate restore needed here. See tt-emule #241.
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {
@@ -475,10 +483,54 @@ void FiberScheduler::spawn(std::function<void()> entry, std::unique_ptr<ThreadCo
     p_->all_.push_back(std::move(f));   // home + ready-queue placement happens in run_until_idle
 }
 
+
+// Conservative stack scan naming the blaze op a parked fiber sits in.
+// Walks the fiber's saved stack for words that dladdr resolves to a symbol, and
+// returns the first demangled blaze::...::Op<...> frame. Env-gated
+// (EMULE_PARK_STACKS=1) and best-effort: a false positive is a stale return address,
+// never a crash (every deref is bounds-checked against the fiber's own mapping).
+static std::string emule_park_op_name(const Fiber* f) {
+    if (!f || !f->map_base || f->map_bytes == 0) {
+        return {};
+    }
+    auto sp = static_cast<uintptr_t>(f->ctx.uc_mcontext.gregs[REG_RSP]);
+    auto lo = reinterpret_cast<uintptr_t>(f->map_base);
+    auto hi = lo + f->map_bytes;
+    if (sp < lo || sp >= hi) {
+        return {};
+    }
+    for (uintptr_t p = sp; p + sizeof(void*) <= hi; p += sizeof(void*)) {
+        void* word = *reinterpret_cast<void* const*>(p);
+        if (!word) {
+            continue;
+        }
+        Dl_info info{};
+        if (!dladdr(word, &info) || !info.dli_sname) {
+            continue;
+        }
+        int status = 0;
+        char* dem = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+        std::string name = (status == 0 && dem) ? dem : info.dli_sname;
+        std::free(dem);
+        if (name.find("blaze::") != std::string::npos && name.find("::Op<") != std::string::npos) {
+            auto cut = name.find(">::");
+            return cut == std::string::npos ? name : name.substr(0, cut + 1);
+        }
+    }
+    return {};
+}
+
 std::string FiberSchedulerImpl::dump_parked() {
     std::ostringstream os;
     os << "  " << parked_.size() << " distinct wait-key(s); parked fibers:\n";
+    const bool park_stacks = std::getenv("EMULE_PARK_STACKS") != nullptr;
     for (auto& [key, head] : parked_) {
+        if (park_stacks) {
+            std::string op = emule_park_op_name(head);
+            if (!op.empty()) {
+                os << "    [op] " << op << "\n";
+            }
+        }
         for (Fiber* f = head; f; f = f->park_link) {
             os << "    core(log " << f->id.logical_x << "," << f->id.logical_y
                << " phys " << int(f->id.phys_x) << "," << int(f->id.phys_y) << ")"
@@ -489,13 +541,42 @@ std::string FiberSchedulerImpl::dump_parked() {
             // Best-effort key naming: a CB if the key lands in this fiber's cbs[] array.
             const auto* ctx = f->owned_ctx.get();
             const char* name = nullptr;
-            char buf[64];
+            char buf[192];
             if (ctx && ctx->cbs) {
                 auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
-                    std::snprintf(buf, sizeof(buf), "CB %zu",
-                                  (k - base) / sizeof(tt_emule::CBSyncState));
+                    const size_t cbid = (k - base) / sizeof(tt_emule::CBSyncState);
+                    // Append the ASAN-recorded call site so a parked CB names the exact
+                    // kernel line, not just the op. A producer (cb_reserve_back) and a
+                    // consumer (cb_wait_front) park on the SAME address, so pick the side
+                    // that is actually blocked: ASAN sets the dangling flag on entry, before
+                    // the blocking wait, and clears it on the matching push/pop. Reporting
+                    // the wait site unconditionally mislabels a stuck producer with a
+                    // consumer line, usually a stale one from a call that already completed.
+                    const bool res_blocked = ctx->san.cb_reserve_dangling[cbid];
+                    const bool wait_blocked = ctx->san.cb_wait_dangling[cbid];
+                    auto basename = [](const char* p) {
+                        const char* s = std::strrchr(p, '/');
+                        return s ? s + 1 : p;
+                    };
+                    // Both can be outstanding when one fiber is both producer and consumer
+                    // of this CB; name both rather than guessing which one is stuck.
+                    if (res_blocked && wait_blocked && ctx->san.cb_reserve_file[cbid] && ctx->san.cb_wait_file[cbid]) {
+                        std::snprintf(buf, sizeof(buf), "CB %zu @ reserve %s:%u / wait %s:%u", cbid,
+                                      basename(ctx->san.cb_reserve_file[cbid]), ctx->san.cb_reserve_line[cbid],
+                                      basename(ctx->san.cb_wait_file[cbid]), ctx->san.cb_wait_line[cbid]);
+                    } else if (res_blocked && ctx->san.cb_reserve_file[cbid]) {
+                        std::snprintf(buf, sizeof(buf), "CB %zu @ reserve %s:%u", cbid,
+                                      basename(ctx->san.cb_reserve_file[cbid]), ctx->san.cb_reserve_line[cbid]);
+                    } else if (wait_blocked && ctx->san.cb_wait_file[cbid]) {
+                        std::snprintf(buf, sizeof(buf), "CB %zu @ wait %s:%u", cbid,
+                                      basename(ctx->san.cb_wait_file[cbid]), ctx->san.cb_wait_line[cbid]);
+                    } else {
+                        // Neither side outstanding: any recorded site is stale, so don't
+                        // print one — a wrong line is worse than no line.
+                        std::snprintf(buf, sizeof(buf), "CB %zu", cbid);
+                    }
                     name = buf;
                 }
             }
