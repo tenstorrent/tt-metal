@@ -144,5 +144,5 @@ def test_pow_bf16_large_exponent_sweep(device, exponent):
     # Skip points where the golden overflows or denormal-flushes; those are
     # correctly handled but outside the accuracy comparison.
     finite = torch_output.isfinite() & (torch_output.abs() >= torch.finfo(torch.bfloat16).tiny)
-    assert finite.any()
+    assert finite.any(), f"exponent {exponent}: no finite, non-denormal golden outputs to compare"
     assert_with_ulp(torch_output[finite], ttnn_output[finite], 3)

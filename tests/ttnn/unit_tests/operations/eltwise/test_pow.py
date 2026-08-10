@@ -245,19 +245,28 @@ def test_binary_pow_bf16_large_exponent(device, exponent):
     output = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
 
     finite = torch_output.isfinite() & (torch_output.abs() >= torch.finfo(torch.bfloat16).tiny)
-    assert finite.any()
+    assert finite.any(), f"exponent {exponent}: no finite, non-denormal golden outputs to compare"
     assert_with_ulp(torch_output[finite], output[finite], 3)
 
 
-@pytest.mark.parametrize("exponent", [128.0, 39.0, 15.0])
-def test_binary_pow_bf16_overflow_to_inf(device, exponent):
+@pytest.mark.parametrize(
+    "base,exponent",
+    [
+        (2.0, 128.0),  # 2**128 overflows fp32 (issue repro)
+        (10.0, 39.0),  # 10**39 overflows fp32 (issue repro)
+        (1000.0, 15.0),  # 1000**15 overflows fp32; 10**15 would not
+    ],
+)
+def test_binary_pow_bf16_overflow_to_inf(device, base, exponent):
     torch.manual_seed(0)
-    base = torch.full([1, 1, 32, 32], 10.0, dtype=torch.bfloat16)
+    base_t = torch.full([1, 1, 32, 32], base, dtype=torch.bfloat16)
     exp = torch.full([1, 1, 32, 32], exponent, dtype=torch.bfloat16)
-    golden = torch.pow(base, exp)
-    assert torch.isinf(golden).all()  # sanity: this exponent really overflows
+    golden = torch.pow(base_t, exp)
+    assert torch.isinf(
+        golden
+    ).all(), f"base={base} exponent={exponent}: golden does not overflow (got {golden[0,0,0,0]})"
 
-    ttnn_base = ttnn.from_torch(base, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_base = ttnn.from_torch(base_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
 
