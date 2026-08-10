@@ -980,6 +980,32 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+  mistral-small-3.1-24b:
+    aliases: ["Mistral-Small-3.1-24B", "mistralai/Mistral-Small-3.1-24B-Instruct-2503"]
+    skus:
+      # Ported from blackhole_demo_tests.yaml / t3k_unit_tests.yaml — neither the
+      # e2e pipeline_tests nor the vision unit tests emit a benchmark payload yet,
+      # so there are no measured numbers to target. Populate after the first
+      # tiered run reports perf / accuracy.
+      wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08GEGWHQJF # Adam Roberge
+            team: models
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08GEGWHQJF # Adam Roberge
+            team: models
+
   mixtral-8x7b:
     aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
     skus:
@@ -1461,4 +1487,31 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+
+  vit:
+    aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
+    skus:
+      # Placeholder coverage for the tier-2 (vit, wh_n150) / (vit, wh_n300) combos
+      # registered in models_e2e_tests.yaml. The demo asserts samples/sec against its
+      # own hardcoded expectation and emits no benchmark payload, and samples/sec is not
+      # in ALLOWED_TARGET_METRIC_NAMES in validate_perf_targets.py, so there is no
+      # measurable metric to declare here yet. Kept as TODO so the combo is on the books.
+      wh_n150:
+        entries:
+          - batch_size: 8
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy Ginuga
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 8
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy Ginuga
             team: models

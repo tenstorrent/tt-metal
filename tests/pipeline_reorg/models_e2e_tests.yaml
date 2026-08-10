@@ -649,6 +649,22 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Mistral-Small-3.1-24B e2e tests
+  cmd: |
+    set -e
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  model: mistral-small-3.1-24b
+  model_family: Mistral
+  skus:
+    bh_quietbox_2:
+      timeout: 12
+      tier: 3
+  owner_id: U08GEGWHQJF # Adam Roberge
+  team: models
+
 - name: Mixtral-8x7B e2e tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1
@@ -960,6 +976,30 @@
       release_ready: false
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
+
+# ── ViT ────────────────────────────────────────────────────────────
+
+# Ported from the (Single-card) Demo tests inline matrix, where this ran as
+# `run_vit_demo` on both N150 and N300. HF_HUB_OFFLINE is forced back to 0
+# because the tiered impl defaults WH SKUs to offline and the demo resolves
+# its checkpoint from the hub (same pattern as the SDXL entries above).
+- name: ViT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 900 models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+  model: vit
+  model_family: ViT
+  skus:
+    # Measured on the tier runners in run 31106916424, + ~15%:
+    # wh_n150 9.2 min -> 11, wh_n300 5.0 min -> 6. Both legs passed.
+    wh_n150:
+      timeout: 11
+      tier: 2
+    wh_n300:
+      timeout: 6
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
 
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4-mgd) ───────────────────
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
