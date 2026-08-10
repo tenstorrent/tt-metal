@@ -639,6 +639,12 @@ class TtHCA(_TtHCABase):
         )
         _COMPRESSED_WRITERS[COMPRESSED_WRITE](self, state, new_entries, width)
 
+    def _write_fill_cache(self, state, new_entries, width):
+        """The write as it stood before: one op, but only legal while the append offset happens to be
+        tile-aligned, i.e. chunks of compress_rate * TILE_SIZE tokens. Kept as the perf baseline the two
+        candidates are measured against."""
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, new_entries, 0, update_idx=state.entry_count)
+
     def _write_slice(self, state, new_entries, width):
         """``slice_write`` places rows at any offset, but folds the offset into its own program hash, so
         this compiles one program per chunk."""
@@ -780,6 +786,7 @@ class TtHCA(_TtHCABase):
 
 
 _COMPRESSED_WRITERS = {
+    "fill_cache": TtHCA._write_fill_cache,
     "slice_write": TtHCA._write_slice,
     "token_at_a_time": TtHCA._write_token_at_a_time,
 }
