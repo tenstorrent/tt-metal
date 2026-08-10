@@ -36,8 +36,19 @@ namespace ckernel::sfpu {
 //      Polynomial-path intermediates die at the store, freeing LRegs.
 //   2. v_if (|x|>6): overwrite DST with asymptotic result.
 //
-// Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow; I0 stays
-// finite to ~88.5 in FP32 (I0(88.5) ~ 1.2e+37).
+// Overflow: I0 grows without bound, so |x| past the representable range
+// returns +inf rather than a clamped finite value. The computation is
+// still clamped to 88.5 (FP32 exp() saturates at 88.7228), and lanes above
+// that bound are then overwritten with +inf. i0(+/-inf) = +inf follows from
+// the same test.
+//
+// This matches ttnn's declared golden, torch.i0, which overflows to inf at
+// the same 88.7228 for the same reason (cf. the note on torch.sinh in
+// test_unary_fp32.py). The two differ only for FP32 inputs in the 0.22-wide
+// window (88.5, 88.7228), where torch still returns a finite value below
+// 1.45e+37; no bfloat16 value lands strictly inside it. The true I0 stays
+// representable to x = 91.9008 (I0 = 3.4028e+38), but no exp()-first
+// formulation can reach it without the intermediate overflowing.
 //
 // APPROXIMATION_MODE is accepted for call-site compatibility; both paths
 // are already the accurate ones and it does not select a cheaper route.
@@ -94,12 +105,15 @@ inline void calculate_i0() {
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        // i0 is even, so the sign is never needed: take |x| up front and clamp with a
+        // plain min. Strictly cheaper than symmetric_clamp() followed by abs(), which
+        // computes a copysgn() only for the abs() to discard it — and it leaves the
+        // unclamped magnitude live for the overflow test below at no extra LReg cost.
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat abs_x_in = sfpi::abs(x);
 
-        // Clamp to [-88.5, 88.5] — exp() saturates near +/-88.7 in FP32.
-        x = sfpi::symmetric_clamp(x, I0_MAX_INPUT);
-
-        const sfpi::vFloat abs_x = sfpi::abs(x);
+        // Clamp to 88.5 — exp() saturates near 88.7 in FP32.
+        const sfpi::vFloat abs_x = sfpi::min(abs_x_in, I0_MAX_INPUT);
 
         sfpi::vFloat val;
         // ─── Polynomial path (always; valid for |x| <= 6) ────────────────
@@ -111,7 +125,7 @@ inline void calculate_i0() {
         // significant figures, which cost ~52 FP32 ULP at |x| = 5 on its
         // own — independent of, and masked by, the truncation problem.
         {
-            const sfpi::vFloat t = x * x;
+            const sfpi::vFloat t = abs_x * abs_x;
             val = 1.0f + t * PolynomialEvaluator::eval(
                                  t,
                                  2.5000000000e-01f,
@@ -129,6 +143,28 @@ inline void calculate_i0() {
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 6) ────────────────
         v_if(abs_x > I0_THRESHOLD) { val = calculate_i0_asymptotic_(abs_x); }
+        v_endif;
+
+        // ─── Overflow: |x| past the representable range → +inf ───────────
+        // Tested on the *unclamped* magnitude. Without this, i0(1e4) would
+        // return i0(88.5) = 1.16e+37 — a silent wrong finite answer.
+        // i0(+/-inf) = +inf falls out of the same test.
+        v_if(abs_x_in > I0_MAX_INPUT) { val = std::numeric_limits<float>::infinity(); }
+        v_endif;
+
+        // ─── NaN in → NaN out ────────────────────────────────────────────
+        // The SFPU compare is not IEEE-ordered: NaN carries the maximal
+        // exponent and passes the > test above, so it would be converted to
+        // +inf. Detect it by bit pattern instead — exponent all ones with a
+        // non-zero mantissa — and restore it.
+        //
+        // Measured on Blackhole p150b: this restores NaN on the FP32 path.
+        // On the BF16 path NaN still emerges as +inf — a DRAM round-trip with
+        // no op returns NaN intact, so the payload is lost unpacking BF16 into
+        // DST, upstream of this branch. Both remain an improvement on the
+        // previous behaviour, where the input clamp mapped NaN to a finite
+        // 1.15e+37.
+        v_if(sfpi::exexp(abs_x_in) == 128 && sfpi::exman(abs_x_in) != 0) { val = abs_x_in; }
         v_endif;
 #ifndef INP_FLOAT32
         val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
