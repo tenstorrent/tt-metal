@@ -376,3 +376,29 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
     # otherwise answer without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "unknown implementation selector"):
         ttnn.tilize(xt, **kwargs, implementation=selector)
+
+
+# ---------------------------------------------------------------------------
+# Arch-gated perf demotion: the 2D-column stream-concurrency predicate in
+# is_demoted (tilize_codegen_supported.cpp) arms on blackhole only. [7, 96, 160]
+# bf16 scores over the measured crossover on BOTH grids (BH ncol=5 -> 105 cores
+# vs 64 B strips; WH ncol=3 -> 63), so the routing difference isolates the arch
+# gate itself: blackhole must fall back to native, wormhole keeps the codegen win.
+# ---------------------------------------------------------------------------
+
+
+def test_tilize_codegen_column_concurrency_demotion_is_arch_gated(device):
+    from models.common.utility_functions import is_blackhole, is_wormhole_b0
+
+    shape, dtype = [7, 96, 160], ttnn.bfloat16
+    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    golden = ttnn.to_torch(ttnn.tilize(xt, **_DRAM, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_DRAM, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    if is_blackhole():
+        msg = "auto kept a blackhole-demoted column config on codegen (program cache grew)"
+        assert device.num_program_cache_entries() == entries_before, msg
+    elif is_wormhole_b0():
+        msg = "auto fell back to native for a wormhole-winning column config; the demotion is not armed there"
+        assert device.num_program_cache_entries() > entries_before, msg
