@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
@@ -35,12 +36,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
     }
 }
 
@@ -106,12 +106,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // three tiles so we just need the SFPU dvalid chain.
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
     }
 
     _llk_math_eltwise_sfpu_init_();
@@ -166,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_sfpu_done_();
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
 
     // Drain any in-flight SFPU / FPU / MOP work before PACK reads Dest.
     wait_sfpu_idle();
@@ -195,11 +195,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // PACK's side. The chain must match on all three threads.
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -224,6 +224,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // and accepts arbitrary (gate, up, out) Dest offsets via
     // `_calculate_swiglu_`'s parameters; +2 is not a property of swiglu.
     _llk_pack_(params.DST_INDEX + 2, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

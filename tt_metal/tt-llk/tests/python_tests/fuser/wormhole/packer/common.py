@@ -114,3 +114,11 @@ def pack_reduce_mask_clear(operation) -> str:
     if operation.reduce_dim is None:
         return ""
     return "_llk_pack_reduce_mask_clear_();\n"
+
+
+def dvalid_signal_sfpu(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""
+
+
+def dvalid_disable(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""

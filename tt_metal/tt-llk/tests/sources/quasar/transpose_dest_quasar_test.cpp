@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -45,13 +46,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
             }
             else
             {
                 // L1_TO_L1 leaves UNPACK waiting for DEST ownership. Other run
                 // types have no unpack-to-dest consumer pulse.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
             }
 
             const DataFormat unpack_src_format = static_cast<DataFormat>(formats.unpack_A_src);
@@ -77,7 +78,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
         buffer_descriptor_u bd_val = {0};
@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
                     }
                 }
 
@@ -206,7 +206,8 @@ inline void run_datacopy_transpose_loop(
 
         if constexpr (set_dvalid)
         {
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
+            _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
         }
     }
 }
@@ -231,18 +232,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+                _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+                _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate has no destination producer before FPU, so make FPU
             // the producer and restore immediate ownership of the destination.
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+            _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
         }
 
         if constexpr (is_fp32_dest_acc_en)
@@ -333,11 +337,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
         }
 
@@ -377,7 +381,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

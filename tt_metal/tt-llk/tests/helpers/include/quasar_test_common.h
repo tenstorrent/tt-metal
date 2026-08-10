@@ -8,44 +8,6 @@
 
 #include "tensor_shape.h"
 
-inline void clear_dest_dvalid_wait_mask(std::uint32_t wait_mask_addr)
-{
-    volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
-    cfg[wait_mask_addr]         = 0;
-}
-
-/**
- * @brief Disables the DEST DVALID handshake for UNPACK.
- */
-inline void set_up_zero_dest_dvalid_handshake_for_unpack()
-{
-    clear_dest_dvalid_wait_mask(UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32);
-}
-
-/**
- * @brief Disables the DEST DVALID handshake for MATH.
- */
-inline void set_up_zero_dest_dvalid_handshake_for_math()
-{
-    clear_dest_dvalid_wait_mask(MATH_DEST_DVALID_CTRL_wait_mask_ADDR32);
-}
-
-/**
- * @brief Disables the DEST DVALID handshake for SFPU.
- */
-inline void set_up_zero_dest_dvalid_handshake_for_sfpu()
-{
-    clear_dest_dvalid_wait_mask(SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32);
-}
-
-/**
- * @brief Disables the DEST DVALID handshake for PACK.
- */
-inline void set_up_zero_dest_dvalid_handshake_for_pack()
-{
-    clear_dest_dvalid_wait_mask(PACK_DEST_DVALID_CTRL_wait_mask_ADDR32);
-}
-
 /**
  * @brief Populates TensorShape from explicit dimensions.
  */

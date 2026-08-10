@@ -75,27 +75,6 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
 }
 
 /**
- * @brief Clears the unpack-to-dest data valid for the dest section after unpacking directly into DEST.
- *
- * For DstSync::SyncFull, also clears dvalid for dest bank 1 and resets the dest bank id to 0 so the
- * next section starts from bank 0, allowing the full dest register to be used.
- *
- * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
- */
-template <DstSync DST>
-inline void _llk_unpack_dest_dvalid_section_done_()
-{
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::UNPACK0);
-    TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, 0);
-    if constexpr (DST == DstSync::SyncFull)
-    {
-        // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
-        // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
-        TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::UNPACK_TO_DEST, p_cleardvalid::UNPACK_TO_DEST, 0);
-    }
-}
-
-/**
  * @brief Reprograms the unpacker output DataFormat at runtime.
  *
  * Quasar unpack dynamic output format: reprograms only THCON `UNPACKER*_REG0_OUT_DATA_FORMAT`.

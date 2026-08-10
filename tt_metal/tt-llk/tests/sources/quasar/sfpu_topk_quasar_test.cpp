@@ -10,6 +10,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
@@ -57,7 +58,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, TOPK_INDEX_FORMAT};
 
     // Dvalid setup: FPU -> SFPU -> PACK
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     const std::uint32_t buf_desc_id = 0;
 
@@ -74,6 +74,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t td_val;
     td_val.buf_desc    = bd_val;
     td_val.buf_desc_id = buf_desc_id;
+
+    _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
@@ -137,6 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(second_tile_index, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.
+                _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
             } // Pipeline loop.
         } // Iteration loop.
     } // current_tile_row loop.
@@ -181,8 +184,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK. Math thread owns
     // both the FPU and SFPU clients.
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+    _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
 
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, TOPK_INDEX_FORMAT};
 
@@ -230,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
 
                 _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
                     value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
@@ -297,7 +300,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 // Release the SFPU dvalid to the PACK client.
                 wait_sfpu_idle();
-                _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
             } // Pipeline loop.
         } // Iteration loop.
     } // current_tile_row loop.
@@ -328,7 +331,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id = 8;
 
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK.
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
 
     // Init the PACK -> UNPACK L1 write-back semaphore (see TOPK_L1_WB_SEM).
     // Max pending posts = pairs in one iteration (<= 8 for [32,1024]); 15 is the HW max.
@@ -394,7 +397,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 } // Stage loop.
 
                 // Clear the PACK dvalid, zero the consumed bank, and flip the packer dest bank.
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
 
                 if (!last_iter)
                 {

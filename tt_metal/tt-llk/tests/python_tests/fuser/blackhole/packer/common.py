@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from fuser.operand import Operand
 from fuser.wormhole.packer.common import (  # noqa: F401
     configure_pack,
+    dvalid_disable,
+    dvalid_signal_sfpu,
     l1_accumulation_config,
     pack_reduce_mask_clear,
     pack_reduce_mask_config,

@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
@@ -24,10 +25,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
-    // UNPACK-to-DEST path: UNPACK writes DEST; SFPU reads/writes DEST; PACK reads DEST.
-    // FPU path: UNPACK writes SrcA; FPU datacopy writes DEST; SFPU reads/writes DEST; PACK reads DEST.
-    constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({unpack_dest, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    if constexpr (unpack_to_dest)
+    {
+        _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
+    }
 
     if constexpr (unpack_to_dest)
     {
@@ -67,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (unpack_to_dest)
     {
         // Signals DEST writes are done; not called on the FPU path since UNPACK doesn't touch DEST there.
-        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
     }
 }
 
@@ -96,12 +97,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if constexpr (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -117,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
     }
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
@@ -137,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.DST_INDEX + 0u /*DST_OUT*/,
         VECTOR_MODE);
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
 }
 
 #endif
@@ -157,8 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = 1;
 
-    constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({unpack_dest, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
 
     buffer_descriptor_u bd_val = {0};
     bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
@@ -179,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Packs only the result tile (DEST[DST_INDEX]); where produces one output tile
     // regardless of how many input tiles were loaded.
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif

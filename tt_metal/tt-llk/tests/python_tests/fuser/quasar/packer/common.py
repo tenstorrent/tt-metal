@@ -5,6 +5,7 @@
 from typing import TYPE_CHECKING
 
 from fuser.operand import Operand
+from fuser.quasar import dest_dvalid
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden
 
@@ -64,8 +65,8 @@ def pack_dest_init(
     config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
     if config.quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    elif operation.stage_id != 1:
+        return dest_dvalid.enable(config, operation, dest_dvalid.PACK_THREAD)
+    if operation.stage_id != 1:
         return ""
     return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
 
@@ -77,13 +78,25 @@ def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> st
 
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if config.quasar_use_dvalid:
+        return dest_dvalid.signal(
+            config, operation, dest_dvalid.PACK_THREAD, dest_dvalid.PACK
+        )
     if config.skip_sync:
         return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
-    if config.quasar_use_dvalid:
-        return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
     return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
+
+
+def dvalid_signal_sfpu(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return dest_dvalid.signal(
+        config, operation, dest_dvalid.PACK_THREAD, dest_dvalid.SFPU
+    )
+
+
+def dvalid_disable(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return dest_dvalid.disable(config, operation, dest_dvalid.PACK_THREAD)
 
 
 def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:

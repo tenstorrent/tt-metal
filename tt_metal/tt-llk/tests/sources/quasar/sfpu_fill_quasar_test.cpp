@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
@@ -51,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // DEST DVALID handshake: T0 is the producer, T1 (SFPU) and T2 (PACK) are the consumers.
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path).
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
 
     // hw_configure: int-fill needs DEST in int32 mode; float-fill follows is_fp32_dest_acc_en.
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
@@ -88,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
-    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
 }
 
 #endif
@@ -113,7 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // Math acts as the SFPU client of the DEST DVALID chain.
     // fill always uses unpack_to_dest path.
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+    _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
 
     // srcAB hw_configure: srcA/srcB both use formats.math; DEST mode tracks the
     // int-fill / float-fill split (int32 for int fills, otherwise is_fp32_dest_acc_en).
@@ -128,6 +130,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
     }
+
+    // No FPU work here, but the FPU client still has to pass the grant to the SFPU client.
+    _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
 
     _llk_math_eltwise_sfpu_init_();
 
@@ -159,7 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Hand DEST off to PACK.
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
 
     // Drain SFPU/FPU/MOP queues before this thread returns.
     wait_sfpu_idle();
@@ -185,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     // PACK is the final consumer of the DEST DVALID chain.
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
 
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
     // face geometry from the harness.
@@ -208,6 +213,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

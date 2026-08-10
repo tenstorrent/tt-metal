@@ -14,6 +14,12 @@ from fuser.tile_loop import LoopBlockRow, LoopTileByTile, TileLoop
 from helpers.llk_params import DestSync, EltwiseBinaryReuseDestType
 
 
+def _unpack_to_dest_arg(compute_unit: FpuNode, config: GlobalConfig) -> str:
+    if config.quasar_use_dvalid:
+        return "false"
+    return compute_unit.unpack_to_dest.cpp_enum_value
+
+
 def _unp_sel(compute_unit: FpuNode) -> str:
     if compute_unit.unpack_to_dest.value:
         return "p_unpacr::UNP_DEST"
@@ -67,7 +73,7 @@ class UnpackerA(Unpacker):
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
+        unpack_to_dest = _unpack_to_dest_arg(compute_unit, config)
         transpose_en = compute_unit.transpose_faces.cpp_enum_value
         unp_sel = _unp_sel(compute_unit)
         num_tiles = (
@@ -77,7 +83,7 @@ class UnpackerA(Unpacker):
         )
 
         code = ""
-        if compute_unit.unpack_to_dest.value:
+        if compute_unit.unpack_to_dest.value and not config.quasar_use_dvalid:
             num_sem = 2 if operation.dest_sync == DestSync.Half else 1
             code += f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_sem}, 0);\n"
         code += (
@@ -96,7 +102,7 @@ class UnpackerA(Unpacker):
         unp_sel = _unp_sel(compute_unit)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
+        unpack_to_dest = _unpack_to_dest_arg(compute_unit, config)
         dest_sync = operation.dest_sync.cpp_enum_value
 
         return (

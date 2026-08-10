@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -47,11 +48,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // persisted wait mask rather than leaving UNP_DEST blocked.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
             }
             else
             {
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
             }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
@@ -77,7 +78,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
         unsigned l1_addr_16B;
@@ -97,7 +97,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
             // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
-            // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
             // ZEROACC to wipe subsequent tile rows after packing the first one.
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, BLOCK_CT_DIM);
         }
@@ -146,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
                     }
                 }
             }
@@ -190,7 +189,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // FPU→PACK dest-dvalid handshake (WH/BH style).
             if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+                _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
             }
 
             DataFormat math_format     = static_cast<DataFormat>(formats.math);
@@ -258,7 +258,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_eltwise_unary_datacopy_(block_ct);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
                     }
                 }
             }
@@ -301,11 +302,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
         }
 
@@ -377,7 +378,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

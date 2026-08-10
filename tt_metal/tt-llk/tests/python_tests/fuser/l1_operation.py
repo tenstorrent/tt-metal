@@ -26,6 +26,7 @@ class L1Operation:
         (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
     )
     stage_id: int = 0
+    is_last_stage: bool = False
     needs_pack_sync: bool = False
     has_pack_consumer: bool = False
     throttle: int = 0

@@ -4,6 +4,7 @@
 
 from fuser.wormhole.fpu.common import (  # noqa: F401
     configure_math,
+    dvalid_disable,
     hw_configure_math,
     math_dest_section_done,
     math_pack_sync_init,

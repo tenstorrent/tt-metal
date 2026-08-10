@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -41,19 +42,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
             }
             else
             {
                 // CFG persists across run types, so non-L1_TO_L1 runs must not
                 // inherit the unpack-to-dest handshake.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
             }
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
                 }
             }
         }
@@ -152,7 +152,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+                _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
             }
 
             DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -196,7 +197,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_eltwise_unary_datacopy_(i);
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
                 }
             }
             PROFILER_SYNC();
@@ -231,17 +233,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            set_up_zero_dest_dvalid_handshake_for_pack();
+            _llk_dest_dvalid_disable_<dest_dvalid_client::PACK>();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
             }
         }
 
@@ -275,7 +277,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape_A);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -49,8 +50,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
+        }
+        else
+        {
+            _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
+        }
         // Setup data valid scheme
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val_A {};
         bd_val_A.f.l1_addr_16B = L1_ADDRESS(buffer_A[0]);
@@ -115,6 +123,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, ckernel::DEFAULT_TENSOR_SHAPE);
                 }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
+                }
             }
         }
         PROFILER_SYNC();
@@ -152,7 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // L1_TO_L1 / MATH_ISOLATE keep the math↔pack handshake: set up FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+            _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -204,7 +217,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
                     }
                 }
             }
@@ -248,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
         }
 
         buffer_descriptor_u bd_val {};
@@ -289,7 +303,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
                     {
-                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

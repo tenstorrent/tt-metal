@@ -128,7 +128,15 @@ def configure_unpack(
     return code
 
 
-def dvalid_init(**kwargs) -> str:
+def dvalid_enable(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""
+
+
+def dvalid_signal(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""
+
+
+def dvalid_disable(config: "GlobalConfig", operation: "L1Operation") -> str:
     return ""
 
 

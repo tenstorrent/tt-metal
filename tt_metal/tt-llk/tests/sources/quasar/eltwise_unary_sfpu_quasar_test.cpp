@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -39,23 +40,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // T0 produces Dest directly on the UNP_DEST path; on the SrcA path,
-            // the FPU datacopy is the producer. Every thread must declare the
-            // same client chain.
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-            }
-            else
-            {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
             }
         }
         else if constexpr (unpack_to_dest)
         {
             // L1_TO_L1 may leave UNP_DEST waiting for inactive SFPU/PACK clients.
             // Isolated/congested UNP_DEST execution must not inherit that chain.
-            set_up_zero_dest_dvalid_handshake_for_unpack();
+            _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
         }
 
         if constexpr (unpack_to_dest)
@@ -119,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
                 }
             }
         }
@@ -162,25 +156,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // The dvalid chain must match UNPACK exactly. On the FPU path T1 is
-            // both the datacopy producer and the SFPU producer.
-            if constexpr (unpack_to_dest)
+            if constexpr (!unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+                _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
             }
-            else
-            {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-            }
+            _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // FPU datacopy (when present) and SFPU execute sequentially on this
             // thread. Keep them on one Dest bank instead of creating a dvalid
             // chain whose producer would also wait for inactive UNPACK/PACK.
-            set_up_zero_dest_dvalid_handshake_for_math();
-            set_up_zero_dest_dvalid_handshake_for_sfpu();
+            _llk_dest_dvalid_disable_<dest_dvalid_client::FPU>();
+            _llk_dest_dvalid_disable_<dest_dvalid_client::SFPU>();
         }
         if constexpr (unpack_to_dest)
         {
@@ -234,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
                     }
                 }
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
@@ -250,7 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
                 }
             }
             // Drain every execution unit driven by T1 before PACK takes over.
@@ -292,19 +280,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // PACK runs without the L1_TO_L1 producer chain in isolated modes.
-            set_up_zero_dest_dvalid_handshake_for_pack();
+            _llk_dest_dvalid_disable_<dest_dvalid_client::PACK>();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            // Declare the same dvalid client chain that UNPACK and MATH use.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-            }
-            else
-            {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-            }
+            _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
         }
 
         buffer_descriptor_u bd_val = {0};
@@ -333,7 +313,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_(DST_INDEX, 0 /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

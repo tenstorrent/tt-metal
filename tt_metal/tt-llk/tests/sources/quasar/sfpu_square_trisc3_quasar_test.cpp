@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -28,12 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -64,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
     }
 }
 
@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if (!unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
 
         wait_fpu_idle();
         wait_mop_idle();
@@ -129,11 +129,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
     }
 
     _llk_math_eltwise_sfpu_init_();
@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_square, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC);
     }
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
 
     wait_sfpu_idle();
 }
@@ -168,11 +168,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
     }
     else
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+        _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -191,6 +191,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

@@ -202,7 +202,6 @@ inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, cons
  *
  * Sets the L1 source and DEST counters once, then runs the MOP which processes BLOCK_CT_DIM tiles.
  * The MOP auto-advances both source (via Src_Z_Cntr_inc) and dest (via Dst_Z_Cntr_inc with
- * DST_Z_STRIDE=NUM_FACES). Call once per tile row, then call @ref _llk_unpack_dest_dvalid_section_done_
  * after all rows.
  *
  * @param l1_face_idx: Face-level index into the L1 buffer for the start of this tile row.

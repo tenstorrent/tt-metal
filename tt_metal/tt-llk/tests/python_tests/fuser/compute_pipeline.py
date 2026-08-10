@@ -196,9 +196,7 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        init_code += unpack_common.dvalid_init(
-            quasar_use_dvalid=config.quasar_use_dvalid
-        )
+        init_code += unpack_common.dvalid_enable(config, operation)
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(
@@ -234,6 +232,8 @@ class ComputePipeline:
                 body += cu.unpack_run(operation, config, block)
                 if not hoist:
                     body += cu.unpack_uninit(operation, config, block)
+                if cu.unpacker is not None and cu.unpack_to_dest.value:
+                    body += unpack_common.dvalid_signal(config, operation)
             return body
 
         code += self._zone_loop(
@@ -245,6 +245,7 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(operation, config, None)
+        uninit_code += unpack_common.dvalid_disable(config, operation)
         code += self._zone(config, "INIT", uninit_code)
 
         return code
@@ -269,9 +270,16 @@ class ComputePipeline:
             init_fn = lambda block: fpu_ops[0].fpu_init(operation, config, block)
             uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
 
+        first_sfpu = next(
+            (i for i, cu in enumerate(self.math_nodes) if isinstance(cu, SfpuNode)),
+            None,
+        )
+
         def batch_body(block: BlockData):
             body = fpu_common.math_wait_for_dest(config, operation)
-            for cu in self.math_nodes:
+            for i, cu in enumerate(self.math_nodes):
+                if config.quasar_use_dvalid and i == first_sfpu:
+                    body += fpu_common.math_dest_section_done(config, operation, "FPU")
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, operation, cu)
@@ -284,7 +292,12 @@ class ComputePipeline:
                     body += cu.sfpu_init(operation, config, block)
                     body += cu.sfpu_run(operation, config, block)
                     body += cu.sfpu_uninit(operation, config, block)
-            body += fpu_common.math_dest_section_done(config, operation)
+            if config.quasar_use_dvalid:
+                if first_sfpu is None:
+                    body += fpu_common.math_dest_section_done(config, operation, "FPU")
+                body += fpu_common.math_dest_section_done(config, operation, "SFPU")
+            else:
+                body += fpu_common.math_dest_section_done(config, operation)
             return body
 
         code += self._zone_loop(
@@ -296,6 +309,7 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
+        uninit_code += fpu_common.dvalid_disable(config, operation)
         code += self._zone(config, "INIT", uninit_code)
 
         return code
@@ -328,12 +342,19 @@ class ComputePipeline:
             init_fn = lambda block: pack_only[0].init(operation, config, block)
             uninit_fn = lambda block: pack_only[0].uninit(operation, config)
 
+        first_pack = next(
+            (i for i, pn in enumerate(self.pack_nodes) if isinstance(pn, PackNode)),
+            None,
+        )
+
         def batch_body(block: BlockData):
             body = pack_common.packer_wait_for_math(config, operation)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
             prev_was_pack = False
-            for pack_node in self.pack_nodes:
+            for i, pack_node in enumerate(self.pack_nodes):
+                if i == first_pack:
+                    body += pack_common.dvalid_signal_sfpu(config, operation)
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
                         body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
@@ -365,6 +386,7 @@ class ComputePipeline:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
+        uninit_code += pack_common.dvalid_disable(config, operation)
         code += self._zone(config, "INIT", uninit_code)
 
         return code

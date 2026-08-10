@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
@@ -36,6 +37,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            _llk_dest_dvalid_init_<dest_dvalid_client::UNPACK>();
+        }
+        else
+        {
+            _llk_dest_dvalid_disable_<dest_dvalid_client::UNPACK>();
+        }
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         unsigned l1_addr_16B;
@@ -92,6 +101,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_dest_dvalid_done_<dest_dvalid_client::UNPACK, dest_sync>();
+                }
             }
         }
         PROFILER_SYNC();
@@ -131,7 +144,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_dest_dvalid_init_<dest_dvalid_client::FPU>();
+            _llk_dest_dvalid_init_<dest_dvalid_client::SFPU>();
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -178,7 +192,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::FPU, dest_sync>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::SFPU, dest_sync>();
             }
         }
         PROFILER_SYNC();
@@ -218,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_dest_dvalid_init_<dest_dvalid_client::PACK>();
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -251,7 +266,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, tensor_shape_A);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                _llk_dest_dvalid_done_<dest_dvalid_client::PACK, dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

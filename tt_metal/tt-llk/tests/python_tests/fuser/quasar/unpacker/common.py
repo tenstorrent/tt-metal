@@ -5,6 +5,7 @@
 from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
+from fuser.quasar import dest_dvalid
 from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
 
@@ -87,10 +88,18 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    return ""
+def dvalid_enable(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return dest_dvalid.enable(config, operation, dest_dvalid.UNPACK_THREAD)
+
+
+def dvalid_signal(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return dest_dvalid.signal(
+        config, operation, dest_dvalid.UNPACK_THREAD, dest_dvalid.UNPACK
+    )
+
+
+def dvalid_disable(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return dest_dvalid.disable(config, operation, dest_dvalid.UNPACK_THREAD)
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:

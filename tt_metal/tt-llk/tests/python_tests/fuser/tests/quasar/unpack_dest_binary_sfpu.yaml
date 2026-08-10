@@ -1,0 +1,75 @@
+dest_acc: false
+quasar_use_dvalid: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "output"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "output2"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        unpack_to_dest: true
+        math_fidelity: "LoFi"
+      - type: "Fpu"
+        src_a: "input_B"
+        src_b: "input_A"
+        operation: "Elwadd"
+        unpacker: "UnpackerA"
+        reuse_dest: "DEST_TO_SRCB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 32
+    block_size: [32, 32]
+    pack:
+      - output: "output"
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "output2"
+        packer: "Packer"
+  # - math:
+  #     - type: "Fpu"
+  #       src_a: "input_A"
+  #       src_b: "input_B"
+  #       operation: "Datacopy"
+  #       unpacker: "UnpackerA"
+  #       unpack_to_dest: true
+  #       math_fidelity: "LoFi"
+  #     - type: "Fpu"
+  #       src_a: "input_B"
+  #       src_b: "input_A"
+  #       operation: "Elwadd"
+  #       unpacker: "UnpackerA"
+  #       reuse_dest: "DEST_TO_SRCB"
+  #       math_fidelity: "LoFi"
+  #     # - type: "UnarySfpu"
+  #     #   operation: "Exp"
+  #     #   approximation_mode: false
+  #     #   iterations: 32
+  #   block_size: [32, 32]
+  #   pack:
+  #     - output: "output2"
+  #       packer: "Packer"
