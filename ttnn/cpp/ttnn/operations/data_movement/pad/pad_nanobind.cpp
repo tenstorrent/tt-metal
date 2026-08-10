@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
@@ -48,14 +49,16 @@ void bind_pad(nb::module_& mod) {
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+                const std::optional<CoreRangeSet>&,
+                const std::string&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("padding"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("implementation") = "auto"),
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
@@ -64,7 +67,8 @@ void bind_pad(nb::module_& mod) {
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::pad),
+                const std::optional<CoreRangeSet>&,
+                const std::string&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("output_padded_shape"),
             nb::arg("input_tensor_start"),
@@ -72,6 +76,7 @@ void bind_pad(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("implementation") = "auto"));
 }
 }  // namespace ttnn::operations::data_movement::detail
