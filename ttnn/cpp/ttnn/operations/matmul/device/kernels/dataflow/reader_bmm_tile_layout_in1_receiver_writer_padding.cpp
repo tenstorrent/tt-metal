@@ -102,7 +102,7 @@ void kernel_main() {
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
-    auto in1_pipe = in1_mcast_args.receiver(noc);
+    auto weights_bias_pipe = in1_mcast_args.receiver(noc);
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
@@ -118,7 +118,7 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
-                    in1_pipe.receive();
+                    weights_bias_pipe.receive();
                     dfb_in1.push_back(in1_block_num_tiles);
                 }
 
@@ -127,7 +127,7 @@ void kernel_main() {
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
                     dfb_in3.reserve_back(in3_block_w);
-                    in1_pipe.receive();
+                    weights_bias_pipe.receive();
                     dfb_in3.push_back(in3_block_w);
                 }
 #endif

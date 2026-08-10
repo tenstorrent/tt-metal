@@ -225,7 +225,7 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    auto in1_pipe = in1_mcast_args.sender(noc);
+    auto weights_bias_pipe = in1_mcast_args.sender(noc);
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
@@ -420,7 +420,7 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
-                        in1_pipe.send(
+                        weights_bias_pipe.send(
                             static_cast<uint32_t>(in1_start_address),
                             static_cast<uint32_t>(in1_start_address),
                             in1_block_size_bytes);
@@ -525,7 +525,7 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifndef SKIP_MCAST
-                        in1_pipe.send(
+                        weights_bias_pipe.send(
                             static_cast<uint32_t>(in3_start_address),
                             static_cast<uint32_t>(in3_start_address),
                             in3_block_size_bytes);
