@@ -613,6 +613,33 @@ class TtHCA(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
 
+    def _write_compressed(self, state, new_entries):
+        """Append this call's entries to the cache at row ``state.entry_count``.
+
+        One entry is one row, so the append offset advances by ``chunk/compress_rate`` per chunk --
+        tile-aligned only when that is a multiple of TILE_SIZE, i.e. chunks of 4096 tokens.
+        ``fill_cache_for_user_`` requires the alignment (update_cache_device_operation.cpp:96);
+        ``slice_write`` does not, at the cost of taking the cache through ROW_MAJOR and back.
+
+        The whole padded width is written, not just the real entries: the width is then constant across
+        chunks, and the attention mask -infs everything past ``total_entries`` anyway."""
+        width = new_entries.shape[2]
+        assert state.entry_count + width <= state.compressed_kv.shape[2], (
+            f"compressed cache full: writing {width} entries at {state.entry_count} exceeds capacity "
+            f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
+        )
+
+        cache_rm = ttnn.untilize(state.compressed_kv)
+        entries_rm = ttnn.untilize(new_entries)
+        cache_rm = ttnn.experimental.slice_write(
+            entries_rm,
+            cache_rm,
+            [0, 0, state.entry_count, 0],
+            [1, 1, state.entry_count + width, self.head_dim],
+            [1, 1, 1, 1],
+        )
+        state.compressed_kv = ttnn.tilize(cache_rm)
+
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
         batch, _, seq_len, _ = attn.shape
@@ -708,7 +735,7 @@ class TtHCA(_TtHCABase):
         )
         # Attention then reads the WHOLE cache every chunk, so its shape stays constant and the mask
         # -infs everything past total_entries.
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, new_entries, 0, update_idx=state.entry_count)
+        self._write_compressed(state, new_entries)
 
         attn, next_carry = self._attention(
             q,

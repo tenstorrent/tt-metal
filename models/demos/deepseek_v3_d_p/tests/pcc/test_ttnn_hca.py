@@ -279,6 +279,11 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
 
 # must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
 _CHUNK_SIZE = 4096
+
+# Programs the compressed-cache write compiles per chunk. slice_write folds its offsets into its own
+# program hash, so the append offset moving by one chunk's entries costs a program every time. Drops to
+# 0 once the write stops varying any op attribute.
+_WRITE_COMPILES_PER_CHUNK = 1
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", [_CHUNK_SIZE, _CHUNK_SIZE]),
     ("2chunk-ragged", [_CHUNK_SIZE, 3000]),
@@ -364,9 +369,9 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, it
         now = mesh_device.num_program_cache_entries()
         logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
         if it > 0:
-            assert now == programs, (
-                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}); an op "
-                f"attribute or a shape changed between chunks"
+            assert now - programs == _WRITE_COMPILES_PER_CHUNK, (
+                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}), expected "
+                f"{_WRITE_COMPILES_PER_CHUNK}; an op attribute or a shape changed between chunks"
             )
         programs = now
 
@@ -484,9 +489,9 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
         now = mesh_device.num_program_cache_entries()
         logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
         if it > 0:
-            assert now == programs, (
-                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}); an op "
-                f"attribute or a shape changed between chunks"
+            assert now - programs == _WRITE_COMPILES_PER_CHUNK, (
+                f"chunk {it} compiled {now - programs} new program(s) ({programs} -> {now}), expected "
+                f"{_WRITE_COMPILES_PER_CHUNK}; an op attribute or a shape changed between chunks"
             )
         programs = now
 
