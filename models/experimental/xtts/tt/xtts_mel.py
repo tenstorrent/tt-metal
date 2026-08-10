@@ -22,7 +22,9 @@ PERF (traced, p150; both frontends went ~21-25x in one pass):
     pages, and reshaping out of it cost **31.8 ms**, 96% of the conditioning mel.
     See :func:`_flat_signal`. This was by far the largest term.
   * framing without ``ttnn.gather`` — see :class:`_Framer`, the fix that took the
-    demo's traced setup from 7.045 s to 0.068 s.
+    demo's traced setup from 7.045 s to 0.068 s. Its reshape is chunked to a fixed
+    L1 budget (:data:`RESHAPE_PAGE_BUDGET`), so ANY audio length works: unchunked,
+    one 4 s conditioning window already overflowed L1.
   * ``real^2+imag^2`` folded into the filterbank — 5 ops become 1.
   * the tail multiplies by a precomputed reciprocal instead of dividing.
 
@@ -53,6 +55,20 @@ N_FREQS = N_FFT // 2 + 1  # 257
 # ttnn.matmul defaults its output to DRAM (the eltwise ops inherit the input's config instead), so
 # the matmuls need this passed explicitly or they drag the chain back out to DRAM.
 L1 = ttnn.L1_MEMORY_CONFIG
+
+# L1 budget for ONE framing reshape's input page, which is what caps the audio length a single
+# reshape can take and therefore why _Framer chunks. The reshape's circular buffers come out at
+# ~4.3x the page (page = rows*hop*4 bytes), measured on p150 by growing the signal until the clash:
+#
+#   conditioning (hop 256)  3.50 s  309 KB page  OK      |  4.00 s  352 KB page  CBs 1.52 MB  CLASH
+#   speaker      (hop 160)  4.00 s  252 KB page  OK      |  8.00 s  502 KB page  CBs 2.17 MB  CLASH
+#
+# L1 is 1.5 MB, so a whole 4 s conditioning window (coqui's gpt_cond_chunk_len) does not fit, and a
+# reference longer than ~4 s does not fit the speaker frontend either — both fatal for long
+# reference audio, and the 4 s case fails even though it "just fits" at 1.52 MB, because any live L1
+# buffer clashes with the CB region. 192 KB keeps the CBs near 0.83 MB, i.e. ~0.7 MB of L1 left for
+# whatever the caller has live.
+RESHAPE_PAGE_BUDGET = 192 * 1024
 
 
 def _flat_signal(wav, length):
@@ -102,6 +118,11 @@ class _Framer:
     per-element indexing. The framing itself is bit-exact — 0.0 max abs err against a host
     reference, given the same padded signal.
 
+    The reshape is done in CHUNKS of ``frame_chunk`` frames (see ``RESHAPE_PAGE_BUDGET``), because
+    its circular buffers are sized by the padded signal's single ROW_MAJOR page and one whole 4 s
+    conditioning window already exceeds L1. Chunk boundaries fall on frames and consecutive chunks
+    re-read the ``rows_per_frame - 1`` rows they overlap on, so this is invisible in the result.
+
     Framing alone: 5770 -> 1.0 ms at the conditioning shape. Whole frontend, in model:
     conditioning mel 5801 -> 33 ms, speaker mel 1234 -> 25 ms, at PCC 0.9999993 and 0.99999996
     against their torch references. Whole demo: 7.045 -> 0.068 s of traced setup, RTF 1.15 -> 0.19.
@@ -121,6 +142,11 @@ class _Framer:
         self.n_fft = n_fft
         self.hop = hop
         self.center_pad = n_fft // 2
+        self.rows_per_frame = -(-n_fft // hop)
+        # Frames per reshape (see RESHAPE_PAGE_BUDGET). A multiple of 32 so every chunk but the
+        # trailing one is tile-aligned in height, which keeps the dim-0 concat on whole tiles.
+        rows_budget = max(self.rows_per_frame, RESHAPE_PAGE_BUDGET // (hop * 4))
+        self.frame_chunk = max(32, ((rows_budget - self.rows_per_frame + 1) // 32) * 32)
         self._rev_cache = {}  # pad length p -> anti-identity [p, p]
         self._geom_cache = {}  # signal length L -> geometry tuple
 
@@ -131,7 +157,7 @@ class _Framer:
         """``(T, rows_per_frame, num_rows, right_pad)`` for a signal of ``length`` samples."""
         if length not in self._geom_cache:
             frames = self.num_frames(length)
-            rows_per_frame = -(-self.n_fft // self.hop)
+            rows_per_frame = self.rows_per_frame
             num_rows = (frames - 1) + rows_per_frame
             right = num_rows * self.hop - self.center_pad - length
             # A single reflection can only mirror `length - 1` samples. Signals shorter than
@@ -170,16 +196,50 @@ class _Framer:
         # (every block is `hop` wide) and so is exact; only this pad concat takes the hit.
         xpad = ttnn.concat(parts, dim=1)  # [1, num_rows*hop]
 
-        # [rows, hop] view -> frame m is rows m .. m+rows_per_frame-1, so each column block is one
-        # contiguous row slice. Row slices + a column concat, no indexing.
-        # DRAM, not L1, up to and including this reshape (see the L1 note at the top of the file):
-        # its input is a SINGLE ROW_MAJOR page of num_rows*hop*4 bytes, which sizes its circular
-        # buffers at ~1.48 MB of the 1.5 MB L1 and leaves no room for a live L1 activation.
-        rows = ttnn.reshape(ttnn.to_layout(xpad, ttnn.ROW_MAJOR_LAYOUT), [num_rows, self.hop])
-        blocks = [ttnn.slice(rows, [k, 0], [k + frames, self.hop], memory_config=L1) for k in range(rows_per_frame)]
+        # Frame in chunks of at most self.frame_chunk frames, then concat along dim 0. The chunking
+        # is purely an L1 budget for the reshape (see RESHAPE_PAGE_BUDGET) — every chunk boundary
+        # falls on a frame, and consecutive chunks re-read the rows_per_frame-1 rows they overlap on,
+        # so the result is identical to framing in one go (verified bit-exact, 0.0 max abs err).
+        pieces = [
+            self._frame_chunk(xpad, start, min(self.frame_chunk, frames - start), rows_per_frame)
+            for start in range(0, frames, self.frame_chunk)
+        ]
+        if len(pieces) == 1:
+            return pieces[0]
+        # dim-0 concat: the LAST dim is n_fft, a multiple of 32, so this is fp32-exact even when the
+        # trailing chunk's mid-tile height sends it down the untilize/retilize path (see the concat
+        # note above; that path is cheap here because a row stick is only n_fft*4 bytes).
+        out = ttnn.concat(pieces, dim=0, memory_config=L1)
+        for p in pieces:
+            ttnn.deallocate(p)
+        return out
+
+    def _frame_chunk(self, xpad, start, nf, rows_per_frame):
+        """Frames ``start .. start+nf`` of the padded signal as ``[nf, n_fft]`` TILE fp32.
+
+        Only the ``(nf + rows_per_frame - 1)`` rows those frames span are reshaped, which is what
+        bounds the reshape's L1: its input is a SINGLE ROW_MAJOR page of ``rows*hop*4`` bytes and
+        its circular buffers come out at ~4.3x that (see RESHAPE_PAGE_BUDGET). The slice off ``xpad``
+        is taken in TILE layout, where ``start*hop`` and the width are tile-aligned (``hop`` is a
+        multiple of 32 in both frontends), so it is a whole-tile copy.
+
+        DRAM, not L1, up to and including the reshape — see the L1 note at the top of the file.
+        """
+        hop = self.hop
+        rows_needed = nf + rows_per_frame - 1
+        seg = ttnn.slice(xpad, [0, start * hop], [1, (start + rows_needed) * hop])  # [1, rows*hop]
+        rows = ttnn.reshape(ttnn.to_layout(seg, ttnn.ROW_MAJOR_LAYOUT), [rows_needed, hop])
+        ttnn.deallocate(seg)
+        blocks = [ttnn.slice(rows, [k, 0], [k + nf, hop], memory_config=L1) for k in range(rows_per_frame)]
+        ttnn.deallocate(rows)
         wide = ttnn.concat(blocks, dim=1, memory_config=L1) if len(blocks) > 1 else blocks[0]
+        if len(blocks) > 1:
+            for b in blocks:
+                ttnn.deallocate(b)
         if wide.shape[1] != self.n_fft:  # hop does not divide n_fft (speaker: 4x160 -> trim to 512)
-            wide = ttnn.slice(wide, [0, 0], [frames, self.n_fft], memory_config=L1)
+            trimmed = ttnn.slice(wide, [0, 0], [nf, self.n_fft], memory_config=L1)
+            ttnn.deallocate(wide)
+            wide = trimmed
         return ttnn.to_layout(wide, ttnn.TILE_LAYOUT, memory_config=L1)
 
 

@@ -33,7 +33,16 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
-from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio, wav_to_mel
+from models.experimental.xtts.reference.xtts_conditioning import (
+    GPT_COND_CHUNK_SEC,
+    MEL_SR,
+    chunk_cond_mel,
+    chunk_wav,
+    load_coqui_test_audio,
+    load_reference_audio,
+    reference_conditioning,
+    wav_to_mel,
+)
 from models.experimental.xtts.reference.xtts_mel import SAMPLE_RATE as SPK_SR
 from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE, XttsHifiDecoderFull
@@ -43,6 +52,10 @@ from models.experimental.xtts.tt.xtts_inference import TtXtts
 TILE = 32
 MAX_NEW_TOKENS = 16
 COND_SECONDS = 3
+# Long-reference case: over two gpt_cond_chunk_len windows, so the style average has 3 terms and
+# each window is a FULL 4 s one (the length that forces the mel frontend to frame in chunks).
+COND_LONG_SECONDS = 10
+COND_LONG_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav")  # 9.66 s + 9.67 s, same speaker
 
 # A bigger, real sentence for the objective eval metrics (CER/UTMOS/SECS), which need
 # natural, intelligible speech of some length to be meaningful.
@@ -115,6 +128,56 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
     logger.info(f"end-to-end raw-waveform PCC (informational): {wave_pcc}")
     logger.info(f"end-to-end spectrogram-magnitude PCC: {spec_msg}")
     assert spec_pass, f"end-to-end spectrogram PCC below {pcc}: {spec_msg}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("pcc", [0.99])
+def test_tt_cond_latents_long_reference(device, xtts_state_dict, pcc, reset_seeds):
+    """LONG reference audio -> conditioning latents, on device vs torch.
+
+    coqui ``get_gpt_cond_latents`` conditions on up to ``gpt_cond_len`` (30 s) of reference audio by
+    slicing the AUDIO into ``gpt_cond_chunk_len`` (4 s) windows, computing each window's mel, and
+    AVERAGING the per-window style embeddings — the whole point of accepting a long reference. The
+    device does the same, computing every window's 80-mel on device, so the torch reference here
+    windows the audio too (``XttsReference._cond_latents`` instead windows the precomputed mel, which
+    is only equivalent up to the few STFT frames straddling a boundary — logged below for reference).
+
+    A reference this long also makes every window a full 4 s one, which is what forces the device mel
+    frontend to frame in several reshape chunks (one whole 4 s window does not fit L1 in one reshape).
+    """
+    sd = xtts_state_dict
+
+    # The HF samples are all ~3 s (under one window), so use the upstream coqui LJSpeech test
+    # clips: real, distinct, single-speaker speech, so the averaged windows differ from each other.
+    wav = load_coqui_test_audio(samples=COND_LONG_CLIPS, max_seconds=COND_LONG_SECONDS)
+    windows = chunk_wav(wav)
+    logger.info(
+        f"long reference {wav.shape[-1] / MEL_SR:.2f}s -> {len(windows)} windows of "
+        f"{[round(w.shape[-1] / MEL_SR, 2) for w in windows]}s (gpt_cond_chunk_len {GPT_COND_CHUNK_SEC}s)"
+    )
+    assert len(windows) > 2, "test needs a reference spanning more than two conditioning windows"
+
+    # Reference: window the audio -> mel + get_style_emb per window -> average (coqui order).
+    ref_cond = reference_conditioning(sd)
+    mel_stats = sd["mel_stats"].cpu()
+    with torch.no_grad():
+        parts = [ref_cond(wav_to_mel(w, mel_stats)) for w in windows]
+        mel_windowed = [ref_cond(m) for m in chunk_cond_mel(wav_to_mel(wav, mel_stats))]
+    ref_latents = torch.stack(parts, dim=0).mean(dim=0).transpose(1, 2)  # [1, 32, 1024]
+
+    # Device: chunk the audio -> mel + style per window on device -> average.
+    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    tt_latents = ttnn.to_torch(tt._cond_latents(wav)).float()
+
+    assert tt_latents.shape == ref_latents.shape, f"{tuple(tt_latents.shape)} != {tuple(ref_latents.shape)}"
+    does_pass, pcc_message = comp_pcc(ref_latents, tt_latents, pcc)
+    logger.info(comp_allclose(ref_latents, tt_latents))
+    logger.info(f"long-reference conditioning latents ({len(windows)} windows averaged): {pcc_message}")
+    logger.info(
+        "windowing the mel instead of the audio (XttsReference._cond_latents) differs by "
+        f"{comp_pcc(ref_latents, torch.stack(mel_windowed, dim=0).mean(dim=0).transpose(1, 2), pcc)[1]}"
+    )
+    assert does_pass, f"long-reference conditioning PCC below {pcc}: {pcc_message}"
 
 
 # A real sampled generation + three heavy eval backends (Whisper-large-v3, UTMOS22, ECAPA2,
