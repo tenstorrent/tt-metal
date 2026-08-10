@@ -29,8 +29,8 @@ Tensor reduce(
     // tile-reduce kernels. Default-off pending fixes to the dense RM path (perf regression +
     // multi-H-tile hang); see reduce_op.cpp for the eligibility constraints.
     bool use_row_major_support = false,
-    // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
-    // non-fp32/non-AVG.
+    // When false (default), fp32 mean and max run on the accurate SFPU path (full fp32); true selects the FPU.
+    // Ignored for non-fp32 and for math ops other than AVG/MAX.
     bool fast_and_approximate_mode = false);
 
 }  // namespace ttnn::operations::reduction::generic::detail
