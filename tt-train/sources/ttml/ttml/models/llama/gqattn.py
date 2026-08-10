@@ -43,10 +43,12 @@ class GroupedQueryAttention(AbstractModuleBase):
             )
 
         use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.sequence_parallel = sequence_parallel
 
         head_dim = embedding_size // num_heads
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
@@ -70,6 +72,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.out_linear = RowParallelLinear(
@@ -78,6 +81,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -180,6 +184,11 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
+        if self.sequence_parallel:
+            # SP shards the residual stream along the sequence; single-token decode
+            # (seq=1, not divisible by tp) has nothing to shard. Decode runs with the
+            # classic-TP model instead.
+            raise NotImplementedError("sequence_parallel does not support the KV-cache decode path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)

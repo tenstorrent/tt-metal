@@ -116,6 +116,9 @@ class LoraColumnParallelLinear(AbstractModuleBase):
     def __init__(self, base_layer: ColumnParallelLinear, config: LoraConfig):
         super().__init__()
 
+        if base_layer.sequence_parallel:
+            raise NotImplementedError("LoraColumnParallelLinear does not support sequence parallelism.")
+
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
         self.gather_output = base_layer.gather_output
@@ -169,6 +172,9 @@ class LoraRowParallelLinear(AbstractModuleBase):
 
     def __init__(self, base_layer: RowParallelLinear, config: LoraConfig):
         super().__init__()
+
+        if base_layer.sequence_parallel:
+            raise NotImplementedError("LoraRowParallelLinear does not support sequence parallelism.")
 
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
