@@ -22,8 +22,11 @@ from fuser.validator import (
     MATMUL_INNER_TILE_DIMS,
     MATMUL_OPERAND_DIMS,
     NO_BROADCAST,
+    NO_BROADCAST_ACC_TO_DEST,
+    NO_BROADCAST_REUSE_DEST,
     NO_REUSE_DEST,
     NO_TRANSPOSE,
+    NO_TRANSPOSE_UNPACK_TO_DEST,
     NO_UNPACK_TO_DEST,
     PACK_NO_L1_ACC,
     REDUCE_PARAMS_REQUIRED,
@@ -35,18 +38,15 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
+    eltwise_unpacker_rules,
     forced_unpackers,
     reject,
     require_src_a_tiles,
-    reuses_dest,
 )
 from helpers.llk_params import (
-    AccToDest,
     BroadcastType,
-    EltwiseBinaryReuseDestType,
     MathOperation,
     ReduceDimension,
-    UnpackToDest,
 )
 from pydantic import Field
 
@@ -75,26 +75,9 @@ _broadcast_required = reject(
     "UnaryBroadcast requires a broadcast_type",
 )
 
-_no_transpose_unpack_to_dest = reject(
-    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes and s.has_transpose,
-    "does not support transpose with unpack_to_dest",
-)
-
 _no_transpose_mismatch = reject(
     lambda s, a, b: s.transpose_faces != s.transpose_within_face,
     "requires both transpose_faces and transpose_within_face to have the same value",
-)
-
-_no_broadcast_reuse_dest = reject(
-    lambda s, a, b: s.broadcast_type != BroadcastType.None_
-    and s.reuse_dest != EltwiseBinaryReuseDestType.NONE,
-    "broadcast does not support reuse_dest",
-)
-
-_no_broadcast_acc_to_dest = reject(
-    lambda s, a, b: s.broadcast_type != BroadcastType.None_
-    and s.acc_to_dest == AccToDest.Yes,
-    "broadcast does not support acc_to_dest",
 )
 
 _block_full_width = reject(
@@ -107,21 +90,12 @@ _reduce_col_only = reject(
     "unpacker can only be paired with a column reduce (operation: Reduce, reduce_dim: REDUCE_COL)",
 )
 
-_eltwise_unpacker_rules = [
-    forced_unpackers("UnpackerA", when=reuses_dest, note="when reuse_dest is set"),
-    forced_unpackers(
-        "UnpackerAB",
-        when=lambda s, a, b: not reuses_dest(s, a, b),
-        note="unless reuse_dest is set",
-    ),
-]
-
 _eltwise_checks = [
-    _no_transpose_unpack_to_dest,
+    NO_UNPACK_TO_DEST,
     _no_transpose_mismatch,
-    *_eltwise_unpacker_rules,
-    _no_broadcast_reuse_dest,
-    _no_broadcast_acc_to_dest,
+    *eltwise_unpacker_rules,
+    NO_BROADCAST_REUSE_DEST,
+    NO_BROADCAST_ACC_TO_DEST,
 ]
 
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
@@ -131,7 +105,7 @@ UNPACKER_MAP = {
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
         [
             INT32_NEEDS_UNPACK_TO_DEST,
-            _no_transpose_unpack_to_dest,
+            NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
         ],
     ),
@@ -189,7 +163,7 @@ FPU_MAP = {
             NO_REUSE_DEST,
             forced_unpackers("UnpackerA", "UnpackerTilizeA"),
             NO_BROADCAST,
-            _no_transpose_unpack_to_dest,
+            NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
         ],
     ),
@@ -227,7 +201,7 @@ FPU_MAP = {
         [
             _broadcast_required,
             NO_REUSE_DEST,
-            _no_broadcast_acc_to_dest,
+            NO_BROADCAST_ACC_TO_DEST,
             NO_UNPACK_TO_DEST,
             require_src_a_tiles((32, 32)),
             forced_unpackers("UnaryBroadcastUnpacker"),

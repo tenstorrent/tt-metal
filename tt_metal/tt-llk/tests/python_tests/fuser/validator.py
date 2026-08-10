@@ -83,6 +83,15 @@ def forced_unpackers(*names, when=None, note=None):
 
 reuses_dest = lambda s, a, b: s.reuse_dest != EltwiseBinaryReuseDestType.NONE
 
+eltwise_unpacker_rules = [
+    forced_unpackers("UnpackerA", when=reuses_dest, note="when reuse_dest is set"),
+    forced_unpackers(
+        "UnpackerAB",
+        when=lambda s, a, b: not reuses_dest(s, a, b),
+        note="unless reuse_dest is set",
+    ),
+]
+
 NO_BROADCAST = reject(
     lambda s, a, b: s.broadcast_type != BroadcastType.None_,
     "broadcast is not supported for this kernel",
@@ -101,6 +110,23 @@ NO_TRANSPOSE_FACES = reject(
 NO_UNPACK_TO_DEST = reject(
     lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes,
     "unpack_to_dest is not supported for this kernel",
+)
+
+NO_TRANSPOSE_UNPACK_TO_DEST = reject(
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes and s.has_transpose,
+    "does not support transpose with unpack_to_dest",
+)
+
+NO_BROADCAST_REUSE_DEST = reject(
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.reuse_dest != EltwiseBinaryReuseDestType.NONE,
+    "broadcast does not support reuse_dest",
+)
+
+NO_BROADCAST_ACC_TO_DEST = reject(
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.acc_to_dest == AccToDest.Yes,
+    "broadcast does not support acc_to_dest",
 )
 
 INT32_NEEDS_UNPACK_TO_DEST = reject(

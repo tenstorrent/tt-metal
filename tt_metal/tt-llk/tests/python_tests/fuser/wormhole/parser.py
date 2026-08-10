@@ -25,10 +25,14 @@ from fuser.validator import (
     MATMUL_INNER_TILE_DIMS,
     MATMUL_OPERAND_DIMS,
     NO_BROADCAST,
+    NO_BROADCAST_ACC_TO_DEST,
+    NO_BROADCAST_REUSE_DEST,
     NO_COL_ROW_BCAST_32X16,
     NO_REUSE_DEST,
     NO_TRANSPOSE,
     NO_TRANSPOSE_FACES,
+    NO_TRANSPOSE_UNPACK_TO_DEST,
+    NO_UNPACK_TO_DEST,
     PACK_FULL_TILE_ONLY,
     PACK_NO_BLOCK_FLOAT,
     PACK_NO_L1_ACC,
@@ -44,9 +48,9 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
+    eltwise_unpacker_rules,
     forced_unpackers,
     require_src_a_tiles,
-    reuses_dest,
 )
 from helpers.llk_params import (
     MathOperation,
@@ -79,7 +83,7 @@ from .unpacker.unpack_ab import UnpackerAB
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [INT32_NEEDS_UNPACK_TO_DEST],
+        [INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
@@ -115,21 +119,15 @@ UNPACKER_MAP = {
     ),
 }
 
-_eltwise_unpacker_rules = [
-    forced_unpackers("UnpackerA", when=reuses_dest, note="when reuse_dest is set"),
-    forced_unpackers(
-        "UnpackerAB",
-        when=lambda s, a, b: not reuses_dest(s, a, b),
-        note="unless reuse_dest is set",
-    ),
-]
-
 _eltwise_checks = [
     DEST_TO_SRCA_NEEDS_ACC,
-    *_eltwise_unpacker_rules,
+    *eltwise_unpacker_rules,
     SUPPORTED_SRC_A_TILE,
     TRANSPOSE_NEEDS_FULL_TILE,
+    NO_UNPACK_TO_DEST,
     NO_COL_ROW_BCAST_32X16,
+    NO_BROADCAST_REUSE_DEST,
+    NO_BROADCAST_ACC_TO_DEST,
 ]
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
