@@ -50,6 +50,16 @@ void kernel_main() {
 #ifndef IS_ROW_MAJOR
     DataflowBuffer value_tensor_dfb(dfb::value_tensor);
     const uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
+#ifdef IS_UINT16_FP32_MODE
+    // IS_UINT16_FP32_MODE: input was UInt16 but compute writes sorted values as
+    // Float32 (into dfb::value_tensor) so pack_tile does not bf16-truncate the
+    // fp32 DEST register.  Writer converts Float32 → UInt16 element-by-element
+    // via a 1-tile UInt16 staging DFB before DMA'ing to DRAM.  Only bound when
+    // this mode is on, so bf16/fp32/uint32 sorts pay nothing extra.
+    DataflowBuffer uint16_conv_dfb(dfb::uint16_conv);
+    const uint32_t uint16_conv_tile_size = uint16_conv_dfb.get_tile_size();
+    constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32 × 32
+#endif
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const uint32_t h = core_loop * total_number_of_cores +
@@ -64,6 +74,38 @@ void kernel_main() {
             }
         }
 
+#ifdef IS_UINT16_FP32_MODE
+        for (uint32_t w = 0; w < Wt; w++) {
+            value_tensor_dfb.wait_front(one_tile);
+            uint16_conv_dfb.reserve_back(one_tile);
+
+            volatile tt_l1_ptr uint32_t* fp32_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(value_tensor_dfb.get_read_ptr());
+            volatile tt_l1_ptr uint16_t* u16_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(uint16_conv_dfb.get_write_ptr());
+
+            for (uint32_t i = 0; i < ELEMENTS_PER_TILE; i++) {
+                const uint32_t fp32_bits = fp32_ptr[i];
+                float fval;
+                __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
+                u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
+            }
+            __sync_synchronize();
+
+            value_tensor_dfb.pop_front(one_tile);
+            uint16_conv_dfb.push_back(one_tile);
+
+            uint16_conv_dfb.wait_front(one_tile);
+            noc.async_write(
+                uint16_conv_dfb,
+                value_accessor,
+                uint16_conv_tile_size,
+                {.offset_bytes = 0},
+                {.page_id = h * Wt + w, .offset_bytes = 0});
+            noc.async_write_barrier();
+            uint16_conv_dfb.pop_front(one_tile);
+        }
+#else
         // Write sorted value tiles from value_tensor_dfb → DRAM
         for (uint32_t w = 0; w < Wt; w++) {
             value_tensor_dfb.wait_front(one_tile);
@@ -76,6 +118,7 @@ void kernel_main() {
             noc.async_write_barrier();
             value_tensor_dfb.pop_front(one_tile);
         }
+#endif
     }
 #else
     // ------------------------------------------------------------------
@@ -88,8 +131,16 @@ void kernel_main() {
     //           (compute kernel sorts them alongside the tilized values).
     //   Output: drain 32 untilized value pages from rm_value_output_dfb
     //           → write via noc.async_write → value DRAM buffer.
+    //
+    // With IS_UINT16_FP32_MODE the compute kernel pack_untilizes Float32
+    // values into rm_value_output, but DRAM is UInt16.  Writer software-
+    // converts each row into dfb::rm_uint16_output_stage (UInt16) before
+    // the DMA.
     // ------------------------------------------------------------------
     DataflowBuffer rm_value_output_dfb(dfb::rm_value_output);
+#ifdef IS_UINT16_FP32_MODE
+    DataflowBuffer rm_uint16_output_stage_dfb(dfb::rm_uint16_output_stage);
+#endif
 
     constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT
 
@@ -112,6 +163,34 @@ void kernel_main() {
         const uint32_t row_base = h * TILE_H;
         for (uint32_t row = 0; row < TILE_H; row++) {
             rm_value_output_dfb.wait_front(one_tile);
+#ifdef IS_UINT16_FP32_MODE
+            rm_uint16_output_stage_dfb.reserve_back(one_tile);
+
+            const uint32_t elements_per_row = W_value_bytes / sizeof(uint16_t);
+            volatile tt_l1_ptr uint32_t* fp32_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rm_value_output_dfb.get_read_ptr());
+            volatile tt_l1_ptr uint16_t* u16_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rm_uint16_output_stage_dfb.get_write_ptr());
+            for (uint32_t i = 0; i < elements_per_row; i++) {
+                const uint32_t fp32_bits = fp32_ptr[i];
+                float fval;
+                __builtin_memcpy(&fval, &fp32_bits, sizeof(fval));
+                u16_ptr[i] = static_cast<uint16_t>(static_cast<uint32_t>(fval));
+            }
+            __sync_synchronize();
+            rm_value_output_dfb.pop_front(one_tile);
+            rm_uint16_output_stage_dfb.push_back(one_tile);
+
+            rm_uint16_output_stage_dfb.wait_front(one_tile);
+            noc.async_write(
+                rm_uint16_output_stage_dfb,
+                value_accessor,
+                W_value_bytes,
+                {.offset_bytes = 0},
+                {.page_id = row_base + row, .offset_bytes = 0});
+            noc.async_write_barrier();
+            rm_uint16_output_stage_dfb.pop_front(one_tile);
+#else
             noc.async_write(
                 rm_value_output_dfb,
                 value_accessor,
@@ -120,6 +199,7 @@ void kernel_main() {
                 {.page_id = row_base + row, .offset_bytes = 0});
             noc.async_write_barrier();
             rm_value_output_dfb.pop_front(one_tile);
+#endif
         }
     }
 #endif

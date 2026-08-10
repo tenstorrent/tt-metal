@@ -54,6 +54,120 @@ void append_group_norm_pad_correction_cbs(
     }
 }
 
+bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
+    return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
+        return format != tt::DataFormat::Float16_b;
+    });
+}
+
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt) {
+    // Mirrors how the kernel pads num_out_blocks: a leftover remainder becomes extra full-size blocks.
+    const uint32_t out_block_h_normal = block_ht / num_out_blocks;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    if (block_ht % num_out_blocks != 0) {
+        const uint32_t residual = block_ht - num_out_blocks * out_block_h_normal;
+        num_out_blocks_padded += residual / out_block_h_normal + 1;
+    }
+    return num_out_blocks_padded * out_block_h_normal * block_wt;
+}
+
+uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores) {
+    constexpr uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
+    constexpr uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
+    if (num_virtual_cores == 0) {
+        return 1;
+    }
+    uint32_t heuristic = volume / (HEURISTIC_BLOCK_SIZE_BASE * num_virtual_cores);
+    heuristic = heuristic ? heuristic : 1;
+    uint32_t num_out_blocks = 1;
+    while (num_out_blocks < heuristic && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
+        num_out_blocks <<= 1;
+    }
+    return num_out_blocks;
+}
+
+bool groupnorm_legacy_rm_input_fits_l1(
+    uint32_t Ht,
+    uint32_t W,
+    uint32_t per_batch_hw,
+    uint32_t num_batches,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t num_groups,
+    int num_out_blocks_arg,
+    uint32_t tile_width,
+    uint32_t single_tile_size,
+    bool has_gamma,
+    bool has_beta,
+    bool tilize_in,
+    bool untilize_out,
+    uint64_t available_l1) {
+    // Grid geometry, same formulas as the program factory.
+    uint32_t num_virtual_cols = std::min(grid_x, num_groups);
+    while (num_virtual_cols > 0 && ((W / num_virtual_cols) % tile_width != 0 || (num_groups % num_virtual_cols) != 0)) {
+        num_virtual_cols -= 1;
+    }
+    if (num_virtual_cols == 0) {
+        return false;  // Invalid grid; report "does not fit" (fall back to the composite path)
+    }
+    const uint32_t num_virtual_rows = (grid_x / num_virtual_cols) * grid_y;
+    if (num_virtual_rows == 0 || Ht < num_virtual_rows) {
+        return false;
+    }
+    const uint32_t per_core_Mt = Ht / num_virtual_rows;
+    const uint32_t per_core_N = W / num_virtual_cols;
+    const uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
+    const uint32_t num_channels_per_group = W / num_groups;
+
+    const uint32_t block_wt = find_max_tile_span(per_core_N, num_channels_per_group).first;
+    // Per-core tile height: many batches per core, or one batch split across rows.
+    const uint32_t block_ht = (num_batches >= num_virtual_rows) ? (Ht / num_batches) : per_core_Mt;
+    if (block_ht == 0) {
+        return false;
+    }
+
+    // num_out_blocks: -1 means use the factory's power-of-two heuristic.
+    uint32_t num_out_blocks;
+    if (num_out_blocks_arg < 0) {
+        num_out_blocks = groupnorm_heuristic_num_out_blocks(per_batch_hw * W, num_virtual_cols * num_virtual_rows);
+    } else {
+        num_out_blocks = num_out_blocks_arg == 0 ? 1 : static_cast<uint32_t>(num_out_blocks_arg);
+    }
+    num_out_blocks = std::min(num_out_blocks, block_ht);
+
+    // CB footprint: seven per-out-block CBs, the resident group, and an allowance for the small ones.
+    const uint64_t in0_block_tiles = static_cast<uint64_t>(block_ht / num_out_blocks) * block_wt;
+    const uint64_t per_out_block_cb = in0_block_tiles * single_tile_size;
+    // Only a row-major input allocates the resident group.
+    const uint64_t resident_cb =
+        tilize_in ? static_cast<uint64_t>(groupnorm_tilized_group_tiles(block_ht, num_out_blocks, block_wt)) *
+                        single_tile_size
+                  : 0;
+
+    uint64_t est =
+        resident_cb + 7 * per_out_block_cb + static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+    if (has_gamma) {
+        est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+    }
+    if (has_beta) {
+        est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+    }
+    // Mask CB; a mask is always allocated. Assumes bf16 tiles, which over-estimates on purpose.
+    est += static_cast<uint64_t>(block_wt) * single_tile_size * 2;
+    if (untilize_out) {
+        est += 2 * per_out_block_cb;  // c_30 untilize out + c_20 reread
+    }
+
+    return est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
+}
+
+bool groupnorm_legacy_rm_prefer_composite_for_perf(
+    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches) {
+    const bool imbalanced =
+        num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
+    return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
