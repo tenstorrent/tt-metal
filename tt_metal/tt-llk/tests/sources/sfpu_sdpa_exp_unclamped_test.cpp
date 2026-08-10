@@ -5,10 +5,13 @@
 // Driver for the upper-unclamped exp SFPU entry
 // (tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h).
 //
-// The header only exposes leaf helpers that map a vFloat to a vFloat; there is
-// no dst_reg loop and no _init_ entry, so this test supplies the loop itself
-// (`calculate_sdpa_exp_unclamped`, one SFPU slot per iteration, 8 iterations per
-// face) and drives it through the standard VectorMode::RC wrapper.
+// That header only exposes leaf helpers that map a vFloat to a vFloat; there is
+// no dst_reg loop and no _init_ entry. The loop lives in the metal llk_api tree
+// (`ckernel::sfpu::calculate_sdpa_exp_unclamped`, one SFPU slot per iteration,
+// 8 iterations per face, in
+// hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa_exp_unclamped.h),
+// alongside the other SDPA SFPU wrappers, and this test drives it through the
+// standard VectorMode::RC dispatch.
 //
 // What is under test: `_ckernel_sfpu_exp_accurate_upper_unclamped_` is a copy of
 // the accurate exp path with the *upper* input clamp removed. The clamped variant
@@ -34,8 +37,7 @@
 // live one layer up, in the metal llk_api tree
 // (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/). That unqualified spelling only
 // resolves because the tt-llk test build now also puts llk_api/llk_sfpu on the
-// include path (see setup_compilation_options in helpers/test_config.py). The
-// explicit include below just makes the dependency visible at the use site.
+// include path (see setup_compilation_options in helpers/test_config.py).
 
 #include <cstdint>
 
@@ -81,31 +83,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
-// The experimental header reaches for the metal-tree exp helpers; pull them in
-// under their on-path spelling first (see file header).
-#include "llk_sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h"
+// ckernel_sfpu_sdpa_exp_unclamped.h reads a bare DST_ACCUM_MODE (it is written
+// against the metal SFPU macro environment), so define it before including it.
+#define DST_ACCUM_MODE is_fp32_dest_acc_en
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_exp_unclamped.h"
+#undef DST_ACCUM_MODE
 
 using namespace ckernel;
-
-namespace
-{
-// One SFPU slot (4 dest rows x 8 dest columns) per iteration, 8 iterations to
-// cover a full 16x16 face. VectorMode::RC repeats this over the four faces.
-constexpr int SDPA_EXP_ITERATIONS = 8;
-
-template <bool scale_en>
-inline void calculate_sdpa_exp_unclamped(const std::uint32_t scale_bits)
-{
-    for (int d = 0; d < SDPA_EXP_ITERATIONS; ++d)
-    {
-        const sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::dst_reg[0]       = ckernel::sfpu::_ckernel_sfpu_exp_accurate_upper_unclamped_<scale_en, is_fp32_dest_acc_en>(val, scale_bits);
-        sfpi::dst_reg++;
-    }
-}
-} // namespace
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -119,10 +105,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     // No op-specific init: `_ckernel_sfpu_exp_accurate_upper_unclamped_` is a pure sfpi
-    // leaf -- it materialises every constant as an SFPLOADI immediate and walks DEST with
-    // `sfpi::dst_reg++` -- so all it needs is the invariant SFPU config + ADDR_MOD_7 from
-    // the LLK init. Calling `exp_init` here would only program the TTI exp path's state
-    // (ADDR_MOD_6, LREG12 = 1/ln2, LREG13 = c2), which nothing on this path reads.
+    // leaf -- it materialises every constant as an SFPLOADI immediate and the wrapper walks
+    // DEST with `sfpi::dst_reg++` -- so all it needs is the invariant SFPU config +
+    // ADDR_MOD_7 from the LLK init. Calling `exp_init` here would only program the TTI exp
+    // path's state (ADDR_MOD_6, LREG12 = 1/ln2, LREG13 = c2), which nothing on this path reads.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
@@ -132,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             0 /* dst_index */, formats.math, formats.math);
 
-        _llk_math_eltwise_unary_sfpu_params_(calculate_sdpa_exp_unclamped<SFPU_SCALE_EN>, 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

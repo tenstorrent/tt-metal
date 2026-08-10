@@ -78,6 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 #include "sfpu/experimental/ckernel_sfpu_softmax_k.h"
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0 /* dst_index */, formats.math, formats.math);
 
         // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_softmax_k_<SOFTMAX_K>, 0 /* dst_index */, VectorMode::RC_custom);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

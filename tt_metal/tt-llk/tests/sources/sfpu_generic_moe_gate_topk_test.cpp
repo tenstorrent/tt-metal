@@ -95,6 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 using namespace ckernel;
@@ -125,9 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         MOE_GATE_BIAS_DST_TILE, formats.math, formats.math);
 
     // RC_custom: the kernel walks DEST itself off the tile-0 base.
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::
-            _generic_moe_gate_topk_<MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT>,
+    SFPU_UNARY_CALL(
+        DST_SYNC,
+        is_fp32_dest_acc_en,
+        _generic_moe_gate_topk_,
+        (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
         MOE_GATE_SCORES_DST_TILE,
         VectorMode::RC_custom,
         MOE_GATE_EPS_BITS,
