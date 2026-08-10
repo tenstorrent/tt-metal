@@ -2611,9 +2611,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.compile_time_args = compute_compile_time_args;
     compute_kernel.defines = kernel_defines;
     compute_kernel.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
+        .math_fidelity = q_tiny_tile ? MathFidelity::LoFi : math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
+        .math_approx_mode = q_tiny_tile ? true : math_approx_mode,
     };
 
     // Set reader rt args

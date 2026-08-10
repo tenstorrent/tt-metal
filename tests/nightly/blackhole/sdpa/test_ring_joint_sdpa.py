@@ -5721,9 +5721,9 @@ else:
         # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
-        # Genuine 16x32 tiny tiles with strided-wide in-place latent V. Measured 2026-08-10:
-        # 8.477 ms, 38.34% math utilization on QB.
-        ("kimi_k3", 16, 640, 4, 38.34),
+        # Genuine 16x32 tiny tiles with strided-wide in-place latent V and q16-specific
+        # approximate/LoFi compute. Measured 2026-08-10: 8.354 ms, 38.90% math utilization on QB.
+        ("kimi_k3", 16, 640, 4, 38.90),
     ]
 
 
