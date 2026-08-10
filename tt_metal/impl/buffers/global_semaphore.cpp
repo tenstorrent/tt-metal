@@ -19,7 +19,6 @@
 
 #include "global_semaphore_impl.hpp"
 #include "mesh_device.hpp"
-#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
@@ -146,10 +145,9 @@ GlobalSemaphore::~GlobalSemaphore() = default;
 
 IDevice* GlobalSemaphore::device() const { return pimpl_->device(); }
 
-std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    ttsl::reflection::operator<<(os, global_semaphore);
-    return os;
-}
+GlobalSemaphoreImpl& GlobalSemaphore::impl() { return *pimpl_; }
+
+const GlobalSemaphoreImpl& GlobalSemaphore::impl() const { return *pimpl_; }
 
 DeviceAddr GlobalSemaphore::address() const { return pimpl_->address(); }
 
@@ -160,12 +158,3 @@ std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
 }
 
 }  // namespace tt::tt_metal
-
-namespace std {
-
-std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
-    const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
-}
-
-}  // namespace std

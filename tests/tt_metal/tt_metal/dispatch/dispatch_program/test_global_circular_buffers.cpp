@@ -24,6 +24,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 
@@ -98,37 +99,37 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
         }
         std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
-        sender_runtime_args[sender_args_idx++] = global_cb.config_address();  // config_addr
-        sender_runtime_args[sender_args_idx++] = 1;                           // is_sender
-        sender_runtime_args[sender_args_idx++] = receiver_noc_coords.size();  // num_receivers
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_start_addr
-        sender_runtime_args[sender_args_idx++] = global_cb.size();            // fifo_size
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_ptr
+        sender_runtime_args[sender_args_idx++] = global_cb.config_address();         // config_addr
+        sender_runtime_args[sender_args_idx++] = 1;                                  // is_sender
+        sender_runtime_args[sender_args_idx++] = receiver_noc_coords.size();         // num_receivers
+        sender_runtime_args[sender_args_idx++] = global_cb.impl().buffer_address();  // fifo_start_addr
+        sender_runtime_args[sender_args_idx++] = global_cb.size();                   // fifo_size
+        sender_runtime_args[sender_args_idx++] = global_cb.impl().buffer_address();  // fifo_ptr
 
         for (const auto& receiver_noc_coord : receiver_noc_coords) {
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.x;  // remote_noc_x
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.y;  // remote_noc_y
         }
-        sender_runtime_args[sender_args_idx++] = 0;                           // aligned_pages_sent
-        sender_runtime_args[sender_args_idx++] = 0;                           // aligned_pages_acked
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_wr_ptr
+        sender_runtime_args[sender_args_idx++] = 0;                                  // aligned_pages_sent
+        sender_runtime_args[sender_args_idx++] = 0;                                  // aligned_pages_acked
+        sender_runtime_args[sender_args_idx++] = global_cb.impl().buffer_address();  // fifo_wr_ptr
         sender_runtime_args[sender_args_idx++] =
-            global_cb.buffer_address() + global_cb.size();      // fifo_limit_page_aligned
-        sender_runtime_args[sender_args_idx++] = cb_page_size;  // fifo_page_size
+            global_cb.impl().buffer_address() + global_cb.size();  // fifo_limit_page_aligned
+        sender_runtime_args[sender_args_idx++] = cb_page_size;     // fifo_page_size
 
         std::vector<uint32_t> receiver_runtime_args = {
-            global_cb.config_address(),                     // config_addr
-            0,                                              // is_sender
-            global_cb.buffer_address(),                     // fifo_start_addr
-            global_cb.size(),                               // fifo_size
-            global_cb.buffer_address(),                     // fifo_ptr
-            sender_noc_coords.x,                            // sender_noc_x
-            sender_noc_coords.y,                            // sender_noc_y
-            0,                                              // aligned_pages_sent
-            0,                                              // aligned_pages_acked
-            global_cb.buffer_address(),                     // fifo_rd_ptr
-            global_cb.buffer_address() + global_cb.size(),  // fifo_limit_page_aligned
-            cb_page_size,                                   // fifo_page_size
+            global_cb.config_address(),                            // config_addr
+            0,                                                     // is_sender
+            global_cb.impl().buffer_address(),                     // fifo_start_addr
+            global_cb.size(),                                      // fifo_size
+            global_cb.impl().buffer_address(),                     // fifo_ptr
+            sender_noc_coords.x,                                   // sender_noc_x
+            sender_noc_coords.y,                                   // sender_noc_y
+            0,                                                     // aligned_pages_sent
+            0,                                                     // aligned_pages_acked
+            global_cb.impl().buffer_address(),                     // fifo_rd_ptr
+            global_cb.impl().buffer_address() + global_cb.size(),  // fifo_limit_page_aligned
+            cb_page_size,                                          // fifo_page_size
         };
         tt::tt_metal::SetRuntimeArgs(program_, dm0_sender_kernel, sender_cores, sender_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program_, dm1_sender_kernel, sender_cores, sender_runtime_args);

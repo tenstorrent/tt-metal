@@ -4,7 +4,9 @@
 
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include "impl/buffers/circular_buffer_config_impl.hpp"
 
+#include <memory>
 #include <utility>
 
 namespace tt::tt_metal {
@@ -83,8 +85,7 @@ CircularBufferConfig from_flatbuffer(
         return result;
     };
 
-    // Constructor supports being able to specify all private members. shadow_global_buffer is public.
-    CircularBufferConfig config(
+    auto impl = std::make_unique<CircularBufferConfigImpl>(
         config_fb->total_size(),
         globally_allocated_address,
         data_formats,
@@ -97,10 +98,9 @@ CircularBufferConfig from_flatbuffer(
         config_fb->dynamic_cb(),
         config_fb->max_size(),
         config_fb->buffer_size());
+    impl->set_shadow_global_buffer(shadow_global_buffer);
 
-    config.shadow_global_buffer = shadow_global_buffer;
-
-    return config;
+    return make_circular_buffer_config(std::move(impl));
 }
 
 // TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp

@@ -25,6 +25,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/buffers/circular_buffer_config_impl.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -37,6 +38,8 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
+
+#include "impl/buffers/circular_buffer_config_impl.hpp"
 
 #include "multi_device_fixture.hpp"
 
@@ -402,7 +405,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_
     CBHandle cb_id = cbs[0]->id();
 
     // Initial CB address should be tensor_a's buffer address.
-    EXPECT_EQ(GetCircularBufferConfig(program, cb_id).globally_allocated_address(), buf_a->address());
+    EXPECT_EQ(GetCircularBufferConfig(program, cb_id).impl().globally_allocated_address(), buf_a->address());
 
     // Switch to tensor_b via apply_descriptor_runtime_args (the slow-path cache-hit call).
     ProgramDescriptor desc2 = desc;
@@ -410,7 +413,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_
     apply_descriptor_runtime_args(program, desc2);
 
     // CB address must now reflect tensor_b.
-    EXPECT_EQ(GetCircularBufferConfig(program, cb_id).globally_allocated_address(), buf_b->address());
+    EXPECT_EQ(GetCircularBufferConfig(program, cb_id).impl().globally_allocated_address(), buf_b->address());
 }
 
 // apply_descriptor_runtime_args must fire TT_FATAL when a CBDescriptor has both

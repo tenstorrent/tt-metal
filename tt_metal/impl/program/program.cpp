@@ -1256,8 +1256,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                         target_cb_indices[buffer_index] = true;
                     }
                 };
-                add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);
-                add_buffer_indices(circular_buffer->config().remote_buffer_indices(), remote_cb_indices);
+                add_buffer_indices(circular_buffer->config().impl().local_buffer_indices(), local_cb_indices);
+                add_buffer_indices(circular_buffer->config().impl().remote_buffer_indices(), remote_cb_indices);
             }
         }
 
@@ -2781,10 +2781,14 @@ std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circul
 }
 
 std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
-    std::ranges::transform_view res_view(impl().circular_buffers(), [](const auto& impl_ptr) {
-        return std::make_shared<CircularBuffer>(impl_ptr.get());
-    });
-    return {res_view.begin(), res_view.end()};
+    // Construct in this friend member (not via make_shared/lambda): CircularBuffer's ctor is private.
+    const auto impl_cbs = impl().circular_buffers();
+    std::vector<std::shared_ptr<CircularBuffer>> result;
+    result.reserve(impl_cbs.size());
+    for (const auto& impl_ptr : impl_cbs) {
+        result.emplace_back(new CircularBuffer(impl_ptr.get()));
+    }
+    return result;
 }
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }

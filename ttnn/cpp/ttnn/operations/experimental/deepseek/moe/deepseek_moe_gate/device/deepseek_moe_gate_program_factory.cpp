@@ -6,7 +6,6 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -58,17 +57,11 @@ void patch_program_from_descriptor(
     for (size_t cb_idx = 0; cb_idx < program_descriptor.cbs.size(); ++cb_idx) {
         const auto& cb_desc = program_descriptor.cbs[cb_idx];
         auto cb_handle = shared_vars.cb_handles[cb_idx];
-        const CircularBufferConfig& cb_config = GetCircularBufferConfig(program, cb_handle);
-
-        if (cb_config.total_size() != cb_desc.total_size) {
-            UpdateCircularBufferTotalSize(program, cb_handle, cb_desc.total_size);
-        }
-        const auto& current_page_sizes = cb_config.page_sizes();
+        // Always re-apply descriptor sizes on the cache-hit path. Comparing against
+        // CircularBufferConfig getters is internal-only after pimpl.
+        UpdateCircularBufferTotalSize(program, cb_handle, cb_desc.total_size);
         for (const auto& format_desc : cb_desc.format_descriptors) {
-            if (current_page_sizes[format_desc.buffer_index].has_value() &&
-                current_page_sizes[format_desc.buffer_index].value() != format_desc.page_size) {
-                UpdateCircularBufferPageSize(program, cb_handle, format_desc.buffer_index, format_desc.page_size);
-            }
+            UpdateCircularBufferPageSize(program, cb_handle, format_desc.buffer_index, format_desc.page_size);
         }
         if (cb_desc.buffer != nullptr) {
             UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer);

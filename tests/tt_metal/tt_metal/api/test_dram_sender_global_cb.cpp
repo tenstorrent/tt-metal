@@ -20,6 +20,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"  // DramConfig
@@ -134,7 +135,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
         config_addr,
         data_addr,
         kGcbSize,
-        static_cast<uint32_t>(gcb.buffer_address()),
+        static_cast<uint32_t>(gcb.impl().buffer_address()),
         static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
@@ -174,7 +175,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
         slow_dispatch::ReadFromL1(
-            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+            *mesh_device_, receivers_vec[r], gcb.impl().buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xABCD0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w << " mismatch (expected 0x" << std::hex
@@ -264,7 +265,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         config_addr,
         data_addr,
         kGcbSize,
-        static_cast<uint32_t>(gcb.buffer_address()),
+        static_cast<uint32_t>(gcb.impl().buffer_address()),
         static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
@@ -312,7 +313,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
         std::vector<uint32_t> result;
         slow_dispatch::ReadFromL1(
-            *mesh_device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+            *mesh_device_, receivers_vec[r], gcb.impl().buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0x55AA0000u + r * 0x100u + w;
             EXPECT_EQ(result[w], expected) << "Receiver " << r << " word " << w;
@@ -412,7 +413,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
             config_addr,
             data_addr,
             kGcbSize,
-            static_cast<uint32_t>(gcb.buffer_address()),
+            static_cast<uint32_t>(gcb.impl().buffer_address()),
             static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
         };
         KernelHandle sender_kernel_id = CreateKernel(
@@ -454,7 +455,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     {
         std::vector<uint32_t> result;
         slow_dispatch::ReadFromL1(
-            *mesh_device_, CoreCoord{0, 0}, gcb_a.buffer_address(), kPageSize, result, CoreType::WORKER);
+            *mesh_device_, CoreCoord{0, 0}, gcb_a.impl().buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xAAAA0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver A word " << w;
@@ -464,7 +465,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     {
         std::vector<uint32_t> result;
         slow_dispatch::ReadFromL1(
-            *mesh_device_, CoreCoord{1, 0}, gcb_b.buffer_address(), kPageSize, result, CoreType::WORKER);
+            *mesh_device_, CoreCoord{1, 0}, gcb_b.impl().buffer_address(), kPageSize, result, CoreType::WORKER);
         for (uint32_t w = 0; w < kPageSize / sizeof(uint32_t); ++w) {
             uint32_t expected = 0xBBBB0000u + w;
             EXPECT_EQ(result[w], expected) << "Receiver B word " << w;
