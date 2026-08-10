@@ -76,6 +76,12 @@ FOLD_MIN_CANDIDATES = 4
 FUSED_STATS_MAX_WIDTH = 189 * ttnn.TILE_SIZE
 FUSED_STATS_MAX_WIDTH_FP32 = 94 * ttnn.TILE_SIZE
 
+# Taking the accumulation in the same pass costs L1 for both addends double-buffered
+# on top of what the statistics alone hold, so the width it admits is a little under
+# half. The op's own guard is the authority; this is the gate that keeps a caller
+# from reaching it.
+FUSED_ACCUM_STATS_MAX_WIDTH = 88 * ttnn.TILE_SIZE
+
 
 class TtAttnRes(LightweightModule):
     """The AttnRes read, composed from ttnn primitives.
@@ -609,6 +615,40 @@ class TtAttnRes(LightweightModule):
         it makes anyway: no scoring program, and the score never reaches DRAM."""
         return self.fused_merge and (self.fused_stats or self.fused_scores)
 
+    @property
+    def fused_accum_stats(self):
+        """The write into the stream and the read out of it share one pass.
+
+        A read site reduces exactly what the accumulation before it produced, so
+        unfused the sum crosses DRAM twice for nothing. Only where `merge` takes
+        packed statistics — the direct form reduces the sealed snapshots
+        alongside the live stream and has no such pair to collapse. The op sums
+        on the FPU, which is exact for bfloat16 and not for anything wider.
+        """
+        return (
+            self.fused_stats
+            and self.merge_folds_stats
+            and self.dtype == ttnn.bfloat16
+            and self.shard_width <= FUSED_ACCUM_STATS_MAX_WIDTH
+        )
+
+    def accum_stats(self, a, b, q):
+        """`a + b`, and the rank-crossed statistics of that sum against `q`.
+
+        Borrows both addends. Returns `(total, stats)`, with `stats` None where
+        the read that follows does not take the packed layout and has to reduce
+        the sum itself.
+        """
+        if not self.fused_accum_stats:
+            return ttnn.add(a, b), None
+
+        total, packed = ttnn.experimental.attn_res_accum_stats(a, b, q, stats_dtype=self.stats_dtype)
+        if self.tp_factor == 1:
+            return total, packed
+        crossed = self._gather_stats(packed)
+        ttnn.deallocate(packed)
+        return total, crossed
+
     def _stats_for_scores(self, v, q):
         """[1, C, N, d/tp] -> rank-stacked `[1, 2C * tp, N, 1]` statistics, or None.
 
@@ -774,7 +814,7 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(exponentials)
         return partials, site_shifts, site_masses
 
-    def merge(self, partial, shift, mass, prefix_sum, q, site=0):
+    def merge(self, partial, shift, mass, prefix_sum, q, site=0, live_stats=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.
 
         Args:
@@ -785,6 +825,9 @@ class TtAttnRes(LightweightModule):
             q: `[1, 1, 1, d/tp_factor]` folded query, the one that built site
                 `site`'s partial.
             site: which read site of the batches this is.
+            live_stats: `prefix_sum`'s rank-stacked statistics against `q`, where
+                the caller already has them from `accum_stats`. Consumed. Taken
+                here otherwise.
 
         Returns:
             `[1, 1, N, d/tp_factor]`, equal to `forward` up to rounding.
@@ -792,7 +835,8 @@ class TtAttnRes(LightweightModule):
         self._assert_shard_width(prefix_sum)
 
         if self.merge_folds_stats:
-            live_stats = self._stats_for_scores(prefix_sum, q)
+            if live_stats is None:
+                live_stats = self._stats_for_scores(prefix_sum, q)
             merged = ttnn.experimental.attn_res_merge(
                 partial,
                 prefix_sum,
@@ -807,6 +851,9 @@ class TtAttnRes(LightweightModule):
             ttnn.deallocate(live_stats)
             return merged
 
+        # Only the packed path above can use them, and the caller handed over ownership.
+        if live_stats is not None:
+            ttnn.deallocate(live_stats)
         live_scores = self._scores(prefix_sum, q)
 
         if self.fused_merge:

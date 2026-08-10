@@ -38,43 +38,93 @@ class TtAttnResStream(object):
 
     def __init__(self, op, hidden_states, block_size=BLOCK_SIZE):
         self.op = op
-        self.prefix_sum = hidden_states
+        self._prefix_sum = hidden_states
+        self._pending = None
         self.block_residual = None
         self.block_size = block_size
+
+    @property
+    def prefix_sum(self):
+        """The live stream, with any deferred write settled.
+
+        Reading it costs the plain sum `accumulate` deferred, so a caller that
+        goes on to take statistics over it should go through `merge` instead.
+        """
+        self._flush()
+        return self._prefix_sum
 
     @property
     def num_sealed(self):
         return 0 if self.block_residual is None else self.block_residual.shape[1]
 
     def read(self, q):
-        assert self.prefix_sum is not None, "no live stream between seal and accumulate"
-        return self.op.forward(self.prefix_sum, self.block_residual, q)
+        self._flush()
+        assert self._prefix_sum is not None, "no live stream between seal and accumulate"
+        return self.op.forward(self._prefix_sum, self.block_residual, q)
+
+    def merge(self, partial, shift, mass, q, site):
+        """A split-form read, settling the deferred write against this query.
+
+        The statistics `merge` needs are over exactly the sum that settling
+        produces, so the two come out of one pass rather than through DRAM.
+        """
+        live_stats = self._settle(q)
+        assert self._prefix_sum is not None, "no live stream between seal and accumulate"
+        return self.op.merge(partial, shift, mass, self._prefix_sum, q, site, live_stats=live_stats)
 
     def seal(self):
-        assert self.prefix_sum is not None, "nothing to seal"
+        self._flush()
+        assert self._prefix_sum is not None, "nothing to seal"
         if self.block_residual is None:
-            self.block_residual = self.prefix_sum
+            self.block_residual = self._prefix_sum
         else:
-            grown = ttnn.concat([self.block_residual, self.prefix_sum], dim=1)
+            grown = ttnn.concat([self.block_residual, self._prefix_sum], dim=1)
             ttnn.deallocate(self.block_residual)
-            ttnn.deallocate(self.prefix_sum)
+            ttnn.deallocate(self._prefix_sum)
             self.block_residual = grown
-        self.prefix_sum = None
+        self._prefix_sum = None
 
     def accumulate(self, module_out):
-        if self.prefix_sum is None:
-            self.prefix_sum = module_out
-        else:
-            total = ttnn.add(self.prefix_sum, module_out)
-            ttnn.deallocate(self.prefix_sum)
-            ttnn.deallocate(module_out)
-            self.prefix_sum = total
+        """Take ownership of a module output, deferring the sum itself.
+
+        The read that consumes the sum also reduces it, and one op does both —
+        but it needs the query, which only the read has. So the addend is held
+        until then; anything reaching the stream first settles it plainly.
+        """
+        if self._prefix_sum is None:
+            self._prefix_sum = module_out
+            return
+        self._flush()
+        self._pending = module_out
+
+    def _flush(self):
+        if self._pending is None:
+            return
+        total = ttnn.add(self._prefix_sum, self._pending)
+        ttnn.deallocate(self._prefix_sum)
+        ttnn.deallocate(self._pending)
+        self._prefix_sum, self._pending = total, None
+
+    def _settle(self, q):
+        """Settle a deferred write against the query about to read it.
+
+        Returns the settled stream's statistics, or None where nothing was
+        deferred or the configuration takes them separately — the read falls
+        back to its own pass over the stream there.
+        """
+        if self._pending is None:
+            return None
+        total, stats = self.op.accum_stats(self._prefix_sum, self._pending, q)
+        ttnn.deallocate(self._prefix_sum)
+        ttnn.deallocate(self._pending)
+        self._prefix_sum, self._pending = total, None
+        return stats
 
     def deallocate(self):
-        for tensor in (self.prefix_sum, self.block_residual):
+        for tensor in (self._prefix_sum, self._pending, self.block_residual):
             if tensor is not None:
                 ttnn.deallocate(tensor)
-        self.prefix_sum = None
+        self._prefix_sum, self._pending = None, None
         self.block_residual = None
 
 
@@ -148,12 +198,13 @@ def attn_res_stack_split(op, hidden_states, q_pre, q_post, q_out, attn_fns, mlp_
 
     def read():
         site, q = next(pending)
-        return op.merge(partials, shifts, masses, stream.prefix_sum, q, site)
+        return stream.merge(partials, shifts, masses, q, site)
 
     for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns)):
-        h, borrowed = stream.prefix_sum, True
-        if stream.num_sealed > 0:
-            h, borrowed = read(), False
+        # Only reach for the stream itself when no read follows — the property settles the
+        # write that `merge` would otherwise fold into its own pass.
+        borrowed = stream.num_sealed == 0
+        h = stream.prefix_sum if borrowed else read()
 
         if layer_idx % block_size == 0:
             stream.seal()

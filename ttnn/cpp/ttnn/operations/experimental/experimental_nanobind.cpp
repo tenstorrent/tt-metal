@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/attn_res_accum_stats/attn_res_accum_stats_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/attn_res_merge/attn_res_merge_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/attn_res_scores/attn_res_scores_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/attn_res_stats/attn_res_stats_nanobind.hpp"
@@ -135,6 +136,7 @@ void py_module(nb::module_& mod) {
 
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
 
+    reduction::detail::bind_attn_res_accum_stats(mod);
     reduction::detail::bind_attn_res_merge(mod);
     reduction::detail::bind_attn_res_scores(mod);
     reduction::detail::bind_attn_res_stats(mod);
