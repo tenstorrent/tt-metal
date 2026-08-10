@@ -36,6 +36,34 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# Prefill (full 256-token chunk, M=256=8 tiles) 2D-mcast block-sharded matmul configs.  The prefill
+# path ran every LM matmul on auto, which picks in0_block_w=1 / out_subblock 1x1 for these compute-
+# bound M=256 shapes (down 256x8960x1536 sat at 10.7% BW / 18% FLOPs).  A block-sharded config with a
+# proper K-stream + subblock is BYTE-IDENTICAL — fp32_dest_acc keeps the full-K reduction in fp32, so
+# the tiling change doesn't touch the math (maxabsdiff==0 vs auto, verified per shape) — and 1.5-3.2x
+# faster.  Gated strictly on S==256 (per_core_M=1 needs exactly 8 M-tiles); the partial tail chunk and
+# single-shot S<256 fall back to auto.
+_PREFILL_S = 256
+
+
+def _mm2d_prefill(gx, gy, ibw, sw, pN):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=sw,
+        per_core_M=1,
+        per_core_N=pN,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+
+_PREFILL_WQKV_PROGCFG = _mm2d_prefill(8, 8, 6, 2, 8)  # 256x1536x2048  60 -> 40 us (1.49x)
+_PREFILL_WO_PROGCFG = _mm2d_prefill(6, 8, 6, 2, 8)  # 256x1536x1536  64 -> 40 us (1.61x)
+_PREFILL_GATEUP_PROGCFG = _mm2d_prefill(10, 8, 12, 2, 28)  # 256x1536x8960 153 -> 98 us (1.56x)
+_PREFILL_DOWN_PROGCFG = _mm2d_prefill(8, 8, 14, 2, 6)  # 256x8960x1536 350 -> 109 us (3.22x)
+
 # Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead
 # of separate wq (1536x1536) + wkv (1536x512).  Byte-identical: the fused output [q|k|v] equals the
 # column concat of the separate matmuls (block matmul; fp32-dest reduction is blocking-invariant),
@@ -978,12 +1006,13 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Fused wqkv projection (generic path: prefill S>1 and eager S==1) → auto progcfg; byte-identical.
+        # Fused wqkv projection (generic path: prefill S>1 and eager S==1).  Full 256-chunk prefill gets
+        # the tuned block-sharded config (byte-identical); eager/partial fall to auto.
         qkv = ttnn.linear(
             x,
             layer_w.wqkv,
             compute_kernel_config=_HIFI4,
-            program_config=None,
+            program_config=_PREFILL_WQKV_PROGCFG if S == _PREFILL_S else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if layer_w.qkv_bias is not None:
@@ -1168,7 +1197,7 @@ class TTVibeVoiceLM:
             out,
             layer_w.wo,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
+            program_config=(_QO_DECODE_PROGCFG if S == 1 else (_PREFILL_WO_PROGCFG if S == _PREFILL_S else None)),
             memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
@@ -1184,7 +1213,9 @@ class TTVibeVoiceLM:
             gate_pc, down_pc = _FFN_GATEUP_DECODE_PROGCFG_B2, _FFN_DOWN_DECODE_PROGCFG_B2
         elif S == 1 and B == 1:  # eager / B=1 traced decode (gate/up: no win over auto)
             gate_pc, down_pc = None, _FFN_DOWN_DECODE_PROGCFG_B1
-        else:  # prefill (S>1) → auto
+        elif S == _PREFILL_S:  # prefill full 256-chunk → tuned block-sharded (byte-identical)
+            gate_pc, down_pc = _PREFILL_GATEUP_PROGCFG, _PREFILL_DOWN_PROGCFG
+        else:  # prefill partial tail chunk (S<256) → auto
             gate_pc, down_pc = None, None
         # L1-island for gate/up matmul outputs + silu:
         # - Decode B==2: explicit progcfg + L1, byte-identical.
