@@ -637,6 +637,7 @@ void merge_dispatch_d_noc_counter_deltas() {
 void kernel_main() {
     set_l1_data_cache<true>();
     channel_state.channel_index = get_my_thread_id();
+    DPRINT("dispatch_s : start\n");
     ASSERT(get_num_threads() == NUM_DISPATCH_S_CHANNELS);
     ASSERT(channel_state.channel_index < NUM_DISPATCH_S_CHANNELS);
     const uint32_t hart = internal_::get_hw_thread_idx();
@@ -647,7 +648,6 @@ void kernel_main() {
     channel_state.dispatch_telemetry_control =
         reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
             channel_state.config->dispatch_telemetry_control_addr);
-    DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
