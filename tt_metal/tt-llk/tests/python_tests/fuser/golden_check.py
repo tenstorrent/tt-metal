@@ -7,8 +7,8 @@ from helpers.llk_params import DataFormat, format_dict
 from helpers.logger import logger
 from helpers.utils import passed_test, tolerances
 
-from .fused_operation import FusedOperation
 from .fuser_config import FuserConfig
+from .l1_operation import L1Operation
 from .pack_node import PackNode
 
 DEFAULT_BASE_ATOL = 0.05
@@ -16,7 +16,7 @@ DEFAULT_BASE_RTOL = 0.05
 DEFAULT_BASE_PCC = 0.99
 
 
-class FusedGolden:
+class GoldenCheck:
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
 
@@ -65,7 +65,7 @@ class FusedGolden:
 
         return l1_passed and master_passed
 
-    def check_operation(self, operation: FusedOperation) -> bool:
+    def check_operation(self, operation: L1Operation) -> bool:
         if self.verbose:
             logger.info(f"{operation}")
 
@@ -85,7 +85,7 @@ class FusedGolden:
         return passed
 
     @staticmethod
-    def _accumulate_tolerance(operation: FusedOperation) -> None:
+    def _accumulate_tolerance(operation: L1Operation) -> None:
         """Propagate tolerances through the pipeline stage by stage.
 
         Each operation builds on the error from its inputs: errors grow
@@ -118,7 +118,7 @@ class FusedGolden:
             base_atol = base_tol.atol if base_tol else DEFAULT_BASE_ATOL
 
             min_input_pcc = min((s.acc_pcc for s in sources), default=1.0)
-            base_pcc = FusedGolden._FORMAT_PCC.get(output.data_format, DEFAULT_BASE_PCC)
+            base_pcc = GoldenCheck._FORMAT_PCC.get(output.data_format, DEFAULT_BASE_PCC)
 
             # Relative errors multiply together because the new operation
             # introduces its own error on top of the error from previous stages.

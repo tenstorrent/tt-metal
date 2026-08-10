@@ -19,6 +19,7 @@ Usage:
     clang_tidy_report.py <fixes-dir> --format list
     clang_tidy_report.py <fixes-dir> --format summary-md
     clang_tidy_report.py <fixes-dir> --format annotations [--max-annotations N]
+    clang_tidy_report.py <fixes-dir> --format rdjson
     clang_tidy_report.py --self-test
 """
 
@@ -26,11 +27,29 @@ from __future__ import annotations
 
 import argparse
 import glob as _glob
+import json
 import sys
 import unittest
 from dataclasses import dataclass
 
 import yaml
+
+
+@dataclass
+class Suggestion:
+    """A single-span replacement, suitable for a GitHub "suggested change" block.
+
+    Only built when a diagnostic has exactly one Replacement — GitHub suggestions
+    replace one contiguous range, so multiple disjoint replacements for the same
+    diagnostic can't be represented as a single suggestion without guessing how
+    to merge them.
+    """
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+    text: str
 
 
 @dataclass
@@ -40,6 +59,7 @@ class Violation:
     file_path: str
     line: int | None
     col: int | None
+    suggestion: Suggestion | None = None
 
 
 def _offset_to_line_col(file_path: str, offset: int) -> tuple[int | None, int | None]:
@@ -53,6 +73,37 @@ def _offset_to_line_col(file_path: str, offset: int) -> tuple[int | None, int | 
     last_newline = data.rfind(b"\n")
     col = offset - last_newline
     return line, col
+
+
+def _build_suggestion(file_path: str, replacements: list) -> Suggestion | None:
+    """Build a Suggestion from a diagnostic's Replacements, or None if not representable.
+
+    Only diagnostics with exactly one Replacement produce a suggestion — see the
+    Suggestion docstring for why more than one can't be merged safely. Not every
+    violation has a Replacement at all: compiler-diagnostic-class findings
+    (clang-diagnostic-error and friends) have none, since clang can't auto-fix
+    "no such member" the way it can auto-fix a stylistic clang-tidy check.
+
+    A Replacement carries its own FilePath, which is not always the diagnostic's
+    file (e.g. a fix in a macro/header pulled in by the diagnostic file). rdjson
+    suggestions have no path of their own — they inherit the diagnostic's — so a
+    replacement targeting a different file can't be represented as a suggestion;
+    doing so anyway would convert its offset against the wrong file's bytes and
+    could publish a corrupting one-click "fix".
+    """
+    if len(replacements) != 1 or not file_path:
+        return None
+    rep = replacements[0]
+    if rep.get("FilePath") != file_path:
+        return None
+    offset, length = rep.get("Offset"), rep.get("Length")
+    if not isinstance(offset, int) or not isinstance(length, int):
+        return None
+    start_line, start_col = _offset_to_line_col(file_path, offset)
+    end_line, end_col = _offset_to_line_col(file_path, offset + length)
+    if start_line is None or end_line is None:
+        return None
+    return Suggestion(start_line, start_col, end_line, end_col, rep.get("ReplacementText", ""))
 
 
 def parse_fixes_dir(fixes_dir: str, repo_root: str | None = None) -> list[Violation]:
@@ -86,6 +137,7 @@ def parse_fixes_dir(fixes_dir: str, repo_root: str | None = None) -> list[Violat
             if repo_root and file_path.startswith(repo_root):
                 display_path = file_path[len(repo_root) :].lstrip("/")
             message = (msg.get("Message") or "").strip().splitlines()[0] if msg.get("Message") else ""
+            suggestion = _build_suggestion(file_path, msg.get("Replacements") or [])
             violations.append(
                 Violation(
                     check=diag.get("DiagnosticName", "unknown-check"),
@@ -93,6 +145,7 @@ def parse_fixes_dir(fixes_dir: str, repo_root: str | None = None) -> list[Violat
                     file_path=display_path,
                     line=line,
                     col=col,
+                    suggestion=suggestion,
                 )
             )
     violations.sort(key=lambda v: (v.file_path, v.line or 0, v.col or 0))
@@ -156,10 +209,47 @@ def format_annotations(violations: list[Violation], max_annotations: int) -> str
     return "\n".join(lines)
 
 
+def format_rdjson(violations: list[Violation]) -> str:
+    """Emit reviewdog's rdjson diagnostic format, for `reviewdog -f=rdjson`.
+
+    Unlike posting a `git diff` (post-`clang-apply-replacements`) through reviewdog's
+    diff reporter, this reports every violation directly from the parsed YAML —
+    including violations with no machine-applicable fix, which a fix-diff can never
+    represent because there's nothing to diff. Violations with a single Replacement
+    get a suggested-change block; everything else gets a plain review comment.
+    """
+    diagnostics = []
+    for v in violations:
+        location: dict = {"path": v.file_path}
+        if v.line:
+            location["range"] = {
+                "start": {"line": v.line, "column": v.col or 1},
+                "end": {"line": v.line, "column": v.col or 1},
+            }
+        diagnostic = {
+            "message": v.message or f"clang-tidy: {v.check}",
+            "location": location,
+            "severity": "ERROR" if v.check == "clang-diagnostic-error" else "WARNING",
+            "code": {"value": v.check},
+        }
+        if v.suggestion:
+            diagnostic["suggestions"] = [
+                {
+                    "range": {
+                        "start": {"line": v.suggestion.start_line, "column": v.suggestion.start_col},
+                        "end": {"line": v.suggestion.end_line, "column": v.suggestion.end_col},
+                    },
+                    "text": v.suggestion.text,
+                }
+            ]
+        diagnostics.append(diagnostic)
+    return json.dumps({"source": {"name": "clang-tidy"}, "diagnostics": diagnostics})
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fixes_dir", nargs="?", help="Directory containing clang-tidy --export-fixes *.yaml files")
-    parser.add_argument("--format", choices=["count", "list", "summary-md", "annotations"], default="list")
+    parser.add_argument("--format", choices=["count", "list", "summary-md", "annotations", "rdjson"], default="list")
     parser.add_argument("--repo-root", default=None, help="Strip this prefix from absolute file paths")
     parser.add_argument("--max-annotations", type=int, default=50)
     parser.add_argument("--self-test", action="store_true", help="Run unit tests and exit")
@@ -183,6 +273,8 @@ def main(argv: list[str]) -> int:
         out = format_annotations(violations, args.max_annotations)
         if out:
             print(out)
+    elif args.format == "rdjson":
+        print(format_rdjson(violations))
     return 0
 
 
@@ -243,6 +335,104 @@ Diagnostics:
             self.assertEqual(v.check, "bugprone-integer-division")
             self.assertEqual(v.line, 2)
             self.assertIn("truncated", v.message)
+            self.assertIsNone(v.suggestion)
+
+    def test_single_replacement_becomes_a_suggestion(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._write(tmp, "foo.cpp", "int x = 1;\nint y = 2;\n")
+            self._write(
+                tmp,
+                "foo.cpp-abc.yaml",
+                f"""---
+MainSourceFile: '{src}'
+Diagnostics:
+  - DiagnosticName: modernize-use-nullptr
+    DiagnosticMessage:
+      Message: 'use nullptr'
+      FilePath: '{src}'
+      FileOffset: 0
+      Replacements:
+        - FilePath: '{src}'
+          Offset: 0
+          Length: 3
+          ReplacementText: 'long'
+    Level: Warning
+...
+""",
+            )
+            v = parse_fixes_dir(tmp)[0]
+            self.assertIsNotNone(v.suggestion)
+            self.assertEqual(v.suggestion.text, "long")
+            self.assertEqual((v.suggestion.start_line, v.suggestion.start_col), (1, 1))
+            self.assertEqual((v.suggestion.end_line, v.suggestion.end_col), (1, 4))
+
+    def test_replacement_targeting_another_file_does_not_become_a_suggestion(self):
+        # Regression (caught by Copilot review on the live demo PR): a Replacement's
+        # own FilePath can differ from the diagnostic's file (e.g. a fix inside a
+        # header pulled in by the diagnostic file). Converting its offset against
+        # the diagnostic file's bytes would compute a bogus line/col and could
+        # publish a corrupting one-click suggestion.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._write(tmp, "foo.cpp", "int x = 1;\nint y = 2;\n")
+            other = self._write(tmp, "foo.hpp", "int z = 3;\n")
+            self._write(
+                tmp,
+                "foo.cpp-abc.yaml",
+                f"""---
+MainSourceFile: '{src}'
+Diagnostics:
+  - DiagnosticName: modernize-use-nullptr
+    DiagnosticMessage:
+      Message: 'use nullptr'
+      FilePath: '{src}'
+      FileOffset: 0
+      Replacements:
+        - FilePath: '{other}'
+          Offset: 0
+          Length: 3
+          ReplacementText: 'long'
+    Level: Warning
+...
+""",
+            )
+            v = parse_fixes_dir(tmp)[0]
+            self.assertIsNone(v.suggestion)
+
+    def test_multiple_replacements_do_not_become_a_suggestion(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._write(tmp, "foo.cpp", "int x = 1;\nint y = 2;\n")
+            self._write(
+                tmp,
+                "foo.cpp-abc.yaml",
+                f"""---
+MainSourceFile: '{src}'
+Diagnostics:
+  - DiagnosticName: readability-two-part-fix
+    DiagnosticMessage:
+      Message: 'needs two edits'
+      FilePath: '{src}'
+      FileOffset: 0
+      Replacements:
+        - FilePath: '{src}'
+          Offset: 0
+          Length: 3
+          ReplacementText: 'long'
+        - FilePath: '{src}'
+          Offset: 11
+          Length: 3
+          ReplacementText: 'long'
+    Level: Warning
+...
+""",
+            )
+            v = parse_fixes_dir(tmp)[0]
+            self.assertIsNone(v.suggestion)
 
     def test_skips_unparseable_file_without_crashing(self):
         import tempfile
@@ -293,6 +483,43 @@ class TestFormatters(unittest.TestCase):
         vs = [Violation(check="c", message="a | b", file_path="x.cpp", line=1, col=1)]
         md = format_summary_md(vs)
         self.assertIn("a \\| b", md)
+
+    def test_format_rdjson_reports_violation_with_no_fix(self):
+        # The exact case that silently dropped comments: a clang-diagnostic-error
+        # has no Replacements, so a post-fix `git diff` would be empty for it.
+        vs = [
+            Violation(check="clang-diagnostic-error", message="no member named 'X'", file_path="a.cpp", line=5, col=3)
+        ]
+        doc = json.loads(format_rdjson(vs))
+        self.assertEqual(len(doc["diagnostics"]), 1)
+        diag = doc["diagnostics"][0]
+        self.assertEqual(diag["severity"], "ERROR")
+        self.assertEqual(diag["location"]["path"], "a.cpp")
+        self.assertEqual(diag["location"]["range"]["start"], {"line": 5, "column": 3})
+        self.assertNotIn("suggestions", diag)
+
+    def test_format_rdjson_includes_suggestion_when_present(self):
+        suggestion = Suggestion(start_line=1, start_col=1, end_line=1, end_col=4, text="long")
+        vs = [
+            Violation(
+                check="modernize-use-nullptr",
+                message="use nullptr",
+                file_path="a.cpp",
+                line=1,
+                col=1,
+                suggestion=suggestion,
+            )
+        ]
+        doc = json.loads(format_rdjson(vs))
+        diag = doc["diagnostics"][0]
+        self.assertEqual(diag["severity"], "WARNING")
+        self.assertEqual(
+            diag["suggestions"],
+            [{"range": {"start": {"line": 1, "column": 1}, "end": {"line": 1, "column": 4}}, "text": "long"}],
+        )
+
+    def test_format_rdjson_empty_violations(self):
+        self.assertEqual(json.loads(format_rdjson([]))["diagnostics"], [])
 
 
 if __name__ == "__main__":
