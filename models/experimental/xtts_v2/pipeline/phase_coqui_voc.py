@@ -14,7 +14,7 @@ if not hasattr(_ptu, "isin_mps_friendly"):
 
 import soundfile as sf
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/localdev/acicovic/xtts_ref")  # coqui checkpoint dir
+CKPT = os.environ.get("XTTS_CKPT_DIR", "/home/acicovic/xtts_ref")  # coqui checkpoint dir
 
 
 def main():

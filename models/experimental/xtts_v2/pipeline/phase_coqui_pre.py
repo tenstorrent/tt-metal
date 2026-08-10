@@ -1,6 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Phase A (coqui venv, CPU): conditioning + tokenize + generate codes, capture the GPT
-inputs_embeds for the return_latent forward, and produce a full-CPU baseline wav."""
+inputs_embeds for the return_latent forward, and produce a full-CPU baseline wav.
+
+One request (the original single-card flow):
+
+    phase_coqui_pre.py --text "..." --ref ref.pt --sr 24000 --work out/work
+
+Many requests for data-parallel serving (`phase_tt_mesh.py`), one work dir per request:
+
+    phase_coqui_pre.py --texts-file texts.txt --ref ref.pt --sr 24000 --work-root out/reqs
+
+The model is loaded once and the reference clip's conditioning (gpt_cond_latent /
+speaker_embedding, which depend on the *reference audio only*, not the text) is computed once
+and copied into every work dir — only the text-dependent captures are redone per request.
+"""
 import argparse, os
 
 os.environ["COQUI_TOS_AGREED"] = "1"
@@ -16,35 +29,29 @@ import soundfile as sf
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/localdev/acicovic/xtts_ref")  # coqui checkpoint dir
+CKPT = os.environ.get("XTTS_CKPT_DIR", "/home/acicovic/xtts_ref")  # coqui checkpoint dir
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--text", required=True)
-    ap.add_argument("--ref", required=True, help="path to reference audio .pt (waveform)")
-    ap.add_argument("--sr", type=int, default=22050, help="sample rate of the .pt waveform")
-    ap.add_argument("--lang", default="en")
-    ap.add_argument("--work", required=True)
-    args = ap.parse_args()
-    os.makedirs(args.work, exist_ok=True)
-
+def load_model():
     print("[A] loading XTTS (CPU)...")
     config = XttsConfig()
     config.load_json(os.path.join(CKPT, "config.json"))
     model = Xtts.init_from_config(config)
     model.load_checkpoint(config, checkpoint_dir=CKPT, eval=True, use_deepspeed=False)
     model.eval()
+    return model
 
-    # reference .pt waveform -> tensor-level conditioning (bypasses torchcodec file IO).
-    # Handles: raw tensor/ndarray, (tensor, sr) tuple, or a HuggingFace audio-sample dict
-    # {"audio": {"array": ndarray, "sampling_rate": int}}.
+
+def load_ref_audio(path, sr):
+    """reference .pt waveform -> tensor-level conditioning (bypasses torchcodec file IO).
+    Handles: raw tensor/ndarray, (tensor, sr) tuple, or a HuggingFace audio-sample dict
+    {"audio": {"array": ndarray, "sampling_rate": int}}."""
     import numpy as np
 
-    raw = torch.load(args.ref, map_location="cpu", weights_only=False)
-    sr_eff = args.sr
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    sr_eff = sr
     if isinstance(raw, dict) and isinstance(raw.get("audio"), dict) and "array" in raw["audio"]:
-        sr_eff = int(raw["audio"].get("sampling_rate", args.sr))
+        sr_eff = int(raw["audio"].get("sampling_rate", sr))
         raw = raw["audio"]["array"]
     elif isinstance(raw, dict):
         for k in ("array", "audio", "waveform", "wav"):
@@ -59,9 +66,13 @@ def main():
         wav = wav[0]
     audio = wav.float().reshape(1, -1)  # [1, N]
     print(f"[A] ref waveform {tuple(audio.shape)} @ {sr_eff}Hz")
+    return audio, sr_eff
 
-    # capture the conditioning-encoder input mel (Block 1 input) so TT can recompute
-    # gpt_cond_latent on device in phase B.
+
+def capture_conditioning(model, audio, sr_eff):
+    """Both conditioning branches + the Block-1/Block-2 *inputs* (which the TT path recomputes
+    on device). Depends only on the reference clip, so it is shared by every request."""
+    # capture the conditioning-encoder input mel (Block 1 input)
     _mel = {}
     _h = model.gpt.conditioning_encoder.register_forward_hook(lambda m, a, o: _mel.update(x=a[0].detach().clone()))
     gpt_cond_latent = model.get_gpt_cond_latents(audio, sr_eff)
@@ -73,12 +84,25 @@ def main():
     )
     speaker_embedding = model.get_speaker_embedding(audio, sr_eff)
     _hs.remove()
-    torch.save(_mel["x"].float(), os.path.join(args.work, "cond_mel_in.pt"))  # [1,80,T]
-    torch.save(_spk["logmel"].float(), os.path.join(args.work, "speaker_logmel.pt"))  # [1,64,T]
     print(
         f"[A] gpt_cond_latent {tuple(gpt_cond_latent.shape)}  speaker_embedding {tuple(speaker_embedding.shape)}  "
         f"cond_mel_in {tuple(_mel['x'].shape)}"
     )
+    return {
+        "gpt_cond_latent": gpt_cond_latent,
+        "speaker_embedding": speaker_embedding,
+        "cond_mel_in": _mel["x"].float(),
+        "speaker_logmel": _spk["logmel"].float(),
+    }
+
+
+def capture_request(model, text, lang, cond, work):
+    """Run one full-CPU inference and write this request's handoffs into `work`."""
+    os.makedirs(work, exist_ok=True)
+    gpt_cond_latent = cond["gpt_cond_latent"]
+    speaker_embedding = cond["speaker_embedding"]
+    torch.save(cond["cond_mel_in"], os.path.join(work, "cond_mel_in.pt"))  # [1,80,T]
+    torch.save(cond["speaker_logmel"], os.path.join(work, "speaker_logmel.pt"))  # [1,64,T]
 
     # Hooks: capture the (longest) inputs_embeds fed to the GPT2 transformer (= the
     # return_latent full-sequence forward), and the CPU mel-latent output for reference.
@@ -128,21 +152,22 @@ def main():
     print(f"[A] inference (sampled generate + return_latent + vocode) ...")
     # coqui default decode = stochastic sampling (do_sample=True) — the baseline now reflects
     # XTTS's real inference mode (temperature 0.75 / top_k 50 / top_p 0.85 / rep-penalty 10 defaults).
-    out = model.inference(args.text, args.lang, gpt_cond_latent, speaker_embedding, do_sample=True)
+    out = model.inference(text, lang, gpt_cond_latent, speaker_embedding, do_sample=True)
     h1.remove()
     h1b.remove()
     model.gpt.forward = _orig_gpt_forward
+    model.gpt.gpt_inference.store_prefix_emb = _orig_store
 
     am = cap.get("attn_mask")
     print(f"[A] attn_mask: {None if am is None else (tuple(am.shape), 'all_ones=' + str(bool((am==1).all())))}")
     if cap.get("lh") is not None:
-        torch.save(cap["lh"].float(), os.path.join(args.work, "last_hidden_cpu.pt"))
+        torch.save(cap["lh"].float(), os.path.join(work, "last_hidden_cpu.pt"))
         print(f"[A] saved last_hidden_cpu {tuple(cap['lh'].shape)}")
 
     base_wav = out["wav"]
     if hasattr(base_wav, "detach"):
         base_wav = base_wav.detach().cpu().numpy()
-    sf.write(os.path.join(args.work, "baseline_cpu.wav"), base_wav.squeeze(), 24000)
+    sf.write(os.path.join(work, "baseline_cpu.wav"), base_wav.squeeze(), 24000)
 
     emb = cap["emb"]
     mel_lat = cap["mel_lat"]
@@ -152,10 +177,10 @@ def main():
     print(f"[A] captured emb {tuple(emb.shape)}  mel_lat {tuple(mel_lat.shape)}  mel_len={mel_len}")
 
     if cap.get("audio_codes") is not None:
-        torch.save(cap["audio_codes"].cpu(), os.path.join(args.work, "audio_codes.pt"))
+        torch.save(cap["audio_codes"].cpu(), os.path.join(work, "audio_codes.pt"))
         print(f"[A] audio_codes {tuple(cap['audio_codes'].shape)} first8={cap['audio_codes'].flatten()[:8].tolist()}")
     if cap.get("prefix_emb") is not None:
-        torch.save(cap["prefix_emb"].float(), os.path.join(args.work, "prefix_emb.pt"))
+        torch.save(cap["prefix_emb"].float(), os.path.join(work, "prefix_emb.pt"))
         print(f"[A] prefix_emb {tuple(cap['prefix_emb'].shape)}")
     torch.save(
         {
@@ -163,13 +188,52 @@ def main():
             "stop_audio": int(model.gpt.stop_audio_token),
             "repetition_penalty": 10.0,
         },
-        os.path.join(args.work, "gen_meta.pt"),
+        os.path.join(work, "gen_meta.pt"),
     )
-    torch.save(emb.float(), os.path.join(args.work, "emb.pt"))
-    torch.save(speaker_embedding.float(), os.path.join(args.work, "speaker_embedding.pt"))
-    torch.save(mel_lat.float(), os.path.join(args.work, "gpt_latents_cpu.pt"))
-    torch.save({"mel_len": int(mel_len)}, os.path.join(args.work, "meta.pt"))
-    print(f"[A] wrote handoffs + baseline_cpu.wav to {args.work}")
+    torch.save(emb.float(), os.path.join(work, "emb.pt"))
+    torch.save(speaker_embedding.float(), os.path.join(work, "speaker_embedding.pt"))
+    torch.save(mel_lat.float(), os.path.join(work, "gpt_latents_cpu.pt"))
+    torch.save({"mel_len": int(mel_len)}, os.path.join(work, "meta.pt"))
+    with open(os.path.join(work, "text.txt"), "w") as f:
+        f.write(text + "\n")
+    print(f"[A] wrote handoffs + baseline_cpu.wav to {work}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--text", help="single request's text")
+    ap.add_argument("--texts-file", help="one text per line; N requests -> N work dirs under --work-root")
+    ap.add_argument("--ref", required=True, help="path to reference audio .pt (waveform)")
+    ap.add_argument("--sr", type=int, default=22050, help="sample rate of the .pt waveform")
+    ap.add_argument("--lang", default="en")
+    ap.add_argument("--work", help="work dir (single request)")
+    ap.add_argument("--work-root", help="parent dir for per-request work dirs (with --texts-file)")
+    ap.add_argument("--limit", type=int, default=0, help="with --texts-file: use only the first N texts")
+    args = ap.parse_args()
+
+    if args.texts_file:
+        assert args.work_root, "--texts-file needs --work-root"
+        with open(args.texts_file) as f:
+            texts = [ln.strip() for ln in f if ln.strip()]
+        if args.limit:
+            texts = texts[: args.limit]
+    else:
+        assert args.text and args.work, "need --text and --work (or --texts-file and --work-root)"
+        texts = [args.text]
+
+    model = load_model()
+    audio, sr_eff = load_ref_audio(args.ref, args.sr)
+    cond = capture_conditioning(model, audio, sr_eff)
+
+    if args.texts_file:
+        os.makedirs(args.work_root, exist_ok=True)
+        for i, text in enumerate(texts):
+            work = os.path.join(args.work_root, f"r{i}")
+            print(f"\n[A] === request {i + 1}/{len(texts)} -> {work} ===")
+            capture_request(model, text, args.lang, cond, work)
+        print(f"\n[A] prepared {len(texts)} request work dirs under {args.work_root}")
+    else:
+        capture_request(model, texts[0], args.lang, cond, args.work)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ Run to (re)generate goldens:
 """
 
 import argparse
+import functools
 import os
 import sys
 import types
@@ -103,7 +104,14 @@ def _install_tts_stub():
         sys.modules.setdefault(name, _StubMod(name))
 
 
+@functools.lru_cache(maxsize=2)
 def load_full_state(ckpt_path=None):
+    """Load (and cache) the XTTS checkpoint's tensors.
+
+    Cached because data-parallel serving builds one model instance per chip: on a 1x32 mesh the
+    preprocess_* functions are called 32 times, and re-reading the 1.86 GB model.pth each time
+    dominates startup. The returned dict is read-only as far as callers are concerned — the
+    preprocess_* functions only copy out of it."""
     _install_tts_stub()
     sd = torch.load(resolve_ckpt(ckpt_path), map_location="cpu", weights_only=False)
     state = sd["model"] if isinstance(sd, dict) and "model" in sd else sd
