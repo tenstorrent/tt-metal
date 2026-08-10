@@ -37,6 +37,7 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
@@ -2572,13 +2573,60 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
 }
 
 // ============================================================================
-// SECTION 9: GetDataflowBufferFootprints
+// SECTION 9: Dataflow buffers reported to graph tracking
 // ============================================================================
 //
-// Both mappings exist to stop L1 over-reporting in graph capture (#51674), so each needs a test
-// that fails if it is dropped.
+// A hooked program never allocates, so GraphTracker reports its DFBs as CB allocations (#51674).
+// The alias skip and the borrowed flag are there to stop L1 over-reporting, and the hook gate keeps
+// a real run's trace untouched, so each needs a test that fails if it is dropped.
 
-TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsCollapsesAliasGroup) {
+// Records what a capture would see, so the reporting can be checked without a TTNN graph capture.
+class RecordingGraphProcessor : public IGraphProcessor {
+public:
+    struct CbAllocation {
+        uint64_t size = 0;
+        bool is_globally_allocated = false;
+    };
+
+    void track_allocate_cb(
+        const CoreRangeSet& /*core_range_set*/,
+        uint64_t /*addr*/,
+        uint64_t size,
+        bool is_globally_allocated,
+        const IDevice* /*device*/) override {
+        cb_allocations.push_back(CbAllocation{.size = size, .is_globally_allocated = is_globally_allocated});
+    }
+
+    std::vector<CbAllocation> cb_allocations;
+};
+
+// Blocking hooks stand in for RunMode::NO_DISPATCH, where programs are captured but never run.
+class BlockingGraphHooks : public IGraphHooks {
+public:
+    bool hook_allocate(const Buffer*) override { return true; }
+    bool hook_deallocate(Buffer*) override { return true; }
+    bool hook_program(Program*) override { return true; }
+    bool hook_write_to_device(const Buffer*) override { return true; }
+    bool hook_write_to_device(const distributed::MeshBuffer*) override { return true; }
+    bool hook_read_from_device(Buffer*) override { return true; }
+    bool hook_read_from_device(const distributed::MeshBuffer*) override { return true; }
+};
+
+class ScopedGraphTracking {
+public:
+    ScopedGraphTracking(const std::shared_ptr<IGraphProcessor>& processor, bool block_programs) {
+        GraphTracker::instance().push_processor(processor);
+        if (block_programs) {
+            GraphTracker::instance().add_hook(std::make_shared<BlockingGraphHooks>());
+        }
+    }
+    ~ScopedGraphTracking() {
+        GraphTracker::instance().pop_processor();
+        GraphTracker::instance().clear_hook();
+    }
+};
+
+TEST_F(ProgramRunArgsTestQuasar, TrackProgramCollapsesAliasedDataflowBuffers) {
     // Equal totals (512*8 == 1024*4) so the assertion holds whichever member becomes primary.
     ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -2587,23 +2635,47 @@ TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsCollapsesAliasGroup)
     auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
     ASSERT_TRUE(a->alias_primary_id.has_value() || !a->alias_secondary_ids.empty()) << "dfb_a not aliased";
 
-    const auto footprints = GetDataflowBufferFootprints(program);
+    auto processor = std::make_shared<RecordingGraphProcessor>();
+    {
+        ScopedGraphTracking tracking(processor, /*block_programs=*/true);
+        GraphTracker::instance().track_program(&program, mesh_device_.get());
+    }
 
-    ASSERT_EQ(footprints.size(), 1u) << "aliased DFBs must report one region, not one per member";
-    EXPECT_EQ(footprints[0].total_size, 4096u);
-    EXPECT_FALSE(footprints[0].borrows_memory);
+    ASSERT_EQ(processor->cb_allocations.size(), 1u) << "aliased DFBs share one L1 region, report it once";
+    EXPECT_EQ(processor->cb_allocations[0].size, 4096u);
+    EXPECT_FALSE(processor->cb_allocations[0].is_globally_allocated);
 }
 
-TEST_F(ProgramRunArgsTestQuasar, GetDataflowBufferFootprintsFlagsBorrowedMemory) {
+TEST_F(ProgramRunArgsTestQuasar, TrackProgramFlagsBorrowedDataflowBuffer) {
     // entry_size 16 * num_entries 2 = 32 bytes.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    const auto footprints = GetDataflowBufferFootprints(program);
+    auto processor = std::make_shared<RecordingGraphProcessor>();
+    {
+        ScopedGraphTracking tracking(processor, /*block_programs=*/true);
+        GraphTracker::instance().track_program(&program, mesh_device_.get());
+    }
 
-    ASSERT_EQ(footprints.size(), 1u);
-    EXPECT_TRUE(footprints[0].borrows_memory) << "borrowed DFB must be flagged so its L1 isn't double-counted";
-    EXPECT_EQ(footprints[0].total_size, 32u);
+    ASSERT_EQ(processor->cb_allocations.size(), 1u);
+    EXPECT_TRUE(processor->cb_allocations[0].is_globally_allocated)
+        << "a borrowed DFB is backed by a tensor that is tracked in its own right";
+    EXPECT_EQ(processor->cb_allocations[0].size, 32u);
+}
+
+// Without a hook the program goes on to run, and its allocations report themselves with real
+// addresses. Reporting here too would double-count them.
+TEST_F(ProgramRunArgsTestQuasar, TrackProgramSkipsDataflowBuffersWhenProgramIsNotHooked) {
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto processor = std::make_shared<RecordingGraphProcessor>();
+    {
+        ScopedGraphTracking tracking(processor, /*block_programs=*/false);
+        GraphTracker::instance().track_program(&program, mesh_device_.get());
+    }
+
+    EXPECT_TRUE(processor->cb_allocations.empty());
 }
 
 }  // namespace

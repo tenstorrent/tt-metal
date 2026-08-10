@@ -5,9 +5,7 @@
 #pragma once
 
 #include <span>
-#include <vector>
 
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -107,18 +105,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args);
-
-// Per-core L1 footprint of one dataflow buffer, for consumers that sum L1 without needing the
-// buffer itself (graph capture, memory estimation).
-struct DataflowBufferFootprint {
-    CoreRangeSet core_ranges;
-    uint32_t total_size = 0;  // entry_size * num_entries
-    // Backed by a tensor's buffer rather than program-lifetime L1, so its owner already counts it.
-    bool borrows_memory = false;
-};
-
-// One entry per distinct L1 region: aliased DFBs share a region, so only the primary is reported.
-std::vector<DataflowBufferFootprint> GetDataflowBufferFootprints(const Program& program);
 
 }  // namespace tt::tt_metal::experimental
 

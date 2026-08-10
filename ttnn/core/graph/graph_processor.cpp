@@ -20,7 +20,6 @@
 #include <string>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -368,12 +367,6 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
 
     for (const auto& cb : program->circular_buffers()) {
         track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
-    }
-
-    // Metal 2.0 ports allocate L1 scratch as dataflow buffers, so the CB loop above finds nothing
-    // and cb_peak_size_per_core comes out 0. Same resource to the peak math, so record them here.
-    for (const auto& dfb : tt::tt_metal::experimental::GetDataflowBufferFootprints(*program)) {
-        track_allocate_cb(dfb.core_ranges, 0, dfb.total_size, dfb.borrows_memory, device);
     }
 }
 

@@ -522,12 +522,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
 // ============================================================================
 
 namespace {
-// Row major keeps `repeat` on the DFB-bearing factory instead of tilizing first.
+// Row major so `repeat` lands on the interleaved-RM factory, which builds two dataflow buffers.
 tt::tt_metal::TensorSpec metal2_repeat_input_spec() {
     return tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), ttnn::L1_MEMORY_CONFIG));
 }
+
+// Two DFBs of (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes, neither borrowed nor aliased.
+constexpr uint32_t kRepeatDfbPeakPerCore = 768;
 
 ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::MeshDevice* device) {
     const auto input_spec = metal2_repeat_input_spec();
@@ -536,7 +539,10 @@ ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::Mes
         device,
         input_spec,
         ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
-        input_spec.tensor_layout().get_memory_config());
+        input_spec.tensor_layout().get_memory_config(),
+        // Without this, `repeat` picks the codegen path, which uses circular buffers and would
+        // report a non-zero peak with or without dataflow buffers being recorded.
+        std::string("native"));
 }
 
 // Two repeats in one capture. Params are by const& because forwarding the same pack twice is
@@ -544,14 +550,15 @@ ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::Mes
 ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed::MeshDevice* device) {
     const auto input_spec = metal2_repeat_input_spec();
     return ttnn::graph::query_op_constraints(
-        [](const auto& input, const auto& repetition_vector, const auto& memory_config) {
-            [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config);
-            return ttnn::repeat(input, repetition_vector, memory_config);
+        [](const auto& input, const auto& repetition_vector, const auto& memory_config, const auto& implementation) {
+            [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config, implementation);
+            return ttnn::repeat(input, repetition_vector, memory_config, implementation);
         },
         device,
         input_spec,
         ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
-        input_spec.tensor_layout().get_memory_config());
+        input_spec.tensor_layout().get_memory_config(),
+        std::string("native"));
 }
 }  // namespace
 
@@ -560,7 +567,7 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsNonZeroCbPeak) {
     auto query = query_repeat(mock_device_.get());
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
-    EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
+    EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
 }
 
 // Recording the buffers is only half the fix; the running total is a separate accumulator.
@@ -568,7 +575,10 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakContributesToPeakMemory)
     auto query = query_repeat(mock_device_.get());
 
     ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
-    EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
+    ASSERT_EQ(query.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
+    EXPECT_EQ(
+        query.resource_usage.peak_memory_usage_per_core,
+        query.resource_usage.cb_peak_size_per_core + query.resource_usage.l1_buffers_peak_per_core);
 }
 
 // Must be two programs in ONE capture: separate queries each re-zero the counters, so their
@@ -581,7 +591,7 @@ TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatCbPeakDoesNotAccumulateWithinO
         << "Error: " << single.error_message.value_or("none");
     ASSERT_EQ(doubled.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << doubled.error_message.value_or("none");
-    ASSERT_GT(single.resource_usage.cb_peak_size_per_core, 0u);
+    ASSERT_EQ(single.resource_usage.cb_peak_size_per_core, kRepeatDfbPeakPerCore);
     EXPECT_EQ(doubled.resource_usage.cb_peak_size_per_core, single.resource_usage.cb_peak_size_per_core);
 }
 

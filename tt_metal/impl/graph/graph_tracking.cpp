@@ -8,6 +8,10 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/program.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 thread_local std::vector<std::shared_ptr<IGraphProcessor>> GraphTracker::processors;
@@ -82,6 +86,24 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
     }
 }
 
+namespace {
+
+// A Metal 2.0 program holds its per-core L1 scratch in dataflow buffers, which - unlike circular
+// buffers - have no allocation-time tracking hook.
+void track_dataflow_buffers(GraphTracker& tracker, const Program& program, const IDevice* device) {
+    for (const auto& dfb : program.impl().dataflow_buffers()) {
+        // Alias secondaries share the primary's L1 region instead of adding one.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
+        }
+        // A borrowed DFB is a view onto a tensor's buffer, so it is reported like a globally
+        // allocated CB: its owner is tracked separately, and that L1 must not be counted twice.
+        tracker.track_allocate_cb(dfb->core_ranges, /*addr=*/0, dfb->total_size(), dfb->borrows_memory(), device);
+    }
+}
+
+}  // namespace
+
 void GraphTracker::track_program(Program* program, const IDevice* device) {
     TT_ASSERT(program);
     TT_ASSERT(device);
@@ -90,6 +112,11 @@ void GraphTracker::track_program(Program* program, const IDevice* device) {
     }
     for (auto& it : processors) {
         it->track_program(program, device);
+    }
+    // A hooked program never runs, so no allocation will report its L1 later. Addresses are not
+    // assigned yet either, matching how a capture reports this program's circular buffers.
+    if (hook_program(program)) {
+        track_dataflow_buffers(*this, *program, device);
     }
 }
 

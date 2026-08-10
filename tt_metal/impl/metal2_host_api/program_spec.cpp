@@ -25,7 +25,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -3251,22 +3250,6 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
         BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
     workload.impl().compile(&mesh_device);
     return workload;
-}
-
-std::vector<DataflowBufferFootprint> GetDataflowBufferFootprints(const Program& program) {
-    const auto& dfbs = program.impl().dataflow_buffers();
-    std::vector<DataflowBufferFootprint> footprints;
-    footprints.reserve(dfbs.size());
-    for (const auto& dfb : dfbs) {
-        // Secondaries alias the primary's L1 region rather than adding one, so reporting them
-        // would multiply-count a single allocation for any consumer that sums these.
-        if (dfb->alias_primary_id.has_value()) {
-            continue;
-        }
-        footprints.push_back(DataflowBufferFootprint{
-            .core_ranges = dfb->core_ranges, .total_size = dfb->total_size(), .borrows_memory = dfb->borrows_memory()});
-    }
-    return footprints;
 }
 
 }  // namespace tt::tt_metal::experimental
