@@ -1,0 +1,327 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""pytest plugin that sweeps detours over an LLK test.
+
+Every collected test runs once clean. If that pass loaded ELFs and had something
+to compare, the same test body is then re-run once per planned variant with a
+detour armed, and anything that stops passing is recorded.
+
+Load it with `-p ttnop_plugin` and this directory on PYTHONPATH.
+"""
+
+import os
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import pytest
+import report
+import scanner
+import sweep as sweep_module
+from cave import DetourError, Injector
+from helpers.device import (
+    LLKAssertException,
+    commit_tensix_soft_reset,
+    set_tensix_soft_reset,
+)
+from helpers.logger import logger
+from helpers.test_config import TestConfig
+from ttexalens.tt_exalens_lib import read_word_from_device, write_words_to_device
+
+# pytest's outcome exceptions derive from BaseException, so they need naming
+# explicitly or they would escape the per-variant handler and fail the whole item.
+_SKIPPED = (pytest.skip.Exception, pytest.xfail.Exception)
+_FAILED = pytest.fail.Exception
+
+
+@contextmanager
+def quiet_harness():
+    """Mute the harness's own logging for the duration of a variant.
+
+    Variants are *meant* to fail, and the harness answers every mismatch with a
+    colour dump of the offending tiles. A hundred of those is the whole console.
+    The baseline pass runs outside this, so a genuinely broken test still says so.
+    """
+    logger.disable("helpers")
+    try:
+        yield
+    finally:
+        logger.enable("helpers")
+
+
+class _Baseline:
+    """What the clean pass told us about this test."""
+
+    def __init__(self):
+        self.config = None
+        self.saw_run = False
+        self.had_result = False
+        self.saw_load = False
+
+    def worth_sweeping(self) -> bool:
+        # A test that never loaded ELFs has nothing to perturb, and one whose run()
+        # produced no result has no golden to mismatch against.
+        if self.config is None or not self.saw_load:
+            return False
+        return self.had_result or not self.saw_run
+
+
+def _test_kwargs(item) -> dict:
+    """Fixture values for calling the test body directly. Fixed for the whole sweep."""
+    names = getattr(item._fixtureinfo, "argnames", ()) or ()
+    return {name: item.funcargs[name] for name in names if name in item.funcargs}
+
+
+class Perturber:
+    def __init__(self, config: sweep_module.Config):
+        self.config = config
+        self.verbose = os.environ.get("TTNOP_VERBOSE", "") not in ("", "0")
+        self.baseline = _Baseline()
+        self.scans = {}
+        self._item = None
+        self._kwargs = {}
+        self._injector = None
+
+    # -- device plumbing ---------------------------------------------------
+
+    def _injector_for_device(self) -> Injector:
+        if self._injector is None:
+            location = TestConfig.TENSIX_LOCATION
+            self._injector = Injector(
+                read_words=lambda addr, count: [
+                    read_word_from_device(location, addr + 4 * i) for i in range(count)
+                ],
+                write_words=lambda addr, words: write_words_to_device(
+                    location, addr, words
+                ),
+                max_delay=self.config.max_delay,
+            )
+        return self._injector
+
+    def _forget_kernel_image(self) -> None:
+        """Make the harness re-flash the TRISCs, and stop trusting our view of L1.
+
+        BRISC is deliberately left alone: it is mid command loop, and re-flashing it
+        from under itself is what stops it answering at all.
+        """
+        TestConfig.LAST_LOADED_ELFS = None
+        self._injector_for_device().forget()
+
+    # -- baseline capture --------------------------------------------------
+
+    def watch_baseline(self):
+        """Wrap both loaders. Suites like SDPA never call run(), only run_elf_files()."""
+        original_run, original_load = TestConfig.run, TestConfig.run_elf_files
+        baseline = self.baseline
+
+        def wrapped_run(config_self, *args, **kwargs):
+            baseline.config = baseline.config or config_self
+            baseline.saw_run = True
+            outcome = original_run(config_self, *args, **kwargs)
+            baseline.had_result = (
+                baseline.had_result or getattr(outcome, "result", None) is not None
+            )
+            return outcome
+
+        def wrapped_load(config_self, *args, **kwargs):
+            baseline.config = baseline.config or config_self
+            baseline.saw_load = True
+            return original_load(config_self, *args, **kwargs)
+
+        def unwatch():
+            TestConfig.run, TestConfig.run_elf_files = original_run, original_load
+
+        TestConfig.run, TestConfig.run_elf_files = wrapped_run, wrapped_load
+        return unwatch
+
+    # -- the runtime the sweep loop drives ---------------------------------
+
+    def run(self, variant):
+        # The ELF is already in L1 and the cores are idle, so arming is a couple of
+        # word writes. Leaving the image alone is what keeps a 100-delay sweep cheap:
+        # a reload per variant would cost three ELFs to buy the same one instruction.
+        self._injector_for_device().arm(
+            variant.thread,
+            self.scans[variant.thread],
+            variant.site,
+            variant.delay,
+            variant.filler_word,
+        )
+        if self.verbose:
+            print(f">> {variant.label()}", flush=True)
+        # Keep the baseline's RNG stream across variants (no re-seed); some races
+        # only show up on later draws.
+        try:
+            # Call the body, not item.runtest: we are already inside pytest_runtest_call,
+            # and re-entering that hook nests another full sweep.
+            with quiet_harness():
+                self._item.obj(**self._kwargs)
+            return None, ""
+        except _SKIPPED:
+            return None, ""
+        except DetourError:
+            raise
+        except TimeoutError as err:
+            return "hang", str(err)
+        except LLKAssertException as err:
+            return "assert", str(err)
+        except (AssertionError, _FAILED) as err:
+            return "mismatch", str(err)
+        except Exception as err:
+            return "error", f"{type(err).__name__}: {err}"
+
+    def recover(self) -> bool:
+        """Soft reset after a hang. False means the device needs a manual reset."""
+        location = TestConfig.TENSIX_LOCATION
+        try:
+            self._injector_for_device().restore()
+        except Exception:
+            pass
+        # Soft reset takes BRISC down with it, so its image really is stale here.
+        self._forget_kernel_image()
+        TestConfig.BRISC_ELF_LOADED = False
+        for _ in range(3):
+            try:
+                commit_tensix_soft_reset(1, location=location)
+                break
+            except TimeoutError:
+                # commit_ polls for an exact readback, which a wedged core can miss.
+                # Re-assert without polling and give it another go.
+                set_tensix_soft_reset(1, location=location)
+        else:
+            return False
+        # Reload a clean image (no nested sweep) so the next arm() sees the scan's words.
+        try:
+            with quiet_harness():
+                self._item.obj(**self._kwargs)
+        except Exception:
+            pass
+        self._injector_for_device().forget()
+        return True
+
+    # -- driving one test --------------------------------------------------
+
+    def sweep(self, item) -> list:
+        """Perturb every planned variant of one test. Returns a label per failure."""
+        config = self.baseline.config
+        self.scans = {
+            thread: scanner.scan(path, self.config.site_mode)
+            for thread, path in zip(TestConfig.KERNEL_COMPONENTS, config.temp_elfs)
+        }
+        # Check every cave fits before touching the device, so a geometry mistake
+        # is a loud error up front rather than a run of bogus "failures".
+        injector = self._injector_for_device()
+        for scan in self.scans.values():
+            injector.cave_for(scan)
+
+        variants = sweep_module.plan(self.config, self.scans)
+        if not variants:
+            return []
+        if self.verbose:
+            print(f"\n>> {item.nodeid}: {len(variants)} variant(s)", flush=True)
+
+        self._item = item
+        self._kwargs = _test_kwargs(item)
+        try:
+            return sweep_module.run(
+                self.config,
+                variants,
+                self,
+                lambda variant, fails, tags, error: self._record(
+                    item, variant, fails, tags, error
+                ),
+            )
+        finally:
+            self._item = None
+            self._kwargs = {}
+            try:
+                injector.restore()
+            except Exception:
+                # Only reachable once the device stopped taking writes, which is
+                # already being raised past us — do not mask it with the symptom.
+                pass
+            # The cave bytes outlive the restore, so the next case must not be handed
+            # an L1 image the harness still believes is pristine.
+            self._forget_kernel_image()
+
+    def _record(self, item, variant, fails, tags, error) -> None:
+        scan = self.scans[variant.thread]
+        report.append(
+            self.config.report_dir,
+            {
+                "case": item.nodeid,
+                "arch": self.config.arch,
+                "site_mode": self.config.site_mode,
+                "thread": variant.thread,
+                "site_index": variant.site.index,
+                "addr": variant.site.addr,
+                "op": variant.site.op,
+                "filler": variant.filler,
+                "filler_word": variant.filler_word,
+                "delay": variant.delay,
+                "runs": self.config.repeats,
+                "fails": fails,
+                "tag": ",".join(sorted(tags)),
+                # First line only: a mismatch drags the whole offending tensor
+                # behind it, and none of that survives a rebuild anyway.
+                "error": error.strip().splitlines()[0][:200] if error.strip() else "",
+                "chain": list(report.source_chain(scan.elf, variant.site.addr)),
+            },
+        )
+
+
+_perturber = None
+
+
+def _get() -> Perturber:
+    global _perturber
+    if _perturber is None:
+        _perturber = Perturber(sweep_module.Config.from_env())
+    return _perturber
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    perturber = _get()
+    perturber.baseline = _Baseline()
+    unwatch = perturber.watch_baseline()
+    try:
+        outcome = yield
+    finally:
+        unwatch()
+
+    # A test that was already red tells us nothing about timing.
+    if outcome.excinfo is not None or not perturber.baseline.worth_sweeping():
+        return
+    failures = perturber.sweep(item)
+    if failures:
+        # Hang the finding on the case itself so a sweep reads like an ordinary
+        # pytest run: the case goes red and names the variant that broke it.
+        head = (
+            failures[0]
+            if len(failures) == 1
+            else f"{failures[0]} (+{len(failures) - 1} more)"
+        )
+        outcome.force_exception(
+            AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
+        )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # Workers each swept part of the suite into the shared JSONL; the master renders it.
+    if hasattr(session.config, "workerinput"):
+        return
+    config = sweep_module.Config.from_env()
+    records = report.load(config.report_dir)
+    if not records:
+        return
+    path = report.write_markdown(
+        config.report_dir,
+        report.environment(config.arch, config.site_mode, config.filler),
+    )
+    print(f"\n>> {len(records)} failing variant(s) -> {path}", flush=True)
