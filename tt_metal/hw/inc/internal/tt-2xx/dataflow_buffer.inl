@@ -610,7 +610,7 @@ Noc::async_write(
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
     uint32_t txn_id = src.prepare_implicit_write();
-        // Use cached addresses for NOC APIs
+    // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
