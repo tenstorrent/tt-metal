@@ -140,14 +140,19 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "Failed to GetSignedArtifactURL: Received non-retryable error: Failed request: (404) Not Found": str(
             InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE
         ),
-        "Failed to GetSignedArtifactURL": str(InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE),
-        "Failed to ListArtifacts": str(InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE),
+        # Match the connection-specific portion, not the bare operation name: a 403/500/malformed
+        # GetSignedArtifactURL is a different failure mode and must not land in the connection bucket
+        "Failed to GetSignedArtifactURL: Unable to make request": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE
+        ),
+        # Match the 403-specific portion: a ListArtifacts ECONNRESET is a connection error, not a
+        # forbidden error, and should not be swallowed by the operation name alone
+        "Failed to ListArtifacts: Received non-retryable error: Failed request: (403) Forbidden": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE
+        ),
         "Upload progress stalled.": str(InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
         "Request was cancelled.": str(InfraErrorV1.REQUEST_CANCELLED_FAILURE),
         "We received a malformed request from your client": str(InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE),
-        # Most generic step-failure message GitHub emits; keep last so any more specific
-        # snippet above (e.g. the git/artifact ones) matches first
-        "Process completed with exit code": str(InfraErrorV1.GENERIC_EXIT_CODE_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -198,6 +203,12 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
 
         if is_clang_tidy_failure:
             return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
+
+    # Most generic step-failure message GitHub emits ("Process completed with exit code N").
+    # Checked only after the step-specific classifiers above so a checkout/clang-tidy step that
+    # fails with this generic annotation still gets its specific signature, not this fallback.
+    if "Process completed with exit code" in failure_description:
+        return str(InfraErrorV1.GENERIC_EXIT_CODE_FAILURE)
 
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
