@@ -45,8 +45,9 @@ from pathlib import Path
 import torch
 
 
-# Cached transformers 5.8.1 (the only install with ``deepseek_v4``).
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
+# Cached transformers 5.8.1 (the only install with ``deepseek_v4``). Same snapshot the
+# attention tests run against.
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731"
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +382,7 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 @pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + many decode steps
 @pytest.mark.parametrize("layer_idx", (4, 5))  # 4 = CSA + moe, 5 = HCA + moe
 @pytest.mark.parametrize("seq_len", (256,))
-@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("batch_size", (1, 8))
 def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int) -> None:
     """Decode-path PCC for ``DeepSeekV4DecoderLayer.decode`` (the ``fused_experts`` op).
 
@@ -392,7 +393,15 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
     and PCC-compare the last ``_DECODE_STEPS`` decoded rows against the reference's
     full-prefill rows at the same absolute positions. The first ``seq_len - 32``
     steps only seed the cache. Each step runs the routed MoE through the single-op
-    ``fused_experts`` kernel (``T == 1`` on the real ``H == 4096``).
+    ``fused_experts`` kernel (``T == B`` on the real ``H == 4096``).
+
+    ``batch_size > 1`` decodes that many *independent* sequences per step, which is what
+    the layer's batching means end to end: every stage packs the users differently -- the
+    hyper-connections and the MoE fold them onto one tile-row of ``T = B*S`` tokens, while
+    attention spreads them over one tile-row (and one cache row) each. The users share an
+    absolute position, and so the RoPE rows, the mask and the cache indices, but nothing
+    else, so a batched step must still reproduce every user's own answer. Scored per user
+    rather than over the pooled batch, which would hide one user's output going wrong.
     """
     ref_path, need_gen = _reference_path(tmp_path, f"decoder_layer_{layer_idx}_{batch_size}_{seq_len}")
     # A bundle cached before ``sliding_window`` was added lacks the field the
@@ -432,7 +441,7 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
     kv_cache = build_static_layer_cache(
-        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates
+        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates, batch=batch_size
     )
     for pos in range(split + _DECODE_STEPS):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
@@ -447,8 +456,8 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
             cw, sw = make_rope_table(bundle["cos_win"][wi : wi + 1], bundle["sin_win"][wi : wi + 1])
             cos_win_d = _to_tt(cw, device)
             sin_win_d = _to_tt(sw, device)
-            win_slot = int32_pos_tensor(pos % cr, device)
-            win_row = int32_pos_tensor(cfg.sliding_window + wi, device)
+            win_slot = int32_pos_tensor(pos % cr, device, batch_size)
+            win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
 
         mask = host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device)
         out_tt = layer.decode(
@@ -460,8 +469,8 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
             sin_win_d,
             mask,
             kv_cache,
-            int32_pos_tensor(pos % cfg.sliding_window, device),
-            int32_pos_tensor(pos, device),
+            int32_pos_tensor(pos % cfg.sliding_window, device, batch_size),
+            int32_pos_tensor(pos, device, batch_size),
             pool_compressor=pool,
             win_slot=win_slot,
             win_row=win_row,
@@ -472,7 +481,13 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
         ref_row = reference[:, pos : pos + 1]
         out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
 
-        passing, pcc_message = comp_pcc(ref_row, out_torch, pcc=DECODE_PCC_THRESHOLD)
-        logger.info(comp_allclose(ref_row, out_torch))
-        logger.info(f"[decode layer {layer_idx} ({layer_type}) pos {pos}] PCC: {pcc_message}")
-        assert passing, f"layer {layer_idx} decode pos {pos} PCC < {DECODE_PCC_THRESHOLD}: {pcc_message}"
+        # Per user rather than over the pooled batch: one user's streams going wrong (a
+        # leak through the shared tile-row, or a cache write landing in another user's
+        # row) still scores well once averaged over the other seven.
+        for user in range(batch_size):
+            passing, pcc_message = comp_pcc(ref_row[user], out_torch[user], pcc=DECODE_PCC_THRESHOLD)
+            logger.info(comp_allclose(ref_row[user], out_torch[user]))
+            logger.info(f"[decode layer {layer_idx} ({layer_type}) pos {pos} user {user}] PCC: {pcc_message}")
+            assert (
+                passing
+            ), f"layer {layer_idx} decode pos {pos} user {user} PCC < {DECODE_PCC_THRESHOLD}: {pcc_message}"

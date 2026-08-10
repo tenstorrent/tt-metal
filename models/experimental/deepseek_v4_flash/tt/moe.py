@@ -447,6 +447,13 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
         h = x_flat.shape[3]
         e = routing_weights.shape[3]
+        # A single row is not a tile, so it cannot be cut out of a width-sharded tensor;
+        # a batched decode arrives sharded (straight off the sharded post-attention norm),
+        # so drop to interleaved before slicing the tokens apart.
+        if x_flat.is_sharded():
+            x_flat = ttnn.to_memory_config(x_flat, ttnn.DRAM_MEMORY_CONFIG)
+        if routing_weights.is_sharded():
+            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.DRAM_MEMORY_CONFIG)
         per_token = [
             self._decode_token(
                 ttnn.slice(x_flat, [0, 0, i, 0], [1, 1, i + 1, h]),
