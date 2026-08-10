@@ -14,10 +14,13 @@
 #   1. clears the endpoint's DevSta sticky bits, so they become a per-run PCIe error probe
 #   2. runs test_perf_debug_zones, timed, with the log kept
 #   3. reads CARD STATE, then classifies:
-#        WEDGE     endpoint link state reads Unknown (all-ones config space) -> genuine PCIe wedge
+#        WEDGE      endpoint link state reads Unknown (all-ones config space) -> hard PCIe wedge
+#        MMIO_STALL "MMIO per-op timeout" in the log: a ~220 ms 4B load = the root-port completion
+#                   timeout firing. The wedge mechanism, transient -- the card answers again by the time
+#                   sysfs is sampled, so link state CANNOT see it. Not reset by design (see below).
 #        TEARDOWN  run failed / core-wait signature, card HEALTHY -> wait_until_cores_done, not a wedge
 #        MASKED    rc=0 but the log shows a CAUGHT teardown timeout -> would have hung unarmed
-#        OTHER     failed, card healthy, no teardown signature
+#        ABORT     failed some other way, card healthy, no core-wait evidence
 #        CLEAN     rc=0, no masked signature
 #      CARD STATE IS AUTHORITATIVE, NEVER EXIT CODE. Pooling wedge with teardown produced and then
 #      destroyed four findings in this investigation; a wedged run can still exit 0.
@@ -41,6 +44,10 @@
 # The wedge rate is ~2-3% per run and does NOT depend on producer delay, so budget runs, not delays.
 
 TAG=${TAG:-watch}
+# Stamped on every row. summary.txt once held two sweeps while params.txt held one block, so the sweep a
+# row belonged to was unrecoverable -- and mixing a host sweep (devsta readable) with a container one
+# (devsta unavail) makes any pooled rate meaningless. Per-row is the only version that cannot be lost.
+SWEEP_ID=${SWEEP_ID:-$(date +%Y%m%dT%H%M%S)}
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 BIN=${BIN:-$REPO/build_Release/programming_examples/test_perf_debug_zones}
 # Derive the output root from the REPO path, not from $LOGNAME: the dev container runs as root with no
@@ -193,7 +200,7 @@ log "    host=$(hostname) out=$OUT stop_on_wedge=$STOP_ON_WEDGE allow_reboot=$AL
 log "    baseline endpoint=$(link_state "$EP") root_port=$(link_state "$RP")"
 log "    NOTE 2.5GT/s on either side = a DEGRADED link (cold power cycle), a different failure to WEDGE"
 
-nclean=0; nwedge=0; nteardown=0; nmasked=0; nother=0; nconsec=0
+nclean=0; nwedge=0; nteardown=0; nmasked=0; nmmio=0; nabort=0; nconsec=0
 for k in $(seq 1 "$N"); do
   RUNLOG=$OUT/${k}.log
   devsta_clear
@@ -215,19 +222,37 @@ for k in $(seq 1 "$N"); do
   reached_end=0
   grep -q "Cluster destructor completed" "$RUNLOG" 2>/dev/null && reached_end=1
 
+  # A 4-byte MMIO load that took ~220 ms is the ROOT-PORT COMPLETION TIMEOUT firing (DevCtl2 on the root
+  # port is set to 65-210 ms): the endpoint never completed the read and the root port abandoned it, so
+  # the UMD's 2 ms per-op budget throws and the process aborts. That is the WEDGE MECHANISM in transient
+  # form. It is invisible to the link-state test below, because by the time we sample sysfs the endpoint
+  # is answering again -- the evidence exists only in the log.
+  mmio_sig=0
+  grep -q "MMIO per-op timeout" "$RUNLOG" 2>/dev/null && mmio_sig=1
+
   class=CLEAN
   if [ "${ep%%|*}" = "Unknown" ] || [ "${ep%%|*}" = "NA" ]; then
-    class=WEDGE; nwedge=$((nwedge+1))
+    class=WEDGE; nwedge=$((nwedge+1))          # hard wedge: card stuck all-ones. Most severe, wins.
+  elif [ $mmio_sig -eq 1 ]; then
+    class=MMIO_STALL; nmmio=$((nmmio+1))       # transient wedge: completion timeout, card recovered
   elif [ $rc -ne 0 ]; then
-    if [ $teardown_sig -eq 1 ] || [ $reached_end -eq 0 ]; then class=TEARDOWN; nteardown=$((nteardown+1))
-    else class=OTHER; nother=$((nother+1)); fi
+    # TEARDOWN means the core-wait never returned, so require EVIDENCE of that: its log signature, or a
+    # run that actually sat there (>= 40 s; armed the wait is 45 s, unarmed it runs to RUN_TIMEOUT).
+    # Never infer it from "did not reach the end marker" alone -- an early abort also fails to reach it,
+    # and filing a 3 s crash as a hang pools two distinct failures, which is the one thing this
+    # investigation cannot afford. Everything else that failed is ABORT.
+    if [ $teardown_sig -eq 1 ] || { [ $reached_end -eq 0 ] && [ "$dur" -ge 40 ]; }; then
+      class=TEARDOWN; nteardown=$((nteardown+1))
+    else
+      class=ABORT; nabort=$((nabort+1))
+    fi
   elif [ $teardown_sig -eq 1 ]; then
     class=MASKED; nmasked=$((nmasked+1))
   else
     nclean=$((nclean+1))
   fi
 
-  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class" >> "$CSV"
+  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class,$SWEEP_ID" >> "$CSV"
   [ "$class" != CLEAN ] && log "k=$k rc=$rc dur=${dur}s ep=$ep rp=$rp devsta=$ds -> $class"
 
   if [ "$class" = CLEAN ]; then
@@ -244,10 +269,17 @@ for k in $(seq 1 "$N"); do
       break
     fi
     recover || break
-  elif [ "$class" = TEARDOWN ] || [ "$class" = OTHER ] || [ "$class" = MASKED ]; then
+  elif [ "$class" = TEARDOWN ] || [ "$class" = ABORT ] || [ "$class" = MASKED ]; then
     # MASKED recovers too: it IS a teardown hang, just one the armed timeout caught. Leaving it
     # unrecovered is what let a sweep grind out 16 identical 46 s masked runs in a row.
     recover || break
+  elif [ "$class" = MMIO_STALL ]; then
+    # Deliberately NO reset. The card reads healthy immediately after these, and resetting anyway is
+    # exactly what stopped us learning whether this mode self-clears: every observation so far is
+    # confounded by a tt-smi -r we did not need. Leave it alone and let the NEXT run answer it -- a
+    # CLEAN successor means no intervention was required at all.
+    log "  [mmio] transient wedge; NO reset by design -- next run tests self-recovery (ALLOW_MMIO_RESET=1 to reset)"
+    if [ "${ALLOW_MMIO_RESET:-0}" = "1" ]; then recover || break; fi
   fi
 
   if [ "$MAX_CONSEC_FAIL" != "0" ] && [ "$nconsec" -ge "$MAX_CONSEC_FAIL" ]; then
@@ -257,19 +289,27 @@ for k in $(seq 1 "$N"); do
     break
   fi
 
-  [ $((k % 20)) -eq 0 ] && log "progress k=$k clean=$nclean wedge=$nwedge teardown=$nteardown masked=$nmasked other=$nother"
+  [ $((k % 20)) -eq 0 ] && log "progress k=$k clean=$nclean wedge=$nwedge mmio=$nmmio teardown=$nteardown masked=$nmasked abort=$nabort"
 done
 
-log "=== DONE: clean=$nclean wedge=$nwedge teardown=$nteardown masked=$nmasked other=$nother ==="
-python3 - "$CSV" <<'PY' 2>/dev/null | tee -a "$SUM"
+log "=== DONE: clean=$nclean wedge=$nwedge mmio_stall=$nmmio teardown=$nteardown masked=$nmasked abort=$nabort ==="
+python3 - "$CSV" "$SWEEP_ID" <<'PY' 2>/dev/null | tee -a "$SUM"
 import sys, csv
-rows = list(csv.DictReader(open(sys.argv[1])))
+allrows = list(csv.DictReader(open(sys.argv[1])))
+# THIS sweep only: a csv may hold several, and pooling a host sweep with a container one (different
+# devsta availability, possibly different dispatch) yields a rate that describes neither.
+rows = [r for r in allrows if r.get('sweep') == sys.argv[2]] or allrows
 d = sorted(float(r['dur_s']) for r in rows if r['dur_s'])
 if d:
     print(f"duration: min={d[0]:.0f}s median={d[len(d)//2]:.0f}s max={d[-1]:.0f}s n={len(d)}")
 n = len(rows)
 w = sum(1 for r in rows if r['class'] == 'WEDGE')
+m = sum(1 for r in rows if r['class'] == 'MMIO_STALL')
 if n:
-    print(f"wedge rate: {w}/{n} = {100.0*w/n:.1f}%  (expect ~2-3%; no delay dependence)")
+    print(f"hard wedge:  {w}/{n} = {100.0*w/n:.2f}%   (card stuck all-ones)")
+    print(f"mmio stall:  {m}/{n} = {100.0*m/n:.2f}%   (transient: completion timeout, card recovered)")
+    print(f"combined:    {w+m}/{n} = {100.0*(w+m)/n:.2f}%   (compare against the recorded ~2-3%/run)")
+if len(allrows) != n:
+    print(f"note: csv holds {len(allrows)} rows across several sweeps; the above is sweep {sys.argv[2]} only")
 PY
 log "csv=$CSV"
