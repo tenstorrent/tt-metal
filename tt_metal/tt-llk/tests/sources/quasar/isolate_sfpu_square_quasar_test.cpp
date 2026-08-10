@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_unpack.buf_desc_id     = buf_desc_id_unpack;
     td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
 
     // Pack BD: SrcS -> L1 output
     bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_pack.buf_desc_id     = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;

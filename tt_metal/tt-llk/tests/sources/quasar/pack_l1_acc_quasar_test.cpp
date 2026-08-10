@@ -90,11 +90,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
         }
         else
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val.reg_data_format);
         }
 
         if constexpr (unpack_to_dest)
@@ -334,7 +334,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
         _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         _llk_pack_relu_config_<p_pacr::PACK0, is_fp32_dest_acc_en>(relu_config);

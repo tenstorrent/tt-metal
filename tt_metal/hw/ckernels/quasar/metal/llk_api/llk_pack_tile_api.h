@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_bfd_alloc.h"
 #include "llk_pack_common_api.h"
 #include "llk_pack.h"
 #include "tensor_shape.h"
@@ -19,12 +20,23 @@
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * DataFlow Buffer.
+ *
+ * Allocates a BFD id from the pack partition and programs its table entry from the output DFB's
+ * info (shape, L1 base, formats); the DFB id never doubles as the BFD id.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    _llk_pack_init_(output_id, tensor_shape);
+    const std::uint8_t bfd_id = ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Pack0>();
+    // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
+    const buffer_descriptor_u buf_desc = ckernel::trisc::construct_buf_desc(
+        tensor_shape,
+        get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+        static_cast<std::uint32_t>(pack_dst_format[output_id]));
+    ckernel::trisc::_configure_buf_desc_table_(bfd_id, buf_desc);
+
+    _llk_pack_init_(bfd_id, tensor_shape);
 
     // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
     // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.

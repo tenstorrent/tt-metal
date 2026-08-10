@@ -76,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
         _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
 
         PROFILER_SYNC();
     }
@@ -264,7 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
         _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
