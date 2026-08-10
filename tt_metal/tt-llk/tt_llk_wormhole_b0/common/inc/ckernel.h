@@ -46,7 +46,7 @@
 #include "ckernel_include.h"
 
 // Two-phase lookup: the config-write builtins are non-dependent names in the
-// cfg_reg_rmw_tensix_i template, so they must be declared before it.  They must
+// cfg_reg_rmw_tensix template, so they must be declared before it.  They must
 // be at global scope (a declaration inside namespace ckernel would resolve to a
 // ckernel:: function, not the compiler's builtin).  Declaring a __builtin_ name
 // is technically a redundant redeclaration of what the compiler knows, so the
@@ -522,50 +522,15 @@ inline void cfg_rmw_gpr(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::
     cfg_rmw(cfg_addr32, cfg_shamt, cfg_mask, wrdata);
 }
 
+// Byte-granular RMWCIB write of VAL (already shifted to SHAMT) to the Config
+// word CfgAddr32, one lane per byte the Mask spans -- cfg_reg_rmw_tensix's one
+// call.  Issues the config-write intrinsics (__builtin_rvtt_rmwciB0..3), the
+// real Tensix instructions, so pass_rvtt_config consumes and coalesces them.
+// VAL may be constant (hw-configure: always-inline so compile-time formats fold
+// to the immediate instruction) or runtime (reconfig: the compiler emits the
+// __instrn_buffer store form).  Same writes on every arch.
 template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
-inline void cfg_reg_rmw_tensix(std::uint32_t val)
-{
-    std::uint32_t wrdata = val << Shamt;
-    std::uint8_t mask_b0 = Mask & 0xff;
-
-    if (mask_b0 != 0)
-    {
-        std::uint8_t data_b0 = wrdata & 0xff;
-        TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
-    }
-    wrdata >>= 8;
-    std::uint8_t mask_b1 = (Mask >> 8) & 0xff;
-
-    if (mask_b1 != 0)
-    {
-        std::uint8_t data_b1 = (wrdata) & 0xff;
-        TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
-    }
-
-    wrdata >>= 8;
-    std::uint8_t mask_b2 = (Mask >> 16) & 0xff;
-
-    if (mask_b2 != 0)
-    {
-        std::uint8_t data_b2 = (wrdata) & 0xff;
-        TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
-    }
-
-    wrdata >>= 8;
-    std::uint8_t mask_b3 = (Mask >> 24) & 0xff;
-    if (mask_b3 != 0)
-    {
-        std::uint8_t data_b3 = (wrdata) & 0xff;
-        TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
-    }
-}
-
-// Intrinsic twin of cfg_reg_rmw_tensix: the same byte-granular RMWCIB write,
-// but through the config-write intrinsics (__builtin_rvtt_rmwciB0..3) instead
-// of inline asm, so pass_rvtt_config consumes and coalesces the writes.  Used
-// by the compiler-managed _llk_*_hw_configure_ primitives.
-template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
-TT_ALWAYS_INLINE void cfg_reg_rmw_tensix_i(std::uint32_t val)
+TT_ALWAYS_INLINE void cfg_reg_rmw_tensix(std::uint32_t val)
 {
     std::uint32_t wrdata = val << Shamt;
     std::uint8_t mask_b0 = Mask & 0xff;

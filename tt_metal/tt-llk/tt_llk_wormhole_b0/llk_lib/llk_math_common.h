@@ -49,7 +49,7 @@ TT_ALWAYS_INLINE void _llk_math_hw_configure_(const std::uint32_t srca_data_form
     std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
-    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 
     // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
     // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
@@ -58,13 +58,13 @@ TT_ALWAYS_INLINE void _llk_math_hw_configure_(const std::uint32_t srca_data_form
     // touch disjoint bits and rely on per-byte RMWCIB atomicity, so no cross-thread mutex is needed.
     constexpr std::uint32_t src_fmt_override_mask =
         ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
-    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
 
-    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
-    _configure_default_zero_flag_state_i_(srca_data_format, srcb_data_format);
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**
