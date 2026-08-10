@@ -1063,33 +1063,24 @@ class TTVibeVoiceLM:
                 ttnn.fill_cache(kv_cache.keys[layer_idx], k, 0, update_idx=start_pos)
                 ttnn.fill_cache(kv_cache.values[layer_idx], v, 0, update_idx=start_pos)
                 S_total = start_pos + S
-                k_all = ttnn.slice(
-                    kv_cache.keys[layer_idx],
-                    [0, 0, 0, 0],
-                    [B, n_kv, S_total, head_dim],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                v_all = ttnn.slice(
-                    kv_cache.values[layer_idx],
-                    [0, 0, 0, 0],
-                    [B, n_kv, S_total, head_dim],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                k_src, v_src = kv_cache.keys[layer_idx], kv_cache.values[layer_idx]
             else:
                 # No allocated cache (single-shot prefill, e.g. PCC tests): attend within
                 # this forward only.  start_pos is 0 in this case.
                 S_total = S
-                k_all, v_all = k, v
+                k_src, v_src = k, v
 
-            # GQA: repeat_interleave KV heads → [B, n_heads, S_total, hd]
+            # GQA: slice each KV head straight from the (cache or chunk) prefix and repeat it into
+            # [B, n_heads, S_total, hd].  The per-head slice bounds both the head and S_total, so the
+            # old full-width k_all/v_all intermediate slices are redundant and dropped (byte-identical).
             repeat = n_heads // n_kv
             k_slices, v_slices = [], []
             for kv_idx in range(n_kv):
                 kh = ttnn.slice(
-                    k_all, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    k_src, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
                 vh = ttnn.slice(
-                    v_all, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    v_src, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
                 for _ in range(repeat):
                     k_slices.append(kh)
