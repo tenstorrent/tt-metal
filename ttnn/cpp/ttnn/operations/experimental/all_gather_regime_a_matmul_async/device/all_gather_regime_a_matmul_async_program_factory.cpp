@@ -557,8 +557,15 @@ enum RingSlotArg : uint32_t {
     // ring origin under the balanced schedule) and the two neighbours have different schedules again.
     kRsPeerSlotFwd = 18,
     kRsPeerSlotBwd = 19,
-    kRsFwdBase = 20,                     // (G-1) pairs {src_slot, dst_slot_on_successor}, one per forward step
-    kRsArgCount = kRsFwdBase + 2u * 7u,  // G-1 == 7 forwards; == 34
+    // ONE pair per CONSUME step, not G-1 pairs crammed into the first G-1 steps. Step s forwards the very chunk
+    // step s consumes, so the forward and the consume share a single gate and forwarding can never block on a
+    // chunk that arrives later than the one we are about to use. With the forwards compressed, every step at or
+    // after the successor's own chunk had F[s] == C[s+1] -- head-of-line blocking: a ready chunk stuck behind a
+    // later one. Exactly one step forwards nothing (the one consuming the successor's own chunk, which it
+    // already has), so the total is still G-1 == 7 forwards.
+    kRsFwdBase = 20,                     // G pairs {src_slot, dst_slot_on_successor}
+    kRsNoForward = 0xFFFFFFFFu,          // src_slot sentinel: this step forwards nothing
+    kRsArgCount = kRsFwdBase + 2u * 8u,  // G == 8 steps; == 36
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -649,6 +656,37 @@ inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops) {
             seen |= 1u << sch.consume_pos[p][s];
         }
         TT_FATAL(seen == 0xFFu, "ring schedule for position {} is not a permutation (mask {:#x})", p, seen);
+    }
+    // CROSS-CORE INVARIANT. Core p forwards, in step order, its consume order minus its successor's own chunk.
+    // The successor must therefore RECEIVE exactly its own consume order minus its own chunk, in that order --
+    // otherwise its receive-count gate (`recv_needed`) admits the wrong chunk and the K-sum silently pairs in0
+    // with the wrong in1 block. Equivalently: the forwarded chunks must land in ASCENDING slot order at the
+    // successor, since a slot index IS a consume-order index.
+    //
+    // This holds for availability order because avail(o, p+1) == avail(o, p) + kHopCost for every o except the
+    // successor's own, so adding one hop preserves the relative order. Asserted rather than trusted: it is the
+    // property the whole schedule rests on, and it is cheap to check.
+    for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
+        const uint32_t succ = (p + 1u) % RingSchedule::kG;
+        uint32_t prev_slot = 0;
+        bool first = true;
+        for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
+            const uint32_t chunk = sch.consume_pos[p][s];
+            if (chunk == succ) {
+                continue;
+            }
+            const uint32_t dst = sch.slot_of(succ, chunk);
+            TT_FATAL(
+                first || dst > prev_slot,
+                "ring schedule: position {} forwards chunk {} into successor slot {} after slot {}; receives "
+                "must land in ascending slot order or the receive-count gate admits the wrong chunk",
+                p,
+                chunk,
+                dst,
+                prev_slot);
+            prev_slot = dst;
+            first = false;
+        }
     }
     return sch;
 }
@@ -2031,20 +2069,38 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(own_slot);
             wa.push_back(peer_fwd);
             wa.push_back(peer_bwd);
-            // FORWARD ORDER = my consume order with my SUCCESSOR'S OWN chunk removed (it already has that
-            // one, and 7 forwards cover the other 7). Because forwarding follows availability order too, a
-            // core waiting on its own late chunk keeps relaying the ones behind it -- the coupling that made
-            // one late chunk freeze the whole ring.
-            for (uint32_t s = 0, t = 0; s < geo.G; ++s) {
+            // Step s forwards the chunk step s CONSUMES -- the same chunk, hence the same gate, hence no
+            // head-of-line blocking. The one exception is the successor's own chunk, which it already has; that
+            // step forwards nothing.
+            uint32_t n_fwd = 0, n_skip = 0;
+            for (uint32_t s = 0; s < geo.G; ++s) {
                 const uint32_t chunk = sch.consume_pos[p][s];
                 if (chunk == succ) {
-                    continue;  // never forward the successor's own chunk
+                    wa.push_back(kRsNoForward);
+                    wa.push_back(kRsNoForward);
+                    ++n_skip;
+                    continue;
                 }
-                TT_FATAL(t + 1u < geo.G, "forward order overflow at position {}", p);
-                wa.push_back(sch.slot_of(p, chunk));     // read this slot of mine
-                wa.push_back(sch.slot_of(succ, chunk));  // write that slot on my successor
-                ++t;
+                TT_FATAL(
+                    sch.slot_of(p, chunk) == s,
+                    "slot_of must invert consume_pos: position {} step {} chunk {} came back as slot {}",
+                    p,
+                    s,
+                    chunk,
+                    sch.slot_of(p, chunk));
+                wa.push_back(s);                         // read the slot we are consuming this step
+                wa.push_back(sch.slot_of(succ, chunk));  // write the slot the successor consumes it at
+                ++n_fwd;
             }
+            // Exactly one skip and G-1 forwards. The successor needs every chunk but its own, so a second skip
+            // would silently drop one -- a global K tile missing on the next core, which the spec lists first.
+            TT_FATAL(
+                n_skip == 1u && n_fwd == geo.G - 1u,
+                "position {} must forward G-1={} chunks and skip exactly 1, got {} and {}",
+                p,
+                geo.G - 1u,
+                n_fwd,
+                n_skip);
             // The ROTATION must still come out exactly as phase 1 hand-derived it: own_slot 0 and
             // (src, dst) == (s, s+1). Keeps the staged path (and TT_AGMM_RING_ROTATION=1) bit-identical, and
             // catches a schedule generator that has broken the case we can check exactly.
@@ -2059,6 +2115,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                         wa[kRsFwdBase + 2u * s],
                         wa[kRsFwdBase + 2u * s + 1u]);
                 }
+                // In the rotation the successor's own chunk (p+1 == p-(G-1)) is consumed LAST, so the skip
+                // lands on step G-1 and steps 0..G-2 come out (s, s+1) exactly as phase 1 derived them.
+                TT_FATAL(
+                    wa[kRsFwdBase + 2u * (geo.G - 1u)] == kRsNoForward,
+                    "rotation must skip the final step at position {}",
+                    p);
             }
             TT_FATAL(
                 wa.size() == kRsArgCount,

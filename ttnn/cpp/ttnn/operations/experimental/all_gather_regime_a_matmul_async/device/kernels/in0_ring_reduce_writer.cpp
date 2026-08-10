@@ -132,8 +132,9 @@ void kernel_main() {
     // by availability: hop counts differ per device, so each neighbour sorts its chunks differently.
     const uint32_t ring_peer_slot_fwd = get_arg_val<uint32_t>(18);
     const uint32_t ring_peer_slot_bwd = get_arg_val<uint32_t>(19);
-    constexpr uint32_t kRingFwdBase = 20;                  // (G-1) pairs {src_slot, dst_slot}
-    [[maybe_unused]] uint32_t fidx = 20u + 2u * (G - 1u);  // optional args start after the schedule
+    constexpr uint32_t kRingFwdBase = 20;             // G pairs {src_slot, dst_slot}, one per consume step
+    constexpr uint32_t kRingNoForward = 0xFFFFFFFFu;  // src_slot sentinel: this step forwards nothing
+    [[maybe_unused]] uint32_t fidx = 20u + 2u * G;    // optional args start after the schedule
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
     const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
@@ -830,12 +831,14 @@ void kernel_main() {
     // fabric_hops*WAVE + on_chip_hops*HOP and emitted that as the slot schedule. Two things follow, and both
     // matter:
     //
-    //  * FORWARD BEFORE CONSUME. The forward is gated only on what we have RECEIVED (or on our own chunk when
-    //    that is what we forward), never on the chunk we are about to consume. Previously the loop waited and
-    //    then forwarded, so a core blocked on its own late chunk relayed nothing and froze every core behind
-    //    it. That coupling, not the ring itself, is what turned one late chunk into a device-wide stall.
-    //  * A LEAF's own-chunk wait lands here (dl1_own_pending), at the step that actually consumes it, instead
-    //    of in the prologue.
+    //  * ONE GATE PER STEP. Step s forwards the very chunk step s consumes, so there is a single wait covering
+    //    both and forwarding can never block on a chunk that lands later than the one we are about to use.
+    //    Compressing the G-1 forwards into the first G-1 steps caused exactly that: every step at or after the
+    //    successor's own chunk forwarded C[s+1] while consuming C[s], so a ready chunk queued behind a later
+    //    one. The step consuming the successor's own chunk forwards nothing (it already has it).
+    //  * The own-chunk wait AND the fabric relay land here (dl1_own_pending), at the step that first needs that
+    //    chunk, instead of in the prologue -- a core stuck in the prologue forwards nothing and starves every
+    //    core behind it.
     for (uint32_t step = 0; step < G; ++step) {
         // Our own chunk: wait for it if it comes over the fabric, then IMMEDIATELY relay it onward. Runs at the
         // first ring step that needs this chunk, and exactly once (dl1_own_pending guards it), so the mux still
@@ -950,23 +953,21 @@ void kernel_main() {
         };
         // Number of received chunks needed before slot `sl` is filled: every slot below it except our own.
         auto recv_needed = [&](uint32_t sl) { return (ring_own_slot <= sl) ? sl : (sl + 1u); };
-        if (step + 1 < G) {
-            const uint32_t fwd_src_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step);
-            const uint32_t fwd_dst_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step + 1u);
-            if (fwd_src_slot == ring_own_slot) {
-                ensure_own();
-            } else {
-                noc_semaphore_wait_min(fwd_ptr, recv_needed(fwd_src_slot));
-            }
-            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + fwd_dst_slot * shard_bytes);
-            noc_async_write(base0 + fwd_src_slot * shard_bytes, dst, shard_bytes);
-            // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
-            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
-        }
+        // THE one wait of this step: the chunk we are about to consume. Nothing else gates here.
         if (step == ring_own_slot) {
             ensure_own();
         } else {
             noc_semaphore_wait_min(fwd_ptr, recv_needed(step));
+        }
+        // Relay that same chunk onward. src_slot == step by construction; the sentinel marks the single step
+        // whose chunk is the successor's own, which it already has.
+        const uint32_t fwd_src_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step);
+        if (fwd_src_slot != kRingNoForward) {
+            const uint32_t fwd_dst_slot = get_arg_val<uint32_t>(kRingFwdBase + 2u * step + 1u);
+            const uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + fwd_dst_slot * shard_bytes);
+            noc_async_write(base0 + fwd_src_slot * shard_bytes, dst, shard_bytes);
+            // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
+            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this chunk (W blocks)
     }
