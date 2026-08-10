@@ -60,14 +60,14 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_silu,
-        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         0 /*DST_IDX*/,
         ::ckernel::VectorMode::RC));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_silu,
-        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         2 /*DST_IDX*/,
         ::ckernel::VectorMode::RC));
 

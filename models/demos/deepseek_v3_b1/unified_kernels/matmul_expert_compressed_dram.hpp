@@ -987,7 +987,7 @@ struct MatmulExpertCompressedDRAM {
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,
-                            (DST_ACCUM_MODE, silu_iterations),
+                            (false /*APPROXIMATION_MODE*/, DST_ACCUM_MODE, silu_iterations),
                             0 /*dst_index*/,
                             VectorMode::R));
                         tile_regs_commit();
@@ -1089,7 +1089,7 @@ struct MatmulExpertCompressedDRAM {
                                     DST_SYNC_MODE,
                                     DST_ACCUM_MODE,
                                     calculate_silu,
-                                    (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
+                                    (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                                     sn /*dst_index*/,
                                     VectorMode::R));
                             }

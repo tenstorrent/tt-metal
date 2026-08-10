@@ -329,7 +329,7 @@ struct DRAMStreamingMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
+                                (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                                 0 /*dst_index*/,
                                 VectorMode::R));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
@@ -337,7 +337,7 @@ struct DRAMStreamingMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /*is_fp32_dest_acc_en*/, 4 /*ITERATIONS*/),
+                                (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 4 /*ITERATIONS*/),
                                 0 /*dst_index*/,
                                 VectorMode::R));
                         } else {
@@ -345,7 +345,7 @@ struct DRAMStreamingMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+                                (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
                                 0 /*dst_index*/,
                                 VectorMode::R));
                         }
