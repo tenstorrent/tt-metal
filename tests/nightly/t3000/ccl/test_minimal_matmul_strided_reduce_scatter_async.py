@@ -105,6 +105,24 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
     # RS needs 3 semaphores per iteration
+    # Caller-owned MM->RS progress counter array, the same thing CCLManager hands the model
+    # (see CCLManager.get_mm_progress_counters_buffer). Passing it exercises the shared-array path;
+    # leaving it None makes each compiled program allocate its own, which permanently lowers the
+    # device's L1 floor. One uint32 slot per matmul core, one row per core, L1 HEIGHT_SHARDED so
+    # every RS worker core sees its row at the same local address.
+    _counter_slots = compute_grid_size.x * compute_grid_size.y
+    mm_progress_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
 
@@ -263,6 +281,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
                 mm_window_blocks=mm_window_blocks,
+                mm_progress_counters=mm_progress_counters,
             )
             return tt_mm_out, tt_rs_out
         else:
