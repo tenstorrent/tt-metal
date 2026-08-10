@@ -1969,6 +1969,24 @@ warns is not a correctness test.
  was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
 ```
 
+### [pipe-05] `generate` — the frame loop is traced
+
+One trace covers the whole per-frame device graph: Block 1, the semantic projection, Block 2.
+**−4.244 ms/frame, RTF 0.4931 → 0.4514, every quality metric identical** (paired `--tier audio`,
+0 worse). The graph is bit-exact — 8 frames teacher-forced, 0 of 288 acoustic differences.
+
+**It must be ALL of the device work.** Once a trace exists any later device allocation may be
+corrupted; leaving Block 1 or `semantic_code` eager allocates per frame and wedges the board.
+Possible only because the acoustic decode does not depend on the semantic argmax.
+
+**Frame 0 is eager and runs before capture** (its hidden state comes from prefill, not a Block 1
+step). **The trace is released in a `finally`** — the next `generate()` prefills, which allocates.
+Capture is 0.034 s per utterance. `TRACE_REGION_SIZE = 0` falls back to the eager loop.
+
+**Aim `pos` at pos0 before the warm-up `graph()`.** Capture writes K/V at whatever `pos` holds;
+left at 0 it destroys the prompt's position 0 and produces garbage audio — see STATUS.md §6.65,
+which also records why a single-frame correctness check did not catch it.
+
 ### [gpt-27] `_layer_step` / `_mlp` — the residual rides in as the matmul's bias
 
 Both Block 1 residuals become `linear(..., bias=x)` instead of `add_(x, linear(...))`.
