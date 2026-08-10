@@ -111,7 +111,10 @@ is warned about rather than honoured:
                                     No typed manifest field: set it via the CLI flag, an exported env var,
                                     or the manifest's raw ``env:`` passthrough.
   PREFILL_VERIFY_MIGRATION_LAYERS   comma layer list to spot-check instead of the full depth. Same: CLI
-                                    flag / env / raw ``env:`` block, no typed field.
+                                    flag / env / raw ``env:`` block, no typed field. Honoured by the
+                                    dst-bytes half only; the golden half always reads the full depth, and
+                                    is refused outright when PREFILL_MIGRATION_LAYERS migrated a subset
+                                    (its reader would PCC dst rows the migrate never wrote).
   MIGRATION_DONE_FILE               path of the DONE sentinel published for an external consumer to poll
                                     (default /tmp/migration_done.sentinel).
   PREFILL_DRIVER_HOSTS              rank-ordered host list ("h0,h1") this driver spans, == --hosts and the
@@ -945,6 +948,12 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
     weaker in others: it decodes through the per-model layout branch (so a new cache layout needs code),
     it needs the golden trace on disk, and its PCC is undefined over the all-zero pad tail. Run ``both``
     when you want the transport and the model correctness reported separately.
+
+    FULL DEPTH, ALWAYS. ``_read_slot_kv_and_check_pcc`` takes a slot and a trace, not a layer list: it
+    walks every layer of the model and reports the min. There is no layer subset to pass, which is why
+    the caller (``_verify_migrated_slots``) decides whether this check may run at all rather than passing
+    one down — see the gate there. Unlike ``_verify_dst_vs_src_bytes``, this cannot honour
+    PREFILL_VERIFY_MIGRATION_LAYERS, and it must not run against a partially migrated destination.
     """
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -981,7 +990,9 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
     return True
 
 
-def _verify_migrated_slots(mode: str, *, table, triples, slot_traces, layers, threshold, cross_endpoint) -> bool:
+def _verify_migrated_slots(
+    mode: str, *, table, triples, slot_traces, layers, migrated_layers, threshold, cross_endpoint
+) -> bool:
     """Run the requested destination check(s) after the migrate. Returns True when everything requested
     passed (and True for ``off``, which asserts nothing).
 
@@ -989,6 +1000,16 @@ def _verify_migrated_slots(mode: str, *, table, triples, slot_traces, layers, th
     address space this driver's table cannot address. Looking up ``dst`` in OUR table would silently read
     our own slot ``dst`` — an unwritten slot, or worse, another pair's source — and report a confident
     wrong answer. Loopback is the only topology where the destination is locally readable.
+
+    TWO layer lists arrive here, and conflating them is a bug:
+      * ``migrated_layers`` (PREFILL_MIGRATION_LAYERS) — which rows the migrate actually COPIED. A subset
+        means every other row of each dst slot was never written, so it constrains what is even
+        MEANINGFUL to read at the destination.
+      * ``layers`` (``--verify-migration-layers``, defaulting to ``migrated_layers``) — which rows this
+        run should bother reading. A pure cost knob: a subset makes a PASS a sample.
+    ``dst-bytes`` takes ``layers`` and honours both. ``dst-golden`` can honour neither — its reader walks
+    the full depth — so the gate below runs it only when the whole model was migrated, and says so
+    otherwise instead of PCCing rows that hold nothing.
     """
     if mode == "off":
         logger.info("[migration_driver] destination verification is OFF; this run proves TRANSPORT only.")
@@ -1018,7 +1039,32 @@ def _verify_migrated_slots(mode: str, *, table, triples, slot_traces, layers, th
     if mode in ("dst-bytes", "both"):
         ok = _verify_dst_vs_src_bytes(table, device_map, triples, layers) and ok
     if mode in ("dst-golden", "both"):
-        ok = _verify_dst_vs_golden(table, device_map, triples, slot_traces, threshold) and ok
+        if migrated_layers:
+            # PARTIAL MIGRATION + golden check: refuse, don't guess. The golden reader walks every layer
+            # of the model, but only `migrated_layers` were copied, so it would PCC the dst slot's
+            # UNWRITTEN rows against golden and fail a perfectly correct migration. Skipping quietly would
+            # be worse than failing: `both` would then report a PASS that never looked at the destination
+            # the way the caller asked. dst-bytes is the mode that does honour a subset.
+            logger.error(
+                f"[migration_driver] --verify-migration={mode} cannot run its GOLDEN half: "
+                f"PREFILL_MIGRATION_LAYERS migrated only layer(s) {sorted(set(migrated_layers))}, so every "
+                "other row of each dst slot was never written — and the golden reader "
+                "(prefill_producer._read_slot_kv_and_check_pcc) has no layer-subset parameter, so it would "
+                "PCC that unwritten memory and fail a correct migration. Use --verify-migration=dst-bytes, "
+                "which does honour the subset, or migrate the full depth (unset PREFILL_MIGRATION_LAYERS) "
+                "to get the golden check."
+            )
+            ok = False
+        else:
+            if layers:
+                # Everything was migrated, so the full-depth golden read is CORRECT here — just not the
+                # cheap sample that was asked for. Say so rather than silently spending the reads.
+                logger.warning(
+                    f"[migration_driver] --verify-migration-layers {sorted(set(layers))} applies to the "
+                    "dst-bytes half only; the golden half reads the FULL depth (its reader takes no layer "
+                    "subset). Expect it to cost a full check_pcc pass per pair."
+                )
+            ok = _verify_dst_vs_golden(table, device_map, triples, slot_traces, threshold) and ok
     return ok
 
 
@@ -1133,6 +1179,7 @@ def _run_validator(rank: int, world_size: int, args) -> None:
             triples=triples,
             slot_traces=slot_traces,
             layers=verify_layers,
+            migrated_layers=driver.layers,
             threshold=cfg.pcc_threshold,
             cross_endpoint=driver.cross_endpoint,
         )
@@ -1222,7 +1269,11 @@ def main() -> None:
         default=os.environ.get("PREFILL_VERIFY_MIGRATION_LAYERS"),
         help="Comma list of layer ids to verify (e.g. '0,30,60'), for a fast spot-check instead of the "
         "full depth. Defaults to every layer the migrate covered. A subset makes a PASS a sample, not a "
-        "proof — the summary says so.",
+        "proof — the summary says so. Applies to the DST-BYTES half only: the golden half's reader takes "
+        "no layer subset and always walks the full depth. For the same reason 'dst-golden'/'both' are "
+        "REFUSED (not silently skipped) when PREFILL_MIGRATION_LAYERS migrated only part of the model — "
+        "the unmigrated dst rows hold nothing, so PCCing them would fail a correct migration. Use "
+        "'dst-bytes' for a partial-depth migration.",
     )
     args = parser.parse_args()
 
@@ -1393,6 +1444,7 @@ def main() -> None:
             triples=triples,
             slot_traces=slot_traces,
             layers=verify_layers,
+            migrated_layers=driver.layers,
             threshold=cfg.pcc_threshold,
             cross_endpoint=driver.cross_endpoint,
         )
