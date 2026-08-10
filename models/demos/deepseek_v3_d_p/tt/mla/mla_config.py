@@ -554,8 +554,7 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
         {
-            # Blackhole coalesces adjacent q16 MLA work into one matrix issue, avoiding the
-            # near-full issue cost of independent half-height QK/QK@V operations.
+            # Use genuine 16x32 tiny Q tiles to expose finer-grained Q scheduling.
             "q_chunk_size": 16,
             "k_chunk_size": 640,
             "num_heads": 96,
