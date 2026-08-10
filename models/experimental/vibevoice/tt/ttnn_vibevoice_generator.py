@@ -122,25 +122,6 @@ def _greedy_argmax(logits: ttnn.Tensor, use_fp32: bool = False) -> int:
     return int(ttnn.to_torch(idx).reshape(-1)[-1].item())
 
 
-def _apply_token_constraint(
-    logits: ttnn.Tensor,
-    valid_token_ids: List[int],
-    device,
-) -> ttnn.Tensor:
-    """Mask logits so only valid_token_ids are selectable."""
-    vocab_size = logits.shape[-1]
-    mask = torch.full((1, 1, 1, vocab_size), float("-inf"), dtype=torch.bfloat16)
-    mask[:, :, :, valid_token_ids] = 0.0
-    mask_tt = ttnn.as_tensor(
-        mask,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return ttnn.add(logits, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
 def _host_2d_to_embeds(embeds_2d: torch.Tensor, device, dtype: torch.dtype = torch.bfloat16) -> ttnn.Tensor:
     """[S, H] or [1, H] host → [1, 1, S, H] on device."""
     if embeds_2d.dim() == 1:
@@ -250,9 +231,9 @@ class TTVibeVoiceGenerator:
         # Lifecycle per segment: warmup -> throwaway capture -> reset (rewind positions, re-seed
         # hidden, zero the conv streaming caches IN PLACE) -> pure replay.  The trace is released
         # at each speech_start (so the boundary's eager LM decodes cannot corrupt a live capture)
-        # and recaptured per segment; a single-segment generation captures once.  Replay is PCC 1.0
-        # against the eager device-RoPE path; its bf16 RoPE puts it at ~0.9999 vs the fp32
-        # reference, the same accepted precision as the bf16 SDPA-decode.
+        # and recaptured per segment; a single-segment generation captures once.  Replay is exact
+        # against the eager device-RoPE path; its bf16 RoPE tracks the fp32 reference to the same
+        # accepted precision as the bf16 SDPA-decode.
         self._trace_segment = os.environ.get("VV_TRACE_SEGMENT", "0") == "1"
         # Voice-clone acoustic-encode chunk trace (see _ensure_encode_trace): (trace_id, out_tensor)
         # for the steady chunk and for the row's final chunk, plus their shared input buffer.  Lives
@@ -280,10 +261,9 @@ class TTVibeVoiceGenerator:
         # VV_TTNN_RANDN=1 draws that table with ttnn.randn ON DEVICE instead of torch.randn on host.
         # EXPERIMENTAL, default off: ttnn.randn is a different generator (device Box-Muller over
         # per-core PRNGs), so it does NOT reproduce torch's values for a seed — the diffusion init
-        # noise changes and every rendered sample differs from the torch reference.  Measured vs
-        # torch.randn: tails match (P(|z|>3) 0.00265 vs 0.00270 at n=1M), but small draws are
-        # under-dispersed and slightly negative-biased (a [400,64] table came out std 0.938-1.002
-        # across seeds, mean -0.004..-0.040, vs torch's steady std~1.000).  Judge by listening.
+        # noise changes and every rendered sample differs from the torch reference.  Its tails match
+        # torch.randn but small draws are under-dispersed and slightly negative-biased.  Judge by
+        # listening.
         self._sf_ttnn_randn = os.environ.get("VV_TTNN_RANDN", "0") == "1"
         self._ttnn_randn_draws = 0  # draw counter, so successive device draws use distinct seeds
         # The voice-clone encode latents stay ON DEVICE: the chunk capture scatters its latent row
@@ -333,8 +313,8 @@ class TTVibeVoiceGenerator:
         # constrained argmax).
         # Fused frame output: the constrained-argmax index is appended to this frame's audio inside
         # _lm2trace, so ONE D2H returns both.  The audio and the token are complete at the same point
-        # in the queue (dp2 is enqueued before lm2), and reading the 4-byte token separately costs
-        # ~0.06 ms of per-call overhead on every frame.
+        # in the queue (dp2 is enqueued before lm2), so reading the 4-byte token separately would add
+        # per-call overhead on every frame.
         self._sf_dp2trace_tid = None
         self._sf_lm2trace_tid = None
         # Diagnostic (VV_TRACE_NOCAPTURE=1): run the frame graph eagerly, with no ttnn
@@ -683,8 +663,8 @@ class TTVibeVoiceGenerator:
                 # Drain this row's replays before READING the accumulator (execute_trace is
                 # non-blocking).
                 ttnn.synchronize_device(self.device)
-                # ONE read per voice row, replacing the per-chunk D2H + host torch.cat (663 -> 4
-                # transfers).  Verified bit-identical to the host path on every row.
+                # ONE read per voice row, replacing the per-chunk D2H + host torch.cat.
+                # Verified bit-identical to the host path on every row.
                 #
                 # The latents come back to host here rather than staying on device for the jitter
                 # and scale/bias: that device variant produced deterministically corrupt noise
@@ -857,7 +837,7 @@ class TTVibeVoiceGenerator:
                 )
                 spos += b - a
         if made_f32:
-            ttnn.deallocate(text_f32)  # the slices above are copies; the 141 MB source is dead
+            ttnn.deallocate(text_f32)  # the slices above are copies, so the source tensor is dead
         if len(parts) == 1:
             return parts[0]
         return ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)

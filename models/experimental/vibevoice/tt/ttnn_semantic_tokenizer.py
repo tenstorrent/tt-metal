@@ -43,11 +43,11 @@ import ttnn
 from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig
 
-# Store the DEEP tokenizer FFN weights (dim 2048/1024 -> 4x) as bfloat8_b: 32 calls/frame at
-# 395-428 GB/s (~85% of DRAM peak), so halving the weight read is worth ~2 ms/frame.  Kept as its
-# own flag rather than folded into the LM / diffusion-head bf8b because these weights sit INSIDE
-# the audio decode path.  NOT bit-exact; ``VV_BF8B_FFN=0`` restores bf16 (the cache filename
-# carries the dtype, so both settings keep their own cached weights).
+# Store the DEEP tokenizer FFN weights (dim 2048/1024 -> 4x) as bfloat8_b: these are DRAM-bound
+# matmuls where halving the weight read pays off.  Kept as its own flag rather than folded into the
+# LM / diffusion-head bf8b because these weights sit INSIDE the audio decode path.  NOT bit-exact;
+# ``VV_BF8B_FFN=0`` restores bf16 (the cache filename carries the dtype, so both settings keep their
+# own cached weights).
 _FFN_W_DTYPE = ttnn.bfloat8_b if os.environ.get("VV_BF8B_FFN", "1") == "1" else ttnn.bfloat16
 
 
@@ -62,9 +62,8 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
 # ── FFN down-proj (linear2) decode program configs (VV_POST_L2_PROGCFG=1) ─────
 # The deepest tokenizer stages (dim 2048 / 1024) run one latent frame => T<=32 rows
 # (M_tiles=1) and their down-proj (linear2, K=4*dim) is the biggest post-phase matmul
-# on the auto config.  These swept 1D mcast_in0 configs (per_core_M=1) recovered
-# ~1.8x/1.5x when originally measured.  Keyed by dim, gated on T<=32; the up-proj is
-# already DRAM-BW-bound at auto so it stays auto.
+# on the auto config.  These 1D mcast_in0 configs (per_core_M=1) are keyed by dim and
+# gated on T<=32; the up-proj is already DRAM-BW-bound at auto so it stays auto.
 def _mm1d_post(cx, cy, in0_block_w, per_core_n):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
@@ -80,8 +79,8 @@ def _mm1d_post(cx, cy, in0_block_w, per_core_n):
 
 
 _FFN_DOWN_PROGCFG = {
-    2048: _mm1d_post(8, 4, 8, 2),  # 8192x2048  145 -> 81 us (1.8x)
-    1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024   60 -> 40 us (1.5x)
+    2048: _mm1d_post(8, 4, 8, 2),  # 8192x2048
+    1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024
 }
 
 
@@ -400,11 +399,9 @@ class TTConv1d:
         # (out_w == 1, i.e. the window is exactly K wide), the whole convolution is a K-tap weighted
         # sum per channel:  out[c] = sum_k w[c,0,0,k] * x[0,0,k,c] + b[c].
         # ttnn.conv2d ignores `groups`, so it runs this as a DENSE in_ch x out_ch conv and pays a
-        # full im2col: the 2048-channel/K=7 stage is 'Conv2d 32 x 14336 x 2048' at ~189 us, 16 calls
-        # per frame = 3.0 ms (~8% of the whole frame) for 1/in_ch of the useful MACs.  mul + reduce
-        # over the K axis does only the real work.  NOT bit-exact (a 7-term reduction in a different
-        # order, and no summing of the 2047 zero cross-terms), so ``VV_DW1_MULREDUCE=0`` restores the
-        # dense conv2d.
+        # full im2col — doing only 1/in_ch of the useful MACs.  mul + reduce over the K axis does
+        # only the real work.  NOT bit-exact (a 7-term reduction in a different order, and no summing
+        # of the 2047 zero cross-terms), so ``VV_DW1_MULREDUCE=0`` restores the dense conv2d.
         # Lazily built device weight [1, 1, K, in_ch] (transpose of the OIHW host weight).
         self._dw_mr = os.environ.get("VV_DW1_MULREDUCE", "1") == "1" and cw.groups == self.in_ch == self.out_ch
         self._dw_w_kc = None
@@ -520,18 +517,17 @@ class TTConv1d:
         if os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache:
             out_w = (T_padded - self.K) // self.stride + 1
             abh = ((out_w + 31) // 32) * 32
-            # A full-height single block > ~1600 rows overflows L1 (the g=32/outw=3200 last decoder
-            # stage needs ~2.9 MB > 1.5 MB), so cap it — that conv stays on auto (multi-block).
+            # A full-height single block above the cap overflows L1, so cap it — beyond the cap the
+            # conv stays on auto (multi-block).
             _sb_cap = int(os.environ.get("VV_CONV_SB_CAP", "1600"))
             # HEIGHT_SHARDED pin (default on; VV_CONV_HS=0 to force the act_block_h_override pin):
             # act_block_h stays at the full per-core height (single block) while the work spreads
             # over many cores — no oversized act_block_h_override and none of its "not a valid
             # override" spam.  It only fits the wide-output stages: high-channel/tiny-width stages
             # (out_w < VV_CONV_HS_MIN_OUTW) overflow L1 under HEIGHT_SHARDED, so they stay on auto
-            # (see the sub-threshold note below).  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS coverage can be
-            # made identical to the override pin's — isolating the layout mechanism from the pinned-set
-            # change.  Default flipped on after the 4p_climate_100min traced render (0/81 anomalous
-            # minutes, 0% clipping) validated it.
+            # (see the sub-threshold note below).  VV_CONV_HS_MAX_OUTW>0 caps the HS set, so HS
+            # coverage can be made identical to the override pin's — isolating the layout mechanism
+            # from the pinned-set change.
             _hs_max = int(os.environ.get("VV_CONV_HS_MAX_OUTW", "0"))
             _hs_min = int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128"))
             _hs = os.environ.get("VV_CONV_HS", "1") == "1" and out_w >= _hs_min and (_hs_max == 0 or out_w <= _hs_max)
@@ -539,10 +535,8 @@ class TTConv1d:
             # are a few tiles at most, conv2d spreads them one tile per core, and act_block_h
             # collapses to that per-core height — a single act block either way, the same config auto
             # picks.  An override wider than the per-core height only costs a "not a valid override"
-            # info line per shard-layout candidate per call (24/frame from the two outw=40 depthwise
-            # stages: acoustic-decoder stage 2 and semantic-encoder stage 4).  Verified bit-exact
-            # against the pinned path (streaming decode+encode SHA-256 equal over 8 frames, traced
-            # post-diffusion PCC 1.0, byte-identical demo wav), so there is no A/B switch.
+            # info line per shard-layout candidate per call.  Verified bit-exact against the pinned
+            # path, so there is no A/B switch.
             if _hs:
                 _conv_cfg = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
             elif _hs_min <= out_w <= _sb_cap:
@@ -695,9 +689,9 @@ class TTBlock1DDevice:
             # TILE, not ROW_MAJOR: these scales are only ever consumed by ttnn.mul, which needs a
             # TILE operand.  A ROW_MAJOR [1,1,1,C] constant made every call re-tilize it, and a
             # 1-tile-tall tilize is single-core (tilize_with_val_padding's multicore split works over
-            # row blocks, and its width-split escape hatch needs >32 width tiles), so C=1024 cost
-            # 40 us of the ~975 us/frame the 72 per-frame scale muls spent re-tilizing constants.
-            # Pure layout change: maxabsdiff 0 vs the ROW_MAJOR operand at every block shape.
+            # row blocks, and its width-split escape hatch needs >32 width tiles), so pinning TILE
+            # avoids the per-call re-tilize.  Pure layout change: byte-identical vs the ROW_MAJOR
+            # operand at every block shape.
             return wc.as_tensor(
                 key,
                 lambda: s.to(tdtype).view(1, 1, 1, s.shape[0]).contiguous(),
@@ -773,41 +767,6 @@ def comp_pcc(golden: torch.Tensor, calculated: torch.Tensor, pcc_threshold: floa
     c = calculated.float().flatten()
     pcc_val = torch.corrcoef(torch.stack([g, c]))[0, 1].item()
     return pcc_val >= pcc_threshold, pcc_val
-
-
-def _tt_conv_rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, eps: float) -> ttnn.Tensor:
-    """ConvRMSNorm on [B, 1, T, C] NHWC: RMS-normalise over C, then scale.
-
-    TTNN equivalent of _conv_rms_norm.  ttnn.rms_norm normalises the last dim
-    so no transpose is needed — NHWC already has C last.
-    weight must be in [1, 1, C//32, 32] ROW_MAJOR as produced by _norm_w_tt.
-    """
-    return ttnn.rms_norm(
-        x,
-        weight=weight,
-        epsilon=eps,
-        compute_kernel_config=_HIFI4,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def _tt_apply_conv1d(x: ttnn.Tensor, conv: "TTConv1d") -> ttnn.Tensor:
-    """Causal-padded Conv1d on [B, 1, T, C] NHWC → [B, 1, T_out, out_ch].
-
-    TTNN equivalent of _apply_conv1d.  Delegates to TTConv1d which computes
-    the extra right-pad and dispatches to ttnn.conv2d.
-    """
-    return conv(x)
-
-
-def _tt_block1d_forward(x: ttnn.Tensor, blk: "TTBlock1DDevice") -> ttnn.Tensor:
-    """Block1D forward on [B, 1, T, C] NHWC → [B, 1, T, C].
-
-    TTNN equivalent of _block1d_forward.  Runs mixer (depthwise conv +
-    layer-scale + residual) and FFN (linear → gelu → linear + layer-scale +
-    residual) entirely on device via TTBlock1DDevice.
-    """
-    return blk(x)
 
 
 # ──────────────────────────────────────────────────────────────
