@@ -23,6 +23,7 @@
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
+#include "api/kernel_thread_globals.h"
 
 #include <array>
 
@@ -34,30 +35,19 @@
 // Reads cannot be issued by dispatch_s.
 constexpr uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
 constexpr uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
-constexpr uintptr_t cb_base = CB_BASE;
 constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
-constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
-constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
-constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
-constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher =
     DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
-constexpr uint32_t completion_counter_offset = COMPLETION_COUNTER_OFFSET;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
 constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
-constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
-constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
-volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
-    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
-        dispatch_telemetry_control_addr);
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
@@ -132,47 +122,121 @@ void device_print_dispatcher_execute_hook() {
 }
 #endif
 
-constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
-constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
-constexpr uintptr_t cb_end = cb_base + cb_size;
 
-// Dispatch-core-local L1 region assigned by DispatchMemMap via
-// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
-// REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
-// description; this kernel is the consumer side of the embedded program_id_fifo.
-volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
+#ifndef NUM_DISPATCH_S_CHANNELS
+#define NUM_DISPATCH_S_CHANNELS 1
+#endif
+#if NUM_DISPATCH_S_CHANNELS == 2 && !defined(ARCH_QUASAR)
+#error "Two-channel DISPATCH_S is only supported on Quasar"
+#endif
 
-static bool rt_profiler_enabled = false;
+struct ChannelConfig {
+    uintptr_t cb_base;
+    uint32_t my_dispatch_cb_sem_id;
+    uint32_t upstream_dispatch_cb_sem_id;
+    uint32_t dispatch_d_shutdown_sem_id;
+    uintptr_t dispatch_s_sync_sem_base_addr;
+    uint32_t completion_counter_offset;
+    uintptr_t realtime_profiler_msg_addr;
+    uintptr_t dispatch_telemetry_addr;
+    uintptr_t dispatch_telemetry_control_addr;
+    uint32_t upstream_noc_xy;
+    uint32_t dispatch_d_noc_xy;
+};
 
-static uint32_t num_pages_acquired = 0;
-static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
-static uintptr_t cmd_ptr;
+#if NUM_DISPATCH_S_CHANNELS == 1
+constexpr ChannelConfig kChannelConfigs[] = {{
+    CB_BASE,
+    MY_DISPATCH_CB_SEM_ID,
+    UPSTREAM_DISPATCH_CB_SEM_ID,
+    DISPATCH_D_SHUTDOWN_SEM_ID,
+    DISPATCH_S_SYNC_SEM_BASE_ADDR,
+    COMPLETION_COUNTER_OFFSET,
+    REALTIME_PROFILER_MSG_ADDR,
+    DISPATCH_TELEMETRY_ADDR,
+    DISPATCH_TELEMETRY_CONTROL_ADDR,
+    uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y)),
+    uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y)),
+}};
+#elif NUM_DISPATCH_S_CHANNELS == 2
+constexpr ChannelConfig kChannelConfigs[] = {
+    {
+        CB_BASE_0,
+        MY_DISPATCH_CB_SEM_ID_0,
+        UPSTREAM_DISPATCH_CB_SEM_ID_0,
+        DISPATCH_D_SHUTDOWN_SEM_ID_0,
+        DISPATCH_S_SYNC_SEM_BASE_ADDR_0,
+        COMPLETION_COUNTER_OFFSET_0,
+        REALTIME_PROFILER_MSG_ADDR_0,
+        DISPATCH_TELEMETRY_ADDR_0,
+        DISPATCH_TELEMETRY_CONTROL_ADDR_0,
+        uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X_0, UPSTREAM_NOC_Y_0)),
+        uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X_0, DOWNSTREAM_NOC_Y_0)),
+    },
+    {
+        CB_BASE_1,
+        MY_DISPATCH_CB_SEM_ID_1,
+        UPSTREAM_DISPATCH_CB_SEM_ID_1,
+        DISPATCH_D_SHUTDOWN_SEM_ID_1,
+        DISPATCH_S_SYNC_SEM_BASE_ADDR_1,
+        COMPLETION_COUNTER_OFFSET_1,
+        REALTIME_PROFILER_MSG_ADDR_1,
+        DISPATCH_TELEMETRY_ADDR_1,
+        DISPATCH_TELEMETRY_CONTROL_ADDR_1,
+        uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X_1, UPSTREAM_NOC_Y_1)),
+        uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X_1, DOWNSTREAM_NOC_Y_1)),
+    },
+};
+#else
+#error "DISPATCH_S supports only one or two channels"
+#endif
+
+struct ChannelState {
+    const ChannelConfig* config = nullptr;
+    uint32_t channel_index = 0;
+    uintptr_t cmd_ptr = 0;
+    uint32_t num_pages_acquired = 0;
+    uint32_t num_mcasts_sent[max_num_worker_sems] = {};
+    uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {};
+    uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries] = {};
+    uint32_t num_worker_sems = 1;
+    std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {};
+    bool rt_profiler_enabled = false;
+    uint32_t local_launch_seq_counter = 0;
+    uint32_t local_sub_device_worker_counts_update = 0;
+    volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg = nullptr;
+    volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
+        nullptr;
+};
+
+struct TriageChannelState {
+    volatile uint32_t dm_index;
+    volatile uint32_t cmd_ptr;
+    volatile uint32_t last_wait_count;
+    volatile uint32_t last_wait_stream;
+};
 
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
-volatile uint32_t last_wait_count = 0;
-volatile uint32_t last_wait_stream = 0;
+volatile TriageChannelState dispatch_s_triage_state[NUM_DISPATCH_S_CHANNELS] = {};
 constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 }
 
-// When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
-// dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
-// To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
-static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
+#if NUM_DISPATCH_S_CHANNELS == 2
+thread_local ChannelState channel_state;
+#else
+static ChannelState channel_state;
+#endif
 
-static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
-
-static uint32_t num_worker_sems = 1;
-
-// The dispatch message entry limit also bounds the number of sub-devices.
-static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+FORCE_INLINE void update_triage_cmd_ptr() {
+    dispatch_s_triage_state[channel_state.channel_index].cmd_ptr = static_cast<uint32_t>(channel_state.cmd_ptr);
+}
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -254,11 +318,11 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
-    last_wait_count = wait_count;
-    last_wait_stream = wait_stream;
+    dispatch_s_triage_state[channel_state.channel_index].last_wait_count = wait_count;
+    dispatch_s_triage_state[channel_state.channel_index].last_wait_stream = wait_stream;
 #ifdef ARCH_QUASAR
     volatile uint32_t* worker_sem =
-        worker_completion_sem_addr(wait_stream, first_stream_used, completion_counter_offset);
+        worker_completion_sem_addr(wait_stream, first_stream_used, channel_state.config->completion_counter_offset);
 #else
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
@@ -269,8 +333,8 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
+        if (channel_state.rt_profiler_enabled) {
+            record_realtime_timestamp(channel_state.rt_profiler_msg, false);
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -284,15 +348,16 @@ template <bool flush_write = false>
 FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
     if constexpr (distributed_dispatcher) {
         bool write = false;
-        for (uint32_t i = 0; i < num_worker_sems; i++) {
+        for (uint32_t i = 0; i < channel_state.num_worker_sems; i++) {
             uint32_t num_workers_signalling_completion =
                 NOC_STREAM_READ_REG(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-            if (num_workers_signalling_completion != worker_count_update_for_dispatch_d[i]) {
-                worker_count_update_for_dispatch_d[i] = num_workers_signalling_completion;
+            if (num_workers_signalling_completion != channel_state.worker_count_update_for_dispatch_d[i]) {
+                channel_state.worker_count_update_for_dispatch_d[i] = num_workers_signalling_completion;
                 // Writing to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX sets
                 // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX (rather than incrementing it).
                 uint64_t dispatch_d_dst = get_noc_addr_helper(
-                    dispatch_d_noc_xy, STREAM_REG_ADDR(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+                    channel_state.config->dispatch_d_noc_xy,
+                    STREAM_REG_ADDR(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
                 dispatch_s_noc_inline_dw_write(dispatch_d_dst, num_workers_signalling_completion, my_noc_index);
                 write = true;
             }
@@ -305,15 +370,14 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
     }
 }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
+FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n, uint32_t sem_id) {
     volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 
     WAYPOINT("DAPW");
     uint32_t heartbeat = 0;
     // Stall until the number of pages already acquired + the number that need to be acquired is greater
     // than the number available
-    while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
+    while (wrap_gt(channel_state.num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -322,11 +386,10 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     WAYPOINT("DAPD");
-    num_pages_acquired += n;
+    channel_state.num_pages_acquired += n;
 }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
+FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n, uint32_t noc_xy, uint32_t sem_id) {
 #ifdef ARCH_QUASAR
     Semaphore<programmable_core_type>(sem_id).up(n);
 #else
@@ -336,16 +399,16 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(channel_state.cmd_ptr);
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
-        uncached_l1_ptr<uint32_t>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
+        uncached_l1_ptr<uint32_t>(channel_state.config->dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
     WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
-    uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
+    uint32_t& mcasts_sent = channel_state.num_mcasts_sent[sync_index];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
@@ -357,16 +420,15 @@ void process_go_signal_mcast_cmd() {
     mcasts_sent++;  // Go signal sent -> update counter
 
     // The location of the go signal embedded in the command does not meet NOC alignment requirements.
-    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
-    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
-    // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
-    // CQDispatchGoSignalMcastCmd).
+    // channel_state.cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher
+    // over NOC. Copy the go signal from an unaligned location to an aligned location. This is safe as long as copying
+    // the go signal does not corrupt any other command fields, which is true (see CQDispatchGoSignalMcastCmd).
     // NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep
     // aligned_go_signal_storage at the cached alias for the NOC sources below.
     // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
     // the NOC then reads the same physical location via the cached-form source address.
-    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
-    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
+    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)channel_state.cmd_ptr;
+    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(channel_state.cmd_ptr);
     uint32_t go_signal_value = cmd->mcast.go_signal;
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
@@ -427,7 +489,8 @@ void process_go_signal_mcast_cmd() {
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
 #ifdef ARCH_QUASAR
-            *worker_completion_sem_addr(first_stream_used, first_stream_used, completion_counter_offset) +=
+            *worker_completion_sem_addr(
+                first_stream_used, first_stream_used, channel_state.config->completion_counter_offset) +=
                 (num_virtual_unicast_cores - num_physical_unicast_cores);
 #else
             NOC_STREAM_WRITE_REG(
@@ -439,23 +502,25 @@ void process_go_signal_mcast_cmd() {
     }
 
     for (uint32_t i = 0; i < num_unicasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
+        uint64_t dst =
+            get_noc_addr_helper(channel_state.go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
 
     if (telemetry_enabled) {
-        static uint32_t local_launch_seq_counter = 0;
         const uint32_t stream_index = wait_stream - first_stream_used;
         ASSERT(stream_index < max_num_worker_sems);
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
-                dispatch_telemetry_base);
+                channel_state.config->dispatch_telemetry_addr);
 
-        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        channel_state.dispatch_telemetry_control->launched_work_sequence_counter[stream_index] =
+            ++channel_state.local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
-        dispatch_telemetry_control->launched_work_start_stream_sem[stream_index] = wait_count;
-        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        channel_state.dispatch_telemetry_control->launched_work_start_stream_sem[stream_index] = wait_count;
+        channel_state.dispatch_telemetry_control->launched_work_sequence_counter[stream_index] =
+            ++channel_state.local_launch_seq_counter;
     }
 
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -466,12 +531,13 @@ void process_go_signal_mcast_cmd() {
 #endif
 
     update_worker_completion_count_on_dispatch_d();
-    cmd_ptr += sizeof(CQDispatchCmd);
+    channel_state.cmd_ptr += sizeof(CQDispatchCmd);
+    update_triage_cmd_ptr();
 }
 
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(channel_state.cmd_ptr);
     // Limited Usage of Wait CMD: dispatch_s should get a wait command only if it's not on the
     // same core as dispatch_d and is used to clear the worker count
     ASSERT(
@@ -494,29 +560,32 @@ void process_dispatch_s_wait_cmd() {
     update_worker_completion_count_on_dispatch_d<true>();
     // Reset SPACE_AVAILABLE to 0.
     NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
-    worker_count_update_for_dispatch_d[index] =
+    channel_state.worker_count_update_for_dispatch_d[index] =
         0;  // Local worker count update for dispatch_d should reflect state of worker semaphore on dispatch_s
-    cmd_ptr += sizeof(CQDispatchCmd);
+    channel_state.cmd_ptr += sizeof(CQDispatchCmd);
+    update_triage_cmd_ptr();
 }
 
 FORCE_INLINE
 void set_num_worker_sems() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
-    num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
-    ASSERT(num_worker_sems <= max_num_worker_sems);
-    cmd_ptr += sizeof(CQDispatchCmd);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(channel_state.cmd_ptr);
+    channel_state.num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
+    ASSERT(channel_state.num_worker_sems <= max_num_worker_sems);
+    channel_state.cmd_ptr += sizeof(CQDispatchCmd);
+    update_triage_cmd_ptr();
 }
 
 FORCE_INLINE
 void set_go_signal_noc_data() {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(channel_state.cmd_ptr);
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(channel_state.cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
-        go_signal_noc_data[i] = *(data_ptr++);
+        channel_state.go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
+    channel_state.cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
+    update_triage_cmd_ptr();
 }
 
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
@@ -532,8 +601,8 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        get_semaphore<programmable_core_type>(channel_state.config->dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();
@@ -567,6 +636,17 @@ void merge_dispatch_d_noc_counter_deltas() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
+    channel_state.channel_index = get_my_thread_id();
+    ASSERT(get_num_threads() == NUM_DISPATCH_S_CHANNELS);
+    ASSERT(channel_state.channel_index < NUM_DISPATCH_S_CHANNELS);
+    const uint32_t hart = internal_::get_hw_thread_idx();
+    dispatch_s_triage_state[channel_state.channel_index].dm_index = hart;
+    channel_state.config = &kChannelConfigs[channel_state.channel_index];
+    channel_state.rt_profiler_msg =
+        reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(channel_state.config->realtime_profiler_msg_addr);
+    channel_state.dispatch_telemetry_control =
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
+            channel_state.config->dispatch_telemetry_control_addr);
     DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
@@ -586,7 +666,8 @@ void kernel_main() {
     // realtime_profiler_msg_t signalling + FIFO + kernel_* .id fields are zeroed on the host in
     // DispatchSKernel::ConfigureCore() before CQ kernels launch.
 
-    cmd_ptr = cb_base;
+    channel_state.cmd_ptr = channel_state.config->cb_base;
+    update_triage_cmd_ptr();
     bool done = false;
     uint32_t total_pages_acquired = 0;
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -607,24 +688,27 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+        channel_state.rt_profiler_enabled = (channel_state.rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
         uint32_t popped_pid = 0;
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, true);
-            popped_pid = pop_program_id(rt_profiler_msg);
+        if (channel_state.rt_profiler_enabled) {
+            record_realtime_timestamp(channel_state.rt_profiler_msg, true);
+            popped_pid = pop_program_id(channel_state.rt_profiler_msg);
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
-        cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
+        cb_acquire_pages_dispatch_s(1, channel_state.config->my_dispatch_cb_sem_id);
 
-        volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+        volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(channel_state.cmd_ptr);
+        ASSERT(
+            channel_state.cmd_ptr >= channel_state.config->cb_base &&
+            channel_state.cmd_ptr < channel_state.config->cb_base + cb_size);
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
-        if (rt_profiler_enabled) {
+        if (channel_state.rt_profiler_enabled) {
             const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
                                          cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
             write_buffer_id(
-                rt_profiler_msg,
+                channel_state.rt_profiler_msg,
                 is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
         }
         switch (cmd->base.cmd_id) {
@@ -642,11 +726,13 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
                 DPRINT("CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS\n");
-                cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
-                    cmd_ptr,
-                    workers_per_sub_device,
-                    &dispatch_telemetry_control->sub_device_worker_counts_update,
-                    dispatch_telemetry_base);
+                channel_state.cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
+                    channel_state.cmd_ptr,
+                    channel_state.workers_per_sub_device,
+                    &channel_state.dispatch_telemetry_control->sub_device_worker_counts_update,
+                    channel_state.config->dispatch_telemetry_addr,
+                    channel_state.local_sub_device_worker_counts_update);
+                update_triage_cmd_ptr();
                 break;
             case CQ_DISPATCH_CMD_WAIT:
                 DPRINT("CQ_DISPATCH_CMD_WAIT\n");
@@ -655,49 +741,53 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
                 wait_for_workers(cmd->rt_profiler_flush.wait_count, cmd->rt_profiler_flush.wait_stream);
-                cmd_ptr += sizeof(CQDispatchCmd);
+                channel_state.cmd_ptr += sizeof(CQDispatchCmd);
+                update_triage_cmd_ptr();
                 break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
-                if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(rt_profiler_msg);
+                if (channel_state.rt_profiler_enabled) {
+                    signal_realtime_profiler_and_switch(channel_state.rt_profiler_msg);
                     noc_async_writes_flushed();
                     for (volatile uint32_t delay = 0; delay < 5000; delay++) {
                     }
                 }
 
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
-                if (rt_profiler_enabled) {
+                channel_state.rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
+                if (channel_state.rt_profiler_enabled) {
                     uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
-                        rt_profiler_msg->realtime_profiler_core_noc_xy,
-                        rt_profiler_msg->realtime_profiler_remote_state_addr);
+                        channel_state.rt_profiler_msg->realtime_profiler_core_noc_xy,
+                        channel_state.rt_profiler_msg->realtime_profiler_remote_state_addr);
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
                 if constexpr (telemetry_enabled) {
-                    dispatch_telemetry_control->compute_terminate = 1;
+                    channel_state.dispatch_telemetry_control->compute_terminate = 1;
                 }
                 done = true;
                 break;
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
-        ASSERT(cmd_ptr <= (l1_cached_addr(reinterpret_cast<uintptr_t>(cmd)) + cb_page_size));
-        cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
+        ASSERT(channel_state.cmd_ptr <= (l1_cached_addr(reinterpret_cast<uintptr_t>(cmd)) + cb_page_size));
+        channel_state.cmd_ptr = round_up_pow2(channel_state.cmd_ptr, cb_page_size);
+        update_triage_cmd_ptr();
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.
-        cb_release_pages_dispatch_s<upstream_noc_xy, upstream_dispatch_cb_sem_id>(1);
-        if (cmd_ptr == cb_end) {
-            cmd_ptr = cb_base;
+        cb_release_pages_dispatch_s(
+            1, channel_state.config->upstream_noc_xy, channel_state.config->upstream_dispatch_cb_sem_id);
+        if (channel_state.cmd_ptr == channel_state.config->cb_base + cb_size) {
+            channel_state.cmd_ptr = channel_state.config->cb_base;
+            update_triage_cmd_ptr();
         }
         total_pages_acquired++;
 
-        if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(rt_profiler_msg);
+        if (!done && channel_state.rt_profiler_enabled) {
+            signal_realtime_profiler_and_switch(channel_state.rt_profiler_msg);
         }
     }
     // Confirm expected number of pages, spinning here is a leak
-    cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
+    cb_wait_all_pages(total_pages_acquired, channel_state.config->my_dispatch_cb_sem_id);
 
 #ifndef ARCH_QUASAR
     if constexpr (!distributed_dispatcher) {

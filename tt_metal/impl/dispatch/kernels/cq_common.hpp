@@ -293,8 +293,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 #endif
 }
 
-template <uint32_t sem_id>
-FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
+FORCE_INLINE void cb_wait_all_pages(uint32_t n, uint32_t sem_id) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(sem_id)));
 
@@ -731,13 +730,12 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     uintptr_t cmd_ptr,
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
-    uintptr_t dispatch_telemetry_base) {
+    uintptr_t dispatch_telemetry_base,
+    uint32_t& local_sub_device_worker_counts_update) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
     volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
-
-    static uint32_t local_sub_device_worker_counts_update = 0;
 
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         uint32_t worker_count = *(data_ptr++);

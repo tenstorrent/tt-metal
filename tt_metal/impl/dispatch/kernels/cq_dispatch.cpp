@@ -105,6 +105,7 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+static uint32_t local_sub_device_worker_counts_update = 0;
 
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t upstream_blocked_counter = 0;
@@ -1414,7 +1415,8 @@ re_run_command:
                 l1_uncached_addr(cmd_ptr),
                 workers_per_sub_device,
                 &dispatch_telemetry_control->sub_device_worker_counts_update,
-                dispatch_telemetry_base);
+                dispatch_telemetry_base,
+                local_sub_device_worker_counts_update);
             break;
 
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
