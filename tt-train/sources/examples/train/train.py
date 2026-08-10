@@ -62,6 +62,7 @@ from model_builders import (
     instantiate_model_from_config,
     parse_model_config,
 )
+from ttml.parallel import TPStrategy
 from callbacks import (
     AverageLossCallback,
     MemoryTrackerCallback,
@@ -423,7 +424,9 @@ def run_training(
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy
     print("Building model...", flush=True)
-    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, use_tp=device_cfg.enable_tp)
+    tp_strategy = TPStrategy.from_flags(device_cfg.enable_tp)
+
+    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, tp_strategy=tp_strategy)
 
     flops_per_token = 0
     flops_fn = FLOPS_REGISTRY.get(model_cfg.model_type)
