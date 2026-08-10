@@ -45,9 +45,13 @@ void AttnResScoresDeviceOperation::validate_on_program_cache_miss(
     // for its sum of squares and page c + C for its dot, so dim 1 has to be the
     // stacked pair and dim 0 has to be flat.
     TT_FATAL(shape[0] == 1, "AttnResScores requires a leading dim of 1, got {}", shape[0]);
+    TT_FATAL(args.num_partials > 0, "AttnResScores requires at least one partial, got {}", args.num_partials);
+    const uint32_t stacked = 2 * args.num_partials;
     TT_FATAL(
-        shape[1] % 2 == 0 && shape[1] > 0,
-        "AttnResScores requires dim 1 to hold both statistics stacked, so it must be even and non-zero, got {}",
+        shape[1] % stacked == 0 && shape[1] > 0,
+        "AttnResScores requires dim 1 to hold both statistics stacked once per partial, so it must be a non-zero "
+        "multiple of {}, got {}",
+        stacked,
         shape[1]);
 
     TT_FATAL(
@@ -62,7 +66,7 @@ tt::tt_metal::TensorSpec AttnResScoresDeviceOperation::compute_output_specs(
     // From the logical shape, not the padded one, so that tile padding stays
     // labelled as padding rather than becoming readable data.
     auto shape = tensor_args.stats.logical_shape();
-    shape[1] /= 2;
+    shape[1] /= 2 * args.num_partials;
 
     return tt::tt_metal::TensorSpec(
         shape, operations::TensorLayout(args.dtype, operations::PageConfig(Layout::TILE), args.output_mem_config));
@@ -81,6 +85,7 @@ Tensor attn_res_scores(
     const Tensor& stats,
     float inv_hidden_size,
     float eps,
+    uint32_t num_partials,
     DataType dtype,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -89,6 +94,7 @@ Tensor attn_res_scores(
     auto operation_attributes = OperationType::operation_attributes_t{
         .inv_hidden_size = inv_hidden_size,
         .eps = eps,
+        .num_partials = num_partials,
         .dtype = dtype,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config};

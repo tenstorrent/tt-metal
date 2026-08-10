@@ -34,6 +34,7 @@ Tensor attn_res_scores(
     const Tensor& stats,
     float inv_hidden_size,
     float eps,
+    uint32_t num_partials,
     DataType dtype,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);

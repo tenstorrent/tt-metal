@@ -11,6 +11,11 @@
 // binops and the SFPU binary multiply are all dst-to-dst — so the scale, the
 // epsilon, the reciprocal square root and the final multiply never round to
 // the output dtype between steps.
+//
+// Above one partial the statistics arrive per rank rather than summed, and the
+// cross-rank sum opens the chain. Folding it in here is what lets the collective
+// be a gather: a reducing collective costs a second program to produce data this
+// pass already has in dst.
 
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -32,6 +37,7 @@ constexpr uint32_t onetile = 1;
 
 constexpr uint32_t dst_rms = 0;
 constexpr uint32_t dst_dots = 1;
+constexpr uint32_t dst_partial = 2;
 
 }  // namespace
 
@@ -40,6 +46,9 @@ void kernel_main() {
     // SFPU scalar binops take.
     constexpr uint32_t inv_hidden_size = get_compile_time_arg_val(0);
     constexpr uint32_t eps = get_compile_time_arg_val(1);
+    constexpr uint32_t num_partials = get_compile_time_arg_val(2);
+
+    constexpr uint32_t tiles_per_candidate = kOperands * num_partials;
 
     // runtime args
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
@@ -50,10 +59,20 @@ void kernel_main() {
     unary_op_init_common(cb_stats, cb_out);
 
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        cb_stats_obj.wait_front(kOperands);
+        cb_stats_obj.wait_front(tiles_per_candidate);
         tile_regs_acquire();
         copy_tile(cb_stats, 0, dst_rms);
         copy_tile(cb_stats, 1, dst_dots);
+
+        if constexpr (num_partials > 1) {
+            add_binary_tile_init();
+            for (uint32_t p = 1; p < num_partials; ++p) {
+                copy_tile(cb_stats, kOperands * p, dst_partial);
+                add_binary_tile(dst_rms, dst_partial, dst_rms);
+                copy_tile(cb_stats, kOperands * p + 1, dst_partial);
+                add_binary_tile(dst_dots, dst_partial, dst_dots);
+            }
+        }
 
         binop_with_scalar_tile_init();
         mul_unary_tile(dst_rms, inv_hidden_size);
@@ -65,7 +84,7 @@ void kernel_main() {
         mul_binary_tile_init();
         mul_binary_tile(dst_dots, dst_rms, dst_dots);
         tile_regs_commit();
-        cb_stats_obj.pop_front(kOperands);
+        cb_stats_obj.pop_front(tiles_per_candidate);
 
         cb_out_obj.reserve_back(onetile);
         tile_regs_wait();

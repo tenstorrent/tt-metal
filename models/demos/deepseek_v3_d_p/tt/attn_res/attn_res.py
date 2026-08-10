@@ -382,7 +382,7 @@ class TtAttnRes(LightweightModule):
         return head, tail
 
     def _reduce_stats_packed(self, first, second):
-        """Same one collective as `_reduce_stats_pair`, left stacked on dim 1.
+        """Same one crossing as `_reduce_stats_pair`, left stacked on dim 1.
 
         Consumes both inputs. Stays at `stats_dtype` on the way out: the consumer
         splits the pair by page arithmetic and normalizes in dest registers, so
@@ -394,11 +394,31 @@ class TtAttnRes(LightweightModule):
             return packed
 
         wide = ttnn.typecast(packed, self.stats_dtype) if packed.dtype != self.stats_dtype else packed
-        reduced = self._collective(wide)
+        crossed = self._gather_stats(wide)
         if wide is not packed:
             ttnn.deallocate(wide)
         ttnn.deallocate(packed)
-        return reduced
+        return crossed
+
+    def _gather_stats(self, wide):
+        """Cross the TP axis for statistics headed straight into `attn_res_scores`.
+
+        Gathers instead of reducing, and leaves the ranks stacked on dim 1 for the
+        consumer to sum. Reducing on the wire costs a second device program —
+        `all_reduce` decomposes into reduce-scatter plus all-gather — to deliver a
+        payload of two scalars per token, while the sum it saves is a pair of dest
+        register adds inside a pass that already loads those tiles. Does not consume
+        `wide`; the identity at `tp_factor == 1`, where the consumer's own default
+        of one partial already matches."""
+        if self.tp_factor == 1:
+            return wide
+        return ttnn.all_gather(
+            wide,
+            dim=1,
+            cluster_axis=self.tp_axis,
+            num_links=self.num_links,
+            topology=self.topology[self.tp_axis],
+        )
 
     def _local_sum_squares(self, v):
         """[1, C, N, d/tp] -> [1, C, N, 1]. Not yet summed across ranks.
@@ -565,7 +585,7 @@ class TtAttnRes(LightweightModule):
             packed = ttnn.experimental.attn_res_stats(v, q, dtype=self.stats_dtype)
             if self.tp_factor == 1:
                 return self._scores_from_stats(packed)
-            crossed = self._collective(packed)
+            crossed = self._gather_stats(packed)
             ttnn.deallocate(packed)
             return self._scores_from_stats(crossed)
 
@@ -583,11 +603,17 @@ class TtAttnRes(LightweightModule):
         return scores
 
     def _scores_from_stats(self, stats):
-        """Globally summed `[1, 2C, N, 1]` statistics -> `[1, C, N, 1]` scores.
+        """Rank-stacked `[1, 2C * tp, N, 1]` statistics -> `[1, C, N, 1]` scores.
 
-        Consumes `stats`. The op splits the pair itself, so the two halves never
-        exist as tensors."""
-        scores = ttnn.experimental.attn_res_scores(stats, 1.0 / self.hidden_size, self.eps, dtype=self.dtype)
+        Consumes `stats`. The op splits the pair and sums the ranks itself, so
+        neither the halves nor the cross-rank total ever exist as tensors."""
+        scores = ttnn.experimental.attn_res_scores(
+            stats,
+            1.0 / self.hidden_size,
+            self.eps,
+            num_partials=self.tp_factor,
+            dtype=self.dtype,
+        )
         ttnn.deallocate(stats)
         return scores
 
