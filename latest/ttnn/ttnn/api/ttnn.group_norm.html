@@ -398,7 +398,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Output data type. When provided, it must equal the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> dtype; a mismatch is rejected. Defaults to <cite>None</cite> (output dtype matches the input).</p></li>
 <li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>True</cite>.</p></li>
 <li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
@@ -430,7 +430,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, FLOAT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
@@ -451,11 +451,12 @@ back with <code class="docutils literal notranslate"><span class="pre">ttnn.to_l
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, FLOAT32</p></td>
 <td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
+<p>weight (gamma) and bias (beta) must share the same dtype.</p>
 <table class="docutils align-default" id="id4">
 <caption>
 <span class="caption-text">input_mask</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
@@ -473,7 +474,7 @@ back with <code class="docutils literal notranslate"><span class="pre">ttnn.to_l
 </tr>
 </tbody>
 </table>
-<p>The output will be BFLOAT16, and both the layout and the memory configuration will match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>The output dtype matches the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> dtype (BFLOAT16 or FLOAT32); an explicit <code class="xref py py-attr docutils literal notranslate"><span class="pre">dtype</span></code> must equal it. Both the layout and the memory configuration also match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
