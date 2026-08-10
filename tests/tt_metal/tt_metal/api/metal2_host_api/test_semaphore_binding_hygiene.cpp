@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -441,8 +442,13 @@ TEST(Metal2SemaphoreHygiene, FileGatesAndDetectorDiscrimination) {
 }
 
 TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
-    // Locate the repo from __FILE__ so the lint cannot pass vacuously when TT_METAL_HOME is
-    // unset; the env var is only a fallback for an out-of-tree layout.
+    // Locate the repo: __FILE__ (compile-time path), then TT_METAL_HOME, then a walk up from
+    // the current directory. Some CI jobs run this binary from a PACKAGED artifact with no
+    // source tree at all -- a source lint cannot run there, so that case SKIPS loudly instead
+    // of failing; every source-full pipeline still runs it.
+    auto has_source = [](const std::filesystem::path& r) {
+        return !r.empty() && std::filesystem::exists(r / "tests" / "tt_metal");
+    };
     std::filesystem::path root;
     {
         const std::string self{__FILE__};
@@ -453,14 +459,27 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
             root = std::filesystem::path{self.substr(0, at)};
         }
     }
-    if (root.empty() || !std::filesystem::exists(root / "tests")) {
-        const char* home = std::getenv("TT_METAL_HOME");
-        ASSERT_NE(home, nullptr) << "cannot locate the repo from __FILE__ (" << __FILE__
-                                 << ") and TT_METAL_HOME is unset -- this lint would otherwise pass "
-                                    "vacuously without scanning anything";
-        root = std::filesystem::path{home};
+    if (!has_source(root)) {
+        if (const char* home = std::getenv("TT_METAL_HOME")) {
+            root = std::filesystem::path{home};
+        }
     }
-    ASSERT_TRUE(std::filesystem::exists(root / "tests")) << "derived repo root has no tests/ dir: " << root;
+    if (!has_source(root)) {
+        std::error_code ec;
+        for (auto dir = std::filesystem::current_path(ec); !dir.empty() && dir.has_relative_path();
+             dir = dir.parent_path()) {
+            if (has_source(dir)) {
+                root = dir;
+                break;
+            }
+        }
+    }
+    if (!has_source(root)) {
+        GTEST_SKIP() << "no source tree found (__FILE__ path stale: " << __FILE__
+                     << "; TT_METAL_HOME unset or invalid; no ancestor of the cwd has tests/tt_metal). "
+                        "This binary appears to run from a packaged artifact -- the source lint can "
+                        "only run where the repo is checked out.";
+    }
     // Broad roots: all of tests/ (the TT-NN test tree also holds Metal 2.0 kernels) plus the
     // whole op tree; is_kernel_source narrows per file.
     const std::vector<std::filesystem::path> scan_roots = {
@@ -552,8 +571,7 @@ TEST(Metal2SemaphoreHygiene, NoRawSemaphoreAccessInMetal2Kernels) {
         } else if (inc.find('/') != std::string::npos) {
             const std::string suffix = "/" + inc;
             for (const auto& [hpath, h] : headers_by_path) {
-                if (hpath.size() > suffix.size() &&
-                    hpath.compare(hpath.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                if (hpath.size() > suffix.size() && hpath.ends_with(suffix)) {
                     hits.push_back(h);
                 }
             }
