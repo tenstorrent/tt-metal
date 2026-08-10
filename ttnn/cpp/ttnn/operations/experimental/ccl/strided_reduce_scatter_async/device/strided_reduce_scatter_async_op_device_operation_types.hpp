@@ -38,6 +38,8 @@ struct StridedReduceScatterProgramArtifacts {
     // into the reader + MM runtime args, so freeing it would leave both kernels polling memory the
     // allocator has handed to something else.
     std::shared_ptr<tt::tt_metal::Buffer> rs_credit_counters_buffer;
+    // Credit-array L1 address baked into the reader + MM runtime args at build time
+    uint32_t rs_credit_counters_addr = 0;
 };
 
 struct operation_attributes_t {

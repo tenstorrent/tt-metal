@@ -208,6 +208,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     std::optional<uint32_t> mm_window_blocks,
     std::optional<uint32_t> mm_logical_Ht,
+    const std::optional<const Tensor>& mm_credit_counters,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
@@ -512,6 +513,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t rs_credit_counters_addr = 0;
     std::vector<CoreCoord> mm_cores_noc;
     uint32_t num_mm_cores = 0;
+    uint32_t captured_rs_credit_counters_addr = 0;
     if (mm_window_blocks.has_value()) {
         TT_FATAL(fuse_mm_op, "mm_window_blocks requires the fused matmul path (FUSE_MM_OP_SIGNALER).");
         TT_FATAL(
@@ -526,20 +528,45 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         const CoreRangeSet mm_core_range_set(
             CoreRange(CoreCoord(0, 0), CoreCoord(mm_cores_x_val - 1, mm_cores_y_val - 1)));
         const uint32_t credit_row_bytes = num_rs_readers * sizeof(uint32_t);
-        const auto credit_shard_spec = tt::tt_metal::ShardSpecBuffer(
-            mm_core_range_set,
-            {1, num_rs_readers},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            {1, num_rs_readers},
-            {num_mm_cores, num_rs_readers});
-        rs_credit_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-            .device = mesh_device,
-            .size = num_mm_cores * credit_row_bytes,
-            .page_size = credit_row_bytes,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = credit_shard_spec});
-        rs_credit_counters_addr = static_cast<uint32_t>(rs_credit_counters_buffer->address());
+        if (mm_credit_counters.has_value()) {
+            // Caller-owned array, shared across programs. Same reasoning as mm_progress_counters:
+            // a per-program copy is retained for as long as the program stays cached, and L1 is
+            // handed out top-down, so each small permanent block pins the space above it.
+            const auto& credits = mm_credit_counters.value();
+            const auto& credits_shard_spec = credits.memory_config().shard_spec();
+            TT_FATAL(
+                credits.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 && credits_shard_spec.has_value(),
+                "mm_credit_counters must be an L1 sharded tensor so that its row lands at the same "
+                "local address on every matmul core");
+            TT_FATAL(
+                credits_shard_spec->grid.contains(mm_core_range_set),
+                "mm_credit_counters is sharded over {} which does not cover the matmul cores {}",
+                credits_shard_spec->grid.str(),
+                mm_core_range_set.str());
+            const uint32_t provided_row_bytes = credits_shard_spec->shape[1] * credits.element_size();
+            TT_FATAL(
+                provided_row_bytes >= credit_row_bytes,
+                "mm_credit_counters provides {} B per core but the {} RS readers need {} B",
+                provided_row_bytes,
+                num_rs_readers,
+                credit_row_bytes);
+            rs_credit_counters_addr = static_cast<uint32_t>(credits.buffer()->address());
+        } else {
+            const auto credit_shard_spec = tt::tt_metal::ShardSpecBuffer(
+                mm_core_range_set,
+                {1, num_rs_readers},
+                tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                {1, num_rs_readers},
+                {num_mm_cores, num_rs_readers});
+            rs_credit_counters_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                .device = mesh_device,
+                .size = num_mm_cores * credit_row_bytes,
+                .page_size = credit_row_bytes,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                .shard_parameters = credit_shard_spec});
+            rs_credit_counters_addr = static_cast<uint32_t>(rs_credit_counters_buffer->address());
+        }
 
         // NOC coords of every MM core, in the same row-major order the matmul uses to index its own
         // slot, so a reader can walk them and bump its counter on each.
@@ -554,6 +581,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         mm_fused_op_signaler->rs_credit_counters_addr = rs_credit_counters_addr;
         mm_fused_op_signaler->num_rs_readers = num_rs_readers;
         mm_fused_op_signaler->mm_window_blocks = mm_window_blocks.value();
+        captured_rs_credit_counters_addr = rs_credit_counters_addr;
     }
 
     // Kernel Runtime Args
@@ -874,7 +902,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         captured_reader_addcmul_rt_arg_offset,
         mm_progress_counters_buffer,
         captured_mm_progress_counters_addr,
-        rs_credit_counters_buffer};
+        rs_credit_counters_buffer,
+        captured_rs_credit_counters_addr};
 }
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -1007,6 +1036,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunk_width_in_mm_blocks,
         std::nullopt,   // mm_window_blocks: standalone RS reads a full matmul output, never a window
         std::nullopt,   // mm_logical_Ht
+        std::nullopt,   // mm_credit_counters
         std::nullopt,   // fused_ternary_scalar
         std::nullopt,   // addcmul_input_tensor1
         std::nullopt,   // addcmul_input_tensor2

@@ -73,6 +73,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // height in tiles as mm_logical_Ht. Both unset = the input tensor is the full matmul output.
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
     std::optional<uint32_t> mm_logical_Ht = std::nullopt,
+    // Caller-owned RS->MM credit array for the rolling window; allocated per program when absent.
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
     // Optional fused addcmul at the final RS write step.
     // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
     std::optional<float> fused_ternary_scalar = std::nullopt,

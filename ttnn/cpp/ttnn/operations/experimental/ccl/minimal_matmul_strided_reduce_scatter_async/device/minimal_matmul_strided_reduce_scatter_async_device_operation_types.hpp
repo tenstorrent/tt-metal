@@ -107,6 +107,9 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
        MMRS program; when omitted the RS factory allocates a private array per program, which
        permanently lowers the device's L1 floor and starves later ops of circular-buffer space. */
     const std::optional<const Tensor> mm_progress_counters = std::nullopt;
+    // Caller-owned RS->MM credit array for the rolling window; see mm_window_blocks. Allocated per
+    // compiled program when absent, which permanently lowers the device's L1 floor.
+    const std::optional<const Tensor> mm_credit_counters = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim
