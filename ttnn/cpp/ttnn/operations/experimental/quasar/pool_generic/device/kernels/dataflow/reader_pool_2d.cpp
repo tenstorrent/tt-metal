@@ -91,13 +91,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
                 fill_with_val(
                     in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
-#ifdef ARCH_QUASAR
-                // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
-                // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
-                flush_l2_cache_range(
-                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
-                    static_cast<size_t>(tail_elems) * 2);
-#endif
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -120,10 +113,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
                         rp_dst[rp_i] = rp_src[rp_i];
                     }
-                    // Write back the CPU-store copy to TL1 so the compute unpack (which reads in_cb from TL1)
-                    // sees it. Without this, compute reduces stale/zero in_cb.
-                    flush_l2_cache_range(
-                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
                 }
 #else
                 noc.async_read(
@@ -360,13 +349,6 @@ void kernel_main() {
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
-#ifdef ARCH_QUASAR
-        // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
-        // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
-        // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
-        // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
-        flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
-#endif
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
@@ -525,14 +507,11 @@ void kernel_main() {
                 // bypassing this DM core's private L1 D$ / shared L2. The scratch CB is single-buffered, so
                 // its L1 line address is constant across sticks: after the first read caches it, every later
                 // read hits the STALE cached copy (all sticks would read stick 0's result). On HW the reader
-                // must invalidate any address another agent wrote before reading it (invalidate_l1_cache() is
-                // a no-op on Quasar DM). Invalidate the scratch row's L2+L1D lines so the load re-fetches the
-                // freshly packed data from TL1. The prior NoC-read path avoided this because the NoC engine
-                // reads TL1 directly (non-snooping), never through the DM cache. Arch-split: Quasar (tt-2xx)
-                // has invalidate_l2_cache_range; WH/BH have no L2, so invalidate_l1_cache() (equivalent effect).
-#ifdef ARCH_QUASAR
-                invalidate_l2_cache_range(scratch_row0_addr, out_row_bytes);
-#else
+                // must invalidate any address another agent wrote before reading it. On Quasar DM that is now
+                // handled for free: get_read_ptr() returns the uncached L1 alias, so these loads bypass the
+                // D$/L2 and re-fetch from TL1 every time -- no invalidate needed, and no stale-line hazard
+                // from the single-buffered scratch CB.
+#ifndef ARCH_QUASAR
                 invalidate_l1_cache();
 #endif
                 const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
@@ -541,14 +520,6 @@ void kernel_main() {
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
                     dst_w[w] = src_w[w];
                 }
-                // Write-back the copied output row to TL1 so the host device->host read-back (and any NoC
-                // consumer) sees it, not this DM core's cached copy. Without this the output stick keeps its
-                // pre-kernel stale L1 -> the got.max=2.0 leak. Write-side analog of the scratch invalidate
-                // above and the in_cb write-back in read_kernel_with_top_left_index. (Quasar tt-2xx L2; WH/BH
-                // have no L2 so the write is already visible to the NoC engine.)
-#ifdef ARCH_QUASAR
-                flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
-#endif
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
                 // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.

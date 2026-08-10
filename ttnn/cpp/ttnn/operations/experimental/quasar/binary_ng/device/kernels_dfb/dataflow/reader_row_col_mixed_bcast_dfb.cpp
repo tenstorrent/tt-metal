@@ -139,28 +139,19 @@ void kernel_main() {
                         // (the SRAM the compute consumer + the NOC engine read): a cacheable fill stays dirty
                         // in the DM D$ -- invisible to the consumer (it reads stale TL1) AND later evicted
                         // over the neighbor llk_post DFB, corrupting it. So the fill MUST use a coherent store.
-                        // Here we write through the NON-CACHEABLE L1 alias (MEM_L1_UNCACHED_BASE): the stores
-                        // (and the col-0 reads) bypass the D$/L2 and go straight to TL1, so the consumer sees
-                        // the fill and no dirty line can clobber a neighbor -- no cache flush needed. (An L2
-                        // flush, flush_l2_cache_range(get_write_ptr(), get_entry_size()) before push_back, is
-                        // the equivalent alternative and additionally fences internally -- flush_l2_cache_line
-                        // brackets its flush-register write with `fence`, internal/tt-2xx/risc_common.h.)
-                        // WH/BH DFB is CB-backed shared
-                        // L1 with no incoherent write-back D$, so the plain fill is already visible there --
-                        // the alias offset is 0 (compiled out). Coherent but UNORDERED vs. the credit post --
-                        // see the TODO(#51291) at the top of this file.
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-                        const uint32_t col_uncached_off = MEM_L1_UNCACHED_BASE;
-#else
-                        const uint32_t col_uncached_off = 0;
-#endif
+                        // DataflowBuffer::get_write_ptr() now returns the NON-CACHEABLE L1 alias on Quasar DM,
+                        // so the stores (and the col-0 reads) bypass the D$/L2 and go straight to TL1: the
+                        // consumer sees the fill, no dirty line can clobber a neighbor, and no cache flush is
+                        // needed. WH/BH DFB is CB-backed shared L1 with no incoherent write-back D$, so the
+                        // plain fill is already visible there (alias offset is 0). Coherent but UNORDERED vs.
+                        // the credit post -- see the TODO(#51291) at the top of this file.
 #if SRC_BCAST_COL  // a (in0) is the COL operand
                         dfb_in0.reserve_back(onetile);
 #if !SRC_SHARDED
                         noc.async_read(
                             src, dfb_in0, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
-                        FILL_TILE_WITH_FIRST_COLUMN(dfb_in0.get_write_ptr() + col_uncached_off);
+                        FILL_TILE_WITH_FIRST_COLUMN(dfb_in0.get_write_ptr());
 #endif
                         dfb_in0.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
 #else  // b (in1) is the COL operand
@@ -169,7 +160,7 @@ void kernel_main() {
                         noc.async_read(
                             src_b, dfb_in1, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
-                        FILL_TILE_WITH_FIRST_COLUMN_B(dfb_in1.get_write_ptr() + col_uncached_off);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(dfb_in1.get_write_ptr());
 #endif
                         dfb_in1.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
 #endif
