@@ -41,15 +41,21 @@ class TTPhi1Attention:
             wqkv_weight = state_dict[f"{base_address}.self_attn.Wqkv.weight"]
             wqkv_bias = state_dict[f"{base_address}.self_attn.Wqkv.bias"]
         elif f"{base_address}.self_attn.q_proj.weight" in state_dict:
-            q_w = state_dict[f"{base_address}.self_attn.q_proj.weight"]
-            k_w = state_dict[f"{base_address}.self_attn.k_proj.weight"]
-            v_w = state_dict[f"{base_address}.self_attn.v_proj.weight"]
-            wqkv_weight = torch.cat([q_w, k_w, v_w], dim=0)
+            q_w = state_dict[f"{base_address}.self_attn.q_proj.weight"].view(
+                self.n_heads, self.head_dim, self.hidden_size
+            )
+            k_w = state_dict[f"{base_address}.self_attn.k_proj.weight"].view(
+                self.n_heads, self.head_dim, self.hidden_size
+            )
+            v_w = state_dict[f"{base_address}.self_attn.v_proj.weight"].view(
+                self.n_heads, self.head_dim, self.hidden_size
+            )
+            wqkv_weight = torch.cat([q_w, k_w, v_w], dim=1).view(3 * self.hidden_size, self.hidden_size)
 
-            q_b = state_dict[f"{base_address}.self_attn.q_proj.bias"]
-            k_b = state_dict[f"{base_address}.self_attn.k_proj.bias"]
-            v_b = state_dict[f"{base_address}.self_attn.v_proj.bias"]
-            wqkv_bias = torch.cat([q_b, k_b, v_b], dim=0)
+            q_b = state_dict[f"{base_address}.self_attn.q_proj.bias"].view(self.n_heads, self.head_dim)
+            k_b = state_dict[f"{base_address}.self_attn.k_proj.bias"].view(self.n_heads, self.head_dim)
+            v_b = state_dict[f"{base_address}.self_attn.v_proj.bias"].view(self.n_heads, self.head_dim)
+            wqkv_bias = torch.cat([q_b, k_b, v_b], dim=1).view(3 * self.hidden_size)
         else:
             raise KeyError(f"Could not find Wqkv or q_proj/k_proj/v_proj in state_dict for {base_address}.self_attn")
 
@@ -99,7 +105,9 @@ class TTPhi1Attention:
 
         # Ensure exact rank 3 (`[batch, seq_len, 3*hidden_size]`) required by split_query_key_value_and_split_heads C++ kernel
         if len(qkv.shape) == 4 and qkv.shape[1] == 1:
-            qkv = ttnn.reshape(qkv, (qkv.shape[0], qkv.shape[2], qkv.shape[3]))
+            qkv_new = ttnn.reshape(qkv, (qkv.shape[0], qkv.shape[2], qkv.shape[3]))
+            ttnn.deallocate(qkv)
+            qkv = qkv_new
 
         # Split QKV into separate tensors or heads
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -111,8 +119,28 @@ class TTPhi1Attention:
 
         # Apply Partial RoPE if provided
         if rotary_pos_emb is not None:
-            q = ttnn.apply_rotary_position_embedding(q, rotary_pos_emb)
-            k = ttnn.apply_rotary_position_embedding(k, rotary_pos_emb)
+            # Slicing along the head_dim which is at dim 3
+            q_rot = ttnn.slice(q, [0, 0, 0, 0], [q.shape[0], q.shape[1], q.shape[2], self.rotary_dim])
+            q_pass = ttnn.slice(q, [0, 0, 0, self.rotary_dim], [q.shape[0], q.shape[1], q.shape[2], q.shape[3]])
+            q_rot_new = ttnn.apply_rotary_position_embedding(q_rot, rotary_pos_emb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q_rot)
+
+            q_new = ttnn.concat([q_rot_new, q_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q_rot_new)
+            ttnn.deallocate(q_pass)
+            ttnn.deallocate(q)
+            q = q_new
+
+            k_rot = ttnn.slice(k, [0, 0, 0, 0], [k.shape[0], k.shape[1], k.shape[2], self.rotary_dim])
+            k_pass = ttnn.slice(k, [0, 0, 0, self.rotary_dim], [k.shape[0], k.shape[1], k.shape[2], k.shape[3]])
+            k_rot_new = ttnn.apply_rotary_position_embedding(k_rot, rotary_pos_emb, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(k_rot)
+
+            k_new = ttnn.concat([k_rot_new, k_pass], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(k_rot_new)
+            ttnn.deallocate(k_pass)
+            ttnn.deallocate(k)
+            k = k_new
 
         # Hardware-accelerated Scaled Dot Product Attention (`ttnn.transformer.scaled_dot_product_attention`)
         attn_out = ttnn.transformer.scaled_dot_product_attention(
@@ -137,10 +165,12 @@ class TTPhi1Attention:
 
         # Ensure rank matches input before final linear projection
         if len(attn_out_concatenated.shape) == 4 and attn_out_concatenated.shape[1] == 1:
-            attn_out_concatenated = ttnn.reshape(
+            attn_out_conc_new = ttnn.reshape(
                 attn_out_concatenated,
                 (attn_out_concatenated.shape[0], attn_out_concatenated.shape[2], attn_out_concatenated.shape[3]),
             )
+            ttnn.deallocate(attn_out_concatenated)
+            attn_out_concatenated = attn_out_conc_new
 
         # Final linear projection
         output = ttnn.linear(
@@ -313,6 +343,13 @@ class TTPhi1Model:
             )
 
         self.embed_tokens_torch = state_dict[embed_key]
+        self.embed_tokens_device = ttnn.from_torch(
+            self.embed_tokens_torch.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # 2. Stack Decoder Layers (0 to num_hidden_layers - 1)
         self.layers = []
@@ -350,16 +387,19 @@ class TTPhi1Model:
         # Handle input embedding if raw torch tensor or token ids are passed
         if isinstance(x, torch.Tensor):
             if x.dtype in [torch.long, torch.int, torch.int64, torch.int32]:
-                embedded = torch.nn.functional.embedding(x, self.embed_tokens_torch).to(torch.bfloat16)
+                # On-device embedding to prevent PCIe bottleneck
+                x_device = ttnn.from_torch(x.to(torch.uint32), device=self.device)
+                hidden_state = ttnn.embedding(x_device, self.embed_tokens_device, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x_device)
             else:
                 embedded = x.to(torch.bfloat16)
-            hidden_state = ttnn.from_torch(
-                embedded,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+                hidden_state = ttnn.from_torch(
+                    embedded,
+                    dtype=self.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
             can_deallocate = True
         else:
             hidden_state = x
@@ -367,9 +407,13 @@ class TTPhi1Model:
 
         # Ensure hidden_state is strictly rank 3 (`[batch, seq_len, hidden_size]`) across all decoder layers
         if len(hidden_state.shape) == 4 and hidden_state.shape[1] == 1:
-            hidden_state = ttnn.reshape(
+            hidden_state_new = ttnn.reshape(
                 hidden_state, (hidden_state.shape[0], hidden_state.shape[2], hidden_state.shape[3])
             )
+            if can_deallocate:
+                ttnn.deallocate(hidden_state)
+            hidden_state = hidden_state_new
+            can_deallocate = True
 
         # Sequential evaluation across all stacked decoder layers
         for i, layer in enumerate(self.layers):
