@@ -109,21 +109,37 @@ approach 1 are therefore **not justified by performance** on this evidence.
 ### Precision — the one place the two approaches actually differ
 
 The `Accumulate` chain packs the first pass's row sum to `cb_ex` and reloads it, and `cb_ex` is
-`Float16_b` whenever `fp32_dest_acc_en` is off. Measured against a float64 reference, same seed and
-shapes on both branches (device compute is deterministic, so these are exact comparisons, not noise):
+`Float16_b` whenever `fp32_dest_acc_en` is off. Measured as mean absolute error against a float64
+reference — so **higher is worse** — with the same seed and shapes on both branches. Device compute
+is deterministic, so these are exact comparisons, not noise.
 
-| shape | baseline mean\|err\| | approach 2 | Δ |
-|---|---:|---:|---:|
-| 32 × 1024 | 0.002065 | 0.002065 | **bit-identical** |
-| 32 × 4095 | 0.002775 | 0.002848 | +2.6% |
-| 1024 × 4096 | 0.002807 | 0.002918 | +4.0% |
-| 32 × 4096 | 0.002661 | 0.002851 | +6.8% |
+| W (h = 32) | baseline | approach 2 | Δ |
+|---:|---:|---:|---:|
+| 512 | 0.002102 | 0.002102 | **bit-identical** |
+| 1024 | 0.002065 | 0.002065 | **bit-identical** |
+| 2048 | 0.002006 | 0.002006 | **bit-identical** |
+| 3072 | 0.002749 | 0.002842 | +3.4% |
+| 4096 | 0.002661 | 0.002851 | +7.1% |
+| 6144 | 0.002726 | 0.003006 | +10.3% |
+| 8192 | 0.002701 | 0.002797 | +3.6% |
 
-PCC drops correspondingly (0.99998592 → 0.99998533 at 32 × 4096).
+The boundary between 2048 and 3072 is the small-kernel → large-tensor-kernel switch, not a property
+of the arithmetic. Below it the small kernel materialises `x + b` into `cb_x` and the `Accumulate`
+chain never executes, so the two branches agree bit-for-bit — which also confirms that every
+*non*-pre-add change in this rewrite is numerically exact. Above it the chain runs, and approach 2 is
+worse in 4 of 4 cases.
 
-Identical at W = 1024 and diverging as W grows is exactly the truncation signature: the wider the
-row, the larger the intermediate sum, the more bfloat16 loses. The absolute error stays small and
-every test passes at its tolerance, but the regression is systematic and grows with width.
+Within the large-kernel regime the penalty does not grow monotonically (+3.4, +7.1, +10.3, +3.6); it
+varies with shape. The honest summary is "consistently worse by roughly 3-10% wherever the pre-add
+chain runs", not "grows with width". The consistent direction across all four widths is what makes it
+causal rather than noise.
+
+An earlier version of this document claimed the data showed error diverging with W. That was a
+misreading: three of the four shapes originally measured sat on one side of the kernel-selection
+boundary, so the two explanations were indistinguishable. The sweep above separates them.
+
+In absolute terms the effect is small — mean error 0.0027 to 0.0029 on outputs of order 1, PCC
+0.999986 to 0.999985, both far above any test threshold, which is why all 265 tests pass either way.
 
 Approach 1's `reduce_multi_input` avoids it entirely by never leaving DST.
 
@@ -135,7 +151,7 @@ Approach 1's `reduce_multi_input` avoids it entirely by never leaving DST.
 | `numeric.h` | untouched, left with no callers | rewritten, −30 lines, still the kernels' entry point |
 | call-site churn | 4 sites rewritten inline | 4 sites change arguments only |
 | performance | baseline | baseline |
-| pre-add precision | preserved | **degrades with W** |
+| pre-add precision | preserved | **3-10% worse where the chain runs** |
 
 Approach 2 is the smaller and cheaper change, and it disproves the performance argument for the
 `BlockWait*` policies. The remaining case for approach 1 rests entirely on `reduce_multi_input` and
