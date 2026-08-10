@@ -286,7 +286,15 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
 // is_fp32_dest_acc_en == false
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_21f_<false>(base, pow);
+    // Use the accurate fp32 algorithm for bf16 too. _sfpu_binary_power_21f_
+    // computed log2 with a single cubic on the mantissa, so pow*log2(base)
+    // amplified the ~2.8e-3 log2 error by |pow| and bf16 (the default dtype)
+    // returned silently wrong values for large |pow| plus NaN on overflow. The
+    // fp32 path (atanh-series log2 + hi/lo argument split + explicit overflow
+    // guard) is exact to ~1 ULP, and the final round-to-nearest bf16 conversion
+    // keeps the stored bf16 result correctly rounded.
+    sfpi::vFloat y = _sfpu_binary_power_f32_(base, pow);
+    return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
 // is_fp32_dest_acc_en == true

@@ -332,18 +332,27 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
 
+    // Use the accurate fp32 algorithm (atanh-series log2 + hi/lo argument split +
+    // explicit overflow guard) for bf16 too. The old _sfpu_unary_power_21f_ path
+    // computed log2 with a single cubic on the mantissa; pow*log2(base) amplified
+    // that ~2.8e-3 absolute error by |pow|, so bf16 (the default dtype) returned
+    // silently wrong values for |pow| >= ~3 (18% rel err at pow=100, 133% at
+    // pow=500) and NaN instead of +inf on overflow. bf16 keeps its final
+    // round-to-nearest conversion so the stored result is correctly rounded.
     if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<true>(base, pow);
+            sfpi::vFloat y = _sfpu_unary_power_61f_updated_<true>(base, pow);
+            sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power_21f_<false>(base, pow);
+            sfpi::vFloat y = _sfpu_unary_power_61f_updated_<false>(base, pow);
+            sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
             sfpi::dst_reg++;
         }
     }
