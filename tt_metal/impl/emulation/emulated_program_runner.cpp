@@ -936,12 +936,20 @@ static std::function<void()> jit_compile_kernel(
     }
     std::string abs_kernel = std::filesystem::absolute(kernel_src_path).string();
 
-    // 2. Create temp directory
-    char tmpdir[] = "/tmp/tt_emule_jit_XXXXXX";
-    if (!mkdtemp(tmpdir)) {
+    // 2. Create temp directory. Honor $TMPDIR so the JIT scratch can be placed on a
+    // reaper-safe filesystem (a /tmp cleanup reaper wiping these dirs mid-compile
+    // causes "named_args_generated.h not found" / "ld: cannot open output" failures).
+    std::string tmpl = (std::getenv("TMPDIR") ? std::string(std::getenv("TMPDIR")) : std::string("/tmp"));
+    if (!tmpl.empty() && tmpl.back() == '/') {
+        tmpl.pop_back();
+    }
+    tmpl += "/tt_emule_jit_XXXXXX";
+    std::vector<char> tmpdir(tmpl.begin(), tmpl.end());
+    tmpdir.push_back('\0');
+    if (!mkdtemp(tmpdir.data())) {
         throw std::runtime_error("jit_compile_kernel: mkdtemp failed");
     }
-    std::string dir(tmpdir);
+    std::string dir(tmpdir.data());
 
     // 2b. Preprocess the kernel source for x86: rewrite RISC-V inline asm
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
@@ -2390,8 +2398,14 @@ struct ConnRoute {
 };
 static std::mutex g_conn_route_mu;
 // Keyed by SRC CHIP only (line direction is a per-chip property; the connection-owner core can differ from
-// the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
-// See tt-emule docs/fabric-ccl-emulation.md.
+// the sender, so a per-core key would miss). Deduped by direction and kept sorted by RoutingDirection
+// (N=0,E=1,S=2,W=3,Z=4), i.e. COMPASS order — which is the order the kernel's own connection open sequence
+// walks the active directions, so the sender's per-fiber open-sequence index (ConnRoute::dir_index below)
+// selects the direction it actually opened. Sorted, NOT append order: many fibers on one src chip record
+// concurrently at TT_EMULE_FIBER_WORKERS > 1, so append order is a race — whichever fiber won put its
+// direction at index 0, flipping fwd/bwd for every sender that indexes by open-sequence and teleporting
+// whole slices to the wrong chip (nondeterministic CCL PCC; invisible at K=1, where append order is the
+// deterministic fiber order). See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // Persistent UNDIRECTED ring adjacency (chip -> ring-neighbor chips), accumulated across ALL ops and never
 // reset: the physical ethernet ring is static, but each op's senders open only the connection(s) they use,
@@ -2428,12 +2442,18 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
     auto& v = g_conn_route[src];
-    for (const auto& c : v) {
-        if (c.dir == dir) {
+    // Insert in compass order (see g_conn_route's comment): the position must be a function of `dir`
+    // alone, never of which fiber recorded first.
+    auto at = v.begin();
+    for (; at != v.end(); ++at) {
+        if (at->dir == dir) {
             return;  // already recorded this direction for src
         }
+        if (at->dir > dir) {
+            break;
+        }
     }
-    v.push_back(ConnRoute{dir, neighbor});
+    v.insert(at, ConnRoute{dir, neighbor});
 }
 
 // Ordered ring members at distance 1,2,... from `src` in `start_dir`: first hop from g_conn_route[src], then
@@ -2784,6 +2804,46 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
                     s += " " + std::to_string(c);
                 }
                 fprintf(stderr, "[EMULE_FABRIC]   route src=%u dir=%s walk=[%s ]\n", src_chip, dn[d], s.c_str());
+            }
+        }
+    }
+    // EMULE_FABRIC_XFER=<file>: one compact line per payload-carrying send — the SOURCE L1
+    // offset (bridge_l1-relative, so it is directly comparable to a kernel's get_write_ptr),
+    // the sending core, each destination chip + destination L1 offset, and the payload's first
+    // word. Enough to reconstruct a whole CCL's wiring offline and diff it against the ring the
+    // op intends, which is how a misrouting bug gets localized without a device.
+    //
+    // Deliberately much cheaper than EMULE_FABRIC_DEBUG: that one is too verbose to leave on
+    // without perturbing the very race under study.
+    //
+    // Caveat: the fopen/fprintf/fclose widens the window between reading the payload word and
+    // the delivery memcpy, so under an active race the logged first word can disagree with the
+    // bytes actually delivered. Trust the addresses and targets from this trace; get delivered
+    // contents from a tensor dump.
+    if (payload != nullptr && size > 0) {
+        static const char* xfer_path = std::getenv("EMULE_FABRIC_XFER");
+        if (xfer_path != nullptr) {
+            const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+            const uint64_t src_off = static_cast<uint64_t>(
+                reinterpret_cast<const uint8_t*>(payload) - __emule_self->bridge_l1);
+            uint32_t w0 = 0;
+            std::memcpy(&w0, payload, sizeof(uint32_t));
+            std::string ts;
+            for (auto t : targets) {
+                ts += " " + std::to_string(t);
+            }
+            static std::mutex xfer_mu;
+            std::lock_guard<std::mutex> lk(xfer_mu);
+            FILE* fp = std::fopen(xfer_path, "a");
+            if (fp != nullptr) {
+                std::fprintf(fp,
+                             "[XFER] src_chip=%u core=(%u,%u) proc=%u src_off=0x%llx size=%u "
+                             "dst_noc=0x%llx w0=0x%08x targets=[%s ]\n",
+                             src_chip, (unsigned)__emule_self->core->logical_x,
+                             (unsigned)__emule_self->core->logical_y, (unsigned)__emule_self->processor_id,
+                             (unsigned long long)src_off, size,
+                             (unsigned long long)noc_address, w0, ts.c_str());
+                std::fclose(fp);
             }
         }
     }
