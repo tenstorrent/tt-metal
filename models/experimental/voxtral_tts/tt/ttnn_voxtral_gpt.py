@@ -94,8 +94,11 @@ def _mm1d(in0_block_w, per_core_n, activation=None):
     """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=_MM_GRID, in0_block_w=in0_block_w, out_subblock_h=1,
-        # osh*osw <= 4, not 8: fp32_dest_acc_en halves the dest register file
-        out_subblock_w=next(s for s in (4, 2, 1) if per_core_n % s == 0),
+        # Largest legal width. Two hard rules, both TT_FATAL in ttnn: osh*osw <= 4 (8
+        # normally -- fp32_dest_acc_en halves the dest register file), and per_core_N must
+        # be divisible by it. 3 belongs in this list: ttnn's own SUBBLOCK_HW_CHOICES has
+        # {3,1}, and leaving it out dropped wqkv (per_core_N=3) to 1. STATUS.md 6.61.
+        out_subblock_w=next(s for s in (4, 3, 2, 1) if per_core_n % s == 0),
         per_core_M=1, per_core_N=per_core_n, fuse_batch=True,
         fused_activation=activation, mcast_in0=True)
 

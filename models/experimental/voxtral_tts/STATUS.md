@@ -3882,6 +3882,42 @@ session, the same failure §2 records for the `upstream_compare` venv. Its docst
 that it is a PORT and therefore a liability: a systematic bug in it passes every utterance
 silently, and committing it so it can be diffed against the original is the only defence available.
 
+### 6.61 — `out_subblock_w`'s candidate list had a hole in it
+
+Found while explaining §6.52's helper line, not by any test:
+
+```python
+out_subblock_w = next(s for s in (4, 2, 1) if per_core_n % s == 0)   # skips 3
+```
+
+`out_subblock_w` is how many output tiles a core accumulates in its destination registers at once.
+Two hard rules, both `TT_FATAL` in ttnn:
+
+- `out_subblock_h * out_subblock_w <= 4` — 8 tiles fit normally, but `fp32_dest_acc_en=True` makes
+  them 32-bit and halves the count.
+- `per_core_N % out_subblock_w == 0` — verified on device: `per_core_N=3` with width 2 or 4 fails
+  with *"out_block_w (3) must be divisible by out_subblock_w"*, not a silent fallback.
+
+With `out_subblock_h=1` the legal widths are therefore **1, 2, 3 and 4** — ttnn's own
+`SUBBLOCK_HW_CHOICES` lists `{3,1}` explicitly. **The tuple omitted 3**, so `wqkv` (`per_core_N=3`)
+fell to `out_subblock_w=1`: three passes through the dest registers where one would do. The
+comment said "biggest that fits" and the code did not.
+
+**It is worth nothing in speed: 59.3 µs at width 3 against 59.2 at width 1.** That follows
+directly from §6.53 — subblock width is a *compute-side* knob, and at batch 1 the ALUs are ~99.6%
+idle, so there is nothing for it to accelerate. Paired `--tier fast` gate: **0 metrics worse**, and
+the integer code counts are unchanged (34→34 real, 85→85 synthetic), so the change is inert.
+
+Fixed to `(4, 3, 2, 1)` anyway, for correctness of intent: a future shape with `per_core_N` of 3,
+9 or 15 would otherwise silently drop to 1 with nothing to indicate it.
+`test_out_subblock_w_is_the_largest_legal_one` now asserts the choice is maximal, so the hole
+cannot reopen. 130 tests.
+
+**The general lesson, since this is the second time today:** the §6.52 configs were tuned by
+sweeping `in0_block_w` and the grid, and `out_subblock_w` was left to a one-line helper nobody
+re-read. A swept parameter gets measured; a derived one gets assumed. **Derived parameters need a
+test that re-derives them independently**, which is what the new guard does.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
