@@ -16,6 +16,7 @@ from helpers.compressed_utils import (
 from helpers.param_config import parametrize
 from helpers.tile_constants import DEFAULT_TILE_C_DIM
 
+
 def promote_assignment(assignment, ct):
     # Promote one tile to bfp2 if all tiles are bfp0
     if sum(assignment) == 0:
