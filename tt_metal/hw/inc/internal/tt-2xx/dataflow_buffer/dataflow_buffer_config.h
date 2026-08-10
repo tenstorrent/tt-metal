@@ -215,9 +215,10 @@ struct dfb_hart_init_entry_t {
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
-    uint8_t  dm_block_size;                  // byte 28: DM BLOCKED block size (>=1; 1 when the ring is
-                                             // not BLOCKED). TRISC unused.
-    uint8_t  _pad3[3];                       // bytes 29-31: pad header to 32B → 4B-aligned TC arrays follow
+    uint16_t dm_block_size;                  // bytes 28-29: DM BLOCKED block size (>=1; 1 when the ring is
+                                             // not BLOCKED). TRISC unused. uint16 because block_size is
+                                             // bounded by capacity, which is itself uint16 (see #52117).
+    uint8_t  _pad3[2];                       // bytes 30-31: pad header to 32B → 4B-aligned TC arrays follow
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");

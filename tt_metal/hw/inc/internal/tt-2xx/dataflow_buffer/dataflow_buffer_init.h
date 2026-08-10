@@ -75,7 +75,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
-    uint8_t block_size;           // wire byte 28: BLOCKED block size (>=1); TRISC unused (1)
+    uint16_t block_size;          // wire bytes 28-29: BLOCKED block size (>=1); TRISC unused (1)
 };
 static_assert(sizeof(dfb_init_entry_hdr_t) == 32, "dfb_init_entry_hdr_t must match the 32B wire header");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
@@ -94,7 +94,7 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=capacity
-//   w7 [7:0]=dm_block_size  [31:8]=_pad3
+//   w7 [15:0]=dm_block_size  [31:16]=_pad3
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
@@ -135,7 +135,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
     // 0 is never written by the host, but normalise anyway -- the device computes % block_size
-    h.block_size = static_cast<uint8_t>(w7) ? static_cast<uint8_t>(w7) : uint8_t{1};  // byte 28
+    h.block_size = static_cast<uint16_t>(w7) ? static_cast<uint16_t>(w7) : uint16_t{1};  // bytes 28-29
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = 0;
@@ -168,11 +168,13 @@ FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, 
     const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
                              (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
                              (static_cast<uint32_t>(eh.broadcast_tc) << 16) |
-                             (static_cast<uint32_t>(eh.block_size) << 24);
+                             (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
     uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
     dm_scalar[0] = pack_w0;
     dm_scalar[1] = pack_w1;
     dm_scalar[2] = pack_w2;
+    // block_size is uint16 and lives outside the 12B [8,20) scalar span, so it needs its own store.
+    iface.block_size = eh.block_size;
     iface.tc_idx = 0;
 }
 #endif
