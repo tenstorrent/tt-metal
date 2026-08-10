@@ -2190,8 +2190,8 @@ def test_make_host_gumbel_noise_fn_allows_equivalent_3d_and_4d_shapes(monkeypatc
 
 
 def test_make_seeded_gumbel_noise_fn_generates_block_step_seeds(monkeypatch):
-    """The production draw is vocab-innermost: the permuted variant would put the canvas
-    positions on ttnn.rand's degenerate axis (154/256 vs 253/256 distinct winners)."""
+    """The production draw is plain vocab-innermost device noise with per-block,
+    per-step, per-attempt seed offsets."""
     calls = []
 
     def fake_sample_gumbel_noise(shape, *, device, seed):

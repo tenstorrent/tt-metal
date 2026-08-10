@@ -186,64 +186,6 @@ def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     return _gumbel_from_uniform(u)
 
 
-def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=ttnn.float32):
-    """Generate regenerated Gumbel noise with vocab not produced as the rand innermost axis.
-
-    QB2's single-call ``ttnn.rand(shape=[..., vocab])`` path currently shows
-    last-dimension correlation that biases Gumbel-max distributions. Generating
-    the vocab axis first and permuting back preserves one random draw per logits
-    element and removes that correlation from the *vocab* axis, which is what the
-    W4 per-position marginal validation checks.
-
-    **It does not produce IID noise.** For the production shape ``(1, 1, 256, vocab)`` the
-    collapsed ``inner`` axis below IS the 256 canvas positions, so the last-dimension
-    correlation is relocated onto the canvas-position axis rather than removed. Measured on
-    device 2026-07-25 (P150x4, canvas 256, vocab 16384 and 262144 alike): 64 of the 256 position
-    rows are byte-identical to row ``i - 24`` -- ``ttnn.rand`` reuses 24 of every 32 row streams
-    per tile -- and with flat logits only 119/256 positions pick distinct tokens, against
-    255/256 for host IID Gumbel. That is worse than the plain vocab-innermost path (157/256) on
-    the axis the diffusion decisions are taken along. Chunking along vocab with distinct seeds
-    and both tile-aware layout workarounds were also measured and do not reach IID.
-
-    ``DG_VLLM_GUMBEL_MODE=host`` is the only IID arm today. See
-    ``doc/decision_fidelity/gumbel_position_correlation.md`` and the gate
-    ``tests/test_sampling.py``.
-    """
-    seed = _validate_ttnn_rand_seed(seed)
-    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
-
-    # Generate with the vocab axis OUTERMOST (so it is never the rand innermost axis that
-    # carries the QB2 last-dim correlation) and every non-vocab axis collapsed into ONE
-    # trailing axis. The earlier form kept the batch/singleton axes as explicit trailing
-    # dims — e.g. rand([vocab, 1, canvas, 1]) — and TILE_LAYOUT pads each size-1 axis that
-    # lands in the last two positions up to a full 32-wide tile, inflating the buffer 32x
-    # per singleton (the [1,1,256,262144] canvas case ballooned 256 MiB -> 8 GiB and OOMed).
-    # A 2-D [vocab, inner] rand keeps both tiled axes tile-aligned, then we permute the vocab
-    # axis to innermost and reshape back to the requested logits shape (values differ from the
-    # old grid but the distribution — vocab-outermost draw — is unchanged).
-    vocab = int(shape[-1])
-    inner = 1
-    for dim in shape[:-1]:
-        inner *= int(dim)
-    raw_u = ttnn.rand(
-        (vocab, inner),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        low=0.0,
-        high=1.0,
-        seed=seed,
-        mesh_mapper=_rand_mesh_mapper(device),
-    )
-    u2 = ttnn.permute(raw_u, (1, 0))  # [inner, vocab]
-    if u2 is not raw_u:
-        raw_u.deallocate(True)
-    u = ttnn.reshape(u2, tuple(int(d) for d in shape))
-    if u is not u2:
-        u2.deallocate(True)
-    return _gumbel_from_uniform(u)
-
-
 # ---------------------------------------------------------------------------------------------
 # TP-sharded denoise terminal (DG_TERMINAL_SHARDED) — argmax / global-max / entropy on the
 # per-device vocab shard, skipping the per-step full-vocab all-gather (#47465, path to 100 t/s).

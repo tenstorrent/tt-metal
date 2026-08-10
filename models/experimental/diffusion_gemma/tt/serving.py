@@ -64,7 +64,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
 )
 
 # Sampling modes exposed to the serving layer. "device" is the production mode
-# (on-device permuted-vocab RNG) and the only *materialized* one, so it is the only
+# (on-device seeded SFPU RNG, lane-salted per tt-metal#52024) and the only *materialized* one, so it is the only
 # mode usable under up-front capture (DG_UPFRONT_CAPTURE=1). "argmax" is the greedy
 # RUN-first speed/determinism control.
 # A "chunked" mode (per-vocab-chunk noise descriptors) was removed 2026-08-10: it was

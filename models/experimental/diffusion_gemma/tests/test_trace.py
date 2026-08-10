@@ -670,7 +670,7 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
     _set_valid_upfront_env(monkeypatch)
-    # `device` (the on-device permuted-vocab RNG) is the ONLY materialized Gumbel source, so it
+    # `device` (the on-device seeded SFPU RNG) is the ONLY materialized Gumbel source, so it
     # is the only mode the up-front controller can accept.
     assert (
         generator_vllm._validate_upfront_capture_configuration(

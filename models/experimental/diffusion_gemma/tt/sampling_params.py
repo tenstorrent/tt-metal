@@ -87,7 +87,6 @@ def canvas_sample_from_params(
     default_temperature: float,
     default_seed: int | None = None,
     gumbel_noise=None,
-    use_vocab_permuted_noise: bool | None = None,
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
 
@@ -95,9 +94,9 @@ def canvas_sample_from_params(
     ``TTSamplingParams`` object (or a dict with the same fields), and the helper
     maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
     ``top_k``/``top_p`` remain parsed-only until the reference sampler ships those
-    filters. Seed-regenerated Gumbel noise defaults to the permuted-vocab path to
-    avoid the known QB2 innermost-vocab ``ttnn.rand`` correlation. Set
-    ``use_vocab_permuted_noise=False`` for raw-RNG diagnostics.
+    filters. Seed-regenerated Gumbel noise uses the plain vocab-innermost
+    ``ttnn.rand`` draw; the SFPU RNG is lane-salted per element since
+    tt-metal#52024, so no axis workaround is needed.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
 
@@ -110,22 +109,8 @@ def canvas_sample_from_params(
     if gumbel_noise is None:
         if config.seed is None:
             raise ValueError("canvas_sample_from_params requires gumbel_noise or a sampling seed")
-        if use_vocab_permuted_noise is None:
-            # Default OFF: for a (…, canvas, vocab) logits shape the permuted-vocab draw puts the
-            # canvas positions on ttnn.rand's degenerate innermost axis, which is what makes
-            # positions collapse onto one token. Vocab-innermost measures at the IID control
-            # (253/256 vs 154/256 distinct flat-logit winners at the production geometry).
-            use_vocab_permuted_noise = False
-        if use_vocab_permuted_noise:
-            gumbel_noise = TS.sample_gumbel_noise_with_permuted_vocab(
-                logits.shape,
-                device=logits.device(),
-                seed=config.seed,
-            )
-            owns_gumbel_noise = True
-        else:
-            gumbel_noise = TS.sample_gumbel_noise(logits.shape, device=logits.device(), seed=config.seed)
-            owns_gumbel_noise = True
+        gumbel_noise = TS.sample_gumbel_noise(logits.shape, device=logits.device(), seed=config.seed)
+        owns_gumbel_noise = True
 
     try:
         return TS.canvas_sample(logits, config.temperature, gumbel_noise)

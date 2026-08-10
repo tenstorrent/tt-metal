@@ -228,11 +228,7 @@ class _FakeTensor:
         self.deallocated = force
 
 
-_GUMBEL_NOISE_HELPERS = (
-    TS.sample_gumbel_noise,
-    TS.sample_gumbel_noise_with_permuted_vocab,
-)
-_VOCAB_AXIS_HELPERS = _GUMBEL_NOISE_HELPERS[1:]
+_GUMBEL_NOISE_HELPERS = (TS.sample_gumbel_noise,)
 
 
 def test_rand_mesh_mapper_replicates_over_flattened_mesh(monkeypatch):
@@ -273,8 +269,6 @@ def test_rand_mesh_mapper_single_device_returns_none():
         pytest.param(_GUMBEL_NOISE_HELPERS, (), 47472, "shape", id="shape-empty"),
         pytest.param(_GUMBEL_NOISE_HELPERS, (1, 0, 32), 47472, "shape", id="shape-zero-dim"),
         pytest.param(_GUMBEL_NOISE_HELPERS, (1, -2, 32), 47472, "shape", id="shape-negative-dim"),
-        pytest.param(_VOCAB_AXIS_HELPERS, (32,), 47472, "sample axis and a vocab axis", id="vocab-axis-only-vocab"),
-        pytest.param(_VOCAB_AXIS_HELPERS, (1,), 47472, "sample axis and a vocab axis", id="vocab-axis-singleton"),
     ],
 )
 def test_gumbel_noise_helpers_reject_bad_arguments(helpers, shape, seed, match, expect_error):
@@ -283,51 +277,6 @@ def test_gumbel_noise_helpers_reject_bad_arguments(helpers, shape, seed, match, 
     for helper in helpers:
         with expect_error(ValueError, match=match):
             helper(shape, device=device, seed=seed)
-
-
-def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch):
-    calls = {}
-    raw = _FakeTensor("raw")
-    permuted = _FakeTensor("permuted")
-    reshaped = _FakeTensor("reshaped")
-
-    class _FakeTtnn:
-        TILE_LAYOUT = "tile"
-
-        @staticmethod
-        def rand(shape, **kwargs):
-            calls["rand"] = (shape, kwargs)
-            return raw
-
-        @staticmethod
-        def permute(tensor, order):
-            calls["permute"] = (tensor, order)
-            return permuted
-
-        @staticmethod
-        def reshape(tensor, shape):
-            calls["reshape"] = (tensor, shape)
-            return reshaped
-
-    def fake_gumbel_from_uniform(tensor):
-        calls["gumbel"] = tensor
-        return "gumbel"
-
-    monkeypatch.setattr(TS, "ttnn", _FakeTtnn)
-    monkeypatch.setattr(TS, "_gumbel_from_uniform", fake_gumbel_from_uniform)
-
-    out = TS.sample_gumbel_noise_with_permuted_vocab((2, 1, 4, 16), device="mesh", seed=47472, dtype="float32")
-
-    assert out == "gumbel"
-    # vocab (16) outermost, all non-vocab dims (2*1*4=8) collapsed into one tile-aligned axis;
-    # no singleton axis lands in the tiled last-two dims (the 32x TILE-pad OOM fix).
-    assert calls["rand"][0] == (16, 8)
-    assert calls["permute"] == (raw, (1, 0))
-    assert calls["reshape"] == (permuted, (2, 1, 4, 16))
-    assert calls["gumbel"] is reshaped
-    assert raw.deallocated is True
-    assert permuted.deallocated is True
-    assert reshaped.deallocated is False
 
 
 # --- vLLM sampling-params seam -------------------------------------------------
@@ -415,20 +364,19 @@ def test_canvas_sample_from_params_rejects_bad_arguments(params, kwargs, match, 
 
 
 def test_canvas_sample_from_params_defaults_to_vocab_innermost_rng(monkeypatch):
-    """Default is the plain draw: for a (..., canvas, vocab) shape the permuted variant
-    relocates the RNG degeneracy onto the canvas-position axis, which is what makes
-    different positions collapse onto the same token."""
+    """The seeded path draws plain vocab-innermost device noise (the lane-salted
+    SFPU RNG needs no axis workaround since tt-metal#52024)."""
     calls = {}
 
-    def fake_permuted_noise(shape, *, device, seed):
+    def fake_device_noise(shape, *, device, seed):
         calls["noise"] = (shape, device, seed)
-        return "permuted-gumbel"
+        return "device-gumbel"
 
     def fake_canvas_sample(logits, temperature, gumbel_noise):
         calls["sample"] = (logits, temperature, gumbel_noise)
         return "samples"
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_device_noise)
     monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
 
     logits = _FakeLogits()
@@ -440,14 +388,14 @@ def test_canvas_sample_from_params_defaults_to_vocab_innermost_rng(monkeypatch):
 
     assert out == "samples"
     assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
-    assert calls["sample"] == (logits, 0.7, "permuted-gumbel")
+    assert calls["sample"] == (logits, 0.7, "device-gumbel")
 
 
 def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatch):
     calls = {}
-    noise = _FakeNoise("permuted-gumbel")
+    noise = _FakeNoise("device-gumbel")
 
-    def fake_permuted_noise(shape, *, device, seed):
+    def fake_device_noise(shape, *, device, seed):
         calls["noise"] = (shape, device, seed)
         return noise
 
@@ -455,7 +403,7 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatc
         calls["sample"] = (logits, temperature, gumbel_noise, gumbel_noise.deallocated)
         return "samples"
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_device_noise)
     monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
 
     logits = _FakeLogits()
@@ -472,9 +420,9 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatc
 
 
 def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure(monkeypatch, expect_error):
-    noise = _FakeNoise("permuted-gumbel")
+    noise = _FakeNoise("device-gumbel")
 
-    def fake_permuted_noise(shape, *, device, seed):
+    def fake_device_noise(shape, *, device, seed):
         return noise
 
     def fail_canvas_sample(logits, temperature, gumbel_noise):
@@ -482,7 +430,7 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure
         assert noise.deallocated is False
         raise RuntimeError("sampling failed")
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_device_noise)
     monkeypatch.setattr(TS, "canvas_sample", fail_canvas_sample)
 
     with expect_error(RuntimeError, match="sampling failed"):
@@ -787,33 +735,6 @@ def test_canvas_sample_matches_torch_argmax_with_readback_device_noise(device):
 
 @requires_device
 @pytest.mark.use_module_device
-def test_canvas_sample_permuted_vocab_regenerated_noise_distribution(device):
-    # One ttnn.rand call is still used, but vocab is generated as the outer axis
-    # and permuted back to avoid the known innermost-vocab correlation.
-    num_samples = DIST_NUM_SAMPLES
-    length = 32
-    vocab_size = 32
-    temperature = 0.7
-    logits = _structured_logits_repeated(num_samples, length, vocab_size)
-    expected_probs = F.softmax(logits[0] / temperature, dim=-1)
-
-    tt_logits = _to_device(device, logits)
-    device_noise = TS.sample_gumbel_noise_with_permuted_vocab(logits.shape, device=device, seed=47472)
-    samples = TS.canvas_sample(tt_logits, temperature, device_noise)
-    sample_ids = ttnn.to_torch(samples).squeeze(-1).to(torch.long)
-    _release(tt_logits, device_noise, samples)
-
-    max_top1_freq_error, mean_kl = _distribution_metrics(sample_ids, expected_probs)
-    print(
-        f"\n[canvas sampling permuted-vocab dist] N={num_samples} "
-        f"max_top1_freq_error={max_top1_freq_error:.4f} mean_kl={mean_kl:.4f}"
-    )
-    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
-    assert mean_kl < DIST_MAX_MEAN_KL
-
-
-@requires_device
-@pytest.mark.use_module_device
 @pytest.mark.xfail(
     reason=(
         "QB2 ttnn.rand regenerated noise is currently not iid enough for W4 distributional canvas sampling: "
@@ -845,18 +766,13 @@ def test_canvas_sample_regenerated_noise_distribution(device):
 
 
 # --- device: cross-canvas-position correlation of the gumbel draw ---------------
-# ``sample_gumbel_noise_with_permuted_vocab`` keeps the vocab axis off ``ttnn.rand``'s degenerate
-# innermost axis, but it collapses every non-vocab axis into ONE trailing axis and draws
-# ``ttnn.rand((vocab, inner))`` -- and for the production logits shape ``(1, 1, 256, vocab)`` that
-# ``inner`` **is the 256 canvas positions**, so the last-dim correlation is relocated onto the
-# canvas-position axis rather than removed (#48291). With correlated noise across positions one
-# unlucky draw pushes the SAME token to the top at many positions at once instead of the independent
-# rare flips IID Gumbel gives -- the observed degeneration texture, worst where the logits are
-# flattest. Three arms make the numbers interpretable: ``host`` (torch Gumbel, the IID control that
-# calibrates every metric), ``plain`` (``sample_gumbel_noise``, vocab-innermost -- the layout
-# ``tt/generate.py`` actually ships, generate.py:652) and ``permuted``
-# (``sample_gumbel_noise_with_permuted_vocab`` -- production until 2026-07-27, still reachable through
-# the vLLM seam's ``use_vocab_permuted_noise=True``, and NOT IID: tt/sampling.py:329).
+# With correlated noise across positions one unlucky draw pushes the SAME token to the top at
+# many positions at once instead of the independent rare flips IID Gumbel gives -- the observed
+# degeneration texture, worst where the logits are flattest (#48291). The SFPU RNG is lane-salted
+# per element since tt-metal#52024, and the historical permuted-vocab workaround was removed with
+# it. Two arms make the numbers interpretable: ``host`` (torch Gumbel, the IID control that
+# calibrates every metric) and ``plain`` (``sample_gumbel_noise``, vocab-innermost -- the layout
+# ``tt/generate.py`` actually ships).
 
 CANVAS_LEN = 256
 # The production canvas/vocab geometry; PROBE_VOCAB keeps the default run cheap while staying
@@ -875,7 +791,8 @@ def _draw(arm: str, shape, *, device, seed: int) -> torch.Tensor:
     """Return the arm's Gumbel noise as a host ``[canvas_len, vocab]`` matrix."""
     if arm == "host":
         return _host_gumbel(shape, seed=seed).reshape(shape[-2], shape[-1])
-    generator = TS.sample_gumbel_noise_with_permuted_vocab if arm == "permuted" else TS.sample_gumbel_noise
+    assert arm == "plain", f"unknown noise arm {arm!r}"
+    generator = TS.sample_gumbel_noise
     noise = generator(shape, device=device, seed=seed)
     host = ttnn.to_torch(noise).float()
     if hasattr(noise, "deallocate"):
@@ -952,39 +869,11 @@ def test_host_control_calibrates_the_metrics():
 
 @requires_device
 @pytest.mark.use_module_device
-def test_production_device_gumbel_is_independent_across_canvas_positions(device):
-    """The gate the marginal test cannot express: no cross-position dependency."""
-    stats = _measure("permuted", device=device, vocab=PROBE_VOCAB, seed=48291)
-    _report("permuted", stats)
-    assert stats["max_multiplicity"] <= 4, (
-        "canvas positions are picking the same token far more often than IID noise allows -- "
-        f"largest synchronized group is {stats['max_multiplicity']} positions: {stats}"
-    )
-    assert (
-        stats["frac_pairs_over_5sigma"] < 0.01
-    ), f"cross-position correlation is widespread, not a tail artefact: {stats}"
-
-
-@requires_device
-@pytest.mark.use_module_device
 def test_shipped_plain_gumbel_is_independent_across_canvas_positions(device):
-    """The SHIPPED layout's cross-position gate (was ``test_diagnostic_plain_path_for_comparison``).
-
-    ``make_seeded_gumbel_noise_fn`` -- the serving denoise noise hook -- draws
-    ``TS.sample_gumbel_noise``, vocab innermost, "deliberately" (tt/generate.py:652), and the
-    253/256 figure in the comment above that draw IS this measurement. ``permuted`` has had no
-    production caller since ``use_vocab_permuted_noise`` defaulted to False
-    (tt/sampling_params.py:121), so without this row the #48291 section does not measure the layout
-    production runs. It started life as a print-only comparison; it is a gate now because a
-    ``ttnn.rand`` regression on the vocab-innermost row-stream assignment is exactly how the canvas
-    collapse returns -- this layout already failed once with a different constant (offset 17, 96 of
-    256 rows duplicated), and the surviving guards would all stay green through it: the permuted gate
-    draws a different layout, ``test_canvas_sample_regenerated_noise_distribution`` is
-    ``xfail(strict=True)`` so a worse plain path is still a "failure", and
-    ``test_canvas_sample_matches_torch_argmax_with_readback_device_noise`` uses the read-back device
-    noise as its own reference. Bounds are the same ones the permuted gate uses; they discriminate
-    because ``doc/decision_fidelity/device_gumbel_restored.md`` measured plain at 157/256 distinct
-    winners / max_mult 4 pre-fix against 253/256 / max_mult 2 post-fix.
+    """Gate the SHIPPED noise path: ``sample_gumbel_noise`` vocab-innermost, the layout
+    ``make_seeded_gumbel_noise_fn`` draws in production. The bounds are calibrated by the
+    ``host`` IID control arm and discriminate real cross-position correlation regressions
+    (a return of #48291's degeneracy would fail here first).
     """
     stats = _measure("plain", device=device, vocab=PROBE_VOCAB, seed=48291)
     _report("plain", stats)
@@ -1012,7 +901,7 @@ def test_production_vocab_geometry(device):
     claim was shipped. Both device arms are asserted so a full-vocab-only regression cannot hide
     behind the cheap PROBE_VOCAB gates above.
     """
-    for arm in ("host", "plain", "permuted"):
+    for arm in ("host", "plain"):
         stats = _measure(arm, device=device if arm != "host" else None, vocab=PROD_VOCAB, seed=48291)
         _report(arm, stats)
         if arm != "host":

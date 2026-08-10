@@ -84,8 +84,9 @@ from models.experimental.diffusion_gemma.tt.traced_denoise import (
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 
-# Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
-# Requires the Blackhole ttnn.rand kernel fix; without it this default corrupts generated text.
+# Served default Gumbel source: the on-device seeded SFPU RNG (see the __init__ note).
+# Requires the lane-salted Blackhole rand kernel (tt-metal#52024); without it this default
+# corrupts generated text.
 DEFAULT_VLLM_GUMBEL_MODE = "device"
 PREFILL_BUCKETS = tuple(1 << exponent for exponent in range(7, 19))  # 128 ... 262144
 
@@ -131,7 +132,7 @@ def _validate_upfront_capture_configuration(
         raise RuntimeError(
             "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE='device'; "
             f"got {gumbel_mode!r}. 'device' is the only materialized source: the W4-validated "
-            "on-device permuted-vocab RNG (no per-step host RNG or PCIe DMA). "
+            "on-device seeded SFPU RNG (no per-step host RNG or PCIe DMA). "
             "'argmax' is not a materialized full-tensor source and is unsupported "
             "by the up-front controller."
         )
@@ -369,20 +370,21 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
         self._model_owned_page_tables_per_layer = page_tables_per_layer
-        # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
+        # DEFAULT "device" is the on-device seeded Gumbel: it removes the ~313 ms/step
         # host RNG and the ~256 MiB/step replicated PCIe DMA that the deleted per-step host-torch
         # Gumbel mode paid, measured here at ~53.6 vs ~36.3 tokens/block/s steady (~1.48x).
         #
         # HISTORY, because this default has moved twice. It was flipped to "device" on 2026-07-24,
         # reverted to the host IID mode on 2026-07-25 after "device" corrupted generated text on
         # 2 of 4 matched seeds, and restored here once the CAUSE was fixed. The cause was never in
-        # this module: for the production noise shape (1, 1, 256, vocab) the permuted-vocab draw
-        # puts the 256 canvas positions on the ttnn.rand width axis, and the Blackhole SFPU PRNG
-        # is a sliding window over one stream -- element (read t, lane i) carried stream[t + i],
-        # so 64 of 256 positions held a byte-identical COPY of another position's noise and picked
-        # the same token together. tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_rand.h now
-        # advances the window per element; duplicate rows are gone and the same 4-seed A/B answers
-        # correctly 4/4 on both arms with the degeneracy guard never firing.
+        # this module: for the production noise shape (1, 1, 256, vocab) the then-used
+        # permuted-vocab draw put the 256 canvas positions on the ttnn.rand width axis, and the
+        # Blackhole SFPU PRNG was a sliding window over one stream -- element (read t, lane i)
+        # carried stream[t + i], so 64 of 256 positions held a byte-identical COPY of another
+        # position's noise and picked the same token together. The window-advance dilution that
+        # first fixed this (4-seed A/B 4/4 on both arms, degeneracy guard silent) has since been
+        # superseded by the lane-salted counter RNG from tt-metal#52024, and the permuted-vocab
+        # workaround itself was removed.
         #
         # This default therefore DEPENDS on that kernel fix. The residual correlation it does not
         # remove (cross-position max |r| 0.618 against 0.035 for a host IID control) is pinned by

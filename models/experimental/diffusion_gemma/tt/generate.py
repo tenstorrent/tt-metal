@@ -683,10 +683,9 @@ def make_seeded_gumbel_noise_fn(
 ):
     """Create deterministic device Gumbel noise hooks for ``generate_blocks``.
 
-    The production-shaped seeded path uses the permuted-vocab TTNN RNG workaround
-    validated by W4 distributional tests, avoiding the raw innermost-vocab
-    innermost-vocab layout: see the comment on the draw below for why that is the
-    correct axis choice here rather than the permuted-vocab workaround.
+    Draws plain vocab-innermost device noise. The SFPU RNG is lane-salted per
+    element (tt-metal#52024), so no axis-permutation workaround is needed; see
+    the comment on the draw below for the axis-choice history.
     """
     _check_random_token_args(batch, canvas_len, vocab_size)
     seed = TS._validate_ttnn_rand_seed(seed)
@@ -697,12 +696,12 @@ def make_seeded_gumbel_noise_fn(
         block_seed = seed + block_idx * 1_000_003 + attempt * 7_919_003
 
         def gumbel_noise_for_step(step: int):
-            # Vocab innermost, deliberately. The permuted-vocab variant keeps vocab off ttnn.rand's
-            # innermost axis by collapsing every other axis into it -- which for this shape is the
-            # 256 CANVAS POSITIONS, i.e. it relocates the RNG degeneracy onto the axis where it
-            # makes different positions pick the same token and collapses the canvas. Measured at
-            # canvas 256 / vocab 262144 with the fixed rand kernel: this layout gives 253/256
-            # distinct flat-logit winners (host IID control 256/256), the permuted one 154/256.
+            # Vocab innermost, deliberately. The retired permuted-vocab workaround collapsed
+            # every other axis into the rand width -- for this shape the 256 CANVAS POSITIONS --
+            # relocating the old RNG degeneracy onto the axis where it made different positions
+            # pick the same token (measured 154/256 vs 253/256 distinct flat-logit winners at
+            # canvas 256 / vocab 262144). With the lane-salted SFPU RNG (tt-metal#52024) the
+            # plain draw is the trusted path and the workaround was removed.
             return TS.sample_gumbel_noise(
                 (batch, 1, canvas_len, vocab_size),
                 device=mesh_device,
