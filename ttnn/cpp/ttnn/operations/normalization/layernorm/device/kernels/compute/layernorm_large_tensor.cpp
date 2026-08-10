@@ -14,12 +14,12 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 #include "layernorm_compute_utils.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -37,6 +37,11 @@ void kernel_main() {
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t W = get_compile_time_arg_val(7);
     constexpr uint32_t tile_width = get_compile_time_arg_val(8);
+
+    // The reader emits a second, partial-fill scaler tile when W is not tile-aligned; the reduce
+    // helpers apply it to the last W tile so the padding columns contribute nothing.
+    constexpr auto partial_scaler = (W % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                         : compute_kernel_lib::ReducePartialScaler::none();
 
     constexpr uint32_t onetile = 1;
 
@@ -111,16 +116,43 @@ void kernel_main() {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<
+        // E[x + b] without ever materialising x + b: by linearity the mean of the sum is the sum of
+        // the two row sums, so both CBs fold into one DST accumulator and a single tile is packed.
+        // That matters here — this is the kernel for rows that do not fit in L1, so there is no room
+        // for a Wt-sized temporary of the elementwise sum.
+        {
+            constexpr uint32_t pre_add_inputs[] = {dfb_in_id, dfb_inb_id};
+            compute_kernel_lib::reduce_multi_input<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                dfb_in_id,
+                dfb_scaler_id,
+                dfb_ex_id,
+                2,
+                compute_kernel_lib::ReduceInputPolicy::BlockWaitBlockPop>(
+                pre_add_inputs,
+                compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+                partial_scaler,
+                compute_kernel_lib::ReduceBlockConfig::of(block_size),
+                [](uint32_t dst) { numeric::detail::scale_dest(dst, generic::bit_cast<uint32_t>(1.0f / W)); });
+        }
+#else
+        compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            FLOAT32_REDUCTION,
-            policies::FullBlockWithPopPolicy>(dfb_in, dfb_inb, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
-#else
-        numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-                dfb_in, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
+            dfb_in_id,
+            dfb_scaler_id,
+            dfb_ex_id,
+            compute_kernel_lib::ReduceInputPolicy::BlockWaitBlockPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst) { numeric::detail::scale_dest(dst, generic::bit_cast<uint32_t>(1.0f / W)); },
+            partial_scaler,
+            compute_kernel_lib::ReduceBlockConfig::of(block_size));
 #endif
+        // row_wise_mean* waited on its own output; reduce*() does not.
+        dfb_ex.wait_front(1);
 #endif  // !RMS ifdef end
         // Start of
         // Var Calculation
