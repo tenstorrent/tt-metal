@@ -690,17 +690,14 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         inner_gather_burst,
         gather_trids);
 
+    // NOTE: T_in/H_in/W_in were moved from compile-time args to runtime args (see reader runtime
+    // args below) so the reader binary is spatial-resolution-invariant and disk-cache-hits across
+    // resolutions.  T_out/H_out/W_out/C_out were dead in the kernel and are removed entirely.
+    // C_in stays compile-time (channel count, resolution-invariant).
     std::vector<uint32_t> reader_compile_time_args = {
         cb_vol2col_rm_id,
         N,
-        T_in,
-        H_in,
-        W_in,
         C_in,
-        T_out,
-        H_out,
-        W_out,
-        C_out,
         operation_attributes.padding[0],
         operation_attributes.padding[1],
         operation_attributes.padding[2],
@@ -780,9 +777,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         matmul_K_t,
         matmul_N_t,
         (uint32_t)use_bias,
-        T_out,
-        H_out,
-        W_out,
+        // T_out/H_out/W_out removed: they were dead compile-time args in compute.cpp.  Removing them
+        // keeps the compute binary spatial-resolution-invariant.
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
@@ -817,9 +813,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cb_reduction_tiled_id,
         cb_worker_ack_back_id,
         N,
-        T_out,
-        H_out,
-        W_out,
+        // T_out/H_out/W_out moved to runtime args (see writer runtime args below) so the writer
+        // binary is spatial-resolution-invariant.
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
@@ -1191,7 +1186,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
              cw.h_out_start,
              cw.h_out_end,
              cw.w_out_start,
-             cw.w_out_end});
+             cw.w_out_end,
+             // Spatial input dims moved from compile-time args to runtime args.
+             T_in,
+             H_in,
+             W_in});
 
         compute_desc.runtime_args.emplace_back(
             core,
@@ -1212,7 +1211,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(26 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(29 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1243,6 +1242,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.mcast_num_dests);
         writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
+        // Spatial output dims moved from compile-time args to runtime args.  Pushed before the
+        // variable-length reducer/worker coordinate block so the kernel's argidx-relative reads of
+        // that block are unaffected.
+        writer_args.push_back(T_out);
+        writer_args.push_back(H_out);
+        writer_args.push_back(W_out);
 
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);

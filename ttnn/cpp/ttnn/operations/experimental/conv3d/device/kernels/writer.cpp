@@ -42,27 +42,28 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_tiled = get_compile_time_arg_val(4);
     constexpr uint32_t cb_worker_ack_back = get_compile_time_arg_val(5);
     constexpr uint32_t N = get_compile_time_arg_val(6);
-    constexpr uint32_t T_out = get_compile_time_arg_val(7);
-    constexpr uint32_t H_out = get_compile_time_arg_val(8);
-    constexpr uint32_t W_out = get_compile_time_arg_val(9);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(10);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(11);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(13);
-    constexpr uint32_t matmul_M_t = get_compile_time_arg_val(14);
-    constexpr uint32_t matmul_K_t = get_compile_time_arg_val(15);
-    constexpr uint32_t matmul_N_t = get_compile_time_arg_val(16);
-    constexpr uint32_t num_patches_tile_padded = get_compile_time_arg_val(17);
-    constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);
-    constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(21);
+    // NOTE: T_out/H_out/W_out were previously compile-time args 7,8,9 here.  They are spatial-
+    // resolution dependent, so they were moved to runtime args (read below) to keep the writer
+    // binary resolution-invariant.  Compile-time indices below are renumbered accordingly.
+    constexpr uint32_t T_block_size = get_compile_time_arg_val(7);
+    constexpr uint32_t H_block_size = get_compile_time_arg_val(8);
+    constexpr uint32_t W_block_size = get_compile_time_arg_val(9);
+    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t matmul_M_t = get_compile_time_arg_val(11);
+    constexpr uint32_t matmul_K_t = get_compile_time_arg_val(12);
+    constexpr uint32_t matmul_N_t = get_compile_time_arg_val(13);
+    constexpr uint32_t num_patches_tile_padded = get_compile_time_arg_val(14);
+    // Index 15 (out_row_size_bytes) is passed by the factory but intentionally unused by this kernel.
+    constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(16);
+    constexpr bool use_bias = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(18);
     // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp): Disabled, Chain, or Mcast.
-    constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(get_compile_time_arg_val(22));
+    constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(get_compile_time_arg_val(19));
     constexpr bool enable_weight_chain = weight_share_mode == WeightShareMode::Chain;
     constexpr bool enable_weight_mcast = weight_share_mode == WeightShareMode::Mcast;
-    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
-    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(20);
+    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(21);
+    constexpr bool enable_streaming_output = get_compile_time_arg_val(22) == 1;
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -93,6 +94,12 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
+    // Spatial output dims moved from compile-time args to runtime args (resolution-invariant binary).
+    // Placed before the variable-length reducer/worker coordinate block below so those reads keep
+    // their argidx-relative positions.
+    const uint32_t T_out = get_arg_val<uint32_t>(argidx++);
+    const uint32_t H_out = get_arg_val<uint32_t>(argidx++);
+    const uint32_t W_out = get_arg_val<uint32_t>(argidx++);
 
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
@@ -119,7 +126,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
@@ -129,7 +136,7 @@ void kernel_main() {
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
-    constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
+    const uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
 
     // Mcast passive participant: this core sits inside the mcast bbox but has no work. It exists
     // only to satisfy the multicast handshake (sender's wait depends on every core in the bbox

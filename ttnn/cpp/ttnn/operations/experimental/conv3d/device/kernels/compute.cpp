@@ -231,25 +231,24 @@ void kernel_main() {
     constexpr uint32_t matmul_N_t = get_compile_time_arg_val(12);
 
     constexpr bool use_bias = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t T_out = get_compile_time_arg_val(14);
-    constexpr uint32_t H_out = get_compile_time_arg_val(15);
-    constexpr uint32_t W_out = get_compile_time_arg_val(16);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(17);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(18);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(19);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(20);
+    // NOTE: T_out/H_out/W_out were previously compile-time args here but were never referenced by
+    // this kernel (dead).  Removed so the compute binary is spatial-resolution-invariant.
+    constexpr uint32_t T_block_size = get_compile_time_arg_val(14);
+    constexpr uint32_t H_block_size = get_compile_time_arg_val(15);
+    constexpr uint32_t W_block_size = get_compile_time_arg_val(16);
+    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(17);
 
     // matmul parameters
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(21);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(22);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(23);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(24);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
+    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(20);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(21);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(22);
 
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
-    constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(23);
+    constexpr bool use_fp32_partials = get_compile_time_arg_val(24) == 1;
     // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
+    constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;

@@ -318,10 +318,6 @@ template <
     bool is_padding_zeros,
     uint32_t H_shard_max_W_shard_max,
     uint32_t W_shard_max,
-    uint32_t T_in,
-    uint32_t H_in,
-    uint32_t W_in,
-    uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     bool check_padding,
     uint32_t N_TRIDS,
@@ -342,7 +338,12 @@ void gather_rows_to_shard(
     uint32_t h_end,
     int32_t w_shard_start,
     uint32_t w_col_start,
-    uint32_t w_count) {
+    uint32_t w_count,
+    // Spatial input dims moved from template (compile-time) to runtime function args.
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    uint32_t H_in_W_in) {
     // N_TRIDS == 0 is a compile-time sentinel: the host-side classifier disabled the trid
     // ring for this shape (compute-bound or scratch-backed reader mode — see
     // conv3d_program_factory.cpp).  In that case all ring code is constexpr-elided and the
@@ -483,8 +484,6 @@ template <
     uint32_t C_in_block_bytes,
     uint32_t H_shard_max_W_shard_max,
     uint32_t W_shard_max,
-    uint32_t W_in,
-    uint32_t H_in_W_in,
     uint32_t GatherTrids,
     typename Reader>
 void gather_rows_to_shard_coalesced(
@@ -503,7 +502,10 @@ void gather_rows_to_shard_coalesced(
     int32_t w_shard_start,
     uint32_t w_col_start,
     uint32_t w_count,
-    uint32_t scratch_rows) {
+    uint32_t scratch_rows,
+    // Spatial input dims moved from template (compile-time) to runtime function args.
+    uint32_t W_in,
+    uint32_t H_in_W_in) {
     static_assert(Reader::DSpec::is_interleaved && Reader::DSpec::is_dram);
     static_assert(GatherTrids == 0, "Coalesced shard reads require gather trid ring disabled");
     ASSERT(c_in_offset_bytes == 0);
@@ -583,10 +585,6 @@ template <
     bool is_padding_zeros,
     uint32_t H_shard_max_W_shard_max,
     uint32_t W_shard_max,
-    uint32_t T_in,
-    uint32_t H_in,
-    uint32_t W_in,
-    uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     uint32_t GatherTrids,
     bool EnableCoalescedShardReads,
@@ -612,17 +610,16 @@ void gather_rows_to_shard_selected(
     int32_t w_shard_start,
     uint32_t w_col_start,
     uint32_t w_count,
-    [[maybe_unused]] uint32_t coalesced_scratch_rows) {
+    [[maybe_unused]] uint32_t coalesced_scratch_rows,
+    // Spatial input dims moved from template (compile-time) to runtime function args.
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    uint32_t H_in_W_in) {
     if constexpr (EnableCoalescedShardReads) {
         if (use_coalesced) {
             ASSERT(all_in_bounds);
-            gather_rows_to_shard_coalesced<
-                C_in_block_bytes,
-                H_shard_max_W_shard_max,
-                W_shard_max,
-                W_in,
-                H_in_W_in,
-                GatherTrids>(
+            gather_rows_to_shard_coalesced<C_in_block_bytes, H_shard_max_W_shard_max, W_shard_max, GatherTrids>(
                 noc,
                 in_reader,
                 shard_cb,
@@ -638,7 +635,9 @@ void gather_rows_to_shard_selected(
                 w_shard_start,
                 w_col_start,
                 w_count,
-                coalesced_scratch_rows);
+                coalesced_scratch_rows,
+                W_in,
+                H_in_W_in);
             return;
         }
     }
@@ -653,10 +652,6 @@ void gather_rows_to_shard_selected(
             is_padding_zeros,
             H_shard_max_W_shard_max,
             W_shard_max,
-            T_in,
-            H_in,
-            W_in,
-            H_in_W_in,
             in_row_size_bytes,
             decltype(check_padding_v)::value,
             GatherTrids,
@@ -675,7 +670,11 @@ void gather_rows_to_shard_selected(
             h_end,
             w_shard_start,
             w_col_start,
-            w_count);
+            w_count,
+            T_in,
+            H_in,
+            W_in,
+            H_in_W_in);
     };
     if (all_in_bounds) {
         do_gather(std::false_type{});
@@ -687,50 +686,48 @@ void gather_rows_to_shard_selected(
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
     constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t T_in = get_compile_time_arg_val(2);
-    constexpr uint32_t H_in = get_compile_time_arg_val(3);
-    constexpr uint32_t W_in = get_compile_time_arg_val(4);
-    constexpr uint32_t C_in = get_compile_time_arg_val(5);
-    constexpr uint32_t T_out = get_compile_time_arg_val(6);
-    constexpr uint32_t H_out = get_compile_time_arg_val(7);
-    constexpr uint32_t W_out = get_compile_time_arg_val(8);
-    constexpr uint32_t C_out = get_compile_time_arg_val(9);
-    constexpr uint32_t padding_t = get_compile_time_arg_val(10);
-    constexpr uint32_t padding_h = get_compile_time_arg_val(11);
-    constexpr uint32_t padding_w = get_compile_time_arg_val(12);
-    constexpr uint32_t kT = get_compile_time_arg_val(13);
-    constexpr uint32_t kH = get_compile_time_arg_val(14);
-    constexpr uint32_t kW = get_compile_time_arg_val(15);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(16);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(17);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(18);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t in_row_size_bytes = get_compile_time_arg_val(20);
-    constexpr uint32_t C_in_block_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(22);
-    constexpr bool is_padding_zeros = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_t = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(26);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
-    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
+    // NOTE: T_in/H_in/W_in were previously compile-time args 2,3,4.  They are spatial-resolution
+    // dependent, so they were moved to runtime args (read below) to keep the reader binary
+    // resolution-invariant.  C_in stays compile-time (channel count, resolution-invariant).
+    // T_out/H_out/W_out/C_out (old args 6,7,8,9) were dead and were removed entirely.
+    // Compile-time indices below are renumbered accordingly.
+    constexpr uint32_t C_in = get_compile_time_arg_val(2);
+    constexpr uint32_t padding_t = get_compile_time_arg_val(3);
+    constexpr uint32_t padding_h = get_compile_time_arg_val(4);
+    constexpr uint32_t padding_w = get_compile_time_arg_val(5);
+    constexpr uint32_t kT = get_compile_time_arg_val(6);
+    constexpr uint32_t kH = get_compile_time_arg_val(7);
+    constexpr uint32_t kW = get_compile_time_arg_val(8);
+    constexpr uint32_t T_block_size = get_compile_time_arg_val(9);
+    constexpr uint32_t H_block_size = get_compile_time_arg_val(10);
+    constexpr uint32_t W_block_size = get_compile_time_arg_val(11);
+    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(12);
+    constexpr uint32_t in_row_size_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t C_in_block_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(15);
+    constexpr bool is_padding_zeros = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(17);
+    constexpr uint32_t stride_t = get_compile_time_arg_val(18);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(19);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(20);
+    constexpr uint32_t dilation_t = get_compile_time_arg_val(21);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(22);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(23);
     // L1 prefetch buffer parameters
-    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
-    constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
-    constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
-    constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
+    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(24);
+    constexpr uint32_t T_shard_max = get_compile_time_arg_val(25);
+    constexpr uint32_t H_shard_max = get_compile_time_arg_val(26);
+    constexpr uint32_t W_shard_max = get_compile_time_arg_val(27);
 
     // Padding bytes to append after each patch row to reach tile-aligned CB page width
-    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
+    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(28);
     // Trid-ring depth for gather_rows_to_shard.  See plan in conv3d_gather_trid_pipeline_plan.md.
-    constexpr uint32_t gather_trids = get_compile_time_arg_val(36);
-    constexpr bool enable_coalesced_shard_reads = get_compile_time_arg_val(37) == 1;
-    constexpr uint32_t coalesced_scratch_rows = get_compile_time_arg_val(38);
-    constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
-    constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
-    constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
+    constexpr uint32_t gather_trids = get_compile_time_arg_val(29);
+    constexpr bool enable_coalesced_shard_reads = get_compile_time_arg_val(30) == 1;
+    constexpr uint32_t coalesced_scratch_rows = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(32);
+    constexpr bool enable_dram_read_staging = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(34);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -746,16 +743,20 @@ void kernel_main() {
     const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
+    // Spatial input dims moved from compile-time args to runtime args (resolution-invariant binary).
+    const uint32_t T_in = get_arg_val<uint32_t>(argidx++);
+    const uint32_t H_in = get_arg_val<uint32_t>(argidx++);
+    const uint32_t W_in = get_arg_val<uint32_t>(argidx++);
 
-    // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<42>();
+    // Tensor accessor for input tensor (compile-time-arg offset, independent of runtime argidx)
+    constexpr auto in_args = TensorAccessorArgs<35>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
     Noc noc;
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
-    constexpr uint32_t H_in_W_in = H_in * W_in;
-    constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
+    const uint32_t H_in_W_in = H_in * W_in;
+    const uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
     // L1 prefetch: enabled when the host allocated a shard buffer (T_shard_max > 0).
     // The host decides based on kernel size, dilation, and L1 budget.
@@ -853,10 +854,6 @@ void kernel_main() {
                                         is_padding_zeros,
                                         H_shard_max_W_shard_max,
                                         W_shard_max,
-                                        T_in,
-                                        H_in,
-                                        W_in,
-                                        H_in_W_in,
                                         in_row_size_bytes,
                                         gather_trids,
                                         enable_coalesced_shard_reads,
@@ -880,7 +877,11 @@ void kernel_main() {
                                         w_shard_start,
                                         overlap_w,
                                         new_w_cols,
-                                        coalesced_scratch_rows);
+                                        coalesced_scratch_rows,
+                                        T_in,
+                                        H_in,
+                                        W_in,
+                                        H_in_W_in);
                                 }
 
                                 ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
@@ -899,10 +900,6 @@ void kernel_main() {
                                                 is_padding_zeros,
                                                 H_shard_max_W_shard_max,
                                                 W_shard_max,
-                                                T_in,
-                                                H_in,
-                                                W_in,
-                                                H_in_W_in,
                                                 in_row_size_bytes,
                                                 gather_trids,
                                                 enable_coalesced_shard_reads,
@@ -926,7 +923,11 @@ void kernel_main() {
                                                 w_shard_start,
                                                 0u,
                                                 W_shard_cur,
-                                                coalesced_scratch_rows);
+                                                coalesced_scratch_rows,
+                                                T_in,
+                                                H_in,
+                                                W_in,
+                                                H_in_W_in);
                                             h_rows_gathered = h_needed;
                                         }
 
