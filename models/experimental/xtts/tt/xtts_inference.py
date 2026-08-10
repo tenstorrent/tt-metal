@@ -28,7 +28,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
-from models.experimental.xtts.tt.xtts_conv import cond_bias_trace_safe
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
 from models.experimental.xtts.tt.xtts_generator import TtXttsGenerator
 from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
@@ -216,22 +215,31 @@ class TtXtts(LightweightModule):
         )
 
         # VOCODER trace on the generated (fixed-length) latents + the speaker embedding g.
-        # The vocoder folds its conditioning bias into the conv bias via a host transfer (faster,
-        # the GAN-decoder optimization) — fatal inside a trace, so switch those convs to the
-        # equivalent trace-safe on-device add for the captured region (eager callers keep the fold).
+        # The vocoder folds its conditioning bias into the conv bias, which used to need a host
+        # transfer per call — fatal inside a trace, so the captured region ran on the equivalent
+        # trace-safe post-conv device add instead. It no longer does: the folded bias is a function
+        # of g and the input signature only, so TtConv1d keeps the PREPARED one and the warmup call
+        # below primes it. The captured region then does no host transfer at all, and the fast fold
+        # is what gets traced — worth the trace-safe add's ~82us/pass, and it makes the replay
+        # byte-identical to eager (the post-conv add was not: it diverges in the last bits).
         lat_in = ttnn.to_layout(ttnn.typecast(latents, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
         voc = self.decoder.decoder
-        with cond_bias_trace_safe():
-            _ = voc(ttnn.clone(lat_in), g)  # warmup / compile
-            ttnn.synchronize_device(dev)
-            vtid = ttnn.begin_trace_capture(dev, cq_id=0)
-            wav_dev = voc(ttnn.clone(lat_in), g)
-            ttnn.end_trace_capture(dev, vtid, cq_id=0)
-            ttnn.synchronize_device(dev)
-            t0 = time.perf_counter()
-            ttnn.execute_trace(dev, vtid, blocking=True)
-            vocoder_replay_s = time.perf_counter() - t0
-            ttnn.release_trace(dev, vtid)
+        _ = voc(ttnn.clone(lat_in), g)  # warmup / compile; also primes the conditioning + bias caches
+        ttnn.synchronize_device(dev)
+        vtid = ttnn.begin_trace_capture(dev, cq_id=0)
+        wav_dev = voc(ttnn.clone(lat_in), g)
+        ttnn.end_trace_capture(dev, vtid, cq_id=0)
+        ttnn.synchronize_device(dev)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(dev, vtid, blocking=True)
+        vocoder_replay_s = time.perf_counter() - t0
+        ttnn.release_trace(dev, vtid)
+        # The vocoder memoises everything derived from g and never evicts on its own, because a live
+        # trace reads those exact addresses. ``g`` here is the SETUP trace's output — a fresh tensor
+        # every call — so without this a looping caller accumulates one conditioning set per
+        # utterance, not per speaker. The trace that used them is released on the line above, which
+        # makes this the safe point to drop them.
+        voc.generator.release_conditioning()
         replay_s = setup_replay_s + decode_replay_s + vocoder_replay_s
         compile_s = max(0.0, time.perf_counter() - t_all0 - replay_s)
         perf = {

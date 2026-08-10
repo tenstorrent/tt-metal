@@ -363,10 +363,10 @@ passed**). There is a single column because Blackhole P150 is the only supported
 | | text_head / mel_head (96,128) | 0.995604 / 0.991085 |
 | `test_tt_gpt_generate.py` | Free-run exact-match prefix / teacher-forced top-1 | 16/16 both |
 | | Teacher-forced latent PCC | 0.999569 |
-| `test_hifi_decoder.py` | latent_len 16 / 32 | 0.991599 / 0.993252 |
-| `test_tt_inference.py` | End-to-end spectrogram PCC (teacher-forced) | 0.990581 |
+| `test_hifi_decoder.py` | latent_len 16 / 32 | 0.991067 / 0.993109 |
+| `test_tt_inference.py` | End-to-end spectrogram PCC (teacher-forced) | 0.990620 |
 | | `test_tt_eval` — CER / UTMOS / SECS (150-code cap; text didn't finish before the cap) | 0.4910 / skipped (no `torchaudio`) / 0.6249 |
-| `test_tt_trace.py` | Fully-traced vs eager spectrogram PCC | 0.999766 |
+| `test_tt_trace.py` | Fully-traced vs eager spectrogram PCC | 1.0 |
 | | `test_tt_eval_traced` — CER / UTMOS / SECS (self-terminated at 166 codes) | 0.0160 / skipped / 0.7604 |
 
 The `test_tt_eval` CER of 0.49 is fully explained by its 150-code cap cutting off a two-sentence
@@ -411,8 +411,9 @@ This baseline is now protected by [`tests/perf/test_e2e_perf.py`](tests/perf/tes
 (see [Test cases](#test-cases)), which hard-asserts on it with a 40% margin. A
 same-day confirmation run (different sampled code count — 166 vs. 189, since the test fixes
 `torch`'s seed differently than an uncontrolled demo run — but the same text/voice/settings)
-landed almost exactly on the rate-based numbers: 12.47 ms setup, 8.062 ms/code decode, 0.1166
-ms/code vocoder, RTF 0.178.
+landed almost exactly on the rate-based numbers: 12.48 ms setup, 8.049 ms/code decode, 0.1126
+ms/code vocoder, RTF 0.178. (The vocoder rate was 0.1164 ms/code before the conditioning-memo /
+sharded-hand-off pass — an A/B of the same 166-code run.)
 
 ### Module-level device time (standalone microbenchmarks, not this table's end-to-end number)
 
@@ -422,7 +423,7 @@ passes on one stage, not as an end-to-end figure:
 
 | Stage | Device time | Ops | Notes |
 |-------|------------:|----:|-------|
-| HiFi-GAN decoder (generator-only standalone conv stack) | ~2.22 ms | 282 | Block-sharded stage-0 conv config |
+| HiFi-GAN decoder (generator-only standalone conv stack) | ~2.02 ms | 249 | Block-sharded stage-0; conditioning memoised on `g`; L1-sharded stage hand-off. First call (cold conditioning cache) is ~2.12 ms / 268 ops |
 | Speaker encoder (`mel_len=801`, ~8 s reference audio) | ~2.92 ms | 564 | Scalar-fold + reduced-core-count optimization pass |
 
 No standing perf CI or automated end-to-end sweep exists for this model (see [CI](#ci)) — these
