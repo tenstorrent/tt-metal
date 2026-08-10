@@ -15,6 +15,11 @@
 //     partials slot (pack_tile<true>); WrPtr does not advance until the single
 //     push_back after the K-loop, so every K-block's packs land in the SAME L1
 //     addresses and accumulate physically in place.
+//   * Reserving once means no cb_push_back/wait_front round trip separates the
+//     K-blocks, so each block ends with an explicit packer drain (see
+//     drain_packer_before_reaccumulate). Without it, block N+1's L1_ACC
+//     read-modify-write can overtake block N's pack of the same slot and
+//     silently drop that contribution.
 //   * After the K-loop the partials CB is pushed once, holding the final
 //     accumulated sum, and a second pass copies each subblock back into dst,
 //     optionally applies SILU, and packs into the final CB (cb_gate_intermed /
@@ -96,6 +101,23 @@
 
 namespace {
 
+// Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
+//
+// Every K-block re-packs the same absolute partials slots, and the accumulate is
+// a packer-side L1 read-modify-write. Pack issue must therefore stop until the
+// packer has drained, or the next block's read can sample a slot the previous
+// block's write has not reached yet — a lost contribution, nondeterministic and
+// worst on small per-core blocks where the same slot recurs a few packs later.
+//
+// Packer-idle is the same condition cb_push_back waits on before publishing
+// tiles_received (llk_push_tiles -> STALLWAIT(STALL_THCON, PACK)), i.e. exactly
+// the guarantee a per-K-block CB drain would buy, minus the drain.
+FORCE_INLINE void drain_packer_before_reaccumulate() {
+#ifdef PACKER_L1_ACC
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK));
+#endif
+}
+
 template <
     uint32_t in0_block_w,
     uint32_t in0_num_subblocks,
@@ -159,10 +181,11 @@ FORCE_INLINE void matmul_phase(
     // Reserve the partials block ONCE. pack_tile with an absolute output_tile_index
     // writes fixed slots and WrPtr does not advance until the push_back after the
     // K-loop, so every K-block re-packs the SAME L1 addresses and PACKER_L1_ACC
-    // accumulates physically in place — no per-K-block drain, and nothing ties the
-    // pushed count to the ring size. EFF_OUT shrinks only on the final (tail)
-    // chunk, and adaptive_chunk keeps per_core_M a divisor of the compile-time max,
-    // so a shrunk block still tiles the ring evenly. EFF_M == 0 reserves nothing.
+    // accumulates physically in place — nothing ties the pushed count to the ring
+    // size. EFF_OUT shrinks only on the final (tail) chunk, and adaptive_chunk keeps
+    // per_core_M a divisor of the compile-time max, so a shrunk block still tiles
+    // the ring evenly. EFF_M == 0 reserves nothing. The K-loop pays for the missing
+    // CB round trip with an explicit packer drain per block.
     if (EFF_M > 0) {
         partials_cb.reserve_back(EFF_OUT);
     }
@@ -237,6 +260,11 @@ FORCE_INLINE void matmul_phase(
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
 #endif
+        // This block's packs must land before the next one accumulates on top of
+        // them. Unlike the fused gate/up phase there is no second matmul between
+        // consecutive same-slot packs here, and a skipped block (k_steps == 0)
+        // removes even the subblock loop that would otherwise sit between them.
+        drain_packer_before_reaccumulate();
 
         in0_cb.pop_front(in0_block_num_tiles);
         in1_cb.pop_front(in1_block_num_tiles);
@@ -389,7 +417,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // with output_tile_index writes to absolute slots; WrPtr doesn't advance
     // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
     // back in the SAME L1 slots — accumulating physically — which is what
-    // we want. No per-K-block pop+repush needed. Guarded by EFF_M>0 so an
+    // we want, at the price of a packer drain per block. Guarded by EFF_M>0 so an
     // empty row (m_subblocks==0) never issues a 0-count reserve/push.
     if (EFF_M > 0) {
         partials_gu_cb.reserve_back(EFF_OUT);
@@ -508,6 +536,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
 #endif
+        // Same reserve-once accumulator, same barrier. The interleaved up matmul
+        // puts a handful of packs between consecutive same-slot packs, but that is
+        // a side effect of the loop shape, not ordering: at one subblock and
+        // out_subblock_w == 1 it is a single pack.
+        drain_packer_before_reaccumulate();
 
         x_cb.pop_front(x_block_tiles);
         gate_cb.pop_front(in1_block_num_tiles);
