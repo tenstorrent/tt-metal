@@ -28,6 +28,19 @@ floor can explain, or marginal cases on more than a bounded fraction of the meas
 is genuinely slower is still refused, because a systematic loss lands every large case in the
 marginal bucket at once. Device time, which is measured on the device and does not drift with host
 scheduling, stays a strict per-case gate.
+
+Aggregates are computed per stratum as well as globally, against the classes `strata.py` chose the
+sample from. A global count is exactly what lets one slow class of inputs hide: a fifth of the
+measurements marginal sits inside the global allowance and is also what a whole dtype being slower
+looks like from far enough away. The coverage report says which classes were measured and how deeply,
+because a ratio quoted without it is a claim about the sample rather than about the op.
+
+Demotion is read off the measurements rather than declared. `is_demoted()` decides which in-scope
+configurations `auto` hands back to native, and there is no way to know which those should be before
+measuring -- the sweep says what codegen *can* serve and nothing says what it serves *well*. So the
+wall band observes where `auto` actually goes, cases routed to native are reported and not graded,
+and the ones that are graded and still fail come back as `demotion_candidates`: fix them or route
+them away. `DEMOTION_CAP` is what stops the second option from being a way to launder a failure.
 """
 
 from __future__ import annotations
@@ -37,10 +50,16 @@ import csv
 import glob
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
 from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+import scaffold  # noqa: E402 - must follow the path insertion above
+import strata  # noqa: E402
 
 # --- thresholds (agentic_port/skills/verify/lib/constants.py) --------------------------------
 WALL_TIE_BAND = 0.98
@@ -50,6 +69,18 @@ WALL_TIE_ABS_US = 3.0
 # counted in aggregate.
 WALL_REGRESSION_FLOOR = 0.90
 WALL_MARGINAL_FRACTION = 0.25
+# The marginal rule is applied per stratum as well as globally, but only where a stratum holds
+# enough measurements for "most of this class is marginal" to mean anything. Two draws both landing
+# under the tie band is the coin flip the aggregate rule was introduced to stop reading as signal,
+# so below this a stratum contributes to the global count and is not judged on its own.
+MIN_STRATUM_FOR_WALL_AGGREGATE = 3
+# A demoted case is one `auto` hands back to native, so it is not a case this port serves and it is
+# not graded. That exemption is what makes `is_demoted()` implementable at all -- a config the
+# generated kernel is genuinely worse at has to be routable away rather than blocking the port -- and
+# it is also the obvious way to launder a failure into a win. Past this fraction of the measured
+# in-scope cases the port is serving a minority of its own declared scope, and buying a second
+# implementation to do that is not worth the complexity.
+DEMOTION_CAP = 0.5
 DEVICE_VS_NATIVE_TIE_BAND = 1.0
 DEVICE_VS_NATIVE_TIE_ABS_NS = 300.0
 DEVICE_VS_NATIVE_TIE_ABS_BAND = 0.95
@@ -64,8 +95,6 @@ VERDICT_WIN = "win"
 VERDICT_BACK_TO_TRANSLATE = "back-to-translate"
 VERDICT_NOT_A_CANDIDATE = "not-a-candidate"
 VERDICT_BLOCKED = "blocked"
-
-SCRIPTS = Path(__file__).resolve().parent
 
 
 # --------------------------------------------------------------------------------------------
@@ -83,7 +112,51 @@ def allowed_prefixes(op: str, category: str) -> list[str]:
         f"{base}/{op}/{op}_nanobind.hpp",
         f"{base}/sources.cmake",
         f"{base}/CMakeLists.txt",
+        # The emitted routing test. Allowed because it has to ship with the port, and pinned by
+        # `check_routing_test` so that allowing it does not hand the agent a test it can weaken. The
+        # path comes from the emitter rather than being spelled again here, so the write the emitter
+        # makes and the write this permits cannot disagree.
+        scaffold.test_path(op, category),
     ]
+
+
+def check_routing_test(manifest: str, op: str, category: str, repo: Path) -> str | None:
+    """Re-render the routing test and report how the tree's copy differs, if it does.
+
+    The write-path guard alone cannot protect this file, because the file has to be writable for the
+    emitter to create it in the first place. So it is pinned by regeneration instead: the emitter is
+    a pure function of the ledger, and the emitter itself lives outside the allowed prefixes, so an
+    agent that edits either the test or the generator is caught -- the test by this check, the
+    generator by the guard that runs before it.
+
+    The copyright year is normalised out. It is the one part of the file that depends on the clock
+    rather than the ledger, and a run spanning New Year is not a reason to refuse a port.
+    """
+    relative = scaffold.test_path(op, category)
+    path = repo / relative
+    if not path.is_file():
+        return f"the routing test is missing at {relative}; the emitter never ran"
+
+    # Local: building the ledger imports the generator's sweep module, which is only importable in
+    # the built container, and gate.py is imported by its own tests outside one.
+    import yaml
+
+    import ledger
+
+    cases = ledger.build_ledger(yaml.safe_load(Path(manifest).read_text()) or {})
+    expected = scaffold.render_routing_test(op, category, cases)
+
+    def normalise(text: str) -> str:
+        return re.sub(r"(SPDX-FileCopyrightText: © )\d{4}", r"\g<1>YYYY", text)
+
+    if normalise(path.read_text()) == normalise(expected):
+        return None
+    return (
+        f"{relative} does not match what the emitter produces. It is generated "
+        "from the coverage ledger and is not yours to edit; restore it by re-running "
+        f"`python3 .github/scripts/port/scaffold.py --op {op} --emit-test-only "
+        "--ttmetal-home /work --codegen-root /codegen`."
+    )
 
 
 def check_write_paths(base_sha: str, op: str, category: str, repo: Path) -> list[str]:
@@ -149,7 +222,9 @@ def run_measure(
     return json.loads(out.read_text())
 
 
-def run_device_band(op: str, ledger: Path, out: Path, repo: Path, limit: int, reps: int, reports: Path) -> dict:
+def run_device_band(
+    op: str, ledger: Path, out: Path, repo: Path, limit: int, reps: int, reports: Path, select: str
+) -> dict:
     """Device timings need a tracy-enabled build, so this leg runs under `python3 -m tracy`, which
     sets TT_METAL_DEVICE_PROFILER and post-processes the device logs into an ops report.
 
@@ -179,6 +254,13 @@ def run_device_band(op: str, ledger: Path, out: Path, repo: Path, limit: int, re
             str(limit),
             "--reps",
             str(reps),
+            # Both perf bands must select the same cases: the wall band supplies the case list the
+            # verdict is keyed on, and this band's profiler rows are attributed positionally against
+            # its own dispatch order. The selection is deterministic, so passing the same strategy
+            # and the same budget is all it takes -- and passing a different one would silently
+            # grade two different samples against each other.
+            "--select",
+            select,
         ],
         repo,
         {"TRACY_NO_INVARIANT_CHECK": "1"},
@@ -271,6 +353,27 @@ def classify_wall(native_us: float, ported_us: float) -> str:
     return WALL_MARGINAL if ratio >= WALL_REGRESSION_FLOOR else WALL_REGRESSION
 
 
+def wall_aggregate(entries: list[dict]) -> dict:
+    """Apply the marginal-allowance rule to a set of measurements.
+
+    Extracted so the global check and the per-stratum checks are literally the same rule; two copies
+    of a threshold policy is how they end up disagreeing.
+    """
+    measured = [c for c in entries if c.get("wall_class")]
+    marginal = [c["case_id"] for c in measured if c["wall_class"] == WALL_MARGINAL]
+    regressions = [c["case_id"] for c in measured if c["wall_class"] == WALL_REGRESSION]
+    # At least one marginal case is always allowed: with two dozen draws, holding a port for a
+    # single one is the coin flip this rule exists to remove.
+    allowance = max(1, int(len(measured) * WALL_MARGINAL_FRACTION))
+    return {
+        "measured": len(measured),
+        "marginal": marginal,
+        "marginal_allowance": allowance,
+        "regressions": regressions,
+        "ok": not regressions and len(marginal) <= allowance,
+    }
+
+
 def device_vs_native_passes(native_ns: float, ported_ns: float) -> bool:
     if ported_ns <= 0:
         return False
@@ -282,8 +385,49 @@ def device_vs_native_passes(native_ns: float, ported_ns: float) -> bool:
     return (ported_ns - native_ns) <= DEVICE_VS_NATIVE_TIE_ABS_NS and ratio >= DEVICE_VS_NATIVE_TIE_ABS_BAND
 
 
-def grade(wall: dict, device_samples: dict, cases: list[dict]) -> dict:
+def coverage_report(selection: dict, configs: list[dict]) -> dict:
+    """What the sample actually covered, per class of inputs.
+
+    Derived from what was graded rather than from what was planned, so a case that errored out
+    leaves its stratum reporting zero measurements instead of inheriting the plan's optimism. This
+    is the table the pull request has to quote: a per-class ratio is the difference between "the
+    port is faster" and "the port is faster on the cases we happened to look at".
+    """
+    planned = (selection or {}).get("strata") or {}
+    graded: dict[str, list[dict]] = {}
+    for entry in configs:
+        if entry.get("stratum"):
+            graded.setdefault(entry["stratum"], []).append(entry)
+
+    rows = {}
+    for key in sorted(set(planned) | set(graded)):
+        entries = graded.get(key, [])
+        walls = [c["wall_ratio"] for c in entries if c.get("wall_ratio")]
+        devices = [c["device_vs_native"] for c in entries if c.get("device_vs_native")]
+        rows[key] = {
+            "cases_in_ledger": planned.get(key, {}).get("total"),
+            "measured": len(entries),
+            "wall_ratio_min": min(walls) if walls else None,
+            "device_vs_native_min": min(devices) if devices else None,
+        }
+
+    unmeasured = [key for key, row in rows.items() if not row["measured"]]
+    return {
+        "select": (selection or {}).get("select"),
+        "axes": (selection or {}).get("axes") or [],
+        # Resolution the sample does not have. Not a gap in the classes that were tracked, but the
+        # pull request has to say it out loud rather than implying the grid was covered.
+        "axes_dropped": (selection or {}).get("axes_dropped") or [],
+        "strata": rows,
+        "strata_unmeasured": unmeasured,
+        "complete": bool(rows) and not unmeasured,
+    }
+
+
+def grade(wall: dict, device_samples: dict, cases: list[dict], selection: dict | None = None) -> dict:
     by_id = {c["case_id"]: c for c in cases}
+    selection = selection or {}
+    axes = selection.get("axes") or []
     configs = []
     for record in wall.get("results", []):
         if record.get("error"):
@@ -291,10 +435,14 @@ def grade(wall: dict, device_samples: dict, cases: list[dict]) -> dict:
             continue
         case_id = record["case_id"]
         native_us, ported_us = record["native_us"], record["ported_us"]
+        case = by_id.get(case_id, {})
         entry = {
             "case_id": case_id,
-            "dtype": by_id.get(case_id, {}).get("dtype"),
-            "layout": by_id.get(case_id, {}).get("layout"),
+            "dtype": case.get("dtype"),
+            "layout": case.get("layout"),
+            # Named by the same function that chose the sample, so a stratum in this report and a
+            # stratum in the coverage table are the same thing by construction.
+            "stratum": strata.stratum_key(case, axes) if case else None,
             "wall_native_us": native_us,
             "wall_ported_us": ported_us,
             "wall_ratio": (native_us / ported_us) if ported_us else None,
@@ -319,26 +467,53 @@ def grade(wall: dict, device_samples: dict, cases: list[dict]) -> dict:
             checks["device_vs_generic_op"] = entry["device_vs_generic_op"] >= DEVICE_VS_GENERIC_TIE_BAND
         entry["checks"] = checks
         entry["passes"] = all(checks.values())
+        # Measured with `implementation="codegen"` either way, so the numbers are real even for a
+        # case `auto` will never send to codegen. That is deliberate: it is what makes an unnecessary
+        # demotion visible instead of just absent.
+        entry["routes_to"] = record.get("routes_to")
+        entry["demoted"] = record.get("routes_to") == "native"
         configs.append(entry)
 
-    ratios = [c["wall_ratio"] for c in configs if c.get("wall_ratio")]
-    marginal = [c["case_id"] for c in configs if c.get("wall_class") == WALL_MARGINAL]
-    regressions = [c["case_id"] for c in configs if c.get("wall_class") == WALL_REGRESSION]
-    measured = [c for c in configs if c.get("wall_class")]
-    # At least one marginal case is always allowed: with two dozen draws, holding a port for a single
-    # one is the coin flip this rule exists to remove.
-    marginal_allowance = max(1, int(len(measured) * WALL_MARGINAL_FRACTION))
+    # Only the cases `auto` actually sends to codegen are graded. The rest are reported in full and
+    # judged by the cap below, because "this port is fast on everything it kept" is a claim that
+    # means nothing without "and here is how much it kept".
+    served = [c for c in configs if not c.get("demoted")]
+    demoted = [c for c in configs if c.get("demoted")]
+    demoted_fraction = len(demoted) / len(configs) if configs else 0.0
+
+    ratios = [c["wall_ratio"] for c in served if c.get("wall_ratio")]
+    overall = wall_aggregate(served)
     wall_median = statistics.median(ratios) if ratios else None
     # The median is reported but deliberately not a gate: with marginals capped, a port that is
     # systematically slower puts every large case in the marginal bucket and fails there, while a
     # median gate would instead break the small-op absolute escape, where a 15% ratio loss is two
     # microseconds and the project has already decided that does not matter.
-    wall_aggregate_ok = not regressions and len(marginal) <= marginal_allowance
 
-    strict_win = any((c.get("wall_ratio") or 0) > 1.0 or (c.get("device_vs_native") or 0) > 1.0 for c in configs)
-    all_pass = bool(configs) and all(c.get("passes") for c in configs) and wall_aggregate_ok
+    # The same rule again, within each class of inputs. A global count lets one slow class hide
+    # behind the classes that pass: a fifth of the measurements marginal is inside the global
+    # allowance, and is also what "every case of one dtype is slower" looks like from far enough
+    # away. Small strata are exempt from the marginal half of the rule (see the constant), but a
+    # regression below the noise floor still fails wherever it appears, because the global check
+    # counts it too.
+    per_stratum: dict[str, dict] = {}
+    for key in sorted({c.get("stratum") for c in served if c.get("stratum")}):
+        entry = wall_aggregate([c for c in served if c.get("stratum") == key])
+        entry["judged"] = entry["measured"] >= MIN_STRATUM_FOR_WALL_AGGREGATE
+        per_stratum[key] = entry
+    failing_strata = [k for k, v in per_stratum.items() if v["judged"] and not v["ok"]]
+    wall_aggregate_ok = overall["ok"] and not failing_strata
+
+    # A win has to come from a case the port actually serves. A demoted case running faster under
+    # forced codegen is evidence the demotion is unnecessary, not evidence the port is a win.
+    strict_win = any((c.get("wall_ratio") or 0) > 1.0 or (c.get("device_vs_native") or 0) > 1.0 for c in served)
+    all_pass = bool(served) and all(c.get("passes") for c in served) and wall_aggregate_ok
     if not configs:
         verdict = VERDICT_BLOCKED
+    elif demoted_fraction > DEMOTION_CAP:
+        # Routing away more than half of the measured scope. Whatever is left may well be faster,
+        # but a second implementation serving a minority of its own declared surface is not worth
+        # maintaining, and this is also what demoting-until-green looks like.
+        verdict = VERDICT_NOT_A_CANDIDATE
     elif all_pass and strict_win:
         verdict = VERDICT_WIN
     elif all_pass:
@@ -347,29 +522,81 @@ def grade(wall: dict, device_samples: dict, cases: list[dict]) -> dict:
     else:
         verdict = VERDICT_BACK_TO_TRANSLATE
 
-    device_ratios = [c["device_vs_native"] for c in configs if c.get("device_vs_native")]
+    device_ratios = [c["device_vs_native"] for c in served if c.get("device_vs_native")]
     return {
         "verdict": verdict,
         "has_strict_win": strict_win,
         "configs": configs,
-        "failing": [c["case_id"] for c in configs if not c.get("passes")],
+        "failing": [c["case_id"] for c in served if not c.get("passes")],
+        "coverage": coverage_report(selection, configs),
+        "routing": {
+            # What the port must either fix or route away. Derived from measurement rather than
+            # asserted in advance, which is the only way to know it: the sweep's `invalidate_vector`
+            # says what codegen *can* serve, and nothing in the manifest says what it serves *well*.
+            # Per-case failures, plus the cases responsible for an aggregate failure. Without the
+            # second half a port can be refused for a whole class being marginal while both `failing`
+            # and this list come back empty, which tells the agent to fix something and does not say
+            # what: a marginal case passes its own per-case checks by design.
+            "demotion_candidates": [
+                {
+                    "case_id": c["case_id"],
+                    "stratum": c.get("stratum"),
+                    "wall_class": c.get("wall_class"),
+                    "wall_ratio": c.get("wall_ratio"),
+                    "device_vs_native": c.get("device_vs_native"),
+                }
+                for c in served
+                if not c.get("passes")
+                or (c.get("wall_class") != WALL_PASS and (c.get("stratum") in set(failing_strata) or not overall["ok"]))
+            ],
+            "demoted": [c["case_id"] for c in demoted],
+            "demoted_fraction": round(demoted_fraction, 3),
+            "demotion_cap": DEMOTION_CAP,
+            # Demoted and yet unambiguously fine under forced codegen: the demotion is costing
+            # performance for no reason. Not a failure, but the port should not route these away.
+            #
+            # "Unambiguously" is carrying weight. Requiring only that one metric beat native flags a
+            # case that is slower on wall clock and faster on device -- which is a normal shape for a
+            # case worth demoting, so the loose version calls every sensible demotion a mistake and
+            # the field becomes noise. A case qualifies only if it cleared every gate with no
+            # marginal caveat and still came out ahead.
+            "demoted_but_faster": [
+                c["case_id"]
+                for c in demoted
+                if c.get("passes")
+                and c.get("wall_class") == WALL_PASS
+                and ((c.get("wall_ratio") or 0) > 1.0 or (c.get("device_vs_native") or 0) > 1.0)
+            ],
+            # Absent when the build cannot answer the program-cache query, in which case nothing was
+            # exempted and the gate is simply stricter than it needs to be.
+            "probe": "program_cache" if any(c.get("routes_to") for c in configs) else "unavailable",
+        },
         "summary": {
             # Device time is worst-case, because it is stable enough for the weakest configuration to
             # mean something. Wall clock is reported as a distribution, because it is not.
             "wall_ratio_min": min(ratios) if ratios else None,
             "wall_ratio_median": wall_median,
-            "wall_marginal": marginal,
-            "wall_marginal_allowance": marginal_allowance,
-            "wall_regressions": regressions,
+            "wall_marginal": overall["marginal"],
+            "wall_marginal_allowance": overall["marginal_allowance"],
+            "wall_regressions": overall["regressions"],
             "wall_aggregate_ok": wall_aggregate_ok,
+            "wall_failing_strata": failing_strata,
+            "wall_by_stratum": per_stratum,
             "device_vs_native_min": min(device_ratios) if device_ratios else None,
+            "cases_measured": len(configs),
+            "cases_graded": len(served),
         },
     }
 
 
 def grade_correctness(results: list[dict]) -> dict:
     failures = [r for r in results if not r.get("equal") or r.get("error")]
-    routing = [r for r in results if r.get("scope") == "out" and r.get("routing_ok") is False]
+    out_of_scope = [r for r in results if r.get("scope") == "out"]
+    routing = [r for r in out_of_scope if r.get("routing_ok") is False]
+    # `routing_ok` is None when the build could not answer the program-cache query. Counted, because
+    # the routing check reading as a pass while it verified nothing is the bug just fixed in
+    # measure.py and the one worth being loud about.
+    unverified = [r["case_id"] for r in out_of_scope if r.get("routing_ok") is None]
     return {
         "total": len(results),
         "failures": [
@@ -383,7 +610,9 @@ def grade_correctness(results: list[dict]) -> dict:
         ],
         "failure_count": len(failures),
         "routing_violations": [r["case_id"] for r in routing],
-        "passes": not failures and not routing,
+        "routing_unverified": unverified[:25],
+        "routing_unverified_count": len(unverified),
+        "passes": not failures and not routing and not unverified,
     }
 
 
@@ -402,6 +631,12 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=24, help="cases per perf band")
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--iters", type=int, default=30)
+    ap.add_argument(
+        "--select",
+        default="stratified",
+        choices=["stratified", "prefix"],
+        help="how the perf bands spend their case budget; `prefix` is the old flat slice",
+    )
     ap.add_argument("--skip-write-check", action="store_true", help="baseline runs, before any edits")
     args = ap.parse_args()
 
@@ -425,13 +660,23 @@ def main() -> int:
                 json.dumps(
                     {
                         "verdict": VERDICT_BLOCKED,
-                        "error": "changes outside the port's own files; tests and build scripts are off limits",
+                        "error": "changes outside the port's own files; the harness and build scripts are off limits",
                         "unexpected_changes": stray,
                         "allowed": allowed_prefixes(args.op, args.category),
                     },
                     indent=2,
                 )
             )
+            return 2
+
+        # After the guard, deliberately: the guard is what establishes that the emitter itself is
+        # unmodified, which is what makes re-rendering a meaningful comparison.
+        try:
+            drift = check_routing_test(args.manifest, args.op, args.category, repo)
+        except Exception as exc:  # noqa: BLE001
+            drift = f"could not verify the routing test: {type(exc).__name__}: {exc}"
+        if drift:
+            print(json.dumps({"verdict": VERDICT_BLOCKED, "error": drift}, indent=2))
             return 2
 
     try:
@@ -441,8 +686,11 @@ def main() -> int:
 
         if args.band in ("correctness", "both"):
             out = work / f"{args.op}_correctness.json"
-            data = run_measure(args.op, ledger_path, "correctness", out, repo, [])
+            # The manifest travels with this band so the golden can be resolved from it; see
+            # `measure.resolve_golden` for why that beats a table of per-op goldens in the harness.
+            data = run_measure(args.op, ledger_path, "correctness", out, repo, ["--manifest", args.manifest])
             report["correctness"] = grade_correctness(data["results"])
+            report["correctness"]["golden"] = data.get("golden")
 
         if args.band in ("performance", "both"):
             wall = run_measure(
@@ -451,13 +699,20 @@ def main() -> int:
                 "wall",
                 work / f"{args.op}_wall.json",
                 repo,
-                ["--limit", str(args.limit), "--iters", str(args.iters)],
+                ["--limit", str(args.limit), "--iters", str(args.iters), "--select", args.select],
             )
             device_samples: dict = {}
             try:
                 reports = work / f"{args.op}_profiler"
                 dev = run_device_band(
-                    args.op, ledger_path, work / f"{args.op}_device.json", repo, args.limit, args.reps, reports
+                    args.op,
+                    ledger_path,
+                    work / f"{args.op}_device.json",
+                    repo,
+                    args.limit,
+                    args.reps,
+                    reports,
+                    args.select,
                 )
                 csv_path = latest_ops_csv(repo, reports)
                 if csv_path is None:
@@ -467,7 +722,7 @@ def main() -> int:
                     report["notes"].extend(notes)
             except Exception as exc:  # noqa: BLE001 - wall alone still yields a usable verdict
                 report["notes"].append(f"device band unavailable: {exc}")
-            report["performance"] = grade(wall, device_samples, ledger["cases"])
+            report["performance"] = grade(wall, device_samples, ledger["cases"], wall.get("selection"))
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"verdict": VERDICT_BLOCKED, "error": f"{type(exc).__name__}: {exc}"}, indent=2))
         return 2

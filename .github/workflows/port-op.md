@@ -8,12 +8,13 @@ description: |
   wiring the native/codegen routing, then proving on silicon that the win survives.
 
   The deterministic parts run before the agent: kernels are copied, the build is registered, the
-  tree is compiled, and a native baseline is measured. The agent writes C++ and calls two tools --
-  `build` and `verify` -- until the gates pass, then opens a draft PR. It never picks the cases,
-  the thresholds, or the measurement method, and `verify` refuses to run at all if the working tree
-  has changed outside the port's own files.
+  routing test is generated, the tree is compiled, and a native baseline is measured. The agent
+  writes C++ and calls two tools -- `build` and `verify` -- until the gates pass, then opens a draft
+  PR carrying the verdict it reached. It never picks the cases, the thresholds, or the measurement
+  method, and `verify` refuses to run at all if the working tree has changed outside the port's own
+  files or the generated test has drifted.
 
-  V1 scope: one op, one arch (N150), `workflow_dispatch` only. `is_demoted()` ships as a stub.
+  V1 scope: one op, one arch (N150), `workflow_dispatch` only.
 
 on:
   # Prototype shakedown only. `workflow_dispatch` resolves against the default branch, so a
@@ -370,6 +371,25 @@ steps:
       '
       docker exec portdev python3 -c 'import ttnn, torch, yaml, graphviz; print("harness imports OK")'
 
+  # The routing test is generated, not written, and this is where it happens: after the build,
+  # because rendering it means expanding the generator's sweep, which imports ttnn. It cannot go in
+  # the pre-build scaffold pass for that reason alone.
+  #
+  # Generating it is what makes it comprehensive. The assertion is identical for every case -- an
+  # out-of-scope configuration must fall back to native under `auto` -- so covering the whole
+  # out-of-scope set is a loop, whereas an agent writing tests by hand covers what it thought of.
+  # `verify` re-renders this file and refuses to measure a tree where it has drifted, so it is a
+  # deliverable the agent can neither weaken nor skip.
+  #
+  # `-u` for the same reason as the scaffold step: the agent is told to re-run this command if the
+  # file ever drifts, and a root-owned file would make that instruction impossible to follow.
+  - name: Emit the routing test
+    run: |
+      docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
+        python3 .github/scripts/port/scaffold.py \
+        --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
+        --ttmetal-home /work --codegen-root /codegen --emit-test-only
+
   # This exists to prove the harness and the card work before the agent starts, so that a later
   # failure is unambiguously the agent's code. The ported leg is still an empty stub, so gate.py
   # will report a failing verdict and exit non-zero -- that is expected and is not what this step
@@ -377,6 +397,42 @@ steps:
   # or missing device attribution all mean the numbers the agent later produces would be
   # meaningless. Run 31203909328 sailed through this step green with an unbuilt tree because it was
   # `continue-on-error` and swallowed everything, which is exactly the failure being closed here.
+  # The correctness band grades the port against a host golden, and that golden is now resolved
+  # generically -- from the manifest if it names one, otherwise from the reference ttnn itself
+  # registers for the op -- rather than from a table of per-op goldens inside the harness. Resolving
+  # it generically is only safe if something checks the answer, so this compares the resolved golden
+  # against native on in-scope cases, where the ledger has already dropped the slices the manifest
+  # marks as native being wrong. A disagreement here means every later correctness verdict would have
+  # been graded against the wrong answer, and it would have looked like a broken port.
+  - name: Check the golden against native
+    run: |
+      docker exec portdev python3 .github/scripts/port/ledger.py \
+        --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" --out /tmp/golden_ledger.json
+      docker exec portdev python3 .github/scripts/port/measure.py \
+        --op "${{ inputs.op || 'pad' }}" --ledger /tmp/golden_ledger.json --band golden \
+        --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
+        --limit "${{ inputs['perf-limit'] || '24' }}" --out /tmp/golden.json
+
+      # Asserted here rather than in measure.py, which reports numbers and never decides pass or
+      # fail. Single-quoted so the shell leaves it alone; no single quotes inside for the same reason.
+      docker exec portdev python3 -c '
+      import json
+      report = json.load(open("/tmp/golden.json"))
+      source, results = report.get("golden"), report.get("results") or []
+      if source == "native":
+          print("::warning::no host golden for this op, so correctness compares against native output")
+          raise SystemExit(0)
+      if not results:
+          raise SystemExit("the golden check ran no cases, so the golden is unverified")
+      bad = [r for r in results if not r.get("equal") or r.get("error")]
+      for entry in bad[:10]:
+          print("  {} dtype={} max_abs_diff={} error={}".format(
+              entry["case_id"], entry.get("dtype"), entry.get("max_abs_diff"), entry.get("error")))
+      if bad:
+          raise SystemExit("{} of {} cases disagree between native and {}".format(len(bad), len(results), source))
+      print("golden OK -- {} agrees with native on all {} sampled in-scope cases".format(source, len(results)))
+      '
+
   - name: Native baseline
     run: |
       docker exec portdev python3 .github/scripts/port/gate.py \
@@ -453,6 +509,10 @@ post-steps:
       tar -czf /tmp/port-artifact/port-tree.tar.gz "$dir" || echo "::warning::no $dir to archive"
       git diff "${PORT_BASE_SHA}" -- . > /tmp/port-artifact/tracked.diff || true
       git status --porcelain > /tmp/port-artifact/status.txt || true
+      # The generated routing test is untracked and lives outside the op directory, so neither the
+      # archive above nor the diff would carry it. It is part of the deliverable.
+      routing="tests/ttnn/nightly/unit_tests/operations/${PORT_CATEGORY}/test_${PORT_OP}_codegen_routing.py"
+      cp "$routing" /tmp/port-artifact/ 2>/dev/null || echo "::warning::no generated routing test at $routing"
       # gate.py writes its per-case measurements inside portdev, which the next step deletes. These
       # reports are the only durable record of which cases were marginal and by how much, and that is
       # exactly what judging the noise floor needs after the fact -- the transcript truncates them.
@@ -520,6 +580,8 @@ safe-outputs:
     labels: [codegen-port, gh-aw]
   # Without a no-op the agent has only one way to end, and an agent with a single available action
   # will take it -- filing a PR for a port it knows does not work. This makes stopping expressible.
+  # It is now reserved for a port that is not correct or a harness that could not run: a correct port
+  # that lost on performance is a reviewable finding, and the prompt sends that to a draft PR.
   noop:
 ---
 
@@ -571,13 +633,14 @@ merely happens to make one case pass is a defect even when the case passes.
    **correctness and device-resource feasibility, never performance**. Two things it must get
    right, both of which the sweep cannot tell you:
 
-   - **Bound every dimension-scaled circular buffer.** If a CB's footprint (page size × depth)
-     scales with a tensor dimension, reject configs whose minimum viable CB does not fit in per-core
-     L1, and scale depth down to what does fit. The Python reference gets this free from
-     `ProgramFactory.assemble`'s preflight; a port that drops it turns an `auto` call that should
-     have fallen back to native into a hard allocation failure. Sweeps only ever run shapes small
-     enough to fit, so `invalidate_vector` will never mention this. Walk **every leaf of your
-     dispatch tree** — a guard written for the default builder leaves the alternates unbounded.
+   - **Bound every device resource whose footprint scales with a dimension.** For each one your
+     factory allocates, the factory must scale down to what the device admits and this predicate
+     must reject whatever still does not fit — at **every leaf of your dispatch tree**, since a
+     bound written for the default builder leaves the alternates unbounded. The sweep cannot tell
+     you about any of this: `invalidate_vector` only ever ran shapes small enough to fit, so a
+     predicate derived from it silently claims every size, and `auto` then fails allocation on a
+     config the predicate advertised instead of falling back to native. The porting guide works
+     this through for circular buffers, which is the instance you will meet first.
    - **Transcribe general conditions, not example shapes.** Each `scope: out` case in the manifest
      is one representative of a general condition stated in its `note`. Write the condition (e.g.
      `logical[-2] % TILE_H != 0`), never an exact-match on the tuple. An exact-match lets every
@@ -589,9 +652,26 @@ merely happens to make one case pass is a defect even when the case passes.
    returns `false`.
 
 2. `is_demoted()` in the same files. This is the performance routing gate, consulted **only** by
-   the `auto` branch. **For v1, emit it returning `false` for everything** — demotion analysis is
-   deliberately out of scope for this run. Emit it anyway so the routing shape is right and later
-   work has somewhere to land.
+   the `auto` branch, and it answers a different question from `supported_by_codegen()`: not "can
+   codegen serve this?" but "should it?"
+
+   You cannot know the answer in advance, and you must not guess it. Start it returning `false` for
+   everything, then let the measurements tell you. `verify`'s performance verdict reports
+   `routing.demotion_candidates` — in-scope cases that the port measurably loses on. Each one is a
+   choice: make the generated path faster, or demote it. Demoting is legitimate; a configuration the
+   generated kernel is genuinely worse at should route to native, and a case you demote is not
+   graded.
+
+   Two constraints on taking that option. **Write the general condition, not the case list** — same
+   standard as `supported_by_codegen()`, and for the same reason: a predicate that exact-matches the
+   measured tuples leaves every neighbouring shape with the same problem routed to codegen. Name the
+   property that makes those cases slow. And **demotion is capped**: past
+   `routing.demotion_cap` of the measured in-scope cases the verdict becomes `not-a-candidate`,
+   because a port serving a minority of its own declared scope is not worth maintaining. If you find
+   yourself demoting to get to a `win`, the answer is that this port is not a win.
+
+   `routing.demoted_but_faster` is the opposite mistake: a case you routed away that measured faster
+   under forced codegen. Those demotions cost performance for nothing; remove them.
 
 3. The host free function `ttnn::${{ inputs.op || 'pad' }}(..., implementation=)` in the shared
    `${{ inputs.op || 'pad' }}.cpp`:
@@ -629,23 +709,28 @@ DeviceOp hooks per the porting guide's checklist for this op's tier.
 2. Call **`build`**. Fix what it reports. Repeat until it compiles.
 3. Call **`verify`** with `band: correctness`. Fix real defects until it passes.
 4. Call **`verify`** with `band: performance`.
-5. When the verdict is `win`, open the draft PR.
+5. Open the draft PR once correctness is a full pass and you have stopped improving performance,
+   whatever the performance verdict turned out to be.
 
 Read the verdict rather than pattern-matching on it:
 
-- **`win`** — all gates pass and something is genuinely faster. Open the PR.
-- **`back-to-translate`** — a gate failed. `failing` names the cases. Go fix the code.
-- **`not-a-candidate`** — every gate held but nothing actually got faster. This port is not worth
-  landing. **Do not open a PR.** Use the no-op output and explain what you measured.
+- **`win`** — all gates pass and something is genuinely faster.
+- **`back-to-translate`** — a gate failed. `failing` names the cases that failed on their own, and
+  `routing.demotion_candidates` names every case implicated, including the ones that failed only as
+  part of a class. Go fix the code, or route those cases away — see `is_demoted()` above.
+- **`not-a-candidate`** — either every gate held and nothing got faster, or the port demoted more of
+  its scope than the cap allows. Check `routing.demoted_fraction` to see which.
 - **`blocked`** — the harness could not run, or the tree changed outside the port's own files. Read
   the error. If it is the write-path guard, revert the stray edit; do not try to work around it.
+
+**A verdict short of `win` is not a reason to stop without a pull request.** See below.
 
 **Do not re-run `verify` on unchanged code.** It costs minutes of card time per call, and the
 wall-clock noise that once made repeated calls look informative is now absorbed by the gate itself: a
 case under the tie band is recorded as `marginal` instead of failing, and only a case below the noise
-floor, or marginals on more than a quarter of the measurements, refuses the port. So
-`back-to-translate` means the code needs changing, not that the measurement was unlucky. Read
-`failing`, `summary.wall_marginal` and `summary.wall_regressions`, and fix what they point at.
+floor, or marginals concentrated in one class, refuses the port. So `back-to-translate` means the code
+needs changing, not that the measurement was unlucky. Read `failing`,
+`summary.wall_failing_strata` and `routing.demotion_candidates`, and fix what they point at.
 
 ## Rules
 
@@ -655,11 +740,21 @@ Anything you find that way is stale scratch work, not a reference, and using it 
 run. Build the port from the manifest, the generator source, the porting guide, the merged `repeat`
 port, and nothing else.
 
-**Do not write tests.** No new `test_*.py`, no ad-hoc device scripts, no edits to any existing
-test, harness, or gate script. Correctness and performance are measured for you by `verify`,
-against cases derived from the generator's own sweep. `verify` recomputes the diff from the base
-commit every time it runs and refuses if anything outside the port's own files changed, so editing
-the harness does not get you a passing grade — it gets you a `blocked` verdict.
+**Do not write tests, and do not edit the generated one.** No new `test_*.py`, no ad-hoc device
+scripts, no edits to any existing test, harness, or gate script. Correctness and performance are
+measured for you by `verify`, against cases derived from the generator's own sweep. `verify`
+recomputes the diff from the base commit every time it runs and refuses if anything outside the
+port's own files changed, so editing the harness does not get you a passing grade — it gets you a
+`blocked` verdict.
+
+One test does ship with your port, and it is generated:
+`tests/ttnn/nightly/unit_tests/operations/<category>/test_<op>_codegen_routing.py`, emitted from the
+coverage ledger before you started. It asserts that every out-of-scope case falls back to native
+under `auto`, which is the same thing `verify`'s correctness band checks — so if that band passes,
+this test passes. `verify` re-renders the file and compares it on every call, and a mismatch is a
+`blocked` verdict. It is part of your deliverable; include it in the pull request and describe what
+it covers. If it is ever reported as drifted, restore it by re-running the emitter exactly as the
+error message gives it, rather than by editing the file.
 
 **Do not touch git history.** No `git push`, no `git commit --amend`, nothing that rewrites
 history, and never target `main`. Leave your work as uncommitted edits; the pull-request output
@@ -670,17 +765,41 @@ Do not estimate, extrapolate, or restate a ratio you did not measure.
 
 ## The pull request
 
+**Open one whenever the correctness band is a full pass.** Correct code that compiles and routes
+properly is reviewable work regardless of what the performance verdict says, and a measured negative
+result is a finding worth keeping rather than a reason to throw the port away. Run 31406186048 wrote
+184 out of 184 bit-exact cases, never reached `win`, opened nothing, and left nothing behind but a log
+line. That is the outcome this rule exists to prevent.
+
+Use the no-op output only when correctness fails or the verdict is `blocked` — there is nothing to
+review in a port that does not work.
+
+Put the performance verdict in the title after the op name, in brackets: `[win]`,
+`[not-a-candidate]`, or `[back-to-translate]`. A reviewer must not have to read the body to find out
+whether the thing is faster.
+
 Open it as a draft, describing:
 
-- **What changed** — the file list and the shape of the port.
-- **Why this is faster** — the mechanism, grounded in source. Name the specific native cost that is
-  avoided and the generated design choice that avoids it. Do not claim causality you cannot point
-  at, and do not write "codegen is faster."
+- **What changed** — the file list and the shape of the port, including the generated routing test.
+- **Why this is, or is not, faster** — the mechanism, grounded in source. Name the specific native
+  cost that is avoided and the generated design choice that avoids it. Do not claim causality you
+  cannot point at, and do not write "codegen is faster." A verdict short of `win` gets the same
+  treatment in reverse: name the cost the generated path pays that native does not.
 - **Measured performance** — a table straight from the `verify` verdict: per-configuration wall
   ratio, device-vs-native, and device-vs-prototype, plus the case counts by scope.
+- **What was measured** — from `performance.coverage`, one row per stratum: the class, how many
+  ledger cases it holds (`cases_in_ledger`), how many were measured, and its worst wall and
+  device ratios. Then state `coverage.axes` and, if `coverage.axes_dropped` is non-empty, say which
+  parameters the sample does *not* resolve across. If `coverage.complete` is false, name the
+  unmeasured classes. A ratio quoted without this is a claim about the sample, not about the op.
 - **Routing** — the conditions under which `auto` falls back to native, and why each one exists.
+  Separate the `supported_by_codegen()` conditions from the `is_demoted()` ones, and for demotion
+  give the measurement that motivated each condition. List `routing.demoted` and
+  `routing.demoted_fraction`.
 - **Known gaps** — anything you could not resolve, and anything the manifest asserts that the
-  hardware contradicted. Say so plainly rather than quietly working around it. Note that
-  `is_demoted()` is a v1 stub.
+  hardware contradicted. Say so plainly rather than quietly working around it. Include every entry
+  in the verdict's `notes`, and `routing.demoted_but_faster` if it is non-empty.
 
-If the verdict is not `win`, do not open a pull request at all. Report what you measured and stop.
+Every number in that body must be a field from a `verify` verdict, and the surrounding prose must be
+something the fields support. If a section has no data behind it, write that instead of writing
+around it.
