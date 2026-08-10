@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dump device perf report for VibeVoice single-step LM decode profiling.
+"""Dump device perf report for VibeVoice single eager speech-frame profiling.
 
-Runs the single-decode profile workload under Tracy and writes
-``device_perf_*.csv`` plus a partial benchmark JSON via ``prep_device_perf_report``.
-No golden perf assertion — for collecting / inspecting reports.
+Runs the single-frame profile workload under Tracy and writes ``device_perf_*.csv``
+plus a partial benchmark JSON via ``prep_device_perf_report``.  No golden perf
+assertion — for collecting / inspecting reports.
 
 This script intentionally avoids importing ``ttnn`` so it does not compete for the
 UMD device lock with another pytest parent.
@@ -21,16 +21,13 @@ After the run, analyze the CSV::
 
 from __future__ import annotations
 
-import os
-
 
 def _inner_command() -> str:
     profile_test = (
         "models/experimental/vibevoice/tests/perf/"
         "test_profile_single_step_decode.py::test_profile_single_step_decode"
     )
-    # Match inner ``test_profile_single_step_decode`` (@pytest.mark.timeout(1800)).
-    return f"pytest --timeout=1800 {profile_test} -sv"
+    return f"pytest --timeout=3600 {profile_test} -sv"
 
 
 def main() -> int:
@@ -40,12 +37,10 @@ def main() -> int:
 
     from models.perf.device_perf_utils import prep_device_perf_report
 
-    prefill_len = int(os.environ.get("VV_DECODE_PERF_PREFILL_LEN", "256"))
-    model_name = f"vibevoice_lm_decode1_after_prefill{prefill_len}"
+    model_name = "vibevoice_eager_speech_frame1"
     subdir = "vibevoice_lm_single_step_decode"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    # Headroom for load/warmup/prefill before ReadDeviceProfiler clears the buffer.
-    op_support_count = 50000
+    op_support_count = 100000
 
     command = _inner_command()
     batch_size = 1
@@ -59,6 +54,7 @@ def main() -> int:
         check_test_return_code=False,
         device_analysis_types=["device_kernel_duration"],
         op_support_count=op_support_count,
+        mid_run_device_data=True,
     )
 
     raw = post_process_ops_log(subdir, duration_cols, has_signposts=True)
@@ -79,7 +75,7 @@ def main() -> int:
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results={},
-        comments=f"single_decode_after_prefill{prefill_len}",
+        comments="single_eager_speech_frame1",
     )
     return 0
 

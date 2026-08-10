@@ -1256,13 +1256,35 @@ class TTVibeVoiceGenerator:
             # First frame-0 after a (re)capture: warmup (eager), capture dp2+lm2 (boot stays eager),
             # reset, then the real frame-0 replay — all internal, so warmup/capture frames are
             # discarded and never emitted.
-            for _ in range(self._SF_WARMUP):
+            _t_recap0 = time.perf_counter() if os.environ.get("VV_TIME_RECAPTURE", "0") == "1" else None
+            _prof_traced = os.environ.get("VV_PROFILE_TRACED_FRAME", "0") == "1"
+            for _w in range(self._SF_WARMUP):
                 self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
                 _boot()
+                # VV_PROFILE_TRACED_FRAME=1: signpost the LAST eager warmup iteration.  This is the
+                # deployed dp2+lm2 graph running op-by-op — the only point where the device profiler
+                # can see it, since trace replay emits no per-op data.  Sync on both edges so no op
+                # straddles a signpost.
+                _sp = _prof_traced and _w == self._SF_WARMUP - 1
+                if _sp:
+                    import tracy
+
+                    ttnn.synchronize_device(dev)
+                    tracy.signpost("start")
                 # Keep the warmup's audio handle: _lm2trace reads it when the frame output is fused
                 # (the capture below re-points it at the captured dp2's output before lm2 records).
                 self._sf_audio_out = _dp2trace()
-                _lm2trace()
+                _tok_prof = _lm2trace()
+                if _sp:
+                    ttnn.synchronize_device(dev)
+                    tracy.signpost("stop")
+            if _prof_traced:
+                # The last warmup frame just ran the deployed dp2+lm2 graph op-by-op between the
+                # signposts — the only place the device profiler can see it.  Do NOT capture a
+                # trace: a resident trace makes the device-profiler dump at close_device hang and
+                # emits no per-op data.  Signal generate() to stop after this one profiled frame.
+                self._sf_prof_traced_done = True
+                return self._sf_audio_out, _tok_prof
             self._sf_set_inputs_b2(0, start_pos, noise_2x, noise_idx)
             _boot()  # seed neg_hidden for the captured dp2
             tb = ttnn.begin_trace_capture(dev, cq_id=0)
@@ -1279,6 +1301,12 @@ class TTVibeVoiceGenerator:
             ttnn.execute_trace(dev, self._sf_dp2trace_tid, cq_id=0, blocking=False)
             ttnn.execute_trace(dev, self._sf_lm2trace_tid, cq_id=0, blocking=False)
             _vv_debug("segment_frame(cfg_b2): captured + reset")
+            if _t_recap0 is not None:
+                ttnn.synchronize_device(dev)
+                _ms = (time.perf_counter() - _t_recap0) * 1000.0
+                self._recap_ms = getattr(self, "_recap_ms", [])
+                self._recap_ms.append(_ms)
+                print(f"[VV_TIME_RECAPTURE] recapture #{len(self._recap_ms)}: {_ms:.1f} ms", flush=True)
             return self._sf_audio_out, self._sf_tok_out
 
         if seg_frame_idx == 0:
@@ -1287,8 +1315,23 @@ class TTVibeVoiceGenerator:
             _boot()
         else:
             self._sf_set_inputs_b2(1, start_pos, noise_2x, noise_idx)
+        _t_s0 = time.perf_counter() if os.environ.get("VV_TIME_RECAPTURE", "0") == "1" else None
         ttnn.execute_trace(dev, self._sf_dp2trace_tid, cq_id=0, blocking=False)
         ttnn.execute_trace(dev, self._sf_lm2trace_tid, cq_id=0, blocking=False)
+        if _t_s0 is not None:
+            ttnn.synchronize_device(dev)
+            _ms = (time.perf_counter() - _t_s0) * 1000.0
+            self._steady_ms = getattr(self, "_steady_ms", [])
+            self._steady_ms.append(_ms)
+            if len(self._steady_ms) % 300 == 0:
+                import statistics
+
+                _s = self._steady_ms
+                print(
+                    f"[VV_TIME_RECAPTURE] steady frames n={len(_s)} mean={statistics.mean(_s):.2f} ms "
+                    f"median={statistics.median(_s):.2f} ms",
+                    flush=True,
+                )
         return self._sf_audio_out, self._sf_tok_out
 
     def _sf_zero_conv(self) -> None:
@@ -1737,6 +1780,9 @@ class TTVibeVoiceGenerator:
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1
+                if getattr(self, "_sf_prof_traced_done", False):
+                    _vv_debug("VV_PROFILE_TRACED_FRAME: profiled one deployed frame eagerly — ending generate")
+                    break
                 continue
 
             if current_token == self.speech_diffusion_id:
