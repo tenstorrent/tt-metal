@@ -260,9 +260,8 @@ ALWI void compressed_custom_mm_block_uninit() {
         // Restore default packing stride of 64 rows between tiles
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
-    // pack_block_contiguous_init replaces the packer MOP but does not own the
-    // ADDR_MODs. Restore the Default tile-pack MOP for fused follow-on ops.
-    PACK((_llk_pack_mop_config_<PackMode::Default>()));
+    // Deliberately no packer-MOP write here — see custom_mm_block_uninit for why a no-arg
+    // Default MOP write is a clobber, not a restore, on this family's 1x32 tile geometry.
 }
 
 #endif  // ARCH_BLACKHOLE
