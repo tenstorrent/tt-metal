@@ -174,6 +174,28 @@ def test_out_subblock_w_is_the_largest_legal_one():
             f"per_core_N={n} -- the candidate list has a hole in it again")
 
 
+def test_residual_rides_in_as_bias_on_the_decode_path_only():
+    """A matmul bias is a ROW VECTOR broadcast across rows, so it equals the residual only when
+    there is exactly one row. Decode has one; PREFILL HAS MANY, each with its own residual, and
+    would be silently wrong -- no error, just a broadcast of row 0 over everything. Block 2 is the
+    same hazard (3 or 6 CFG-folded rows), which is why it keeps the explicit add.
+
+    Worth 1.918 ms/step against a 0.190 noise floor, at unchanged accuracy (min PCC 0.999771 vs
+    0.999799, worst relative error 1.11% vs 1.24%). 6.47 REJECTED this at +0.069 ms, correctly at
+    the time: the wo matmul then took 92.7 us and the separate add hid in its shadow. 6.52 made it
+    40.3 us and exposed the add at +53.5. STATUS.md 6.62."""
+    import inspect
+
+    step = inspect.getsource(gpt.TtVoxtralGPT._layer_step)
+    assert "bias=" in step, "wo's residual is back to a separate add -- 6.62"
+    mlp = inspect.getsource(gpt.TtVoxtralGPT._mlp)
+    assert "if prg:" in mlp and "bias=" in mlp, "w2's residual bias is gone -- 6.62"
+    assert "ttnn.add_(x, ttnn.linear(u, w[\"w2\"]" in mlp, (
+        "the prefill fallback add is gone; prefill must NOT take the bias path")
+    prefill = inspect.getsource(gpt.TtVoxtralGPT._layer)
+    assert "bias=" not in prefill, "prefill is using residual-as-bias, which is WRONG for M>1"
+
+
 def test_decode_matmul_configs_assume_one_tile_of_rows():
     """per_core_M=1 and fuse_batch=True are only valid for a single tile of rows -- Block 1's 1 and
     Block 2's 3-or-6. Prefill has many, so _mlp must reach it WITHOUT these configs. STATUS.md

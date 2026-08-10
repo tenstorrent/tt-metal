@@ -1969,6 +1969,21 @@ warns is not a correctness test.
  was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
 ```
 
+### [gpt-27] `_layer_step` / `_mlp` — the residual rides in as the matmul's bias
+
+Both Block 1 residuals become `linear(..., bias=x)` instead of `add_(x, linear(...))`.
+**−1.918 ms/step** against a 0.190 noise floor, WER and long-form MOS unchanged.
+
+`bias=` is genuinely fused, +0.1 µs over a plain matmul — unlike `activation=`, which never fused
+at all ([gpt-26]). **§6.47 rejected this at +0.069 ms and was right at the time**: the `wo` matmul
+then took 92.7 µs and the separate add hid in its shadow at +2.5. [gpt-26] made it 40.3 µs and
+exposed the add at +53.5. A correct measurement whose premise expired — see STATUS.md §6.62.
+
+**DECODE ONLY.** A matmul bias is a row vector broadcast across rows, so it is the residual only
+at M=1. Prefill has many rows, each with its own residual, and would be silently wrong. Block 2's
+3-or-6 CFG-folded rows are the same hazard, which is why `_block` keeps the explicit add. Gated on
+`prg` being non-empty, which is true only on the decode path.
+
 ### [gpt-26] decode matmul program configs — and `activation="silu"` is not fused
 
 Every decode matmul in **both** blocks takes a `MatmulMultiCoreReuseMultiCast1DProgramConfig` on
