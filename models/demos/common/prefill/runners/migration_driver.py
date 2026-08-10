@@ -52,6 +52,39 @@ the same three-terminal flow as before — terminal C just runs THIS module inst
     python3 -m models.demos.common.prefill.runners.migration_driver \
       --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
 
+Multi-host (validating EVERY rank's layers, not just rank 0's). Both read-backs here — the source golden
+PCC and the destination check — go over UMD, which reaches only the chips physically attached to the host
+the process runs on. On a pipeline runner spanning N hosts, ONE driver process therefore verifies just its
+own host's layer slice and SKIPS the rest (it says so, but a PASS is then a fraction of the model). Covering
+the model needs one process per host, which is CONFIG rather than a different command: list the hosts in the
+manifest, in RANK ORDER, and terminal C stays the same single line it always was::
+
+    migration:
+      driver_hosts: [<H0>, <H1>]   # rank 0 FIRST, and it must be the runner's rank-0 host
+
+    # C) unchanged — the driver re-execs ITSELF under mpirun across driver_hosts (see
+    #    _maybe_relaunch_under_mpi). Equivalent overrides: --hosts / PREFILL_DRIVER_HOSTS.
+    python3 -m models.demos.common.prefill.runners.migration_driver \
+      --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
+
+Left out (or one host), nothing changes: a single process, one host's coverage, no MPI. With two or more,
+the relaunched processes split by rank exactly like ``prefill_producer``:
+  * rank 0 (the local host): the full run — H2D feed, ack drain, MigrationLayerClient, migrate(), both
+    sidecars — plus its own host's read-backs.
+  * every other rank: a device-less VALIDATOR. No H2D connect, no migration client, no migrate; it only
+    reads its OWN host's KV back (source PCC and/or destination check) and votes.
+Coordination is three collectives over the distributed context (host-side MPI, no mesh device), so all
+ranks must see the same env — hence the relaunch forwards every PREFILL_*/MIGRATION_* var and each rank
+applies the same manifest itself. GO#1 = rank 0 broadcasts the resident-slot map once every LayerAck has
+landed (releases the source PCC); GO#2 = rank 0 broadcasts the resolved (src, dst, real_len) triples once
+wait_complete has returned (releases the destination check); DONE = an allgather of each rank's verdict,
+which both waits for every validator's reads to finish and folds the pass/fail. Any rank failing fails the
+run. Already being under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) skips the relaunch, so an explicit
+mpirun of this module works too and behaves identically.
+Storage, and this is the usual way a multi-host run goes wrong: PREFILL_MIGRATION_TABLE_PATH must be on
+SHARED storage (every validator reads rank 0's table), while PREFILL_MIGRATION_DEVICE_MAP_PATH must stay
+HOST-LOCAL (each rank reads its OWN host's chips).
+
 Env. Everything below except the two PREFILL_VERIFY_MIGRATION* vars also has a typed field in the
 producer manifest's ``migration:`` block — see ``apply_manifest_env``; an explicitly exported env var
 always wins. Invoking this module IS the opt-in, so ``migration.issue`` is redundant here and a ``false``
@@ -81,6 +114,10 @@ is warned about rather than honoured:
                                     flag / env / raw ``env:`` block, no typed field.
   MIGRATION_DONE_FILE               path of the DONE sentinel published for an external consumer to poll
                                     (default /tmp/migration_done.sentinel).
+  PREFILL_DRIVER_HOSTS              rank-ordered host list ("h0,h1") this driver spans, == --hosts and the
+                                    manifest's ``migration.driver_hosts``. More than one host => the module
+                                    re-execs itself under mpirun, one process per host, so the read-backs
+                                    cover every rank. Unset (default) => one process, this host only.
   Queues + client come from the runner's migration env, resolved via ``runners.migration``:
   PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
 """
@@ -114,6 +151,12 @@ def apply_manifest_env(manifest: dict) -> None:
             os.environ.setdefault(key, "1" if val else "0")
 
     sd_bool("PREFILL_PRODUCER_ISSUE_MIGRATION", migration.get("issue"))
+    # Rank-ordered host list for the multi-host relaunch. Also read DIRECTLY from the manifest, before any
+    # of this runs (see _resolve_driver_hosts): by the time the env is applied the process is already the
+    # right one. Mirrored here so the value is visible in the environment like every other knob.
+    driver_hosts = migration.get("driver_hosts")
+    if driver_hosts is not None:
+        sd("PREFILL_DRIVER_HOSTS", driver_hosts if isinstance(driver_hosts, str) else ",".join(driver_hosts))
     sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
     sd("PREFILL_MIGRATION_SRC_ENDPOINT_ID", migration.get("src_endpoint_id"))
     sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
@@ -152,6 +195,173 @@ def _parse_layers(spec: str):
     """PREFILL_MIGRATION_LAYERS / manifest ``layers`` -> a list of layer ids, or None for "all"."""
     spec = (spec or "").strip()
     return [int(x) for x in spec.split(",") if x.strip()] if spec else None
+
+
+# ---------------------------------------------------------------------------
+# Self-relaunch under MPI (so the documented single-process command still covers every rank)
+# ---------------------------------------------------------------------------
+
+# Set on the exec'd child so a launcher that reports world_size 1 (a one-host list, a launcher that does
+# not export OMPI_*) can never make it relaunch again. Checked before anything else.
+_RELAUNCH_GUARD = "PREFILL_DRIVER_RELAUNCHED"
+
+# Forwarded to the peer ranks with mpirun -x (name only => the launch host's current value). ttrun-style
+# launchers propagate TT_*/ARCH_* themselves but nothing else, so PATH/PYTHONPATH have to be named or a
+# peer resolves a bare interpreter with no ttnn. Every PREFILL_*/MIGRATION_* var set in the shell is added
+# on top of these, because an exported knob that reaches only rank 0 is exactly the asymmetry that
+# desynchronizes the collectives.
+_RELAUNCH_FORWARD_VARS = (
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "TT_METAL_HOME",
+    "TT_METAL_CACHE",
+    "VIRTUAL_ENV",
+    "LOGURU_LEVEL",
+    _RELAUNCH_GUARD,
+)
+
+# Cluster NIC for MPI TCP, == run_pipeline_prefill.sh's tcp_iface default. These machines are multi-homed,
+# and without pinning the interface OpenMPI advertises addresses on one NIC and connects on another; the
+# peers never match up, so MPI_Init NEVER COMPLETES. The visible symptom is every rank logging "applied
+# manifest" and then nothing at all (all of them parked in init_distributed_context), usually with
+# "accepted a TCP connection from what appears to be another Open MPI process but cannot find a
+# corresponding process entry for that peer". Must match what the runner was launched with, since both
+# jobs span the same hosts.
+_RELAUNCH_TCP_IFACE_DEFAULT = "ens5f0np0"
+
+
+def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
+    """The rank-ordered host list this driver should span, or [] for a plain single-process run.
+
+    Three sources, first non-empty wins: ``--hosts``, PREFILL_DRIVER_HOSTS, and the manifest's
+    ``migration.driver_hosts`` (a "h0,h1" string or a YAML list). The manifest is read here WITHOUT
+    applying it to the environment — the relaunch decision has to be made before any env mutation so the
+    child applies the manifest itself, exactly as every other rank does.
+
+    ``$VAR`` / ``${VAR}`` in the value is expanded from the environment, so a SHARED manifest can say
+    ``driver_hosts: "$HOSTSP"`` and reuse the very host list that was passed to run_pipeline_prefill.sh
+    instead of hard-coding one lab's machines (every other host name in these manifests is a launch
+    argument for exactly that reason). An unset variable is fatal rather than ignored: falling back to a
+    single process would quietly re-introduce the partial-coverage bug this whole path exists to fix.
+
+    Entries are normalized to mpirun's ``host:slots`` form with one slot each: one driver process per
+    host is the whole point (each reads its own host's chips), and a second process on the same host
+    would just duplicate reads while adding a rank to every collective."""
+    spec = (cli_hosts or os.environ.get("PREFILL_DRIVER_HOSTS", "")).strip()
+    source = "--hosts/PREFILL_DRIVER_HOSTS"
+    if not spec and manifest_path:
+        import yaml
+
+        with open(manifest_path) as f:
+            hosts = ((yaml.safe_load(f) or {}).get("migration") or {}).get("driver_hosts")
+        if hosts:
+            spec = hosts if isinstance(hosts, str) else ",".join(str(h) for h in hosts)
+            source = f"{manifest_path} migration.driver_hosts"
+    expanded = os.path.expandvars(spec)
+    if "$" in expanded:
+        logger.error(
+            f"[migration_driver] driver host list {spec!r} (from {source}) references an environment "
+            f"variable that is not set — it expanded to {expanded!r}. Export it (e.g. the same HOSTSP you "
+            "passed to run_pipeline_prefill.sh) or replace it with literal host names. Refusing to fall "
+            "back to a single process: that would verify only this host's layers while looking like a "
+            "full-coverage run."
+        )
+        sys.exit(1)
+    return [h if ":" in h else f"{h}:1" for h in (e.strip() for e in expanded.split(",")) if h]
+
+
+def _maybe_relaunch_under_mpi(args) -> None:
+    """Re-exec this module under an MPI launcher across the configured hosts, so that the plain
+
+        python3 -m models.demos.common.prefill.runners.migration_driver --manifest <manifest>
+
+    validates EVERY rank's layers instead of only this host's. Returns (doing nothing) when there is
+    nothing to relaunch for; otherwise it never returns — os.execvp replaces this process with mpirun,
+    whose exit status is therefore the one the caller sees.
+
+    Why a relaunch at all: both read-backs go over UMD, which reaches only the chips attached to the host
+    the process runs on, so covering an N-host pipeline needs N processes. Doing it here rather than in a
+    wrapper script keeps ONE documented command for both topologies — the host list is config (manifest
+    ``migration.driver_hosts``), not a different way to launch.
+
+    Skipped, each time leaving the single-process behaviour untouched:
+      * already under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) or already exec'd by this function;
+      * no host list configured — the default, and what a 1-galaxy run wants;
+      * a single host, where mpirun would add a process manager and change nothing about coverage.
+    """
+    if os.environ.get(_RELAUNCH_GUARD) == "1" or int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
+        return
+    hosts = _resolve_driver_hosts(args.hosts, args.manifest)
+    if not hosts:
+        return
+    if len(hosts) == 1:
+        logger.info(f"[migration_driver] driver_hosts lists one host ({hosts[0]}); running single-process.")
+        return
+
+    import shutil
+    import socket
+
+    # rank 0 must be THIS host: it alone connects the H2D service and the migration cmd queue, both of
+    # which live where the runner's rank 0 runs. A wrong order fails later and less clearly (a service
+    # descriptor timeout on a remote rank), so say it now. Warn rather than exit: aliases/FQDNs make an
+    # exact hostname match unreliable, and the user may know better.
+    local, rank0 = socket.gethostname(), hosts[0].split(":")[0]
+    if not (local == rank0 or local.split(".")[0] == rank0.split(".")[0]):
+        logger.warning(
+            f"[migration_driver] driver_hosts starts with {rank0!r} but this host is {local!r}. Rank 0 must "
+            "be the host running the runner's rank 0 (it owns the H2D service and the migration queues); "
+            "list the hosts in the SAME order you passed to run_pipeline_prefill.sh."
+        )
+
+    launcher = shutil.which("mpirun-ulfm") or "mpirun"
+    # Reuse ttrun's own MCA arguments rather than restating them: the runner these ranks read KV behind was
+    # launched with exactly these (run_pipeline_prefill.sh --tcp-interface -> ttrun), and both jobs have to
+    # agree on the network or MPI_Init hangs. Import is ~0.4 s here because ttnn is already loaded.
+    from ttnn.distributed.ttrun import default_multihost_mpi_args
+
+    iface = args.tcp_interface if args.tcp_interface is not None else _RELAUNCH_TCP_IFACE_DEFAULT
+    iface = iface.strip()
+    if iface.lower() in ("", "none", "auto"):  # opt out -> ttrun's exclude-docker0,lo variant
+        iface = None
+    mca_args = default_multihost_mpi_args(iface)
+    # A peer rank inherits neither the shell that ran this nor its venv activation, so `python3 -m
+    # models...` there resolves against whatever PYTHONPATH is forwarded. Default both to this clone's
+    # root (this file is <root>/models/demos/common/prefill/runners/) when the launching shell left them
+    # unset, so the run does not depend on the caller having exported them.
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 5))
+    os.environ.setdefault("TT_METAL_HOME", repo_root)
+    os.environ.setdefault("PYTHONPATH", repo_root)
+    forward = list(_RELAUNCH_FORWARD_VARS) + sorted(
+        k for k in os.environ if k.startswith(("PREFILL_", "MIGRATION_")) and k not in _RELAUNCH_FORWARD_VARS
+    )
+    os.environ[_RELAUNCH_GUARD] = "1"
+    cmd = [
+        launcher,
+        "--host",
+        ",".join(hosts),
+        "--map-by",
+        "slot",
+        "--bind-to",
+        "none",
+        "--tag-output",
+        "--allow-run-as-root",
+    ] + mca_args
+    for var in forward:
+        if var in os.environ:
+            cmd += ["-x", var]
+    # sys.executable, not "python3": the peer must use the venv interpreter, and every host has this clone
+    # at the identical path (the same assumption run_pipeline_prefill.sh makes). argv[1:] is passed through
+    # verbatim, so every flag of the original command reaches all ranks.
+    cmd += [sys.executable, "-m", "models.demos.common.prefill.runners.migration_driver"] + sys.argv[1:]
+    logger.info(
+        f"[migration_driver] relaunching across {len(hosts)} host(s) {hosts} under {launcher} "
+        f"(tcp interface {iface or 'auto, excluding docker0/lo'}) — rank 0 prefills and migrates, every "
+        f"rank verifies its own host's layers. (Set {_RELAUNCH_GUARD}=1 or clear migration.driver_hosts "
+        "to stay single-process.)"
+    )
+    logger.info(f"[migration_driver] exec: {' '.join(cmd)}")
+    os.execvp(cmd[0], cmd)  # replaces this process; mpirun's exit status becomes ours
 
 
 class MigrationDriver:
@@ -750,6 +960,131 @@ def _verify_migrated_slots(mode: str, *, table, triples, slot_traces, layers, th
     return ok
 
 
+# ---------------------------------------------------------------------------
+# Multi-rank coordination (device-less; GO/DONE over MPI collectives, not files)
+#
+# One driver process per pipeline host under an MPI launcher. Rank 0 is the master (feeds H2D, owns the
+# LayerAck channel and the MigrationLayerClient, issues every migrate() and writes both sidecars); every
+# other rank is a device-less validator that reads only its OWN host's chips. The reason the split exists
+# at all is that read_dram_umd is host-local: rank 0 physically cannot read another galaxy's DRAM, so a
+# single-process driver can only ever verify its own layer slice.
+#
+# The barriers reuse prefill_producer's collectives verbatim (_mr_config / _mr_bcast_resident /
+# _mr_allgather_verdict) and add ONE of their own, _mr_bcast_triples, because the destination check needs
+# something the producer never had: the mapping rank 0 actually migrated. Ordering is fixed and identical
+# on every rank — resident bcast (GO#1), triples bcast (GO#2), verdict allgather (DONE) — since these are
+# built out of allgather_int, and a rank issuing a different NUMBER of allgathers desynchronizes the run.
+# ---------------------------------------------------------------------------
+
+
+def _mr_bcast_triples(rank: int, triples: list) -> list:
+    """Broadcast rank 0's resolved ``(src_slot, dst_slot, real_len)`` triples to every rank, built from
+    allgather_int the same way ``prefill_producer._mr_bcast_resident`` is (element [0] of each allgather is
+    rank 0's contribution; ttnn exposes no native broadcast). Non-master ranks pass ``[]`` and receive the
+    list.
+
+    Doubles as GO#2: a validator blocks in the first allgather until the master arrives, which happens only
+    after every migrate()'s wait_complete has returned — i.e. exactly when the destination slots hold data.
+    Broadcasting the triples rather than re-resolving them per rank means the validators check what was
+    MIGRATED, not what a second evaluation of the env/manifest thinks should have been."""
+    items = list(triples) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out = []
+    for k in range(n):
+        src, dst, real_len = items[k] if rank == 0 else (0, 0, 0)
+        src = ttnn.distributed_context_allgather_int(int(src))[0]
+        dst = ttnn.distributed_context_allgather_int(int(dst))[0]
+        real_len = ttnn.distributed_context_allgather_int(int(real_len))[0]
+        out.append((src, dst, real_len))
+    return out
+
+
+def _run_validator(rank: int, world_size: int, args) -> None:
+    """Non-master path: no H2D feed, no migration client, no migrate() — read-back only.
+
+    Waits for the master's GO#1 (the resident-slot broadcast, which the master only reaches after draining
+    every LayerAck, so all layers are written), PCCs this host's local layers of every source slot, then
+    waits for GO#2 (the migrated triples) and runs the same destination check the master runs, again over
+    this host's layers only. Joins the verdict allgather either way — including on failure — so the master
+    can never hang waiting for a rank that gave up early. Exits non-zero when this rank's checks failed.
+
+    Both read-backs filter by the local device map: a layer whose chips are not this host's resolves to no
+    unique_id and is skipped. With one process per host the union across ranks covers the whole model,
+    which is the entire point of running multi-rank."""
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    cfg = producer._config_from_env()
+    producer._require_shared_table_path(world_size)
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    # Constructed for its env-derived fields only (layers / cross_endpoint) — a validator never attaches a
+    # client and never migrates. The same env on every rank makes these identical to the master's.
+    driver = MigrationDriver(
+        chunk_size=producer.CHUNK_SIZE,
+        num_layers=producer.NUM_LAYERS,
+        default_dst_slot_offset=cfg.num_users,
+    )
+    verify_layers = _parse_layers(args.verify_migration_layers) or driver.layers
+    logger.info(
+        f"[migration_driver] validator rank={rank}/{world_size}: read-back only (no H2D feed, no migrate); "
+        f"src_pcc={cfg.verify} dst_verify={args.verify_migration}"
+    )
+
+    # GO#1 before the table read: the master broadcasts only after draining every LayerAck, which also
+    # means rank 0 finished publishing this run's table, so a read after GO cannot observe a stale one.
+    resident = producer._mr_bcast_resident(rank, {})
+    logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
+
+    try:
+        kv_table = producer._read_kv_chunk_table(timeout_s)
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: KV table read raised {type(e).__name__}: {e}")
+        kv_table = None
+
+    stats = producer.RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    # Env-derived, so this is the same slot -> golden mapping the master pushed against. Resolved only for
+    # the checks that actually need a golden: a dst-bytes-only validator compares device bytes to device
+    # bytes, and requiring the trace to be mounted on every host would fail the rank for nothing.
+    needs_traces = cfg.verify or args.verify_migration in ("dst-golden", "both")
+    slot_traces = producer._resolve_slot_prompts(cfg)[0] if needs_traces else {}
+
+    # Source PCC (was prefill correct on THIS host's layers?), the same gate the master runs on its own.
+    verify_ok = True
+    if cfg.verify:
+        if kv_table is None:
+            logger.error(f"[migration_driver] validator rank={rank}: no KV chunk table available; cannot PCC.")
+            verify_ok = False
+        else:
+            try:
+                verify_ok = producer._verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            except Exception as e:
+                logger.error(f"[migration_driver] validator rank={rank}: KV read/PCC failed: {type(e).__name__}: {e}")
+                verify_ok = False
+
+    # GO#2: the migrated mapping. Blocks until the master's last wait_complete has returned.
+    triples = _mr_bcast_triples(rank, [])
+    logger.info(f"[migration_driver] validator rank={rank}: {len(triples)} migrated pair(s) received")
+
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+
+    ok = verify_ok and migration_ok
+    producer._mr_allgather_verdict(ok)  # DONE barrier + verdict fold (the master reads the result)
+    logger.info(f"[migration_driver] validator rank={rank}: DONE src_pcc_ok={verify_ok} dst_verify_ok={migration_ok}")
+    if not ok:
+        sys.exit(1)
+
+
 def main() -> None:
     """Prefill a set of slots over H2D, then migrate their KV — the whole terminal-C side of a migration
     run in one process.
@@ -782,6 +1117,24 @@ def main() -> None:
         "manifest's migration.pairs and the uniform migration.dst_slot_offset fallback.",
     )
     parser.add_argument(
+        "--hosts",
+        default=None,
+        help="Rank-ordered host list to span, 'h0,h1,...' (rank 0 first, and it MUST be the host running "
+        "the runner's rank 0). With more than one host this module re-execs itself under mpirun, one "
+        "process per host, so that the read-backs cover every rank's layers instead of only this host's "
+        "— UMD can read no other host's chips. Overrides PREFILL_DRIVER_HOSTS and the manifest's "
+        "migration.driver_hosts; unset/one host = plain single-process run.",
+    )
+    parser.add_argument(
+        "--tcp-interface",
+        default=os.environ.get("PREFILL_DRIVER_TCP_IFACE"),
+        help="NIC for MPI TCP on the multi-host relaunch, passed through as ttrun's "
+        f"'--mca btl self,tcp --mca btl_tcp_if_include <iface>' (default {_RELAUNCH_TCP_IFACE_DEFAULT!r}, "
+        "the same default run_pipeline_prefill.sh uses). MUST match the interface the RUNNER was launched "
+        "with — these hosts are multi-homed and a mismatch hangs MPI_Init with every rank silent after "
+        "'applied manifest'. '' / 'none' falls back to excluding docker0,lo.",
+    )
+    parser.add_argument(
         "--dump-src-kv",
         default=os.environ.get("PREFILL_MIGRATION_DUMP_SRC_KV"),
         help="Directory to save each source slot's KV into as src_slot<N>.pt, for a decode-side consumer "
@@ -798,7 +1151,9 @@ def main() -> None:
         "transport only. Cost: dst-bytes reads BOTH slots, so it roughly doubles the UMD reads of a "
         "check_pcc pass (a full-depth Kimi pair is ~215k reads); use --verify-migration-layers to "
         "spot-check. Neither mode sees cross-talk unless PREFILL_PRODUCER_SLOT_TRACES gives the source "
-        "slots different prompts.",
+        "slots different prompts. Coverage is HOST-LOCAL either way (UMD reaches only this host's chips): "
+        "single-process it checks rank 0's layer slice alone, while under an MPI launcher each rank checks "
+        "its own host's slice and the verdicts are folded — see the module docstring.",
     )
     parser.add_argument(
         "--verify-migration-layers",
@@ -809,6 +1164,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Multi-host coverage: re-exec under mpirun across migration.driver_hosts (one process per host) before
+    # touching the environment, so every rank applies the manifest itself from the same starting point.
+    # No host list configured => no-op, and everything below runs exactly as it did single-process.
+    _maybe_relaunch_under_mpi(args)
+
     # Manifest order matters: the producer applies `env:` first (so a raw PREFILL_* key wins) plus its own
     # typed blocks, and hands back the parsed document; we then apply `migration:` from it. setdefault
     # throughout, so an exported env var still beats both.
@@ -818,7 +1178,28 @@ def main() -> None:
         os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations  # CLI beats manifest + env
     producer._load_env_config()
 
+    # Rank split. Under an MPI launcher every non-zero rank is a read-back-only validator for its OWN
+    # host's layers; standalone this is (0, 1) and nothing below changes. Done AFTER the manifest lands in
+    # the env so every rank derives the same config from the same source.
+    #
+    # The log line matters: _mr_config() calls MPI_Init, which BLOCKS until every rank has joined, and a
+    # network misconfiguration (ranks on different NICs -- see _RELAUNCH_TCP_IFACE_DEFAULT) makes that
+    # block forever. Announcing it turns an otherwise silent hang into a visible "waiting for N ranks".
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
+        logger.info(
+            f"[migration_driver] joining the distributed context "
+            f"({os.environ['OMPI_COMM_WORLD_SIZE']} rank(s) expected); this blocks until all of them arrive"
+        )
+    mr_rank, world_size = producer._mr_config()
+    if mr_rank != 0:
+        _run_validator(mr_rank, world_size, args)
+        return
+
     cfg = producer._config_from_env()
+    # Validators read the table the runner published under this path from their own hosts, so on
+    # multi-rank it has to be shared storage. Checked on every rank (same env => same verdict), so a
+    # rejection exits all of them symmetrically instead of half-opening a barrier.
+    producer._require_shared_table_path(world_size)
     # Invoking THIS module is the opt-in, so migration.issue is redundant here. Warn rather than silently
     # honour a `false` that would turn the whole invocation into a no-op.
     if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
@@ -877,6 +1258,13 @@ def main() -> None:
     )
     producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
 
+    # Multi-rank GO#1: every layer of every chunk is now written across every stage's DRAM, so release the
+    # validators to PCC their own hosts' layers. Broadcast BEFORE this rank's own read-back so the reads
+    # overlap across hosts. The drain above is unconditional here (unlike prefill_producer, which gates it
+    # on check_pcc), so this guarantee holds even with check_pcc off.
+    if world_size > 1:
+        producer._mr_bcast_resident(mr_rank, stats.resident)
+
     # Golden PCC + the src-KV dump run BEFORE migrating, so both land before the DONE sentinel a consumer
     # may be waiting on. Migration only READS the source slots, so the order is equivalent.
     verify_ok = True
@@ -894,14 +1282,36 @@ def main() -> None:
         if kv_table is None:
             logger.error("[migration_driver] --dump-src-kv needs the KV chunk table, which never appeared.")
         else:
+            # Rank 0 only: every rank would write the SAME src_slot<N>.pt with a different layer subset and
+            # clobber the others. The dump therefore carries this host's layers alone on a multi-rank run.
+            if world_size > 1:
+                logger.warning(
+                    f"[migration_driver] --dump-src-kv runs on rank 0 only, so {args.dump_src_kv} will hold "
+                    f"THIS host's layers and None for the rest (world_size={world_size}). Dump from a "
+                    "single-rank runner if the decode side needs every layer."
+                )
             _dump_src_kv(args.dump_src_kv, kv_table, stats, slot_traces, driver.layers)
 
-    triples = driver.run(
-        stats,
-        num_slots=kv_table.config().num_slots if kv_table is not None else None,
-        slot_traces=slot_traces,
-        pools_by_trace=pools_by_trace,
-    )
+    # Migrate. Wrapped so a failure here still reaches GO#2 below with an empty mapping: a validator parked
+    # in that broadcast would otherwise hang forever on a master that died. Every rank then verifies zero
+    # pairs, votes False, and the run exits non-zero together.
+    triples = []
+    migrate_ok = True
+    try:
+        triples = driver.run(
+            stats,
+            num_slots=kv_table.config().num_slots if kv_table is not None else None,
+            slot_traces=slot_traces,
+            pools_by_trace=pools_by_trace,
+        )
+    except Exception as e:
+        logger.exception(f"[migration_driver] migration failed: {type(e).__name__}: {e}")
+        migrate_ok = False
+
+    # Multi-rank GO#2: wait_complete has returned for every pair, so the destination slots hold data.
+    # Release the validators with the mapping that was actually migrated.
+    if world_size > 1:
+        _mr_bcast_triples(mr_rank, triples)
 
     # Destination read-back. Runs AFTER driver.run() because the dst slot only holds anything once the
     # migrate's wait_complete has returned, and BEFORE the shutdown sentinel below because the UMD reads
@@ -914,15 +1324,33 @@ def main() -> None:
             f"[migration_driver] verifying layer subset {sorted(set(verify_layers))} only — a PASS is a "
             "SAMPLE of the migration, not a proof that every layer copied correctly."
         )
-    migration_ok = _verify_migrated_slots(
-        args.verify_migration,
-        table=kv_table,
-        triples=triples,
-        slot_traces=slot_traces,
-        layers=verify_layers,
-        threshold=cfg.pcc_threshold,
-        cross_endpoint=driver.cross_endpoint,
-    )
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        # Same reason as the migrate above: reach the verdict allgather rather than stranding a validator.
+        logger.exception(f"[migration_driver] destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+    migration_ok = migration_ok and migrate_ok
+
+    # Multi-rank DONE: the verdict allgather is also the barrier that holds this rank until every validator
+    # has finished reading, so the shutdown sentinel below cannot tear the mesh/DRAM down under one. Fold
+    # every rank's verdict — this rank's own is contributed as element [0] — so a failure anywhere fails
+    # the run, and each rank covers a different slice of the model.
+    local_ok = migration_ok and not (cfg.verify and not verify_ok)
+    all_ranks_ok = local_ok
+    if world_size > 1:
+        verdicts = producer._mr_allgather_verdict(local_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[migration_driver] rank={r}: ok={v}")
+        all_ranks_ok = all(verdicts)
 
     # Optional graceful shutdown: sent LAST, because the UMD read-backs above need the mesh/DRAM alive.
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
@@ -936,11 +1364,17 @@ def main() -> None:
 
     # Both gates feed the exit code: the source PCC (was prefill correct?) and the destination read-back
     # (did the copy land correctly?). A silent success on either would make the run green while unverified.
+    # Multi-rank, they are folded across ranks first — each rank only ever saw its own host's layers, so
+    # only the fold covers the model.
     if cfg.verify and not verify_ok:
-        logger.error("[migration_driver] FAILED: source KV PCC did not pass.")
-    if not migration_ok:
-        logger.error("[migration_driver] FAILED: migrated destination verification did not pass.")
-    if (cfg.verify and not verify_ok) or not migration_ok:
+        logger.error("[migration_driver] FAILED: source KV PCC did not pass on rank 0.")
+    if not migrate_ok:
+        logger.error("[migration_driver] FAILED: the migrate step itself did not complete (see above).")
+    elif not migration_ok:
+        logger.error("[migration_driver] FAILED: migrated destination verification did not pass on rank 0.")
+    if local_ok and not all_ranks_ok:
+        logger.error("[migration_driver] FAILED: rank 0 passed but another rank's read-back did not.")
+    if not all_ranks_ok:
         sys.exit(1)
 
 
