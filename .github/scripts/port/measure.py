@@ -385,9 +385,13 @@ def run_device(op: str, cases: list[dict], device, generic, reps: int) -> list[d
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--op", required=True)
-    ap.add_argument("--ledger", required=True, help="JSON from ledger.py")
+    ap.add_argument("--ledger", default=None, help="JSON from ledger.py; only used without --manifest")
     ap.add_argument("--band", required=True, choices=["correctness", "wall", "device", "golden"])
-    ap.add_argument("--manifest", default=None, help="port manifest; supplies `golden_callable` if set")
+    ap.add_argument(
+        "--manifest",
+        default=None,
+        help="port manifest; preferred over --ledger because it keeps ttnn objects in kwargs live",
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0, help="cap the number of cases (perf bands)")
     ap.add_argument("--iters", type=int, default=30)
@@ -400,9 +404,32 @@ def main() -> int:
         help="how the perf bands spend their case budget; `prefix` is the old flat slice",
     )
     args = ap.parse_args()
+    if not args.manifest and not args.ledger:
+        ap.error("one of --manifest or --ledger is required")
 
-    ledger = json.loads(Path(args.ledger).read_text())
-    cases = ledger["cases"]
+    manifest = None
+    if args.manifest:
+        import yaml
+
+        manifest = yaml.safe_load(Path(args.manifest).read_text()) or {}
+
+    if manifest is not None:
+        # Expanded here rather than read from the ledger JSON, because a case's kwargs can hold live
+        # ttnn objects and JSON cannot carry them. `ledger.py --out` serialises with `default=str`, so
+        # `untilize`'s `memory_config=ttnn.DRAM_MEMORY_CONFIG` arrives as the *string*
+        # "MemoryConfig(...)" and every `ttnn.untilize(x, memory_config=...)` call raises. pad never
+        # showed this: its kwargs are a list and a number, which survive the round trip intact.
+        #
+        # `build_ledger` is a deterministic function of the manifest and the sweep module, so
+        # expanding it again here yields the same cases in the same order, with the same ids, that
+        # gate.py grades against. Re-expanding costs a module import; encoding every ttnn type into
+        # JSON and back would cost a codec that has to keep up with ttnn.
+        import ledger as ledger_module
+
+        cases = ledger_module.build_ledger(manifest)
+    else:
+        cases = json.loads(Path(args.ledger).read_text())["cases"]
+
     selection: dict | None = None
     if args.band == "correctness":
         # Never capped. Correctness is cheap per case and the routing check only means something
@@ -427,12 +454,6 @@ def main() -> int:
             # The plan travels to gate.py, which grades per stratum and reports coverage; the cases
             # themselves would just duplicate the results list.
             selection = {k: v for k, v in selection.items() if k != "cases"}
-
-    manifest = None
-    if args.manifest:
-        import yaml
-
-        manifest = yaml.safe_load(Path(args.manifest).read_text()) or {}
 
     device = ttnn.open_device(device_id=0)
     generic = None

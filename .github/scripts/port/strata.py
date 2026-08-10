@@ -112,9 +112,13 @@ def discover_axes(cases: list[dict], budget: int = 0) -> list[str]:
 
 
 def _label(value) -> str:
-    """`_canonical` with the quotes off plain strings, since these labels reach the PR body."""
+    """`_canonical` with the quotes off, since these labels reach the PR body.
+
+    Keyed on the rendering rather than the input type, so a ttnn object that `_canonical` stringified
+    via `default=str` -- `memory_config=ttnn.DRAM_MEMORY_CONFIG` is one -- loses its quotes too.
+    """
     text = _canonical(value)
-    return text[1:-1] if isinstance(value, str) else text
+    return text[1:-1] if text.startswith('"') and text.endswith('"') else text
 
 
 def stratum_key(case: dict, axes: list[str]) -> str:

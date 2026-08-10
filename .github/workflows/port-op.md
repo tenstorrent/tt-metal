@@ -29,7 +29,7 @@ on:
         description: "Op to port; must have a manifest at agentic_port/manifests/<op>.yaml"
         required: true
         type: string
-        default: pad
+        default: untilize
       category:
         description: "ttnn/cpp/ttnn/operations/<category>/<op>"
         required: false
@@ -166,9 +166,9 @@ steps:
     run: |
       echo ".codegen/" >> .git/info/exclude
       echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-      echo "PORT_OP=${{ inputs.op || 'pad' }}" >> $GITHUB_ENV
+      echo "PORT_OP=${{ inputs.op || 'untilize' }}" >> $GITHUB_ENV
       echo "PORT_CATEGORY=${{ inputs.category || 'data_movement' }}" >> $GITHUB_ENV
-      echo "PORT_MANIFEST=/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" >> $GITHUB_ENV
+      echo "PORT_MANIFEST=/codegen/agentic_port/manifests/${{ inputs.op || 'untilize' }}.yaml" >> $GITHUB_ENV
       echo "PORT_LIMIT=${{ inputs['perf-limit'] || '24' }}" >> $GITHUB_ENV
 
   # One container for the whole run, holding the toolchain, the runtime and the card. Keeping it
@@ -250,7 +250,7 @@ steps:
     run: |
       docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
         python3 .github/scripts/port/scaffold.py \
-        --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
+        --op "${{ inputs.op || 'untilize' }}" --category "${{ inputs.category || 'data_movement' }}" \
         --ttmetal-home /work --codegen-root /codegen
 
       # And assert it, because the agent cannot do its job without write access and this is the only
@@ -258,7 +258,7 @@ steps:
       # test the agent had to perform for itself. `[ -w ]` asks the kernel whether *this* user can
       # write, which is the question; a permission-bit test would pass a root-owned 644 file, since
       # u+w is set for a user we are not.
-      dir="ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'pad' }}/codegen"
+      dir="ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'untilize' }}/codegen"
       if [ ! -d "$dir" ]; then
         echo "::error::scaffold.py reported success but $dir does not exist"
         exit 1
@@ -387,7 +387,7 @@ steps:
     run: |
       docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
         python3 .github/scripts/port/scaffold.py \
-        --op "${{ inputs.op || 'pad' }}" --category "${{ inputs.category || 'data_movement' }}" \
+        --op "${{ inputs.op || 'untilize' }}" --category "${{ inputs.category || 'data_movement' }}" \
         --ttmetal-home /work --codegen-root /codegen --emit-test-only
 
   # This exists to prove the harness and the card work before the agent starts, so that a later
@@ -406,11 +406,9 @@ steps:
   # been graded against the wrong answer, and it would have looked like a broken port.
   - name: Check the golden against native
     run: |
-      docker exec portdev python3 .github/scripts/port/ledger.py \
-        --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" --out /tmp/golden_ledger.json
       docker exec portdev python3 .github/scripts/port/measure.py \
-        --op "${{ inputs.op || 'pad' }}" --ledger /tmp/golden_ledger.json --band golden \
-        --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
+        --op "${{ inputs.op || 'untilize' }}" --band golden \
+        --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'untilize' }}.yaml" \
         --limit "${{ inputs['perf-limit'] || '24' }}" --out /tmp/golden.json
 
       # Asserted here rather than in measure.py, which reports numbers and never decides pass or
@@ -436,7 +434,7 @@ steps:
   - name: Native baseline
     run: |
       docker exec portdev python3 .github/scripts/port/gate.py \
-        --op "${{ inputs.op || 'pad' }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml" \
+        --op "${{ inputs.op || 'untilize' }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op || 'untilize' }}.yaml" \
         --category "${{ inputs.category || 'data_movement' }}" --band performance --repo /work \
         --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] || '24' }}" --skip-write-check \
         > /tmp/baseline.json || true
@@ -587,7 +585,7 @@ safe-outputs:
 
 # Port a codegen op to a C++ program factory
 
-You are porting the tt-dm-codegen generic_op **`${{ inputs.op || 'pad' }}`** into tt-metal as a native C++
+You are porting the tt-dm-codegen generic_op **`${{ inputs.op || 'untilize' }}`** into tt-metal as a native C++
 `DeviceOperation`, and proving on silicon that it beats the existing implementation.
 
 The tree is already scaffolded and built. The kernels are copied, the three `codegen/` source files
@@ -603,10 +601,10 @@ diagnostic will be prefixed differently from the path you edit. They are the sam
 | What | Where you edit it |
 | --- | --- |
 | tt-metal checkout (your working tree) | the workspace root |
-| The op you are porting | `ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'pad' }}/` |
-| Your stubs to fill in | `.../${{ inputs.op || 'pad' }}/codegen/` |
+| The op you are porting | `ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'untilize' }}/` |
+| Your stubs to fill in | `.../${{ inputs.op || 'untilize' }}/codegen/` |
 | tt-dm-codegen (read-only) | `.codegen/` |
-| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ inputs.op || 'pad' }}.yaml` |
+| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ inputs.op || 'untilize' }}.yaml` |
 | The porting guide — read this first | `.codegen/agentic_port/knowledge/porting-guide.md` |
 | The generator you are transliterating | the manifest's `codegen_builder` path, under `.codegen/` |
 | **A finished, merged port to imitate** | `ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/` |
@@ -618,7 +616,7 @@ deliverable you are producing, including its routing in `repeat/repeat.cpp`. Fol
 ## What to write
 
 **A. Program factory.** Transliterate the manifest's `codegen_builder` into a declarative
-`create_descriptor` in `codegen/${{ inputs.op || 'pad' }}_codegen_program_factory.cpp`, per the porting
+`create_descriptor` in `codegen/${{ inputs.op || 'untilize' }}_codegen_program_factory.cpp`, per the porting
 guide's factory-translation section. Wire real circular-buffer and kernel args from the manifest's
 `cache_key_fields`, not placeholders.
 
@@ -628,7 +626,7 @@ merely happens to make one case pass is a defect even when the case passes.
 
 **B. Routing.** All four pieces, in the shared files, not in new ones:
 
-1. `supported_by_codegen()` in `codegen/${{ inputs.op || 'pad' }}_codegen_supported.{hpp,cpp}`, transcribed
+1. `supported_by_codegen()` in `codegen/${{ inputs.op || 'untilize' }}_codegen_supported.{hpp,cpp}`, transcribed
    from the generator sweep's `invalidate_vector` plus any op guards. This predicate is about
    **correctness and device-resource feasibility, never performance**. Two things it must get
    right, both of which the sweep cannot tell you:
@@ -673,8 +671,8 @@ merely happens to make one case pass is a defect even when the case passes.
    `routing.demoted_but_faster` is the opposite mistake: a case you routed away that measured faster
    under forced codegen. Those demotions cost performance for nothing; remove them.
 
-3. The host free function `ttnn::${{ inputs.op || 'pad' }}(..., implementation=)` in the shared
-   `${{ inputs.op || 'pad' }}.cpp`:
+3. The host free function `ttnn::${{ inputs.op || 'untilize' }}(..., implementation=)` in the shared
+   `${{ inputs.op || 'untilize' }}.cpp`:
    - `"auto"` (the default) → codegen iff `supported_by_codegen(attrs) && !is_demoted(attrs)`,
      else the native prim.
    - `"native"` → always the native prim, unconditionally.
@@ -689,8 +687,8 @@ merely happens to make one case pass is a defect even when the case passes.
      control lands work on cores the caller deliberately reserved. Put this in its own predicate,
      shared by both branches, and keep it out of `supported_by_codegen()`.
 
-4. `prim::${{ inputs.op || 'pad' }}_codegen` validate, in
-   `codegen/${{ inputs.op || 'pad' }}_codegen_device_operation.cpp`: a second `TT_FATAL(supported_by_codegen(...))`
+4. `prim::${{ inputs.op || 'untilize' }}_codegen` validate, in
+   `codegen/${{ inputs.op || 'untilize' }}_codegen_device_operation.cpp`: a second `TT_FATAL(supported_by_codegen(...))`
    on cache miss, plus **the native op's own structural `TT_FATAL`s** — device storage, non-null
    buffer, rank and alignment invariants. `supported_by_codegen()` only asks about layout, dtype and
    memory config, all of which answer perfectly well for a host-side or deallocated tensor, so a
@@ -698,7 +696,7 @@ merely happens to make one case pass is a defect even when the case passes.
    where native gave a clear error.
 
 5. The Python binding: expose the `implementation` kwarg on the **existing** binding in
-   `${{ inputs.op || 'pad' }}_nanobind.cpp`, defaulting to `"auto"`.
+   `${{ inputs.op || 'untilize' }}_nanobind.cpp`, defaulting to `"auto"`.
 
 **C. Remaining hooks.** Fill in `compute_output_specs`, `create_output_tensors`, and any other
 DeviceOp hooks per the porting guide's checklist for this op's tier.
