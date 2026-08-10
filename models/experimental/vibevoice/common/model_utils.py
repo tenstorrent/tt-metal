@@ -121,25 +121,3 @@ def ensure_model_weights(
         )
 
     return resolved.resolve()
-
-
-def get_model_path(
-    model_path: Optional[PathLike] = None,
-    *,
-    model_location_generator=None,
-    download: bool = False,
-) -> str:
-    """Return the resolved checkpoint path as a string.
-
-    When *download* is False, returns the configured path without verifying
-    that weights exist (legacy ``MODEL_PATH`` behavior).
-    """
-    if download:
-        return str(
-            ensure_model_weights(
-                model_path,
-                model_location_generator=model_location_generator,
-                download=True,
-            )
-        )
-    return str(_resolve_base_path(model_path, model_location_generator=model_location_generator))

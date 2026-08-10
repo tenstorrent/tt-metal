@@ -32,11 +32,6 @@ def _ttnn_scalar_mul(x: ttnn.Tensor, scalar: float) -> ttnn.Tensor:
     return ttnn.mul(x, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _ttnn_scalar_add(x: ttnn.Tensor, scalar: float) -> ttnn.Tensor:
-    """Add a Python float scalar to a TTNN tensor (direct scalar form; see _ttnn_scalar_mul)."""
-    return ttnn.add(x, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
 class TTDPMSolverMultistepScheduler:
     """TTNN port of DPMSolverMultistepScheduler.
 
