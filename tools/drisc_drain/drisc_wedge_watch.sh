@@ -43,7 +43,11 @@
 TAG=${TAG:-watch}
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 BIN=${BIN:-$REPO/build_Release/programming_examples/test_perf_debug_zones}
-OUT=${OUT_DIR:-/localdev/$LOGNAME/drisc_wedge}/$TAG
+# Derive the output root from the REPO path, not from $LOGNAME: the dev container runs as root with no
+# passwd entry, so $LOGNAME/$USER are EMPTY there and "/localdev/$LOGNAME/..." collapsed to
+# "/localdev//drisc_wedge" -- writing sweep results into the SHARED /localdev root instead of the user's
+# own directory. $REPO is resolved from this script's own location, so it is right either side.
+OUT=${OUT_DIR:-$(dirname "$REPO")/drisc_wedge}/$TAG
 N=${N:-60}
 DELAY=${DELAY:-125}
 ITERS=${ITERS:-500}
@@ -80,36 +84,44 @@ log(){ echo "$*" | tee -a "$SUM"; }
 # PCIe diagnostics preflight. These need the HOST: /sys is bind-mounted into the dev container so link
 # state still reads there, but sudo/setpci config-space access does not -- which is how a whole sweep can
 # look instrumented while its DevSta column is meaningless.
-[ -f /.dockerenv ] && log "WARN: running INSIDE the container -- PCIe config-space diagnostics need the host"
+[ -f /.dockerenv ] && log "NOTE: running INSIDE the container -- link state works here, DevSta does not (see below)"
+
+# Link state is the wedge DISCRIMINATOR: a wedged endpoint's config space reads all-ones, which surfaces
+# as "Unknown". It reads fine even in the container, where /sys is mounted ro. Without it there is
+# nothing to classify, so this one IS fatal.
+for _d in "$EP" "$RP"; do
+    [ -r "/sys/bus/pci/devices/$_d/current_link_speed" ] || {
+        log "FATAL: cannot read link state for $_d -- the wedge classifier has nothing to key on."
+        exit 1; }
+done
+
+# DevSta is CORROBORATING error evidence, not the classifier, so losing it degrades a sweep rather than
+# invalidating it. An earlier version made this fatal and blocked the normal in-container workflow for no
+# good reason. In the dev container it is unavailable two ways over: pciutils is not installed, and /sys
+# is ro so the RW1C clear could not work even if it were. Run on the HOST when you specifically need
+# per-run PCIe error evidence; set REQUIRE_DEVSTA=1 to insist on it.
 DEVSTA_OK=0
-if sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w >/dev/null 2>&1; then
-    DEVSTA_OK=1
+devsta_why=""
+if ! command -v setpci >/dev/null 2>&1; then
+    devsta_why="setpci not installed (pciutils missing -- typical in the dev container)"
+elif ! sudo -n setpci -s "${EP#0000:}" CAP_EXP+0A.w >/dev/null 2>&1; then
+    devsta_why="sudo -n setpci failed (config-space access denied; /sys is mounted ro in the container)"
 else
-    log "FATAL: cannot read endpoint DevSta (sudo -n setpci -s ${EP#0000:} CAP_EXP+0A.w failed)."
-    log "  DevSta at PCIe cap + 0x0A is the per-run PCIe error probe -- AER reads clean while the"
-    log "  endpoint carries a real UnsupReq, so without it a wedge has no error evidence at all."
-    log "  Run this on the HOST (not the container), or set ALLOW_NO_DEVSTA=1 to sweep without it."
-    [ "${ALLOW_NO_DEVSTA:-0}" = "1" ] || exit 1
-    log "  ALLOW_NO_DEVSTA=1 -> continuing; the devsta column will read 'unavail', not a value."
+    DEVSTA_OK=1
 fi
-
-# Refuse to append to an existing sweep. Reusing a TAG used to silently concatenate sweeps into one
-# runs.csv with restarting k values and different ARMED/DISPATCH settings -- which makes any rate
-# computed off that file wrong, and is unrecoverable after the fact because the settings are not in
-# the rows. Pick a new TAG, or opt in with APPEND=1 if you really are continuing the same sweep.
-if [ -f "$CSV" ] && [ "${APPEND:-0}" != "1" ]; then
-    echo "FATAL: $CSV already exists -- that sweep's rows would be mixed with this one's."
-    echo "  use a fresh TAG=...   (or APPEND=1 to deliberately continue the same sweep)"
-    exit 1
+if [ "$DEVSTA_OK" = 1 ]; then
+    log "    devsta probe: ok (per-run PCIe error evidence enabled)"
+else
+    log "WARN: DevSta unavailable -- $devsta_why"
+    log "      The devsta column will read 'unavail'. Wedge CLASSIFICATION is unaffected: it keys on"
+    log "      link state. What you lose is the per-run PCIe error probe, and that matters because AER"
+    log "      reads clean while the endpoint carries a real UnsupReq -- so a wedge caught here will"
+    log "      have no error evidence attached. Re-run on the HOST for that."
+    if [ "${REQUIRE_DEVSTA:-0}" = "1" ]; then
+        log "FATAL: REQUIRE_DEVSTA=1 and DevSta is unavailable."
+        exit 1
+    fi
 fi
-[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class" > "$CSV"
-# Settings live next to the rows, so a csv is still interpretable months later.
-{ echo "date=$(date -Is) host=$(hostname) tag=$TAG"
-  echo "N=$N DELAY=$DELAY ITERS=$ITERS GX=$GX GY=$GY ARMED=$ARMED"
-  echo "DISPATCH=$DISPATCH DRAINER=$DRAINER STOP_ON_WEDGE=$STOP_ON_WEDGE ALLOW_REBOOT=$ALLOW_REBOOT"
-  echo "MAX_CONSEC_FAIL=$MAX_CONSEC_FAIL RUN_TIMEOUT=$RUN_TIMEOUT BIN=$BIN"
-} >> "$OUT/params.txt"
-
 
 # Endpoint config space reads ALL-ONES once wedged, so its own sysfs cannot tell you anything: an
 # all-ones link speed surfaces as "Unknown". That is the wedge signature, not downtraining -- always
