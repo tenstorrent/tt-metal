@@ -598,17 +598,23 @@ def _apply_rope_interleaved_ttnn(
     decode and prefill shape); the surrounding fp32 mul/add/typecasts match _apply_rope_ttnn op for
     op.  Used by prefill, which therefore keeps its fp32 RoPE numerics.
     """
-    x_f32 = ttnn.typecast(x, ttnn.float32)
-    rotated = ttnn.add(
-        ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    # Leading BF16->FP32 widen and trailing FP32->BF16 narrow are folded away (byte-identical,
+    # maxabsdiff==0): mul(bf16, fp32)->fp32 upcasts losslessly, the matmul against the
+    # signed-permutation trans_mat reproduces the rotate exactly for bf16-valued x (dtype=fp32
+    # out), and add(dtype=bf16) packs with the same round-to-nearest-even the dropped typecast
+    # applied.  Same fold proven exact in _apply_rope_b2.
+    return ttnn.add(
+        ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
         ttnn.mul(
-            ttnn.matmul(x_f32, trans_mat, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.matmul(
+                x, trans_mat, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32
+            ),
             sin,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
     )
-    return ttnn.typecast(rotated, ttnn.bfloat16)
 
 
 def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
@@ -1091,17 +1097,22 @@ class TTVibeVoiceLM:
             k_rep = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             v_rep = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            q_f32 = ttnn.typecast(q, ttnn.float32)
-            k_f32 = ttnn.typecast(k_rep, ttnn.float32)
-            v_f32 = ttnn.typecast(v_rep, ttnn.float32)
-            k_t = ttnn.permute(k_f32, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
-            scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # q/k/v are bf16-valued; feeding them straight into the fp32-accumulating HiFi4
+            # matmuls (dtype=fp32 out) is byte-identical (maxabsdiff==0) to widening each to
+            # fp32 first, so the three widen typecasts are dropped.  scores/mask/softmax stay
+            # fp32 exactly as before.
+            k_t = ttnn.permute(k_rep, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
+            scores = ttnn.matmul(
+                q, k_t, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
             scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             scores = ttnn.add(scores, self._causal_mask(S, S_total), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.matmul(
+                attn, v_rep, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
             out = ttnn.typecast(out, ttnn.bfloat16)
             # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape.
             out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
