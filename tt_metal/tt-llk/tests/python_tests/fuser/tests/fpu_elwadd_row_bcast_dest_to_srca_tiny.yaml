@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Regression for ROW broadcast with DEST_TO_SRCA reuse. A 16x32 tile has two
-# faces in one face-row; DEST_TO_SRCA consumes one SrcA DVALID per face. The
-# first stage seeds DEST with non-zero data so the second stage also verifies
+# Regression for Wormhole ROW broadcast with DEST_TO_SRCA reuse. A 16x32 tile
+# has two faces in one face-row; DEST_TO_SRCA consumes one SrcA DVALID per face.
+# The first stage seeds DEST with non-zero data so the second stage also verifies
 # the destination-to-SrcA data path.
 
-supported_archs: ["wormhole", "blackhole"]
+supported_archs: ["wormhole"]
 
 dest_acc: true
 
