@@ -919,6 +919,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
     }
+    // Fused per-channel snake on the 1D depthwise path. The compute kernel reads the two parameter
+    // tiles from a dedicated CB and never pops them; see FUSED_BAND_DESIGN.md for why they cannot ride
+    // the weights CB. The CB is allocated with zero pages unless this same env var is set, so define
+    // and allocation stay in step.
+    if (is_conv_1d_depthwise_conv && std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr) {
+        compute_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+    }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
         reader_defines["SPLIT_READER"] = "1";

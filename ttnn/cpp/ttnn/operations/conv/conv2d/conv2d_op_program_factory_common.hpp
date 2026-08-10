@@ -33,6 +33,10 @@ enum class Conv2dCb {
     READER_INDICES,
     L1_ARRAY,
     MATMUL_PARTIALS,
+    // Per-channel activation parameters (alpha, inv_beta) for the fused snake on the 1D depthwise
+    // path. Write-once, read-many: filled once and never popped, unlike the streaming WEIGHTS CB.
+    // Zero pages unless the feature is requested.
+    SNAKE_PARAMS,
     OUT,
     COUNT
 };

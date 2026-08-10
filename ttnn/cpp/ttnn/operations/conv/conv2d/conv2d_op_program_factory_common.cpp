@@ -7,6 +7,7 @@
 #include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <tuple>
 #include <unordered_map>
@@ -206,6 +207,23 @@ std::vector<CBInfo> get_cb_info(
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::WEIGHTS,
             .num_pages = weight_block_num_tiles,
+            .page_size = weights_tile_size,
+            .data_format = weights_df});
+    }
+
+    {
+        // Per-channel snake parameters (alpha, then inv_beta) for the fused activation on the 1D
+        // depthwise path. Two tiles, filled once and never popped -- they are the same for every tile
+        // in a block, so a streaming CB is the wrong home: the compute path pops in1 once per tile per
+        // tap, which would consume them `block_num_tiles` times over. See FUSED_BAND_DESIGN.md.
+        //
+        // Env-gated rather than a Conv2dConfig field because this is a measurement vehicle; if it
+        // earns its place it should become a proper field. Zero pages otherwise, so the default path
+        // allocates nothing and post_conv2d_op_memory_checks sees no change.
+        const bool snake_params = is_1d_depthwise_conv && std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr;
+        cb_info.emplace_back(CBInfo{
+            .name = Conv2dCb::SNAKE_PARAMS,
+            .num_pages = snake_params ? 2u : 0u,
             .page_size = weights_tile_size,
             .data_format = weights_df});
     }
