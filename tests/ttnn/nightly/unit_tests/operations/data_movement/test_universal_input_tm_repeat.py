@@ -1051,3 +1051,39 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
         input_mem_config=in_mc_fn(device),
         output_mem_config=out_mc_fn(device),
     )
+
+
+# Optional output tensor — preallocated buffer reuse.
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, id="RM"),
+        pytest.param(ttnn.TILE_LAYOUT, id="TILE"),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, repeat_shape",
+    [
+        pytest.param((1, 2, 32, 32), (1, 2, 1, 1), id="rep_n"),
+        pytest.param((2, 3, 32, 64), (1, 1, 1, 2), id="rep_w"),
+        pytest.param((1, 1, 32, 32), (2, 3, 1, 1), id="rep_multi"),
+    ],
+)
+def test_repeat_optional_output_tensor(device, layout, shape, repeat_shape):
+    n = 1
+    for s in shape:
+        n *= s
+    torch_input = torch.arange(0, n, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    out_shape = tuple(s * r for s, r in zip(shape, repeat_shape))
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, layout, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+
+    assert_equal(torch_result, ttnn.to_torch(output))
+    assert_equal(torch_result, ttnn.to_torch(optional_output))
