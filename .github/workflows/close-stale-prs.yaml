@@ -2,6 +2,13 @@ name: "[internal] Close Stale PRs"
 
 permissions:
   pull-requests: write
+  # actions/stale persists its "already processed" list as an Actions cache
+  # keyed _state, and refreshes it by deleting then re-saving. The delete needs
+  # actions: write; without it the delete 403s, the save cannot reserve the
+  # existing key, and the cache freezes at whatever the first run wrote.
+  # A frozen list is skipped verbatim on every later run, so those PRs would
+  # never be reconsidered. This is the narrowest scope that covers caches.
+  actions: write
 
 on:
   schedule:
