@@ -1,8 +1,5 @@
 # `$advisor-challenger` — measure how much `$shard-advise` adds to a decoder already optimized without it
 
-*v3. What changed from v2 and why, with the measurement behind each change:
-`skillexp/ADVCHAL-V3-CHANGES.md`.*
-
 **Input:** a finished, tagged `optimized_decoder.py` from an arm or snapshot that never ran the advisor.
 **Output:** the best *measured* decoder, plus a complete accounting of what the advisor said and what it was
 worth. A **no-change outcome is a measured contribution of zero** — a result, not a failure.
