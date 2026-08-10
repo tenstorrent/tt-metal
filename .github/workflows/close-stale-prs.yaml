@@ -31,9 +31,13 @@ jobs:
             to reopen it or open a new PR whenever you're ready to continue.
           stale-pr-label: "stale"
           exempt-draft-pr: false
-          # Each closed PR costs ~5 operations (fetch events, fetch comments,
-          # label, comment, close), so 450 closes roughly 85 PRs per run. Closing
-          # a PR issues 3 content-generating API requests, and GitHub's secondary
-          # rate limit allows ~500 of those per hour -- 450 keeps us under it.
-          operations-per-run: 450
+          # Sized to close at most ~150 PRs per run. Closing one PR costs 5
+          # operations: GET list-events, GET list-comments, POST add-label,
+          # POST create-comment, PATCH close. The three POST/PATCH calls count
+          # against GitHub's secondary rate limit of 500 content-generating
+          # requests per hour, so 150 PRs x 3 = 450 -- 90% of the ceiling,
+          # leaving headroom for other automation acting on this repo.
+          # Paging through open PRs costs a further ~1 operation per 100
+          # scanned, so 750 lands just under the 150-PR cap rather than over.
+          operations-per-run: 750
           remove-stale-when-updated: true
