@@ -6,16 +6,15 @@
 // U10 oracle, folded variant: the original eltwise-binary kernel structure is
 // preserved (sync init, the _llk_math_hw_configure_ call, the block/tile loops
 // with wait/done) but the MATH thread's compute is folded into the
-// compiler-managed Tensix compute intrinsics.  TT_COMPILER_EMITS_MATH_CONFIG
-// makes _llk_math_hw_configure_ a no-op (see llk_math_common.h) -- the SFPI
-// compiler emits the hw_configure baseline itself.  So the kernel still *calls*
-// the LLK config API but the config comes entirely from the compiler.
+// compiler-managed Tensix compute intrinsics.  The LLK's _llk_math_hw_configure_
+// (still *called*) now issues the one-time ALU baseline through the config-write
+// intrinsics, which pass_rvtt_config consumes and coalesces with the
+// per-compute reconfig derived from the elwmul's format operands.
 //
 // Compute scope: one 16x16 tile (one 16-row face).  A TTELWMUL covers 8 rows
 // (MAX_FPU_ROWS); two with an INCRWC(0,8,8,8) between cover the face, matching
 // the LLK's partial-face MOP.  The intrinsic's dst is a compile-time constant
 // (dest-walking is deferred), so this oracle is single-tile.
-#define TT_COMPILER_EMITS_MATH_CONFIG
 
 #include <algorithm>
 #include <cstdint>
@@ -115,8 +114,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     (void)tensor_shape;
     (void)ACC_TO_DEST;
 
-    // Original structure: sync init, then hw_configure (now a no-op under
-    // TT_COMPILER_EMITS_MATH_CONFIG -- the compiler emits the baseline).
+    // Original structure: sync init, then hw_configure (issues the one-time ALU
+    // baseline through the config-write intrinsics; the per-compute reconfig is
+    // compiler-emitted from the elwmul's format operands).
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 

@@ -4,17 +4,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /* Unpack-thread compiler-config oracle: the same kernel as
- * intrinsic_eltwise_binary_test.cpp, but with TT_COMPILER_EMITS_UNPACK_CONFIG
- * (and TT_COMPILER_EMITS_MATH_CONFIG, since the math thread's hw_configure is
- * now the author-written __builtin_rvtt_{wh,bh}_math_hw_configure declaration)
- * defined, which switches the unpack thread's hardware configure from the LLK's
- * _llk_unpack_hw_configure_ to the compiler-managed
- * __builtin_rvtt_{wh,bh}_unpack_hw_configure config-declaration intrinsic.  The
- * functional oracle (torch golden vs L1 readback) then proves the compiler's
- * emitted unpack baseline is sufficient and correct -- the same kernel running
- * with the LLK configure is the control.  The PACK thread is unaffected by the
- * defines. */
+ * intrinsic_eltwise_binary_test.cpp.  Since the compiler-emitted
+ * config-declaration intrinsics were deleted, the one-time config now comes
+ * from the LLK's _llk_unpack_hw_configure_ / _llk_math_hw_configure_, which
+ * issue the config through the real config-write intrinsics (rmwciB*/setdmareg)
+ * that pass_rvtt_config consumes and coalesces.  This TU is kept so the harness
+ * exercises the same source through its own build; it no longer selects a
+ * distinct compiler-config mode. */
 
-#define TT_COMPILER_EMITS_UNPACK_CONFIG
-#define TT_COMPILER_EMITS_MATH_CONFIG
 #include "intrinsic_eltwise_binary_test.cpp"

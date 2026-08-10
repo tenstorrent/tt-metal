@@ -40,23 +40,16 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  *       For SFPU work, pass a srcb_data_format whose exponent family (BF16 vs FP16) matches the data in DEST (tt-llk #951).
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+TT_ALWAYS_INLINE void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     llk::san::math_operand_configure(srca_data_format, srcb_data_format);
 
-#if defined(TT_COMPILER_EMITS_MATH_CONFIG)
-    // U10 oracle: when a kernel computes through the compiler-managed Tensix
-    // compute intrinsics, the SFPI compiler emits the hw_configure baseline
-    // itself (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base),
-    // so this LLK call is a no-op. The kernel source defines
-    // TT_COMPILER_EMITS_MATH_CONFIG to opt in.
-#else
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 
     // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
     // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
@@ -65,14 +58,13 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     // touch disjoint bits and rely on per-byte RMWCIB atomicity, so no cross-thread mutex is needed.
     constexpr std::uint32_t src_fmt_override_mask =
         ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
 
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
-#endif
+    _configure_default_zero_flag_state_i_(srca_data_format, srcb_data_format);
 }
 
 /**

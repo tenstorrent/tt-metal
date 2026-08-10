@@ -66,6 +66,16 @@ inline void _configure_src_zero_flag_(const bool disable)
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
 }
 
+// Intrinsic twin of _configure_src_zero_flag_: the same drain + Zero_Flag_disabled_src write, but
+// through the config-write intrinsics (__builtin_rvtt_stallwait / cfg_reg_rmw_tensix_i) so
+// pass_rvtt_config consumes and coalesces it. Used by the compiler-managed
+// _llk_math_hw_configure_ primitive; the state tracker is shared with the inline-asm original.
+TT_ALWAYS_INLINE void _configure_src_zero_flag_i_(const bool disable)
+{
+    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
+}
+
 // DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
 inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
 {
@@ -77,6 +87,20 @@ inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_for
     src_zero_flag_srcb_fmt = srcb_dst_format;
     src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
     _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+}
+
+// DEFAULT (intrinsic twin): as _configure_default_zero_flag_state_, but the write goes through
+// _configure_src_zero_flag_i_ (config-write intrinsics) for the compiler-managed hw_configure path.
+TT_ALWAYS_INLINE void _configure_default_zero_flag_state_i_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_srca_fmt == srca_dst_format && src_zero_flag_srcb_fmt == srcb_dst_format)
+    {
+        return;
+    }
+    src_zero_flag_srca_fmt = srca_dst_format;
+    src_zero_flag_srcb_fmt = srcb_dst_format;
+    src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
+    _configure_src_zero_flag_i_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
 }
 
 // UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
@@ -286,11 +310,11 @@ inline void set_dest_section_base()
 {
     if constexpr (Dst == DstStart::StartZero)
     {
-        TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
+        __builtin_rvtt_wh_setc16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
     }
     else
     {
-        TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, DEST_REGISTER_HALF_SIZE);
+        __builtin_rvtt_wh_setc16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, DEST_REGISTER_HALF_SIZE);
     }
 }
 

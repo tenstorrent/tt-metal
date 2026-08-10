@@ -165,7 +165,7 @@ template <bool untilize, bool tilize>
 inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = llk_test_pack_mode_v<untilize, tilize>;
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_hw_configure_wrapper_(
+TT_ALWAYS_INLINE void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,

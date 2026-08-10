@@ -42,27 +42,20 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  *       the data in DEST (tt-llk #951).
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+TT_ALWAYS_INLINE void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     // LLK sanitizer hooks
     llk::san::math_operand_configure(srca_data_format, srcb_data_format);
 
-#if defined(TT_COMPILER_EMITS_MATH_CONFIG)
-    // U10 oracle: when a kernel computes through the compiler-managed Tensix
-    // compute intrinsics, the SFPI compiler emits the hw_configure baseline
-    // itself (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base),
-    // so this LLK call is a no-op. The kernel source defines
-    // TT_COMPILER_EMITS_MATH_CONFIG to opt in.
-#else
     // SFPU_Fp32_enabled (written below) is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
+    cfg_reg_rmw_tensix_i<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
 
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix_i<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
     // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
     // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
@@ -72,11 +65,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     // needed.
     constexpr std::uint32_t src_fmt_override_mask =
         ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
-#endif
+    _configure_default_zero_flag_state_i_(srca_data_format, srcb_data_format);
 }
 
 /**

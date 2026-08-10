@@ -5,12 +5,13 @@
 
 /* Elementwise binary test whose MATH thread drives the compute through the
  * compiler-managed Tensix compute intrinsics (__builtin_rvtt_*_elwmul)
- * instead of the LLK's llk_math_eltwise_binary_* API.  The compiler's config
- * pass emits the ALU hw_configure baseline + per-compute reconfig (the LLK's
- * _llk_math_hw_configure_ / _llk_math_reconfig_data_format_ equivalents), so
- * this thread deliberately does NOT call those LLK functions.  It still calls
- * the synchronization primitives (_llk_math_pack_sync_init_, wait/done) which
- * own the semaphores and dest-section coordination -- not the ALU config.
+ * instead of the LLK's llk_math_eltwise_binary_* API.  The one-time ALU
+ * hw_configure baseline is issued by the LLK's _llk_math_hw_configure_ through
+ * the config-write intrinsics (stallwait/rmwciB*), which pass_rvtt_config
+ * consumes and coalesces; the per-compute reconfig for each elwmul is derived
+ * by the compiler from the intrinsic's format operands.  The synchronization
+ * primitives (_llk_math_pack_sync_init_, wait/done) own the semaphores and
+ * dest-section coordination.
  *
  * The compute is one 16x16 face per call (a single TTELWMUL), which matches
  * the LLK's LoFi MOP for a single-face tile.  Multi-face tiles need the
@@ -34,12 +35,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-// Compiler-managed unpack intrinsics, arch-prefixed like INTR_ELWMUL.
+// Compiler-managed unpack data-op, arch-prefixed like INTR_ELWMUL.
 #if defined(ARCH_WORMHOLE)
-#define INTR_UNPACK_HW_CONFIGURE __builtin_rvtt_wh_unpack_hw_configure
 #define INTR_UNPACR __builtin_rvtt_wh_unpacr
 #else
-#define INTR_UNPACK_HW_CONFIGURE __builtin_rvtt_bh_unpack_hw_configure
 #define INTR_UNPACR __builtin_rvtt_bh_unpacr
 #endif
 
@@ -58,33 +57,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                                   ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                   : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
-#if defined(TT_COMPILER_EMITS_UNPACK_CONFIG)
-    // Compiler-managed unpack config: __builtin_rvtt_{wh,bh}_unpack_hw_configure
-    // is a config-declaration intrinsic -- pass_rvtt_config derives the
-    // configure_unpack_AB baseline (in/out data format, SrcUnsigned, LF8,
-    // strides, tile descriptors, dest, x-dim) from the 6 semantic operands and
-    // emits it, so the _llk_unpack_hw_configure_ call below is a no-op for this
-    // build.  The tile-size GPRs (SETDMAREG) and the stoch-rnd bits are regfile
-    // state the compiler does not manage, so the stoch-rnd call stays.  The
-    // face dims must be compile-time constants (they drive config derivation);
-    // this oracle's shape is fixed (16x16, one face).
-    INTR_UNPACK_HW_CONFIGURE(
-        UNPACK_A_IN, UNPACK_A_OUT, UNPACK_B_IN, UNPACK_B_OUT,
-        /*face_r_dim=*/16, /*num_faces=*/1);
-#else
-    // Configure hardware for unpacking, no broadcast, no transpose
+    // Configure hardware for unpacking, no broadcast, no transpose.  The LLK's
+    // _llk_unpack_hw_configure_ now issues the config through the config-write
+    // intrinsics (rmwciB*/setdmareg) which pass_rvtt_config consumes and
+    // coalesces; the compile-time formats/geometry drive constant-folded
+    // immediates.  The 16x16 one-face shape matches the unpack-config
+    // declaration the compiler used to derive from these six operands.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces(),
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
-#endif
+        UNPACK_A_IN,
+        UNPACK_B_IN,
+        UNPACK_A_OUT,
+        UNPACK_B_OUT,
+        /*unpA_face_r_dim=*/16,
+        /*unpB_face_r_dim=*/16,
+        /*unpA_num_faces=*/1,
+        /*unpB_num_faces=*/1);
 
     // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
     // bits programmed here are overwritten by configure_unpack_AB().
@@ -96,7 +83,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < num_total_tiles; ++i)
     {
-#if defined(TT_COMPILER_EMITS_UNPACK_CONFIG)
         // Author-owned data-op: the same per-tile address writes + sync as
         // _llk_unpack_AB_, but the MOP run is replaced by two inline unpacr
         // intrinsics (one 16x16 face = one SrcA + one SrcB read).  The unpacr
@@ -112,9 +98,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         INTR_UNPACR(1, 1, 0, 0, 1, 1); // SrcB read
         t6_semaphore_get(semaphore::UNPACK_SYNC);
         switch_config_context(unp_cfg_context);
-#else
-        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
-#endif
     }
 }
 
@@ -132,10 +115,8 @@ using namespace ckernel;
 // -DARCH_* define.
 #if defined(ARCH_WORMHOLE)
 #define INTR_ELWMUL __builtin_rvtt_wh_elwmul
-#define INTR_MATH_HW_CONFIGURE __builtin_rvtt_wh_math_hw_configure
 #else
 #define INTR_ELWMUL __builtin_rvtt_bh_elwmul
-#define INTR_MATH_HW_CONFIGURE __builtin_rvtt_bh_math_hw_configure
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -143,20 +124,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Semaphore + dest-section sync only.  Math-thread setup is an author-written
-    // config-declaration intrinsic (__builtin_rvtt_{wh,bh}_math_hw_configure):
-    // the compiler derives _llk_math_hw_configure_ + set_dest_section_base
-    // (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base) from the
-    // declared formats and emits it, so there is no _llk_math_hw_configure_ call
-    // in the compiler-managed build.  The per-compute reconfig for the elwmul
-    // below is compiler-emitted too.  The runtime-formats path is skipped (a
+    // Semaphore + dest-section sync, plus the one-time ALU baseline.  The LLK's
+    // _llk_math_hw_configure_ now issues the config through the config-write
+    // intrinsics (stallwait/rmwciB*) which pass_rvtt_config consumes and
+    // coalesces; the compile-time MATH_FORMAT drives constant-folded immediates.
+    // _llk_math_pack_sync_init_ also programs the dest section base (SETC16).
+    // The per-compute reconfig for the elwmul below is compiler-emitted (from
+    // the intrinsic's format operands).  The runtime-formats path is skipped (a
     // runtime format is the U8 escape hatch -- the compiler cannot derive config
-    // from it, so no declaration is emitted).
+    // from it, so no constant config is emitted).
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
-#if defined(TT_COMPILER_EMITS_MATH_CONFIG)
-    INTR_MATH_HW_CONFIGURE(MATH_FORMAT, MATH_FORMAT);
-#endif
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FORMAT, MATH_FORMAT);
 
     // One 16x16 tile (one 16-row face) at dest index 0.  A single TTELWMUL
     // computes 8 rows (MAX_FPU_ROWS); a 16-row face needs two ELWMULs with an
@@ -200,9 +179,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-// Compiler-managed pack intrinsics.  BH-only this slice (the WH pack
-// intrinsics + config geometry are deferred, like WH unpack).
-#define INTR_PACK_HW_CONFIGURE __builtin_rvtt_bh_pack_hw_configure
+// Compiler-managed pack data-op.  BH-only this slice (the WH pack intrinsics +
+// config geometry are deferred, like WH unpack).
 #define INTR_PACR __builtin_rvtt_bh_pacr
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -217,9 +195,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
 
-    // tile_size / num_faces / partial_face feed only the LLK configure calls,
-    // which TT_COMPILER_EMITS_PACK_CONFIG gates off (the compiler derives the
-    // config from the intrinsic's args).
+    // The compiler-managed pack hw_configure is now the LLK's configure_pack,
+    // which issues the config through the config-write intrinsics (rmwciB*/
+    // setdmareg/wrcfg) that pass_rvtt_config consumes.  Those immediates must be
+    // constant-foldable, so the call uses the compile-time PACK_IN/PACK_OUT and
+    // this oracle's fixed 16x16 one-face geometry (mirroring the pack-config
+    // declaration the compiler used to derive from these operands), NOT the
+    // runtime tensor_shape values.  _llk_pack_dest_init_wrapper_ stays
+    // (dest-offset GPRs + DEST_TARGET + counter init -- author-owned
+    // dest-section state).
     [[maybe_unused]] const std::uint32_t tile_size = tensor_shape.total_tensor_size();
 
     [[maybe_unused]] const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -227,24 +211,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);
 
-#if defined(TT_COMPILER_EMITS_PACK_CONFIG)
-    // Compiler-managed pack config: __builtin_rvtt_bh_pack_hw_configure is a
-    // config-declaration intrinsic -- pass_rvtt_config derives configure_pack's
-    // baseline (strides, Dstacc, formats word, PCK_DEST_RD_CTRL, counters,
-    // edge/mapping, the ADDR_MOD slots the inline pacrs' AddrMode selects, and
-    // the EXP0_SEC_SIZE_BFP GPR) and emits it.  The _llk_pack_hw_configure_
-    // / _llk_pack_init_ calls are gated off; _llk_pack_dest_init_wrapper_ stays
-    // (dest-offset GPRs + DEST_TARGET + counter init -- author-owned
-    // dest-section state).  num_faces is a compile-time constant (1 for this
-    // 16x16 one-face oracle).
-    INTR_PACK_HW_CONFIGURE(PACK_IN, PACK_OUT, /*num_faces=*/1);
-#else
+    // tile_size is the TILE_HEADER datum count (total_tensor_size() of the
+    // 16x16 one-face tile = 16*16 datums).
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+        PACK_IN, PACK_OUT, /*tile_size=*/16 * 16, /*face_r_dim=*/16, /*tile_c_dim=*/16, /*num_faces=*/1, /*partial_face=*/false, /*narrow_tile=*/false);
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
-#endif
+        PACK_OUT, /*face_r_dim=*/16, /*tile_c_dim=*/16, /*num_faces=*/1, /*partial_face=*/false, /*narrow_tile=*/false);
 
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
@@ -260,7 +233,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-#if defined(TT_COMPILER_EMITS_PACK_CONFIG)
             // Author-owned data-op: the per-tile dest select + L1 dest address
             // + sync, then the MOP's PACR stream inlined -- one 16-row face is
             // 4 PACRs (4 dest rows each via ALL_INTF_ACTIVE) with addr-mod 2 on
@@ -274,9 +246,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             INTR_PACR(0, 2, 0, 0, 0, 0); // rows 12-15 (last inner: addr-mod 2)
             INTR_PACR(0, 1, 0, 0, 0, 1); // outer end  (addr-mod 1, Last=1)
             TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
-#else
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
-#endif
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

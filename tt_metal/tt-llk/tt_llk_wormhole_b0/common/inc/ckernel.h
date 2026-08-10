@@ -45,6 +45,20 @@
 
 #include "ckernel_include.h"
 
+// Two-phase lookup: the config-write builtins are non-dependent names in the
+// cfg_reg_rmw_tensix_i template, so they must be declared before it.  They must
+// be at global scope (a declaration inside namespace ckernel would resolve to a
+// ckernel:: function, not the compiler's builtin).  Declaring a __builtin_ name
+// is technically a redundant redeclaration of what the compiler knows, so the
+// warning is suppressed here.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
+void __builtin_rvtt_rmwciB0(unsigned, unsigned, unsigned);
+void __builtin_rvtt_rmwciB1(unsigned, unsigned, unsigned);
+void __builtin_rvtt_rmwciB2(unsigned, unsigned, unsigned);
+void __builtin_rvtt_rmwciB3(unsigned, unsigned, unsigned);
+#pragma GCC diagnostic pop
+
 namespace ckernel
 {
 
@@ -544,6 +558,31 @@ inline void cfg_reg_rmw_tensix(std::uint32_t val)
         std::uint8_t data_b3 = (wrdata) & 0xff;
         TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
     }
+}
+
+// Intrinsic twin of cfg_reg_rmw_tensix: the same byte-granular RMWCIB write,
+// but through the config-write intrinsics (__builtin_rvtt_rmwciB0..3) instead
+// of inline asm, so pass_rvtt_config consumes and coalesces the writes.  Used
+// by the compiler-managed _llk_*_hw_configure_ primitives.
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
+TT_ALWAYS_INLINE void cfg_reg_rmw_tensix_i(std::uint32_t val)
+{
+    std::uint32_t wrdata = val << Shamt;
+    std::uint8_t mask_b0 = Mask & 0xff;
+    if (mask_b0 != 0)
+        __builtin_rvtt_rmwciB0(mask_b0, wrdata & 0xff, CfgAddr32);
+    wrdata >>= 8;
+    std::uint8_t mask_b1 = (Mask >> 8) & 0xff;
+    if (mask_b1 != 0)
+        __builtin_rvtt_rmwciB1(mask_b1, wrdata & 0xff, CfgAddr32);
+    wrdata >>= 8;
+    std::uint8_t mask_b2 = (Mask >> 16) & 0xff;
+    if (mask_b2 != 0)
+        __builtin_rvtt_rmwciB2(mask_b2, wrdata & 0xff, CfgAddr32);
+    wrdata >>= 8;
+    std::uint8_t mask_b3 = (Mask >> 24) & 0xff;
+    if (mask_b3 != 0)
+        __builtin_rvtt_rmwciB3(mask_b3, wrdata & 0xff, CfgAddr32);
 }
 
 inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)

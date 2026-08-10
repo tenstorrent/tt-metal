@@ -68,7 +68,7 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpB_tile_size: Tile size of operand B stored to the tile-size GPR.
  */
 template <bool is_fp32_dest_acc_en>
-inline void _llk_unpack_hw_configure_(
+TT_ALWAYS_INLINE void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpA_dst_format,
@@ -111,7 +111,7 @@ inline void _llk_unpack_hw_configure_(
  * @tparam stoch_rnd_mode: Which units use stochastic rounding, values = <None/Fpu/Pack/All>
  */
 template <StochRndType stoch_rnd_mode>
-inline void _llk_unpack_configure_stoch_rnd_()
+TT_ALWAYS_INLINE void _llk_unpack_configure_stoch_rnd_()
 {
     constexpr std::uint32_t alu_stoch_rnd_mask =
         ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
@@ -121,7 +121,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
     alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_stoch_rnd_mask>(alu_payload.val);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_stoch_rnd_mask>(alu_payload.val);
 }
 
 /**

@@ -474,7 +474,7 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
  * are unaffected by the issue).
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_hw_configure_(
+TT_ALWAYS_INLINE void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,

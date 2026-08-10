@@ -330,6 +330,43 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     }
 }
 
+// Intrinsic twin of set_packer_strides: the same packer-stride staging (GPR <- value via TTSETDMAREG,
+// drain, GPR -> config via TTWRCFG), but through the config-write intrinsics so pass_rvtt_config sees
+// the staging. Used by the compiler-managed configure_pack path; the inline-asm original stays for the
+// runtime reconfig path (reconfig_packer_data_format).
+template <PackMode pack_mode = PackMode::Default>
+TT_ALWAYS_INLINE void set_packer_strides_i(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
+{
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
+    std::uint32_t y_stride = FACE_C_DIM * x_stride;
+    std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
+
+    // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
+    // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
+    const std::uint32_t z_stride = ((pack_mode != PackMode::Default) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
+
+    __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
+    __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP0));
+    __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
+    __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
+    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::THCON);
+    __builtin_rvtt_wrcfg(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
+    __builtin_rvtt_wrcfg(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    TTI_NOP;
+    TTI_NOP;
+
+    if constexpr (pack_mode == PackMode::Tilize)
+    {
+        const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
+        __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
+        __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
+        __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::THCON);
+        __builtin_rvtt_wrcfg(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+        TTI_NOP;
+        TTI_NOP;
+    }
+}
+
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
     // Stall to avoid clobbering current packer configuration
@@ -339,6 +376,21 @@ inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
     // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+}
+
+// Intrinsic twin of reconfigure_packer_l1_acc: the same packer drain + L1-acc writes, but through
+// the config-write intrinsics (__builtin_rvtt_stallwait / cfg_reg_rmw_tensix_i) so pass_rvtt_config
+// consumes them. Used by the compiler-managed configure_pack path (set_packer_config); the
+// inline-asm original stays for the runtime reconfig path.
+TT_ALWAYS_INLINE void reconfigure_packer_l1_acc_i(const std::uint32_t pack_l1_acc)
+{
+    // Stall to avoid clobbering current packer configuration
+    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::PACK);
+
+    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
+    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
+    cfg_reg_rmw_tensix_i<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
+    cfg_reg_rmw_tensix_i<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
 }
 
 /**
@@ -388,8 +440,47 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
+// Intrinsic twin of reconfigure_exp_threshold: the same exponent-threshold RMW, but through
+// cfg_reg_rmw_tensix_i so pass_rvtt_config consumes it. Used by the compiler-managed configure_pack
+// path (set_packer_config); the inline-asm original stays for the runtime reconfig path.
 template <bool is_fp32_dest_acc_en>
-inline void set_packer_config(
+TT_ALWAYS_INLINE void reconfigure_exp_threshold_i(const std::uint32_t pack_dst_format)
+{
+    bool enable             = false;
+    std::uint32_t threshold = 0;
+
+    // Workaround for HW bug: tenstorrent/budabackend#1394
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        if (IS_BFP_A_FORMAT(pack_dst_format))
+        {
+            // After early format conversion the exponent is EXP_B; packing to BFP-A uses EXP_A.
+            // Zero out values too small to represent in EXP_A.
+            //
+            // For a given EXP_B number to be representable in EXP_A, it must satisfy:
+            // EXP_BIAS_B = 127, EXP_BIAS_A = 15, and EXP_MIN_A = 1 - EXP_BIAS_A = -14
+            //   EXP_B - EXP_BIAS_B >= EXP_MIN_A
+            //   EXP_B - 127 >= -14
+            //   EXP_B >= 113
+            // The packer compares against threshold 113 and forces datums with EXP_B < 113 to zero.
+            enable    = true;
+            threshold = 113;
+        }
+    }
+
+    static_assert(
+        THCON_SEC0_REG1_Exp_threshold_en_ADDR32 == THCON_SEC0_REG1_Exp_threshold_ADDR32,
+        "THCON_SEC0_REG1_Exp_threshold_en and Exp_threshold must share ADDR32 for combined RMW");
+
+    constexpr std::uint32_t THRESHOLD_RMW_MASK = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
+
+    std::uint32_t threshold_rmw_data = (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (enable << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
+
+    cfg_reg_rmw_tensix_i<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+}
+
+template <bool is_fp32_dest_acc_en>
+TT_ALWAYS_INLINE void set_packer_config(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -418,7 +509,7 @@ inline void set_packer_config(
     config.f.out_data_format = pack_output_dst_format;
     config.f.in_data_format  = pack_hw_src_format;
 
-    reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
+    reconfigure_exp_threshold_i<is_fp32_dest_acc_en>(pack_output_dst_format);
 
     // Program:
     // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
@@ -446,7 +537,7 @@ inline void set_packer_config(
     // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
 
     // Reset L1 accumulation flag
-    reconfigure_packer_l1_acc(0);
+    reconfigure_packer_l1_acc_i(0);
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -471,8 +562,9 @@ inline void set_packer_config(
     }
     cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
-    // Save to GPR for quick data format reconfig
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    // Save to GPR for quick data format reconfig. Issued as the TTSETDMAREG intrinsic so
+    // pass_rvtt_config sees the REGFILE write (it does not coalesce REGFILE with CONFIG space).
+    __builtin_rvtt_setdmareg(0, (((partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT) & 0x3fff), 0, LO_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
@@ -577,7 +669,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void configure_pack(
+TT_ALWAYS_INLINE void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -596,7 +688,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+    set_packer_strides_i<pack_mode>(pack_src_format, tile_c_dim);
 
     // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
     // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the
@@ -606,9 +698,9 @@ inline void configure_pack(
 
     // Set Fp8 E4M3 mode for packer
     bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3;
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
+    cfg_reg_rmw_tensix_i<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
 
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
     // Establish the no-override baseline for the Dstacc ALU format-select fields (ADDR32=0), consumed
     // by the packer: clear Dstacc_val/override so the base REG2_Dstacc format programmed above is
@@ -616,7 +708,7 @@ inline void configure_pack(
     // (_llk_math_hw_configure_); the two writers touch disjoint bits and rely on per-byte RMWCIB
     // atomicity, so this write does not depend on the surrounding REG_RMW mutex for cross-thread safety.
     constexpr std::uint32_t dstacc_fmt_override_mask = ALU_FORMAT_SPEC_REG_Dstacc_val_MASK | ALU_FORMAT_SPEC_REG_Dstacc_override_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
+    cfg_reg_rmw_tensix_i<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
 
     // Config RELU
     relu_config_u hw_relu_config;
@@ -626,7 +718,7 @@ inline void configure_pack(
     static_assert(STACC_RELU_ApplyRelu_ADDR32 == STACC_RELU_ReluThreshold_ADDR32, "STACC_RELU_ApplyRelu and ReluThreshold must share ADDR32 for combined RMW");
 
     constexpr std::uint32_t hw_relu_mask = STACC_RELU_ApplyRelu_MASK | STACC_RELU_ReluThreshold_MASK;
-    cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(hw_relu_config.val[0]);
+    cfg_reg_rmw_tensix_i<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(hw_relu_config.val[0]);
 
     t6_mutex_release(mutex::REG_RMW);
 
@@ -652,6 +744,9 @@ inline void configure_pack(
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
 
+    // TILE_HEADER is the per-tile datum count (tile_size), an author-owned GPR
+    // (not format-derived config), so it stays as the direct regfile store
+    // rather than the config-write intrinsics.
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
