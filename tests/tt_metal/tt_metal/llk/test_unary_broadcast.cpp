@@ -562,8 +562,7 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
-TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar uses TensixComputeUnaryBroadcastQuasarDfb";
     }

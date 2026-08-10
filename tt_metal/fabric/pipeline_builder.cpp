@@ -139,6 +139,7 @@ std::vector<std::string> topological_sort(
     }
 
     std::vector<std::string> order;
+    order.reserve(all_nodes.size());
     while (!q.empty()) {
         auto node = q.front();
         q.pop();
@@ -292,6 +293,7 @@ GraphLayoutResult resolve_graph_layout(
     // 2. Collect unique node names and separate loopback edges
     // ------------------------------------------------------------------
     std::vector<std::string> all_nodes;
+    all_nodes.reserve(edges.size() * 2);
     {
         std::set<std::string> seen;
         for (const auto& [src, dst, is_lb] : edges) {
@@ -439,6 +441,7 @@ GraphLayoutResult resolve_graph_layout(
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> unclaimed;
+    unclaimed.reserve(chips[stage0_sub].size());
     for (const auto& [fid, row, col] : chips[stage0_sub]) {
         if (!used_coords.contains({row, col})) {
             unclaimed.push_back({row, col});

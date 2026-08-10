@@ -18,7 +18,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES pad_tile.hpp
+        FILES pad_tile.hpp validation_helpers.hpp
 )
 
 install(

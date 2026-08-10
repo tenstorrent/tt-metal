@@ -20,12 +20,12 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
@@ -40,6 +40,19 @@ std::vector<T> make_ramp(size_t count) {
         data[i] = static_cast<T>(static_cast<float>(i % 251));
     }
     return data;
+}
+
+template <typename T>
+std::vector<T> untilize_nfaces(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data) {
+    return convert_layout(
+        data,
+        shape,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        tile.get_tile_shape(),
+        tile.get_face_shape(),
+        tile.get_transpose_within_face(),
+        tile.get_transpose_of_faces());
 }
 
 std::vector<float> make_bfp_data(const Shape& shape, const Tile& tile) {
@@ -168,8 +181,8 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
     auto dest_spec = TensorSpec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), dest_memory, Alignment({32, 32})));
 
-    // Spec equality ignores per_core, but exact-spec predicate must not early-out.
-    EXPECT_TRUE(source.tensor_spec() == dest_spec);
+    // Spec equality must include per_core_allocation because it changes allocator semantics.
+    EXPECT_FALSE(source.tensor_spec() == dest_spec);
     EXPECT_FALSE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(source.tensor_spec(), dest_spec));
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/77.f);
@@ -369,8 +382,8 @@ TEST(HostTensorToTensorSpec, Bfp8TileToFloat32RowMajorValueCheck) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
     // unpacked_golden is tile-major; convert to RM logical for comparison.
-    auto rm_golden =
-        tensor_impl::to_row_major_layout(src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
     EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
 }
 
@@ -393,8 +406,8 @@ TEST(HostTensorToTensorSpec, Bfp4TileToFloat32RowMajorValueCheck) {
     EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
-    auto rm_golden =
-        tensor_impl::to_row_major_layout(src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
     EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
 }
 
@@ -423,7 +436,7 @@ TEST(HostTensorToTensorSpec, RowMajorToBfp8ChangesLayoutAndPreservesTile) {
     auto unpacked_data =
         unpack_bfp8_tiles_into_float_vec(result_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto rm_data =
-        tensor_impl::to_row_major_layout(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
+        CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
 
     ASSERT_EQ(rm_data.size(), data.size());
     for (size_t i = 0; i < data.size(); ++i) {
@@ -497,6 +510,46 @@ TEST(HostTensorToTensorSpec, TypedPadUint8AndWrongTFatal) {
 
     // Wrong T vs working encode dtype (source UINT8).
     EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
+}
+
+TEST(HostTensorToTensorSpec, TypedPadInt8AndWrongTFatal) {
+    const Shape shape{20, 20};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int8_t>(shape.volume());
+
+    data[0] = -128;
+    data[1] = 127;
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_rm_spec(shape, DataType::INT8);
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
+
+    auto source = HostTensor::from_vector<int8_t>(data, src_spec);
+    auto result = host_tensor_to_tensor_spec_with_pad_value<int8_t>(source, dest_spec, /*pad_value=*/int8_t{-2});
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_THAT(result.to_vector<int8_t>(), Pointwise(Eq(), data));
+    EXPECT_EQ(host_buffer::get_as<int8_t>(result).back(), static_cast<int8_t>(-2));
+
+    // Wrong T vs working encode dtype (source INT8).
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
+}
+
+TEST(HostTensorToTensorSpec, FloatPadToInt8DestRejectsOor) {
+    const Shape shape{20, 20};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    for (float& i : data) {
+        i = static_cast<float>(static_cast<int8_t>(static_cast<int>(i)));
+    }
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_rm_spec(shape, DataType::FLOAT32);
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, -129.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 128.f));
+
+    auto ok = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, -2.f);
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(ok.tensor_spec(), dest_spec));
+    EXPECT_EQ(ok.dtype(), DataType::INT8);
+    EXPECT_EQ(ok.layout(), Layout::TILE);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(ok);
+    EXPECT_EQ(host_buffer::get_as<int8_t>(ok).back(), static_cast<int8_t>(-2));
 }
 
 TEST(HostTensorToTensorSpec, FloatPadToIntegralDestRejectsNanInfOor) {

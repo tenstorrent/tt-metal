@@ -28,7 +28,7 @@ on:
         default: "Ubuntu 22.04"
         type: string
       tests-yaml-gist-url:
-        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided)"
         required: false
         default: ""
         type: string
@@ -120,12 +120,13 @@ jobs:
       - name: Select SKUs based on platform
         id: select-skus
         run: |
+          # SKUs used by tier-1 entries in tests/pipeline_reorg/models_e2e_tests.yaml
           if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
-            # Main platform runs all tests including multi-card
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf,wh_galaxy,bh_p100,bh_p150,bh_p150_perf,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+            # Main platform runs all tier-1 SKUs including multi-card
+            echo "enabled-skus=wh_n150,wh_galaxy_perf,bh_p150,bh_quietbox_2,bh_galaxy" >> "$GITHUB_OUTPUT"
           else
-            # Other platforms run only single-card tests
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
+            # Other platforms run only single-card tier-1 tests
+            echo "enabled-skus=wh_n150,bh_p150" >> "$GITHUB_OUTPUT"
           fi
 
   release-demo-tests:
@@ -139,7 +140,47 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+      tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+
+  # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
+  # expected-jobs is the filtered matrix so legs with no ai_job_summary artifact
+  # are reconciled as INFRA_FAILURE (same pattern as blaze-models-prefill-tests).
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [release-demo-tests]
+    if: always() && !cancelled() && needs.release-demo-tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.release-demo-tests.outputs.matrix }}
+          run-result: ${{ needs.release-demo-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
 
   # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
   # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel

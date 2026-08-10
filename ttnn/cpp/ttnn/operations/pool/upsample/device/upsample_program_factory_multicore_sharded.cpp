@@ -162,6 +162,12 @@ Tensor create_config_tensor(
         }
     };
 
+    // Each entry of dst_core_end_idx_map is padded up to a whole reader block, or to a whole core block when there is a
+    // single output stick per core; the extra entry accounts for the trailing per-core padding.
+    const uint32_t elems_per_idx_map_entry = output_nsticks_per_core > 1 ? elems_per_core_reader : elems_per_core;
+    config_vector.reserve(
+        (ch_end_core - ch_start_core + 1) * (dst_core_end_idx_map.size() + 1) * elems_per_idx_map_entry);
+
     uint32_t per_core_start_idx = 0;
     for (size_t i = ch_start_core; i <= ch_end_core; i++) {
         for (size_t ind = 0, j = 0; ind < dst_core_end_idx_map.size(); ind++) {

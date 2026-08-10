@@ -93,6 +93,19 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
+def index_golden_present(trace_dir) -> bool:
+    """True when ``trace_dir`` carries the indexer-key golden that ``_load_golden_index_k`` reads.
+
+    Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
+    and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
+    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
+    layout stays encoded in exactly one place."""
+    from pathlib import Path
+
+    dsa_dir = Path(trace_dir) / "dsa"
+    return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
+
+
 def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors

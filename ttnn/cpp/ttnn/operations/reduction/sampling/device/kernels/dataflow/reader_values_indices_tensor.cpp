@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 /**
  * add a dfb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
@@ -49,35 +50,25 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
 }
 
 void kernel_main() {
-    uint32_t values_addr = get_arg_val<uint32_t>(0);
-    uint32_t indices_addr = get_arg_val<uint32_t>(1);
-
-    constexpr uint32_t input_values_dfb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_indices_dfb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t dfb_intermed_index = get_compile_time_arg_val(2);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(6);
-    constexpr bool use_32bit_index = get_compile_time_arg_val(7) == 1;
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto input_indices_page_size = get_arg(args::input_indices_page_size);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr bool use_32bit_index = get_arg(args::use_32bit_index) == 1;
     // Number of logical users (== number of running cores). Only this many input-index rows exist
     // and are streamed in, even though the values tile is padded to a full tile_height.
-    constexpr uint32_t num_users = get_compile_time_arg_val(8);
-
-    constexpr auto s0_args = TensorAccessorArgs<9>();
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    constexpr auto num_users = get_arg(args::num_users);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(s0_args, values_addr);
+    const auto s0 = TensorAccessor(tensor::input_values);
 
-    const auto s1 = TensorAccessor(s1_args, indices_addr);
+    const auto s1 = TensorAccessor(tensor::input_indices);
 
     Noc noc;
-    DataflowBuffer input_values_dfb(input_values_dfb_index);
-    DataflowBuffer input_indices_dfb(input_indices_dfb_index);
+    DataflowBuffer input_values_dfb(dfb::input_values);
+    DataflowBuffer input_indices_dfb(dfb::input_indices);
     const uint32_t tile_bytes_input_values = input_values_dfb.get_entry_size();
 
     uint32_t tile_id_input_values = 0;
@@ -89,7 +80,7 @@ void kernel_main() {
             noc.async_read(
                 s0, input_values_dfb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
-            generate_index_tile<use_32bit_index>(dfb_intermed_index, j);
+            generate_index_tile<use_32bit_index>(dfb::index, j);
             noc.async_read_barrier();
             input_values_dfb.push_back(onetile);
         }

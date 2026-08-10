@@ -135,6 +135,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         bool is_hybrid = mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
         if (is_hybrid) {
             std::vector<AllocatorImpl*> device_allocators;
+            device_allocators.reserve(mesh_device->get_view().num_devices());
             for (auto* device : mesh_device->get_view().get_devices()) {
                 device_allocators.push_back(device->allocator_impl().get());
             }
