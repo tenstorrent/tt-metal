@@ -28,7 +28,7 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
 {
-    constexpr std::uint8_t set_dvadlid = 1;
+    constexpr std::uint8_t set_dvalid = 1;
     load_replay_buf(
         0,
         25,
@@ -38,29 +38,29 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_3, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
             TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
             // Bfp4
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
             TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
             // Bfp2
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 2, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
             TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
+            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         });
 }
