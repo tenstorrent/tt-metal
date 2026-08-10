@@ -30,6 +30,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 TEST_FILE = "tests/nightly/tg/ccl/test_minimal_matmul_strided_reduce_scatter_async.py"
@@ -37,7 +39,7 @@ TEST_NODE = TEST_FILE + "::test_minimal_matmul_strided_reduce_scatter_block_swee
 OP_NAME = "MinimalMatmulStridedReduceScatterAsync"
 
 # Must match the fixed shape/grid in the test (see _SWEEP_M/_SWEEP_GRID there).
-M_DIM, K_DIM, N_DIM = 4864, 4096, 4096
+M_DIM, K_DIM, N_DIM = 2656, 3456, 5120
 GRID_X, GRID_Y = 12, 8
 TILE = 32
 
@@ -48,7 +50,7 @@ _CSV_RE = re.compile(r"OPs csv generated at:\s*(\S+\.csv)")
 
 def n_block_range():
     """Valid N block tiles for this shape/grid: 2 .. min(16, Nt // grid.x)."""
-    nt_per_core = (N_DIM // TILE) // GRID_X  # 128 // 12 = 10
+    nt_per_core = (N_DIM // TILE) // GRID_X  # 160 // 12 = 13
     return list(range(2, min(16, nt_per_core) + 1))
 
 
@@ -58,31 +60,73 @@ def n_halves():
     return [r[:mid], r[mid:]]
 
 
+K_BLOCK_RANGE = list(range(2, 17))  # K block tiles the sweep covers
+
+
+def k_halves():
+    """Split the K range so each batch stays within what one tracy capture can hold.
+
+    Batch size is the binding constraint on the profiler, not the device: too many ops under one
+    capture and the post-run pass dies with "Start and end marker IDs do not match" (and takes the
+    whole run down with it, since the aborted child never exits). Halving K alongside the existing N
+    halves keeps a batch to roughly a quarter of the (K x N) grid for one M.
+    """
+    mid = (len(K_BLOCK_RANGE) + 1) // 2
+    return [K_BLOCK_RANGE[:mid], K_BLOCK_RANGE[mid:]]
+
+
 def _k_expr(packet):
     return f"block_sweep and axis_0 and " + ("8kib" if packet == "8k" else "not 8kib")
 
 
-def run_batch(m_block, n_half, packet):
+# A batch that stops producing output for this long is wedged, not slow: kill it and move on rather
+# than blocking the rest of the sweep. Seen with the profiler aborting after the tests themselves
+# passed -- the child stays alive holding the pipe open, so there is nothing to wait for.
+STALL_TIMEOUT_S = 900
+
+
+def run_batch(m_block, k_half, n_half, packet):
     """Run one tracy-profiled batch; return list of (device_time_us, M_block, K_block, N_block)."""
     env = dict(os.environ)
     env["SWEEP_M_BLOCKS"] = str(m_block)
     env["SWEEP_N_BLOCKS"] = f"{n_half[0]}:{n_half[-1]}"
-    env["SWEEP_K_BLOCKS"] = "2:16"
+    env["SWEEP_K_BLOCKS"] = f"{k_half[0]}:{k_half[-1]}"
     # tracy re-shells the command, so the -k expression (which contains spaces) must be wrapped in
     # single quotes so it survives as one argument.
     cmd = [PY, "-m", "tracy", "-r", "-m", "pytest", TEST_NODE, "-k", f"'{_k_expr(packet)}'"]
-    print(f"  $ SWEEP_M_BLOCKS={m_block} SWEEP_N_BLOCKS={env['SWEEP_N_BLOCKS']} {' '.join(cmd)}", flush=True)
+    print(
+        f"  $ SWEEP_M_BLOCKS={m_block} SWEEP_K_BLOCKS={env['SWEEP_K_BLOCKS']} "
+        f"SWEEP_N_BLOCKS={env['SWEEP_N_BLOCKS']} {' '.join(cmd)}",
+        flush=True,
+    )
     # Stream the child's output live (merged stdout+stderr) while capturing it so we can still parse
     # out the 'OPs csv generated at:' path afterwards.
     proc = subprocess.Popen(
         cmd, cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )
     captured = []
+    last_output = [time.time()]
+    stalled = [False]
+
+    def watchdog():
+        while proc.poll() is None:
+            if time.time() - last_output[0] > STALL_TIMEOUT_S:
+                stalled[0] = True
+                print(f"  !! no output for {STALL_TIMEOUT_S}s, killing wedged batch", flush=True)
+                proc.kill()
+                return
+            time.sleep(15)
+
+    t = threading.Thread(target=watchdog, daemon=True)
+    t.start()
     for line in proc.stdout:
+        last_output[0] = time.time()
         sys.stdout.write(line)
         captured.append(line)
     sys.stdout.flush()
     proc.wait()
+    if stalled[0]:
+        print("  !! batch killed after stalling; continuing with the next one", flush=True)
     out = "".join(captured)
     m = _CSV_RE.search(out)
     if not m:
@@ -182,17 +226,24 @@ def main():
 
     all_results = []
     for m in range(args.m_lo, args.m_hi + 1):
-        for half in n_halves():
-            if not half:
-                continue
-            print(f"=== M_block={m}  N_block {half[0]}..{half[-1]} ===", flush=True)
-            res = run_batch(m, half, args.packet)
-            all_results.extend(res)
-            if res:
-                bt, bm, bk, bn = min(res)
-                print(f"    batch best: {bt:9.2f} us   M{bm} K{bk} N{bn}   ({len(res)} configs timed)\n", flush=True)
-            else:
-                print("    (no results parsed for this batch)\n", flush=True)
+        for k_half in k_halves():
+            for half in n_halves():
+                if not half or not k_half:
+                    continue
+                print(
+                    f"=== M_block={m}  K_block {k_half[0]}..{k_half[-1]}  N_block {half[0]}..{half[-1]} ===",
+                    flush=True,
+                )
+                res = run_batch(m, k_half, half, args.packet)
+                all_results.extend(res)
+                if res:
+                    bt, bm, bk, bn = min(res)
+                    print(
+                        f"    batch best: {bt:9.2f} us   M{bm} K{bk} N{bn}   ({len(res)} configs timed)\n",
+                        flush=True,
+                    )
+                else:
+                    print("    (no results parsed for this batch)\n", flush=True)
 
     all_results.sort()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

@@ -502,7 +502,7 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
 
 
 # --------------------------------------------------------------------------- Block-shape sweep: fixed LTX video ff2
-_SWEEP_M, _SWEEP_K, _SWEEP_N = 4864, 4096, 4096
+_SWEEP_M, _SWEEP_K, _SWEEP_N = 2656, 3456, 5120
 _SWEEP_GRID = (12, 8)
 # Hand the MM output to the RS through a rolling L1 window this many M blocks deep (clamped to the
 # number of blocks a core actually has). 2 is the shallowest depth that still lets the matmul run a
