@@ -6,10 +6,10 @@
 
 #include <impl/debug/noc_debugging.hpp>
 
-// The tracker treats a NOC transaction counter that fails to advance as a missing barrier. Those
+// The tracker treats a NOC transaction counter that moved backwards as a missing barrier. Those
 // counters are carried in a 12-bit field (LocalNocEventDstTrailer), so they wrap every 4096
-// transactions, and the comparison is a wrapping one -- a wrap must not be reported as a stalled
-// counter, and a genuine stall must still be reported.
+// transactions, and the comparison is a wrapping one -- rolling over must not be reported, while a
+// counter that genuinely moved backwards must be.
 //
 // This drives that logic through push_event()/process_accumulated_events_all_chips() with synthetic
 // events, so it needs no device and no kernel that issues 4096+ transactions. Doing it on device
