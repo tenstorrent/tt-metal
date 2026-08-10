@@ -625,6 +625,13 @@ class KVCache:
     keys: List[Optional[ttnn.Tensor]]  # per-layer, [B, n_kv_heads, max_seq, head_dim]
     values: List[Optional[ttnn.Tensor]]  # per-layer
     max_seq: int = 0
+    # batch==2 is the shared CFG cache (row0=pos, row1=neg) that lets the decode frame run ONE
+    # batched attention instead of one per CFG row.  ``scratch_idx`` is a position past max_seq
+    # that ``cur_pos`` never reaches: a batch-2 write always writes BOTH rows, so callers that
+    # only mean to update one row aim the other row's write here (see _attention_layer's eager
+    # branch and the generator's _boot).
+    batch: int = 1
+    scratch_idx: int = -1
 
 
 def _round_up(x: int, m: int) -> int:
@@ -740,6 +747,14 @@ class TTVibeVoiceLM:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(_shard_grid, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # Same layout over 2 cores (one per CFG row) for the shared batch-2 KV cache: every
+        # batch-2 paged_update_cache / rotary_embedding_llama input is height-sharded on B cores.
+        _shard_grid_b2 = ttnn.num_cores_to_corerangeset(2, _grid, True)
+        self._kv_update_shard_mc_b2 = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid_b2, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
         if self._fused_rope:
             # PART 3 resources.  rotary_embedding_llama's decode mode wants [1,B,heads,hd]
             # height-sharded L1 with a TILE_HEIGHT-tall shard — which _kv_update_shard_mc already
@@ -756,6 +771,20 @@ class TTVibeVoiceLM:
                     ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
                 ),
             )
+            # Batch-2 variant: the ±1 matrix must be REPLICATED per core (llama's
+            # RotarySetup does `.repeat(1, 1, batch, 1)`), not split across them — a single
+            # tile height-sharded over 2 cores leaves core 1 reading garbage.
+            self._rope_trans_bf16_b2 = ttnn.as_tensor(
+                get_rot_transformation_mat(dhead=32).repeat(1, 1, 2, 1),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(_shard_grid_b2, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
             self._rope_trans_f32 = ttnn.as_tensor(
                 get_rot_transformation_mat(dhead=self.cfg.head_dim),
                 device=device,
@@ -764,21 +793,32 @@ class TTVibeVoiceLM:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16) -> KVCache:
+    def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16, batch: int = 1) -> KVCache:
         """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
 
-        Shape per layer: ``[1, n_kv_heads, max_seq_aligned, head_dim]`` TILE/DRAM.
+        Shape per layer: ``[batch, n_kv_heads, max_seq_aligned, head_dim]`` TILE/DRAM.
+
+        ``batch=2`` allocates the SHARED CFG cache (row0=pos, row1=neg) used by the batched
+        decode attention.  It carries one extra tile-row block past ``max_seq`` as a scratch
+        slot: paged_update_cache writes every batch row, so a caller that means to update one
+        row aims the other row's write at ``scratch_idx``, which ``cur_pos`` never reaches.
         """
         cfg = self.cfg
         max_seq_aligned = _round_up(max(max_seq, self._KV_ALIGN), self._KV_ALIGN)
         n_kv = cfg.num_key_value_heads
         head_dim = cfg.head_dim
+        # The scratch slot gets a whole _KV_ALIGN block, NOT one tile row: fused SDPA-decode
+        # derives its auto k_chunk_size from the cache's S dim, so S must stay _KV_ALIGN-aligned
+        # or k_chunk collapses to 32 and long contexts hit the documented Blackhole hang
+        # (see _KV_ALIGN / _fused_sdpa_decode_safe).
+        alloc_seq = max_seq_aligned + (self._KV_ALIGN if batch > 1 else 0)
+        scratch_idx = max_seq_aligned if batch > 1 else -1
         keys: List[ttnn.Tensor] = []
         values: List[ttnn.Tensor] = []
         for _ in range(cfg.num_hidden_layers):
             keys.append(
                 ttnn.zeros(
-                    [1, n_kv, max_seq_aligned, head_dim],
+                    [batch, n_kv, alloc_seq, head_dim],
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
@@ -787,14 +827,14 @@ class TTVibeVoiceLM:
             )
             values.append(
                 ttnn.zeros(
-                    [1, n_kv, max_seq_aligned, head_dim],
+                    [batch, n_kv, alloc_seq, head_dim],
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             )
-        return KVCache(keys=keys, values=values, max_seq=max_seq_aligned)
+        return KVCache(keys=keys, values=values, max_seq=max_seq_aligned, batch=batch, scratch_idx=scratch_idx)
 
     def _embed(self, input_ids) -> ttnn.Tensor:
         """Device embedding lookup via ttnn.embedding. Returns [B, 1, S, hidden] TILE.
@@ -865,6 +905,57 @@ class TTVibeVoiceLM:
         if self._mask_tt is not None and self._mask_key[0] != self._mask_key[1]:
             ttnn.deallocate(self._mask_tt)
         self._mask_key = self._mask_tt = None
+
+    def _decode_attn_row0_on_b2(
+        self,
+        q: ttnn.Tensor,  # [1, n_heads, 1, hd]  post-RoPE
+        k: ttnn.Tensor,  # [1, n_kv, 1, hd]     post-RoPE
+        v: ttnn.Tensor,  # [1, n_kv, 1, hd]
+        kv_cache: KVCache,  # shared batch-2 cache
+        layer_idx: int,
+        start_pos: int,
+        S: int,
+    ) -> ttnn.Tensor:
+        """Eager B=1 decode of the POSITIVE row against the shared batch-2 CFG cache.
+
+        Used for text / segment-boundary tokens, which the traced speech frame does not cover.
+        A batch-2 cache update writes every batch row, so this duplicates the token into both
+        rows and points row1's write at ``scratch_idx`` (a slot no ``cur_pos`` ever reaches) to
+        leave the negative row's history intact.  Row1 reads position 0 only, so its attention is
+        one token wide, and its output is discarded.  Row0 is bit-identical to the B=1 result.
+        """
+        cfg = self.cfg
+        head_dim, n_heads = cfg.head_dim, cfg.num_attention_heads
+
+        def _write_idxs(values):
+            return ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        widx = _write_idxs([start_pos, kv_cache.scratch_idx])
+        k_dec = self._to_sdpa_b2(ttnn.concat([k, k], dim=0))
+        v_dec = self._to_sdpa_b2(ttnn.concat([v, v], dim=0))
+        ttnn.experimental.paged_update_cache(kv_cache.keys[layer_idx], k_dec, update_idxs_tensor=widx, page_table=None)
+        ttnn.experimental.paged_update_cache(
+            kv_cache.values[layer_idx], v_dec, update_idxs_tensor=widx, page_table=None
+        )
+        q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, 1, n_heads, hd]
+        q_b2 = ttnn.concat([q_dec, q_dec], dim=1)  # [1, 2, n_heads, hd]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_b2,
+            kv_cache.keys[layer_idx],
+            kv_cache.values[layer_idx],
+            cur_pos=[start_pos, 0],
+            scale=self.scale,
+            program_config=_SDPA_DECODE_CFG,
+            compute_kernel_config=_HIFI4,
+        )  # [1, 2, n_heads, hd]
+        attn0 = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, n_heads, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return _reshape_tt(attn0, [1, 1, S, n_heads * head_dim])
 
     def _attention_layer(
         self,
@@ -997,14 +1088,25 @@ class TTVibeVoiceLM:
             # audio — validated by a forced-token audio-parity check.  A grouped fp32 manual
             # decode matches tokens exactly but is much slower, so it is not used.
             assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
-            ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
-            ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
+            if kv_cache.batch == 2 and B == 1:
+                # Eager B=1 decode (text / segment-boundary tokens) against the SHARED batch-2 CFG
+                # cache.  Row0 is the positive row, so duplicate this token into both rows and aim
+                # row1's write at the scratch slot — a batch-2 cache write always writes every row,
+                # and the neg row must not be touched here.  The read positions are [start_pos, 0]
+                # so row1's attention is trivial; its output is sliced away.  Row0's values are
+                # exactly the B=1 values (per-batch independence).
+                out = self._decode_attn_row0_on_b2(q, k, v, kv_cache, layer_idx, start_pos, S)
+                cache_seq = valid_len = k_chunk = None  # handled inside
+            else:
+                ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
+                ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
+                cache_seq = kv_cache.max_seq or kv_cache.keys[layer_idx].shape[2]
+                valid_len = start_pos + S
+                k_chunk = _k_chunk_from_cache_seq(cache_seq)
 
-            cache_seq = kv_cache.max_seq or kv_cache.keys[layer_idx].shape[2]
-            valid_len = start_pos + S
-            k_chunk = _k_chunk_from_cache_seq(cache_seq)
-
-            if _fused_sdpa_decode_safe(valid_len, k_chunk):
+            if valid_len is None:
+                pass  # batch-2 row0 path already produced `out`
+            elif _fused_sdpa_decode_safe(valid_len, k_chunk):
                 q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd] for sdpa_decode
                 attn = ttnn.transformer.scaled_dot_product_attention_decode(
                     q_dec,
@@ -1410,6 +1512,42 @@ class TTVibeVoiceLM:
             ttnn.to_memory_config(sin, self._kv_update_shard_mc),
         )
 
+    def _rope_rows_sharded_b2(self, cur_pos_b2: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """_rope_rows_sharded for BOTH CFG rows in one gather.
+
+        cur_pos_b2: [2] int32 device tensor.  Returns cos/sin ``[1, 2, 1, hd]`` height-sharded on
+        2 cores — the layout rotary_embedding_llama's decode mode wants for a B=2 input.  The
+        embedding gathers both rows into one ``[1, 1, 2, hd]`` tile; ``transpose(1, 2)`` (llama's
+        RotarySetup does the same) moves the batch onto its own dim so each row lands on its own
+        core.  Byte-identical to two per-row gathers (verified maxabsdiff==0).
+        """
+        hd = self.cfg.head_dim
+        idx = ttnn.reshape(ttnn.typecast(cur_pos_b2, ttnn.uint32), [1, 2])
+        cos = ttnn.embedding(idx, self._cos_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos = ttnn.transpose(ttnn.reshape(cos, [1, 1, 2, hd]), 1, 2)  # [1, 2, 1(pad 32), hd]
+        sin = ttnn.transpose(ttnn.reshape(sin, [1, 1, 2, hd]), 1, 2)
+        return (
+            ttnn.to_memory_config(cos, self._kv_update_shard_mc_b2),
+            ttnn.to_memory_config(sin, self._kv_update_shard_mc_b2),
+        )
+
+    def _to_sdpa_b2(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """[2, n, 1, hd] (nlp_create_qkv_heads / RoPE output) → [1, 2, n, hd] height-sharded L1.
+
+        Both steps are exact: the permute is pure data movement and ``[2,1,n,hd] → [1,2,n,hd]``
+        only relabels the two outer singleton dims, so the padded tile layout is untouched.
+        """
+        t = ttnn.permute(t, (0, 2, 1, 3))  # [2, 1, n, hd]
+        t = ttnn.reshape(t, [1, 2, t.shape[2], t.shape[3]])
+        return ttnn.to_memory_config(t, self._kv_update_shard_mc_b2)
+
+    def _rope_decode_fused_b2(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
+        """_rope_decode_fused over BOTH CFG rows at once.  [2, n, 1, hd] → [1, 2, n, hd] sharded."""
+        return ttnn.experimental.rotary_embedding_llama(
+            self._to_sdpa_b2(t), cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+        )
+
     def _rope_decode_fused(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
         """PART 3 on device: adjacent-pair RoPE on a decode q or k via the fused kernel.
 
@@ -1435,19 +1573,24 @@ class TTVibeVoiceLM:
 
     # ── CFG batch-2 fused decode (pos row0 + neg row1 in one B=2 forward) ─────────
     # The two CFG forwards (pos-LM, neg-LM) are weight-DRAM-bound at M=1, so batching
-    # their inputs into [2,1,1,H] reads each layer's weights ONCE for both rows.  Only
-    # the weight-bound MATMULS are batched (qkv/o/gate/up/down); attention (rope / KV
-    # write / sdpa) stays per-row on the two SEPARATE [1,..] caches, i.e. byte-identical
-    # to the B=1 attention (no batched KV cache, no extra DRAM).  Every batched op is
-    # byte-identical per row.
+    # their inputs into [2,1,1,H] reads each layer's weights ONCE for both rows.
+    #
+    # ATTENTION is batched too when the caller passes a SHARED batch-2 KVCache
+    # (``KVCache.batch == 2``, row0=pos row1=neg): one RoPE / KV write / sdpa per layer
+    # instead of one per CFG row.  Byte-identical — attention is per-batch independent,
+    # the per-row positions still come from one [2] cur_pos tensor, and the layout moves
+    # ([2,n,1,hd] → [1,2,n,hd]) only relabel singleton dims.
+    #
+    # With two SEPARATE [1,..] caches (the eager / PCC-test callers) the per-row loop is
+    # kept — also byte-identical, just more ops per layer.
     def _attention_decode_traced_b2(
         self,
         x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg
         layer_w: LayerWeights,
-        rope_rows,  # [(cos0,sin0),(cos1,sin1)]  per-row [1,1,1,hd] — fused-RoPE path only
+        rope_rows,  # per-row [1,1,1,hd] [(cos0,sin0),(cos1,sin1)], or ONE (cos,sin) [1,2,1,hd]
         rope_b2,  # (cos2, nsin2) [2,1,1,hd] stacked once per frame — fp32-RoPE path
-        cur_positions,  # [cur_pos0, cur_pos1]  per-row [1] int32
-        kv_caches,  # [kv0, kv1]  separate [1,..] caches
+        cur_positions,  # [cur_pos0, cur_pos1] per-row [1] int32, or ONE [2] int32 (shared cache)
+        kv_caches,  # [kv0, kv1] separate [1,..] caches, or ONE shared batch-2 KVCache
         layer_idx: int,
     ) -> ttnn.Tensor:
         cfg = self.cfg
@@ -1467,6 +1610,7 @@ class TTVibeVoiceLM:
         )
         if layer_w.qkv_bias is not None:
             qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=n_heads,
@@ -1474,6 +1618,43 @@ class TTVibeVoiceLM:
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [2, n_heads/n_kv, 1, hd]
+
+        if isinstance(kv_caches, KVCache):
+            # ── Shared batch-2 cache: ONE attention for both CFG rows ──────────────────
+            if self._fused_rope:
+                cos_sh, sin_sh = rope_rows
+                q_dec = self._rope_decode_fused_b2(q, cos_sh, sin_sh)  # [1,2,n_heads,hd] sharded
+                k_dec = self._rope_decode_fused_b2(k, cos_sh, sin_sh)  # [1,2,n_kv,hd] sharded
+                v_dec = self._to_sdpa_b2(v)
+            else:
+                q_dec = self._to_sdpa_b2(_apply_rope_b2(q, rope_b2[0], rope_b2[1]))
+                k_dec = self._to_sdpa_b2(_apply_rope_b2(k, rope_b2[0], rope_b2[1]))
+                v_dec = self._to_sdpa_b2(v)
+            ttnn.experimental.paged_update_cache(
+                kv_caches.keys[layer_idx], k_dec, update_idxs_tensor=cur_positions, page_table=None
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_caches.values[layer_idx], v_dec, update_idxs_tensor=cur_positions, page_table=None
+            )
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                kv_caches.keys[layer_idx],
+                kv_caches.values[layer_idx],
+                cur_pos_tensor=cur_positions,
+                scale=self.scale,
+                program_config=_SDPA_DECODE_CFG,
+                compute_kernel_config=_HIFI4,
+            )  # [1, 2, n_heads, hd]
+            # L1: wo's in0 (1536x1536, 28 calls/frame) — the placement the per-row path got from
+            # its row concat, which the batched path no longer needs.
+            attn = ttnn.to_memory_config(_reshape_tt(attn, [2, 1, 1, n_heads * head_dim]), ttnn.L1_MEMORY_CONFIG)
+            return ttnn.linear(
+                attn,
+                layer_w.wo,
+                compute_kernel_config=_HIFI4,
+                program_config=_QO_DECODE_PROGCFG_B2,
+                memory_config=_QO_DECODE_OUT_MEMCFG,
+            )
 
         # RoPE + the q/k/v permute run BATCHED over both CFG rows, then the rows are split for the
         # per-row KV caches.  Everything up to the split is elementwise or pure data movement, so
@@ -1581,7 +1762,12 @@ class TTVibeVoiceLM:
         if self._fused_rope:
             # PART 2 on device, once per step: both CFG rows' cos/sin gathered from their device
             # positions, so the caller's host-written rows are unused (and are not even built).
-            rope_rows = [self._rope_rows_sharded(p) for p in cur_positions]
+            # Shared batch-2 cache → ONE gather landing both rows on their own core.
+            rope_rows = (
+                self._rope_rows_sharded_b2(cur_positions)
+                if isinstance(kv_caches, KVCache)
+                else [self._rope_rows_sharded(p) for p in cur_positions]
+            )
         # Stack the two CFG rows' cos / sign-folded sin once — they are layer-invariant.
         rope_b2 = None if self._fused_rope else _rope_b2_tables(rope_rows)
         for layer_idx in range(cfg.num_hidden_layers):
