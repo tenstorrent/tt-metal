@@ -23,6 +23,13 @@ all. Two rules produce almost all of that difference:
 
 incumbent_ms is the MEDIAN of the block means. Not the min: min-of-n is biased low by an amount that grows
 with n, so cells with different n stop being comparable. All nine corpus cells recorded the min.
+
+AND THROW THE FIRST PROCESS OF A SESSION AWAY. The floor above is a within-process quantity, but a large part
+of the real one is not: the first harness process of a session recorded 11.838 us where the identical
+configuration in a later process recorded 0.196 us -- 60x, from JIT-cache warmth BETWEEN processes, which no
+per-process warm-up can touch. Since the floor decides feasibility.verdict, a cell whose control was the first
+thing it ran silently changed what it was allowed to screen. Run once with --label warmup_discard and delete
+the output; process_ordinal below records where each measurement sat in the session.
 """
 from __future__ import annotations
 
@@ -67,11 +74,27 @@ def decode(state):
     raise NotImplementedError("FILL 2: call the decoder's decode_forward and return its output")
 
 
+def _process_ordinal(out_path: str) -> int:
+    """Which harness process of this session this is, counted in a marker file beside the artifacts.
+
+    One line per process, so the count survives crashes and is auditable. The point is a single number in
+    every record: a floor measured as ordinal 1 is not comparable with one measured later.
+    """
+    marker = os.path.join(os.path.dirname(out_path) or ".", ".harness_session")
+    os.makedirs(os.path.dirname(marker) or ".", exist_ok=True)
+    with open(marker, "a+") as fh:
+        fh.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {os.getpid()}\n")
+        fh.flush()
+        fh.seek(0)
+        return sum(1 for _ in fh)
+
+
 def measure(label: str, out_path: str, policy_path: str) -> dict:
     if WARMUP < MIN_WARMUP or REPEATS < MIN_REPEATS or ITERS < MIN_ITERS:
         raise SystemExit(f"protocol floor: WARMUP>={MIN_WARMUP} REPEATS>={MIN_REPEATS} ITERS>={MIN_ITERS}; "
                          f"got {WARMUP}/{REPEATS}/{ITERS}. These are why the corpus floors differed 45x.")
 
+    ordinal = _process_ordinal(out_path)
     frozen = json.load(open(policy_path))
     for k in ("shipped_policy", "shipped_weight_dtypes"):
         if k not in frozen:
@@ -128,6 +151,7 @@ def measure(label: str, out_path: str, policy_path: str) -> dict:
         "label": label,
         "decode_batch": BATCH, "requested_decode_batch": REQUESTED_BATCH,
         "warmup_replays": WARMUP, "iters_per_repeat": ITERS,
+        "process_ordinal": ordinal,
         "repeats_ms": repeats_ms,
         "median_ms": statistics.median(repeats_ms),              # MEDIAN, not min
         "noise_floor_ms": max(repeats_ms) - min(repeats_ms),
@@ -147,6 +171,10 @@ def measure(label: str, out_path: str, policy_path: str) -> dict:
     print(f"{label}: median {record['median_ms']:.6f} ms over {REPEATS} blocks of {ITERS} "
           f"(+{WARMUP} warm-up), floor {floor_us:.3f} us "
           f"({100 * record['noise_floor_ms'] / record['median_ms']:.3f} %) -> {out_path}")
+    if ordinal == 1:
+        print("   !! this is the FIRST harness process of the session, so this floor carries cross-process "
+               "JIT-cache warm-up (measured 60x on one cell). Re-run with --label warmup_discard first and "
+               "delete its output, then measure the incumbent.")
     print("   next: bound tt-perf-report with --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END, "
           "then reconcile.py --incumbent this file. A candidate goes in a FRESH process.")
     return record

@@ -34,7 +34,8 @@ import torch
 
 import ttnn
 
-TT_METAL_ROOT = os.environ.get("TT_METAL_ROOT", "/home/mvasiljevic/tt-metal")
+# BUG FIX (v3): this defaulted to one developer's absolute path, so the template only worked on that host.
+TT_METAL_ROOT = os.environ.get("TT_METAL_ROOT") or os.environ.get("TT_METAL_HOME") or os.getcwd()
 # $shard-advise SETUP.md A.1 pins tt-mlir here so runs stay comparable. Recorded with every capture.
 ADVISOR_PIN = os.environ.get("CHALLENGER_ADVISOR_PIN", "618cd4e75d")
 if TT_METAL_ROOT not in sys.path:
@@ -111,11 +112,32 @@ def decode(hidden):
       * Do NOT query a tensor's memory_config() dynamically inside the traced region -- the compiler
         cannot resolve it before layout assignment, and this blocked a phi capture outright. Use the
         already-declared phase-specific config instead.
-      * ttnn.sparse_matmul and SSM/gated-delta ops (softplus, prefix_scan, hc_sum_reduce, assign) are
-        TERMINAL in the tracer. If this layer kind contains them, the capture stops there; record the
-        kind as uncapturable and note what share of layers it carries.
+      * Do NOT assume an op is terminal in the tracer. `sparse_matmul`, mutable-state `ttnn.copy`,
+        `paged_fused_update_cache`, `ones_like`, `pow` and `repeat_interleave` all have handlers at this
+        pin, and of the ten ops the reference corpus recorded as blockers four already had one and one did
+        not exist at all. ATTEMPT the trace, read the traceback frames (they name which of ttnn-jit's two
+        tracers is running), and only then record a kind as uncapturable -- with its share of layers, and
+        in `CAPTURE_SCOPE["stopped_at"]`.
     """
     raise NotImplementedError("mirror the incumbent's decode path")
+
+
+# ---- FILL 6: what this capture actually attempted --------------------------------------------
+# Fifteen capture scripts were written for the reference corpus, 54 to 290 lines, and nothing compared them:
+# five stopped at the same terminal op in four different places, from 30 ops captured down to 5, and two
+# invented private env knobs whose values were recorded nowhere. So a cross-cell coverage number silently
+# mixed captures that attempted very different amounts of the layer.
+#
+# SUBSTITUTIONS ARE THE IMPORTANT ONE. If you replace a model method before tracing -- four cells replaced
+# `_decode_rope`, one replaced three more -- then the advice for that region is advice for YOUR STAND-IN, and
+# a change to the real method cannot reach the capture at all. Name every one.
+CAPTURE_SCOPE = {
+    "ops_attempted": [],          # e.g. ["rms_norm", "linear", "rope", "sdpa", "mlp"]
+    "methods_substituted": {},    # e.g. {"_decode_rope": "DRAM-staging stand-in; tracer cannot resolve
+                                  #        memory_config() before layout assignment"}
+    "env_knobs": {},              # every private knob this capture reads, with its VALUE
+    "stopped_at": None,           # the op the trace terminated on, if any
+}
 
 
 def _record_traced_dtypes(out_dir: str) -> None:
@@ -141,7 +163,8 @@ def _record_traced_dtypes(out_dir: str) -> None:
                    "shipped_weight_dtypes": SHIPPED_DTYPES,
                    "policy_source": _incumbent.get("shipped_policy_source"),
                    "advisor_commit": commit, "advisor_pin_expected": ADVISOR_PIN,
-                   "advisor_home": advisor_home}, fh, indent=2)
+                   "advisor_home": advisor_home,
+                   "capture_scope": CAPTURE_SCOPE}, fh, indent=2)
 
 
 if __name__ == "__main__":
