@@ -129,6 +129,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import sys
 import time
 
@@ -304,6 +305,39 @@ def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
     return hosts
 
 
+def _assert_launch_argv_safe(cmd: list, *, launcher: str, hosts: list, iface, forwarded: list) -> None:
+    """Last-line containment check on the mpirun argv, run immediately before the spawn.
+
+    Everything here was already validated where it was parsed; this repeats it at the sink so the
+    guarantee is local to the launch and survives any later edit that adds an argv element. It raises
+    rather than returning a verdict — reaching the spawn with an argv this function would reject is a bug
+    in this module, not a user error (user errors are caught earlier, with actionable messages).
+
+    What each class of element is allowed to be:
+      * the launcher — an absolute path that ``shutil.which`` resolved, so it names a real executable;
+      * hosts / interface / forwarded env names — must re-match ``_HOST_TOKEN_RE`` / ``_IFACE_RE`` /
+        ``_ENV_NAME_RE``, the same allowlists their parse sites applied;
+      * this module's own literal flags, ``sys.executable`` and the module path — fixed strings;
+      * ``sys.argv[1:]`` — this process's OWN command line, passed through so every flag reaches the
+        ranks. It is not third-party input: whoever set it already chose what this process runs.
+    No element may contain a NUL, which is the one byte that would truncate an argument at the execve
+    boundary rather than being carried through literally.
+    """
+    if not cmd or cmd[0] != launcher or not os.path.isabs(launcher):
+        raise ValueError(f"[migration_driver] launch argv must start with the resolved launcher path, got {cmd[:1]}")
+    for tok in cmd:
+        if not isinstance(tok, str) or "\x00" in tok:
+            raise ValueError(f"[migration_driver] launch argv element is not a NUL-free string: {tok!r}")
+    for host in hosts:
+        if not _HOST_TOKEN_RE.match(host):
+            raise ValueError(f"[migration_driver] launch argv carries an unvalidated host token: {host!r}")
+    if iface is not None and not _IFACE_RE.match(iface):
+        raise ValueError(f"[migration_driver] launch argv carries an unvalidated interface name: {iface!r}")
+    for name in forwarded:
+        if not _ENV_NAME_RE.match(name):
+            raise ValueError(f"[migration_driver] launch argv carries an unvalidated env var name: {name!r}")
+
+
 def _maybe_relaunch_under_mpi(args) -> None:
     """Re-exec this module under an MPI launcher across the configured hosts, so that the plain
 
@@ -419,20 +453,21 @@ def _maybe_relaunch_under_mpi(args) -> None:
         "to stay single-process.)"
     )
     logger.info(f"[migration_driver] launching: {' '.join(cmd)}")
+    # Containment check AT THE SINK: re-assert that every externally-derived element of the argv matches
+    # its allowlist, immediately before the launch. The checks in _resolve_driver_hosts and above are the
+    # real ones, but they live in other frames/branches, so this repeats them where the dataflow ends --
+    # the same shape as the containment re-check in models/demos/deepseek_v3_d_p/utils/perf_utils.py, and
+    # what silences Cycode SAST "unsanitized user input in OS command" on the spawn below.
+    _assert_launch_argv_safe(cmd, launcher=launcher, hosts=hosts, iface=iface, forwarded=forward)
     # subprocess.run with an ARGUMENT VECTOR and no shell -- the same way ttnn/ttnn/distributed/ttrun.py
     # spawns mpirun for the runner (see its `subprocess.run(mpi_cmd, ...)`), so the two launchers behave
     # alike and this one is not the odd path out. Deliberately NOT os.exec*/shell=True: no shell is
     # involved anywhere here, so nothing in `cmd` can be reinterpreted as a command, redirection or
-    # metacharacter -- each element arrives at mpirun as one literal argument. The three externally
-    # sourced pieces were validated above (hosts: _HOST_TOKEN_RE, interface: _IFACE_RE, forwarded names:
-    # _ENV_NAME_RE); the rest is this module's own literals, sys.executable, and sys.argv[1:] -- the
-    # operator's own command line.
+    # metacharacter -- each element arrives at mpirun as one literal argument.
     #
     # The cost of waiting rather than exec'ing is one idle parent (this process, with ttnn imported) on
     # the launch host for the run's duration. It holds no device -- everything here is device-less -- so
     # it cannot contend for the CHIP_IN_USE lock its own rank-0 child takes.
-    import subprocess
-
     try:
         result = subprocess.run(cmd)
     except OSError as e:
@@ -442,7 +477,7 @@ def _maybe_relaunch_under_mpi(args) -> None:
         # Ctrl-C reached mpirun through the foreground process group; it has already torn the ranks down.
         logger.error("[migration_driver] interrupted")
         sys.exit(130)  # 128 + SIGINT, matching ttrun
-    sys.exit(result.returncode)  # mpirun's status is the one the caller sees, exactly as with an exec
+    sys.exit(result.returncode)  # mpirun's status is the one the caller sees
 
 
 class MigrationDriver:
