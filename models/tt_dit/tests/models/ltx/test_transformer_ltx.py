@@ -1907,7 +1907,11 @@ def _build_block_trace_setup(
     [pytest.param((4, 8), 1, 0, 2, ring_params_8k, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0_8k")],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 34, 60, id="stage_2")])
+# Pro runs stage 1 at half-res under full guidance, so its block shape is the one 120 of the 123
+# forwards per generate actually execute; stage 2 is the remaining 3.
+@pytest.mark.parametrize(
+    ("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1"), pytest.param(19, 34, 60, id="stage_2")]
+)
 @pytest.mark.parametrize("has_audio", [pytest.param(False, id="video"), pytest.param(True, id="av")])
 @pytest.mark.parametrize("checkpoint_variant", [pytest.param("fast", id="ckpt_fast")])
 def test_ltx_transformer_block_trace_perf(
