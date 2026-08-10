@@ -106,6 +106,39 @@ so appending to the tensor alone leaves the extra tiles unread. Widening that co
 tap is the one host change required, and it is the same work the optional-tensor route would have
 needed for its own CB anyway.
 
+### Final answer on the carrier: a small persistent CB, not the weights CB
+
+Two attempts at the weights-CB route each surfaced a further problem. Both are real and neither is
+visible without writing the code, so they are recorded here rather than left to be rediscovered.
+
+**1. The reserve count is a separate compile-time arg.** The reader's
+`dfb_weight_obj.reserve_back(weight_block_num_tiles)` / `push_back(...)` take compile-time arg 7, which
+is *not* the CB page count set in `conv2d_op_program_factory_common.cpp`. Enlarging the CB alone makes
+the reader overflow its reservation. Bumping the shared `weight_block_num_tiles` instead is wrong the
+other way: the compute kernel uses the same value for its tap loop bound and would run two taps long.
+Solvable with a `#define` for the extra count (no arg re-indexing needed), but see 2.
+
+**2. The killer: pop rate.** The compute kernel's non-coalesced path pops in1 **once per tile per
+tap** -- `block_num_tiles` tiles x `num_taps` taps per block. `apply_snake_beta` popping two tiles at
+the last tap therefore consumes `2 * block_num_tiles` per block, while the reader pushes the parameters
+once per block. The counts cannot be reconciled by pushing more, either, because **the parameters are
+the same for every tile in the block**: popping them at all destroys them for the tiles that follow.
+
+The parameters are read-many, write-once data with a different lifetime from the streaming weights, so
+they do not belong in a streaming CB. They want **a small dedicated CB, filled once and never popped**,
+which the compute kernel reads with `wait_front` and leaves in place.
+
+That also dissolves problem 1 -- no reserve arithmetic to reconcile, no interaction with the tap loop
+-- and it makes `apply_snake_beta` simpler: drop the `pop_front(2)` and take the CB id from a define.
+
+Cost: a new `Conv2dCb` enum value and its CB entry (2 files), the define in the sharded factory
+(1 file), one read in the weights reader outside the block loop (1 file), the kernel change (small),
+and host-side tiles. No op-signature change, no stride math, no arg re-indexing.
+
+**The two earlier commits on this (00553d225e3, 7aa264d7b53, b0b7c2ec862) reached the wrong carrier.**
+The stride analysis in b0b7c2ec862 is still correct and still useful -- appending to the weight matrix
+genuinely is safe -- it just is not the right place to put data with this lifetime.
+
 ### Correction to the correction: appending rows does *not* disturb the strides
 
 The section below claimed appending parameter rows to the weight tensor shifts every block's

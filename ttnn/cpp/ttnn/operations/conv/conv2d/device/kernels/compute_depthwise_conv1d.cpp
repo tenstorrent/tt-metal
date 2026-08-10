@@ -155,8 +155,11 @@ inline void mul_and_accumulate_block(
 // unavoidable -- the per-block count comes from the conv dims, not from the weight tensor's shape, so
 // appending to the tensor alone would leave the extra tiles never read.
 //
-// Consumes exactly the two tiles it waits on. The non-coalesced path takes in1 one tile per tap, so
-// this must run *after* the tap loop has popped its own, or the op desyncs.
+// **Does not pop.** The parameters are per channel, so every tile in a block wants the same two
+// tiles; popping them would destroy them for the tiles that follow. They live in a small dedicated CB
+// filled once, not in the streaming weights CB -- which is also why this cannot ride in1: the
+// non-coalesced path pops in1 once per tile per tap, so two pops at the last tap would consume
+// `2 * block_num_tiles` per block against one push. See FUSED_BAND_DESIGN.md.
 template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
 inline void apply_snake_beta(DataflowBuffer params_dfb) {
     const uint32_t params_cb_id = params_dfb.get_id();
@@ -181,7 +184,7 @@ inline void apply_snake_beta(DataflowBuffer params_dfb) {
     add_binary_tile_init();
     add_binary_tile(dst_acc, dst_a, dst_acc);  // x + inv_beta * sin^2
 
-    params_dfb.pop_front(2);
+    // deliberately no pop_front: see the note above
 }
 
 inline void mul_and_accumulate_block_sfpu(
