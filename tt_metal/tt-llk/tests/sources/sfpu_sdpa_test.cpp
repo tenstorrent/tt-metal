@@ -105,32 +105,15 @@ static constexpr bool APPROX         = APPROX_MODE;
 
 using namespace ckernel;
 
-// The two reciprocal paths need different inits. legacy_compat=true routes to _reciprocal_compat_,
-// which materialises its constants inline, so recip_init only has to set up the general SFPU
-// state. legacy_compat=false routes to sfpu_reciprocal_iter, whose Newton step reads the constant
-// sfpu_reciprocal_init programs.
-//
-// exp_init's own scale argument is left at its default throughout, since each body carries its own
-// scale as a bf16 pattern rather than exp_init's fp32 one.
 inline void sdpa_op_init()
 {
-    if constexpr (SDPA_OP == OP_RECIP_LEGACY)
+    if constexpr (SDPA_OP == OP_RECIP_LEGACY || SDPA_OP == OP_RECIP_ITER)
     {
-        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, true /* legacy_compat */>();
-    }
-    else if constexpr (SDPA_OP == OP_RECIP_ITER)
-    {
-        // General SFPU state, then the reciprocal constant the iter path consumes.
-        _llk_math_eltwise_unary_sfpu_init_once_();
-        sfpu::sfpu_reciprocal_init<APPROX_MODE>();
+        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, SDPA_OP == OP_RECIP_LEGACY /* legacy_compat */>();
     }
     else if constexpr (SDPA_OP_IS_EXP || SDPA_OP == OP_CORRECTION)
     {
-        sfpu::exp_init<
-            SDPA_OP != OP_EXP_POLY /* APPROXIMATION_MODE */,
-            0x3F800000 /* scale, unused by these bodies */,
-            true /* CLAMP_NEGATIVE */,
-            is_fp32_dest_acc_en>();
+        sfpu::exp_init<SDPA_OP != OP_EXP_POLY /* APPROXIMATION_MODE */, 0x3F800000 /* scale, unused here */, true /* CLAMP_NEGATIVE */, is_fp32_dest_acc_en>();
     }
     else
     {
