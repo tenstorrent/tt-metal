@@ -48,6 +48,8 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

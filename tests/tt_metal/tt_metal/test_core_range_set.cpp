@@ -21,11 +21,12 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "impl/kernels/kernel.hpp"
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -165,7 +166,7 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
 
     check_program_is_mapped_to_correct_cores(program, core_ranges, compute_kernel_args);
 
-    detail::CompileProgram(dev, program);
+    program.impl().compile(dev);
 
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());

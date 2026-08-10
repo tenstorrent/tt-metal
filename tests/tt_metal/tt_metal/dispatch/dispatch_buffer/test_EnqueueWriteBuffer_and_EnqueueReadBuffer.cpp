@@ -9,7 +9,6 @@
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "allocator/allocator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -50,6 +49,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

@@ -11,7 +11,6 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -20,6 +19,8 @@
 #include <tt-metalium/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

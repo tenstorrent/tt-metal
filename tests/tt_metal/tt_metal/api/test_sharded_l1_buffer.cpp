@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <iostream>
 #include <memory>
@@ -26,6 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt::tt_metal;
 

@@ -32,7 +32,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

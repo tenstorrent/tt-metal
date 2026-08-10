@@ -13,9 +13,9 @@
 #include <tt_stl/assert.hpp>
 
 #include "host_api/temp_quasar_api.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::detail {
 

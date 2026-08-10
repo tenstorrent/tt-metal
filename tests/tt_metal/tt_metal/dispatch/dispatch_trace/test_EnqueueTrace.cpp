@@ -41,6 +41,8 @@
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

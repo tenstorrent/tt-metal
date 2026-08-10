@@ -24,8 +24,8 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.

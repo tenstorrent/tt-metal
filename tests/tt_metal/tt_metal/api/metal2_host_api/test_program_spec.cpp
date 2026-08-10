@@ -43,9 +43,7 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -53,6 +51,7 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 #include "test_helpers.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -3974,7 +3973,7 @@ void kernel_main() {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // ----------------------------------------------------------------------------
@@ -4011,7 +4010,7 @@ void kernel_main() {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
@@ -4039,7 +4038,7 @@ void kernel_main() {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
@@ -4073,7 +4072,7 @@ void kernel_main() {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // ============================================================================
@@ -4134,7 +4133,7 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
 }
 
 // ============================================================================

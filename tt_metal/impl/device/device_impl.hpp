@@ -4,15 +4,21 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <unordered_set>
+#include <vector>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
+#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -288,5 +294,52 @@ private:
 
     friend class experimental::DispatchContext;
 };
+
+IDevice* CreateDevice(
+    ChipId device_id,
+    uint8_t num_hw_cqs = 1,
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+IDevice* CreateDeviceMinimal(
+    ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+
+bool CloseDevice(IDevice* device);
+
+namespace detail {
+
+bool DispatchStateCheck(bool isFastDispatch);
+
+std::map<ChipId, IDevice*> CreateDevices(
+    // TODO: delete this in favour of DeviceManager
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs = 1,
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    bool init_profiler = true,
+    [[deprecated]] bool ignored = false,  // This argument was not used
+    bool initialize_fabric_and_dispatch_fw = true);
+
+void CloseDevices(const std::map<ChipId, IDevice*>& devices);
+
+void ReleaseOwnership();
+
+bool WriteToDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
+
+bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
+bool ReadFromDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+
+bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
+
+}  // namespace detail
 
 }  // namespace tt::tt_metal

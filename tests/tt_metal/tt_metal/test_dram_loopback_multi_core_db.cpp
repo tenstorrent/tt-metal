@@ -9,8 +9,10 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
 // All buffers are double buffered

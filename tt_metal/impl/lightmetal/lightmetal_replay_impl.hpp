@@ -13,7 +13,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {

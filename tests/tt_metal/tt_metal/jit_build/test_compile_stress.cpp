@@ -63,10 +63,10 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -306,7 +306,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
                 .set_page_size(tt::CBIndex::c_16, single_tile_size);
         CreateCircularBuffer(warmup, CoreCoord(0, 0), cb16);
         CreateKernel(warmup, kernel_path, CoreCoord(0, 0), ComputeConfig{.compile_args = {UINT32_MAX, private_seed}});
-        detail::CompileProgram(dev, warmup);
+        warmup.impl().compile(dev);
     }
     log_info(LogTest, "Warmup compile done");
 
@@ -341,7 +341,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     std::vector<std::future<void>> futures;
     futures.reserve(num_programs);
     for (auto& program : programs) {
-        futures.push_back(std::async(std::launch::async, [dev, &program] { detail::CompileProgram(dev, program); }));
+        futures.push_back(std::async(std::launch::async, [dev, &program] { program.impl().compile(dev); }));
     }
     for (auto& f : futures) {
         f.get();

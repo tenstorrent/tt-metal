@@ -12,7 +12,6 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include <tt_metal.hpp>
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
@@ -25,6 +24,7 @@
 #include <impl/dispatch/data_collection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "program/program_impl.hpp"
 
 namespace std {
 std::size_t hash<tt::tt_metal::experimental::ProgramExecutionUID>::operator()(

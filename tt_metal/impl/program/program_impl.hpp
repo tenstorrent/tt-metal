@@ -14,6 +14,7 @@
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
+#include "tt-metalium/profiler_types.hpp"
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
@@ -593,6 +594,21 @@ private:
     friend distributed::MeshWorkload;
     friend distributed::MeshWorkloadImpl;
 };
+
+void LaunchProgram(
+    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+void LaunchProgram(
+    IDevice* device,
+    const std::shared_ptr<Program>& program,
+    bool wait_until_cores_done = true,
+    bool force_slow_dispatch = false);
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
+
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
+
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
+
+DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
 
 }  // namespace detail
 }  // namespace tt::tt_metal

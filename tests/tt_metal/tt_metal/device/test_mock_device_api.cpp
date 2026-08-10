@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include <cstdlib>
@@ -17,6 +16,7 @@
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

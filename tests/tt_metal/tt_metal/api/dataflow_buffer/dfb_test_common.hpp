@@ -18,7 +18,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -32,7 +31,6 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
@@ -48,6 +46,8 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

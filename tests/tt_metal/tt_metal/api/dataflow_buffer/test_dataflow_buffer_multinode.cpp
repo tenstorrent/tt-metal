@@ -5,6 +5,8 @@
 // Multi-core and multi-DFB (concurrent/sequential) tests (Metal 2.0).
 
 #include "dfb_test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -546,7 +548,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
     // kernel is TRISC-only and can't carry tensor bindings.
-    detail::CompileProgram(device, program);
+    program.impl().compile(device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 

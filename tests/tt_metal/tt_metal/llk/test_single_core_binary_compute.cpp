@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <bit>
@@ -38,6 +37,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

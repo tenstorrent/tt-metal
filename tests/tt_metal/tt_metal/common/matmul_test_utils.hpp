@@ -6,13 +6,12 @@
 
 #include <string>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

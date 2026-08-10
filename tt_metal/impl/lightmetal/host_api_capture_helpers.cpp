@@ -15,8 +15,7 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
-
-#include "impl/program/program_impl.hpp"
+#include "program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_impl.hpp"
 
 class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
 protected:

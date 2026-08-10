@@ -8,9 +8,7 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -45,6 +43,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

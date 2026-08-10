@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/resource.h>  // getrlimit(RLIMIT_NOFILE) — bound JIT compile fan-out under the fd limit
 #include <csignal>
+#include "impl/kernels/kernel.hpp"
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
 #include <sys/ucontext.h>
@@ -53,7 +54,6 @@
 #error "TT_EMULE_CXX_STANDARD must be defined by CMake"
 #endif
 
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"

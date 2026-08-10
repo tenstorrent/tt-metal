@@ -19,7 +19,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -34,6 +33,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -446,7 +446,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAddressEquality1Sx1S) {
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
     IDevice* device = devices_.at(0)->get_devices()[0];
-    detail::CompileProgram(device, program);
+    program.impl().compile(device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 
@@ -775,7 +775,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
     IDevice* device = devices_.at(0)->get_devices()[0];
-    detail::CompileProgram(device, program);
+    program.impl().compile(device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 

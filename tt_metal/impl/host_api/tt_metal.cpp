@@ -11,7 +11,6 @@
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
-#include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -40,7 +39,6 @@
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
-#include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -69,6 +67,10 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "kernels/kernel.hpp"
+#include "host_api/device_queries.hpp"
+#include "host_api/helpers.hpp"
+#include "buffers/buffer_impl.hpp"
 
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
@@ -301,12 +303,6 @@ bool WriteToDeviceL1(
         address,
         std::span(reinterpret_cast<const std::uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(uint32_t)),
         core_type);
-}
-
-bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    MetalContext::instance().get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
-    return true;
 }
 
 bool ReadFromDeviceL1(
@@ -949,7 +945,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
 #endif
         {
-            detail::CompileProgram(device, program);
+            program.impl().compile(device);
         }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
@@ -1245,11 +1241,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
             }
         }
     }
-}
-
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
-    ZoneScoped;
-    program.impl().compile(device, force_slow_dispatch);
 }
 
 }  // namespace detail
@@ -1697,20 +1688,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
     circular_buffer->assign_global_address();
 }
 
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
-    circular_buffer->assign_global_address();
-}
-
-void UpdateDynamicCircularBufferAddressAndTotalSize(
-    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().set_globally_allocated_address_and_total_size(tensor, total_size);
-    circular_buffer->assign_global_address();
-}
-
 uint32_t CreateSemaphore(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
     return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
@@ -1779,13 +1756,6 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         BufferShardingArgs(config.shard_parameters, config.buffer_layout),
         std::nullopt,
         sub_device_id);
-}
-
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
-
-void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    detail::DispatchStateCheck(MetalContext::instance().rtoptions().get_fast_dispatch());
-    program.impl().add_buffer(buffer);
 }
 
 void SetRuntimeArgs(

@@ -81,8 +81,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
-#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
-#include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
@@ -91,6 +89,8 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "kernels/kernel.hpp"
+#include "program/program_impl.hpp"
 
 namespace tt {
 enum CBIndex : std::uint8_t;

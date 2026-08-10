@@ -32,11 +32,11 @@
 
 #include "device_fixture.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/kernels/kernel.hpp"
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -17,7 +17,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "emule_live_ranges.hpp"
 

@@ -12,11 +12,11 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "impl/device/device_impl.hpp"
 
 using namespace tt::tt_metal;
 

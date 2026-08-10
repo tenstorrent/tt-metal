@@ -10,10 +10,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 void to_json(nlohmann::json& j, const ProgramExecutionUID& program_execution_uid) {

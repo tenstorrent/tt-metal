@@ -39,6 +39,8 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <algorithm>
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

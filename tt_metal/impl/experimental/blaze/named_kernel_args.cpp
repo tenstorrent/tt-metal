@@ -23,9 +23,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash for hash_named_args_schema
 
-#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal::experimental::blaze {
 

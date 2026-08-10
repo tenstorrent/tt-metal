@@ -12,16 +12,15 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/kernels/kernel.hpp"
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 
 using std::vector;
 using namespace tt;
@@ -72,7 +71,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
             .get_device_build_env(device->build_id())
             .build_env.get_out_kernel_root_path());
 
-    detail::CompileProgram(device, program);
+    program.impl().compile(device);
 
     std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(
         program,

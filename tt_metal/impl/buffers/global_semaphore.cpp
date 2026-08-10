@@ -10,7 +10,6 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt_metal.hpp>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -21,6 +20,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
+#include "buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 

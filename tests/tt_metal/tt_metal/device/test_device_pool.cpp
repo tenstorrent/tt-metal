@@ -13,8 +13,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "context/metal_context.hpp"
 #include "impl/allocator/allocator.hpp"
-#include "tt_metal.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

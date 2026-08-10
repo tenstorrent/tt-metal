@@ -9,7 +9,6 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
 #include <array>
 #include <map>
@@ -44,6 +43,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

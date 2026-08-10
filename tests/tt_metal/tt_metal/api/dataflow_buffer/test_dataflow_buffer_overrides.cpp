@@ -5,6 +5,8 @@
 // DFB re-entry / entry-size / num-entries override runtime tests (legacy-only).
 
 #include "dfb_test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

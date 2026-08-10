@@ -34,7 +34,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -46,6 +45,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #include "gtest/gtest.h"
+#include "impl/buffers/buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

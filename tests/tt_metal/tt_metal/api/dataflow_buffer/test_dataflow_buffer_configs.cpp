@@ -20,7 +20,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -29,13 +28,13 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <gmock/gmock.h>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "../metal2_host_api/test_helpers.hpp"
 #include "dfb_test_common.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

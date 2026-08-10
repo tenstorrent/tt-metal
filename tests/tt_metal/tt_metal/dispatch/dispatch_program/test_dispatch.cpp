@@ -36,11 +36,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/kernels/kernel.hpp"
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig,
 // CreateSemaphore with CoreType
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
 
 namespace tt::tt_metal {

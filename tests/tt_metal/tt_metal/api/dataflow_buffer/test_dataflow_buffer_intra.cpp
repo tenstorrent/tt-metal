@@ -9,6 +9,8 @@
 #include <array>
 #include <map>
 #include <string_view>
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 

@@ -117,7 +117,7 @@
 //     if (buffers_vec.size() > 0) {
 //         log_info(tt::LogTest, "Explicitly deallocating {} buffers now.", buffers_vec.size());
 //         for (auto& buffer : buffers_vec) {
-//             DeallocateBuffer(*buffer);
+//             buffer->deallocate();
 //         }
 //     }
 
@@ -292,7 +292,7 @@
 //     const uint32_t num_buffers = 5;
 //     for (uint32_t i = 0; i < num_buffers; i++) {
 //         auto buf = Buffer::create(device_, 64, 64, BufferType::DRAM);
-//         DeallocateBuffer(*buf);
+//         buf->deallocate();
 //     }
 // }
 
@@ -372,7 +372,7 @@
 //     if (dynamic_cb) {
 //         cb_in_buf = CreateBuffer(InterleavedBufferConfig{device, cb_size_bytes, cb_size_bytes, BufferType::L1});
 //         if (dealloc_cb_buf_early) {
-//             DeallocateBuffer(*cb_in_buf);
+//             cb_in_buf->deallocate();
 //         }
 //         program = create_simple_unary_program(*input, *output, cb_in_buf.get());
 //     } else {

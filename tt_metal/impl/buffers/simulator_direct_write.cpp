@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffers/simulator_direct_write.hpp"
+#include "buffers/buffer_impl.hpp"
 
 #if defined(TT_UMD_BUILD_SIMULATION)
 
 #include "llrt/rtoptions.hpp"
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::tt_sim {

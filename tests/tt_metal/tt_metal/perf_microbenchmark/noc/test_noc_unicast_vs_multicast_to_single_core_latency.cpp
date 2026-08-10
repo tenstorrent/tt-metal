@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <map>
 #include <string>
 #include <variant>
@@ -20,6 +19,8 @@
 #include "impl/context/metal_context.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 
@@ -58,7 +59,7 @@ void measure_latency(const std::string& kernel_name) {
 
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    tt::tt_metal::detail::CompileProgram(device, program);
+    program.impl().compile(device);
     tt_metal::detail::LaunchProgram(device, program);
     tt_metal::CloseDevice(device);
 }

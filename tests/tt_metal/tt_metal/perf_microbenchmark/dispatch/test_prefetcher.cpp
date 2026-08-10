@@ -30,6 +30,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "impl/device/device_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
