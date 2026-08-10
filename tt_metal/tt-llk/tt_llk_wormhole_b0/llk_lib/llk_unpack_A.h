@@ -126,15 +126,33 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        constexpr std::uint32_t innerloop = 1;
-        constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
-        ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
-        if constexpr (acc_to_dest)
+        if constexpr (acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
         {
-            tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
+            // DEST_TO_SRCA moves DEST into SrcA one face at a time. The math MOP
+            // consumes SrcA DVALID after each face, so publish a dummy SrcA DVALID
+            // alongside every SrcB face unpack.
+            const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+            const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+            ckernel_template tmp(
+                num_faces_r_dim,
+                num_faces_c_dim,
+                unpack_srca_zerosrc_set_dvalid,
+                unpack_srcb);
+            tmp.set_end_op(srcb_clear_z);
+            tmp.program();
         }
-        tmp.set_end_op(unpack_srcb_unpack_srcb);
-        tmp.program();
+        else
+        {
+            constexpr std::uint32_t innerloop = 1;
+            constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
+            if constexpr (acc_to_dest)
+            {
+                tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
+            }
+            tmp.set_end_op(unpack_srcb_unpack_srcb);
+            tmp.program();
+        }
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {

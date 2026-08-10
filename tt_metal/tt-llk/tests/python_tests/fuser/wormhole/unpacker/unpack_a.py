@@ -40,7 +40,8 @@ class UnpackerA(Unpacker):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        if compute_unit.broadcast_type != BroadcastType.None_:
+        is_broadcast = compute_unit.broadcast_type != BroadcastType.None_
+        if is_broadcast:
             tensor_b = tensor_a
             tensor_a = None
             src_a_tile_dims = (
@@ -94,7 +95,11 @@ class UnpackerA(Unpacker):
             tensor_b = None
 
         if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-            tensor_b = tensor_a
+            # For broadcast + DEST_TO_SRCA, broadcast already placed the source
+            # operand in tensor_b. Preserve it while the math side supplies SrcA
+            # from DEST one face at a time.
+            if not is_broadcast:
+                tensor_b = tensor_a
             tensor_a = None
 
         return tensor_a, tensor_b
