@@ -214,35 +214,6 @@ ALL_MESH_CONFIGS = [
     ),
 ]
 
-# Cross product: {f_1d, f2d} x {linear_x, ring_x} x {linear_y, ring_y}, expressed via ttnn.FabricConfig.
-# This drives the creation of device_params and thus has to stay conflated as a single parametrization axis rather than separate axes.
-# ttnn.Topology can actually be algorithmically derived from the FabricConfig and the fact that we never need 2d data movement
-# (thus no mesh or torus values), but is kept hand-written to avoid additional function for this short list.
-# ttnn.FabricReliabilityMode is similarly derivable but is always None for 1d and relaxed for 2d.
-# [Add issue Id] It should be bumped to strict once we have machines with 2link-2d_torus superpowers, marked in CI.
-DSP_CMB_FABRIC_CFGS = [
-    (ttnn.FabricConfig.FABRIC_1D, "f1d-Xlin-Ylin"),  # 1D - DG-linear - cross_DG-linear, kept for op generality testintg
-    (
-        ttnn.FabricConfig.FABRIC_1D_RING,
-        "f1d-Xlin-Yring",
-    ),  # 1D - DG-ring.  - cross_DG-linear, kept for op generality testintg
-    #                                                          # 1D - DG-linear - cross_DG-ring,   not needed enough to justify test setup complexity
-    #                                                          # 1D - DG-ring.  - cross_DG-ring,   not supported by 1D fabric
-    (ttnn.FabricConfig.FABRIC_2D, "f2d-Xlin-Ylin"),  # 2D - DG-linear - cross_DG-linear, kept for op generality testintg
-    (
-        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        "f2d-Xlin-Yring",
-    ),  # 2D - DG-ring.  - cross_DG-linear, kept for op generality testintg
-    (
-        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-        "f2d-Xring-Ylin",
-    ),  # 2D - DG-linear - cross_DG-ring,   kept for op generality testintg
-    (
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        "f2d-Xring-Yring",
-    ),  # 2D - DG-ring.  - cross_DG-ring,   ** production scenario testing **
-]
-
 
 def _fabric_cfg_to_init_reliability_mode(fabric_cfg):
     # For fabric 1d the param is omitted. For fabric 2d ideally it would be strict for reliable perf measurements

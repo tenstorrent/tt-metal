@@ -222,6 +222,22 @@ def pytest_collection_modifyitems(config, items):
         ttnn.FabricConfig.FABRIC_1D_RING,
     }
 
+    QB = [
+        ttnn.cluster.ClusterType.P150_X4,  # BH QuietBox — 4x P150
+        ttnn.cluster.ClusterType.T3K,
+    ]  # WH QuietBox — 4x n300 (8 chips)  [ambiguous]
+
+    LB = [
+        ttnn.cluster.ClusterType.P150_X8,  # BH LoudBox — 8x P150
+        ttnn.cluster.ClusterType.T3K,
+    ]  # WH LoudBox / T3000               [ambiguous]
+
+    GLX = [
+        ttnn.cluster.ClusterType.GALAXY,  # WH Galaxy   (board_type UBB)
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,  # BH Galaxy   (board_type UBB_BLACKHOLE)
+        ttnn.cluster.ClusterType.TG,
+    ]
+
     def _is_ring_or_torus(item):
         params = getattr(getattr(item, "callspec", None), "params", {})
         dp = params.get("device_params")
@@ -234,12 +250,15 @@ def pytest_collection_modifyitems(config, items):
     # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
     # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
     skip_rings = False
+    machine_type = None
     if on_ci and any(_is_ring_or_torus(item) for item in items):
         try:
-            skip_rings = ttnn.cluster.get_cluster_type() in (
-                ttnn.cluster.ClusterType.GALAXY,
-                ttnn.cluster.ClusterType.TG,
-                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+            cluster_type = ttnn.cluster.get_cluster_type()
+            skip_rings = cluster_type in GLX
+            machine_type = (
+                "GLX"
+                if cluster_type in GLX
+                else ("LB" if machine_type in LB else ("QB" if machine_type in QB else None))
             )
         except Exception:
             skip_rings = True
@@ -271,6 +290,17 @@ def pytest_collection_modifyitems(config, items):
 
         if mesh_shape is None or topology is None:
             continue
+
+        # Unsupported fabric rings on QB/LB meshes
+        if machine_type == "LB" or machine_type == "QB":
+            if min(mesh_shape[0], mesh_shape[1]) > 1 and _is_ring_or_torus(item):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="ring/torus config on a CI LB or QB runner:"
+                        "Such machines lack cables for anything but 8x1 / 4x1 rings"
+                    )
+                )
+                continue
 
         devices_needed = mesh_shape[0] * mesh_shape[1]
         is_ring = topology == "ring"

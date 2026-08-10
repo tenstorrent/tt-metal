@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import DSP_CMB_FABRIC_CFGS, fabric_to_device_params
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -343,16 +343,23 @@ def run_combine(
 @dataclass
 class _Test_Mesh:
     full_model_mesh: tuple[int, int]  # Intended for full production-scale testing
-    proxy_test_meshes: list[tuple[int, int]]  # Intended for [0..N] proxy tests, typically on smaller HW
-
-    def target_reference_pairs(self):
-        pairs = [(self.full_model_mesh, self.full_model_mesh)]
-        for prxy in self.proxy_test_meshes:
-            pairs.append((prxy, self.full_model_mesh))
-        return pairs
+    target_meshes: list[
+        dict[tuple[int, int], ttnn.FabricConfig]
+    ]  # Intended for [0..N] proxy tests, typically on smaller HW
 
 
-SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh((8, 4), [(8, 1), (4, 2), (4, 1)])
+SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
+    (8, 4),
+    {
+        # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
+        # rings in all configurations. Pick fabric option as representative as possible.
+        (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        (8, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,  # TODO [dlukic]: check if this has to fallback to torus_y
+        (4, 2): ttnn.FabricConfig.FABRIC_2D,
+        (4, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,  # TODO [dlukic]: check if this has to fallback to torus_y
+        (2, 2): ttnn.FabricConfig.FABRIC_2D,
+    },
+)
 
 
 # Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
@@ -436,80 +443,47 @@ def _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg):
         return ttnn.Topology.Ring
 
 
-def _ring_over_one_or_two_chips(fabric_cfg, mesh) -> bool:
-    if (
-        fabric_cfg
-        in [
-            ttnn.FabricConfig.FABRIC_1D_RING,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        ]
-        and mesh[0] <= 2
-    ):
-        return True
-
-    if (
-        fabric_cfg
-        in [
-            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        ]
-        and mesh[1] <= 2
-    ):
-        return True
-
-    return False
-
-
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
-    for fabric_cfg, fabric_cfg_id in DSP_CMB_FABRIC_CFGS:
-        device_params = fabric_to_device_params(fabric_cfg)
-        fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
-        for model_name, model_config, is_extended_model, test_meshes in COMBINE_MODELS:
-            for target_mesh, reference_mesh in test_meshes.target_reference_pairs():
-                # Skip fabric configurations which don't make sense on some grids.
-                # In particular, what makes no sense here is ring over anything with 1 or 2 chips.
-                # (Although in general, ring-2 can theoretically make sense in general.)
-                #
-                if _ring_over_one_or_two_chips(fabric_cfg, target_mesh):
-                    continue
-
-                topo_marker = _topo_marker(target_mesh, fabric_cfg)
-                mesh_requirements_marker = pytest.mark.requires_mesh_topology(
-                    mesh_shape=target_mesh, topology=topo_marker
+    for model_name, model_config, is_extended_model, test_meshes in COMBINE_MODELS:
+        for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
+            device_params = fabric_to_device_params(fabric_cfg)
+            fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
+            topo_marker = _topo_marker(target_mesh, fabric_cfg)
+            mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
+            marks = (
+                (pytest.mark.extended_model, mesh_requirements_marker)
+                if is_extended_model
+                else (mesh_requirements_marker)
+            )
+            test_scenarios = [
+                ("pcc", 128, 4, True),
+                ("perf_no_pcc", 640, 8, False),
+            ]
+            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
+                model_config = _model_scaledown_for_combine(
+                    model_config, test_meshes.full_model_mesh, target_mesh, run_pcc
                 )
-                marks = (
-                    (pytest.mark.extended_model, mesh_requirements_marker)
-                    if is_extended_model
-                    else (mesh_requirements_marker)
-                )
-                test_scenarios = [
-                    ("pcc", 128, 4, True),
-                    ("perf_no_pcc", 640, 8, False),
-                ]
-                for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                    model_config = _model_scaledown_for_combine(model_config, reference_mesh, target_mesh, run_pcc)
 
-                    num_experts = model_config.NUM_ROUTED_EXPERTS
-                    topk = model_config.NUM_EXPERTS_PER_TOKEN
-                    shape = target_mesh
+                num_experts = model_config.NUM_ROUTED_EXPERTS
+                topk = model_config.NUM_EXPERTS_PER_TOKEN
+                shape = target_mesh
 
-                    params.append(
-                        pytest.param(
-                            shape,
-                            device_params,
-                            fabric_topo,
-                            seq_len_per_chip,
-                            model_config.EMB_SIZE,
-                            num_experts,
-                            topk,
-                            dispatch_buffer_capacity_factor,
-                            run_pcc,
-                            marks=marks,
-                            id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}-{fabric_cfg_id}",
-                        )
+                params.append(
+                    pytest.param(
+                        shape,
+                        device_params,
+                        fabric_topo,
+                        seq_len_per_chip,
+                        model_config.EMB_SIZE,
+                        num_experts,
+                        topk,
+                        dispatch_buffer_capacity_factor,
+                        run_pcc,
+                        marks=marks,
+                        id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
                     )
+                )
 
     return params
 
