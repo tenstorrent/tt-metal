@@ -56,31 +56,29 @@ Multi-host (validating EVERY rank's layers, not just rank 0's). Both read-backs 
 PCC and the destination check — go over UMD, which reaches only the chips physically attached to the host
 the process runs on. On a pipeline runner spanning N hosts, ONE driver process therefore verifies just its
 own host's layer slice and SKIPS the rest (it says so, but a PASS is then a fraction of the model). Covering
-the model needs one process per host, which is CONFIG rather than a different command: list the hosts in the
-manifest, in RANK ORDER, and terminal C stays the same single line it always was::
+the model needs one process per host — which this module does NOT arrange for itself. Launching is the
+shell's job, exactly as it is for the runner (``run_pipeline_prefill.sh``); use its sibling::
 
-    migration:
-      driver_hosts: [<H0>, <H1>]   # rank 0 FIRST, and it must be the runner's rank-0 host
+    # C) multi-host: host order == rank order, rank 0 first and it must be THIS host. The third argument
+    #    is the NIC and must match the runner's.
+    ./models/demos/common/prefill/runners/run_migration_driver.sh \
+      models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml \
+      <H0>:1,<H1>:1 [tcp_iface]
 
-    # C) unchanged — the driver relaunches ITSELF under mpirun across driver_hosts (see
-    #    _maybe_relaunch_under_mpi). Equivalent overrides: --hosts / PREFILL_DRIVER_HOSTS.
-    python3 -m models.demos.common.prefill.runners.migration_driver \
-      --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
-
-Left out (or one host), nothing changes: a single process, one host's coverage, no MPI. With two or more,
-the relaunched processes split by rank exactly like ``prefill_producer``:
-  * rank 0 (the local host): the full run — H2D feed, ack drain, MigrationLayerClient, migrate(), both
+Run standalone (no launcher) it is simply rank 0 of 1: one process, one host's coverage, no MPI, and the
+command at the top of this docstring is exactly right. Under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) the
+same entry point splits by rank, like ``prefill_producer``:
+  * rank 0 (the launch host): the full run — H2D feed, ack drain, MigrationLayerClient, migrate(), both
     sidecars — plus its own host's read-backs.
   * every other rank: a device-less VALIDATOR. No H2D connect, no migration client, no migrate; it only
     reads its OWN host's KV back (source PCC and/or destination check) and votes.
 Coordination is three collectives over the distributed context (host-side MPI, no mesh device), so all
-ranks must see the same env — hence the relaunch forwards every PREFILL_*/MIGRATION_* var and each rank
-applies the same manifest itself. GO#1 = rank 0 broadcasts the resident-slot map once every LayerAck has
-landed (releases the source PCC); GO#2 = rank 0 broadcasts the resolved (src, dst, real_len) triples once
-wait_complete has returned (releases the destination check); DONE = an allgather of each rank's verdict,
-which both waits for every validator's reads to finish and folds the pass/fail. Any rank failing fails the
-run. Already being under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) skips the relaunch, so an explicit
-mpirun of this module works too and behaves identically.
+ranks must see the same env — the launcher script forwards every exported PREFILL_*/MIGRATION_* var and
+each rank applies the same manifest itself. GO#1 = rank 0 broadcasts the resident-slot map once every
+LayerAck has landed (releases the source PCC); GO#2 = rank 0 broadcasts the resolved (src, dst, real_len)
+triples once wait_complete has returned (releases the destination check); DONE = an allgather of each
+rank's verdict, which both waits for every validator's reads to finish and folds the pass/fail. Any rank
+failing fails the run.
 Storage, and this is the usual way a multi-host run goes wrong: PREFILL_MIGRATION_TABLE_PATH must be on
 SHARED storage (every validator reads rank 0's table), while PREFILL_MIGRATION_DEVICE_MAP_PATH must stay
 HOST-LOCAL (each rank reads its OWN host's chips).
@@ -117,19 +115,15 @@ is warned about rather than honoured:
                                     (its reader would PCC dst rows the migrate never wrote).
   MIGRATION_DONE_FILE               path of the DONE sentinel published for an external consumer to poll
                                     (default /tmp/migration_done.sentinel).
-  PREFILL_DRIVER_HOSTS              rank-ordered host list ("h0,h1") this driver spans, == --hosts and the
-                                    manifest's ``migration.driver_hosts``. More than one host => the module
-                                    relaunches itself under mpirun, one process per host, so the read-backs
-                                    cover every rank. Unset (default) => one process, this host only.
+  The host list is NOT env or manifest config: it is an argument to run_migration_driver.sh, which is what
+  places one process per host (see the multi-host note above).
   Queues + client come from the runner's migration env, resolved via ``runners.migration``:
   PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
 """
 
 import json
 import os
-import re
 import struct
-import subprocess
 import sys
 import time
 
@@ -156,12 +150,6 @@ def apply_manifest_env(manifest: dict) -> None:
             os.environ.setdefault(key, "1" if val else "0")
 
     sd_bool("PREFILL_PRODUCER_ISSUE_MIGRATION", migration.get("issue"))
-    # Rank-ordered host list for the multi-host relaunch. Also read DIRECTLY from the manifest, before any
-    # of this runs (see _resolve_driver_hosts): by the time the env is applied the process is already the
-    # right one. Mirrored here so the value is visible in the environment like every other knob.
-    driver_hosts = migration.get("driver_hosts")
-    if driver_hosts is not None:
-        sd("PREFILL_DRIVER_HOSTS", driver_hosts if isinstance(driver_hosts, str) else ",".join(driver_hosts))
     sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
     sd("PREFILL_MIGRATION_SRC_ENDPOINT_ID", migration.get("src_endpoint_id"))
     sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
@@ -200,284 +188,6 @@ def _parse_layers(spec: str):
     """PREFILL_MIGRATION_LAYERS / manifest ``layers`` -> a list of layer ids, or None for "all"."""
     spec = (spec or "").strip()
     return [int(x) for x in spec.split(",") if x.strip()] if spec else None
-
-
-# ---------------------------------------------------------------------------
-# Self-relaunch under MPI (so the documented single-process command still covers every rank)
-# ---------------------------------------------------------------------------
-
-# Set on the exec'd child so a launcher that reports world_size 1 (a one-host list, a launcher that does
-# not export OMPI_*) can never make it relaunch again. Checked before anything else.
-_RELAUNCH_GUARD = "PREFILL_DRIVER_RELAUNCHED"
-
-# Forwarded to the peer ranks with mpirun -x (name only => the launch host's current value). ttrun-style
-# launchers propagate TT_*/ARCH_* themselves but nothing else, so PATH/PYTHONPATH have to be named or a
-# peer resolves a bare interpreter with no ttnn. Every PREFILL_*/MIGRATION_* var set in the shell is added
-# on top of these, because an exported knob that reaches only rank 0 is exactly the asymmetry that
-# desynchronizes the collectives.
-_RELAUNCH_FORWARD_VARS = (
-    "PATH",
-    "LD_LIBRARY_PATH",
-    "PYTHONPATH",
-    "TT_METAL_HOME",
-    "TT_METAL_CACHE",
-    "VIRTUAL_ENV",
-    "LOGURU_LEVEL",
-    _RELAUNCH_GUARD,
-)
-
-# Cluster NIC for MPI TCP, == run_pipeline_prefill.sh's tcp_iface default. These machines are multi-homed,
-# and without pinning the interface OpenMPI advertises addresses on one NIC and connects on another; the
-# peers never match up, so MPI_Init NEVER COMPLETES. The visible symptom is every rank logging "applied
-# manifest" and then nothing at all (all of them parked in init_distributed_context), usually with
-# "accepted a TCP connection from what appears to be another Open MPI process but cannot find a
-# corresponding process entry for that peer". Must match what the runner was launched with, since both
-# jobs span the same hosts.
-_RELAUNCH_TCP_IFACE_DEFAULT = "ens5f0np0"
-
-# Every externally-sourced token that reaches the relaunch argv is matched against one of these first.
-#
-# The exec below takes an ARGUMENT VECTOR, not a command string, and never goes through a shell, so shell
-# metacharacters in a host name or interface are inert -- they would be passed to mpirun as literal
-# characters inside a single argv element. What validation buys is the next tier down: it keeps a
-# malformed or hostile value from being reinterpreted as an mpirun OPTION, keeps `-x` carrying a bare
-# NAME rather than a NAME=VALUE assignment, and turns the overwhelmingly more likely failure -- a typo or
-# a half-expanded variable in driver_hosts -- into a precise error instead of an opaque launcher one.
-#   host:  RFC-1123-ish label chars, plus mpirun's optional ":<slots>" suffix
-#   iface: a network interface name (also used for -x variable names, which are identifier-shaped)
-_HOST_TOKEN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(:[1-9][0-9]{0,3})?$")
-_IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _resolve_driver_hosts(cli_hosts: str, manifest_path: str) -> list:
-    """The rank-ordered host list this driver should span, or [] for a plain single-process run.
-
-    Three sources, first non-empty wins: ``--hosts``, PREFILL_DRIVER_HOSTS, and the manifest's
-    ``migration.driver_hosts`` (a "h0,h1" string or a YAML list). The manifest is read here WITHOUT
-    applying it to the environment — the relaunch decision has to be made before any env mutation so the
-    child applies the manifest itself, exactly as every other rank does.
-
-    ``$VAR`` / ``${VAR}`` in the value is expanded from the environment, so a SHARED manifest can say
-    ``driver_hosts: "$HOSTSP"`` and reuse the very host list that was passed to run_pipeline_prefill.sh
-    instead of hard-coding one lab's machines (every other host name in these manifests is a launch
-    argument for exactly that reason). An unset variable is fatal rather than ignored: falling back to a
-    single process would quietly re-introduce the partial-coverage bug this whole path exists to fix.
-
-    Entries are normalized to mpirun's ``host:slots`` form with one slot each: one driver process per
-    host is the whole point (each reads its own host's chips), and a second process on the same host
-    would just duplicate reads while adding a rank to every collective.
-
-    Every entry must match ``_HOST_TOKEN_RE`` before it can reach the relaunch argv; anything else exits
-    here, naming the offending token and where it came from."""
-    spec = (cli_hosts or os.environ.get("PREFILL_DRIVER_HOSTS", "")).strip()
-    source = "--hosts/PREFILL_DRIVER_HOSTS"
-    if not spec and manifest_path:
-        import yaml
-
-        with open(manifest_path) as f:
-            hosts = ((yaml.safe_load(f) or {}).get("migration") or {}).get("driver_hosts")
-        if hosts:
-            spec = hosts if isinstance(hosts, str) else ",".join(str(h) for h in hosts)
-            source = f"{manifest_path} migration.driver_hosts"
-    expanded = os.path.expandvars(spec)
-    if "$" in expanded:
-        logger.error(
-            f"[migration_driver] driver host list {spec!r} (from {source}) references an environment "
-            f"variable that is not set — it expanded to {expanded!r}. Export it (e.g. the same HOSTSP you "
-            "passed to run_pipeline_prefill.sh) or replace it with literal host names. Refusing to fall "
-            "back to a single process: that would verify only this host's layers while looking like a "
-            "full-coverage run."
-        )
-        sys.exit(1)
-    hosts = []
-    for entry in (e.strip() for e in expanded.split(",")):
-        if not entry:
-            continue
-        if not _HOST_TOKEN_RE.match(entry):
-            logger.error(
-                f"[migration_driver] driver host {entry!r} (from {source}) is not a valid "
-                "'host' or 'host:slots' token: expected letters, digits, '.', '-' and '_' only, with an "
-                "optional ':<slots>' suffix. Nothing is launched with it."
-            )
-            sys.exit(1)
-        hosts.append(entry if ":" in entry else f"{entry}:1")
-    return hosts
-
-
-def _assert_launch_argv_safe(cmd: list, *, launcher: str, hosts: list, iface, forwarded: list) -> None:
-    """Last-line containment check on the mpirun argv, run immediately before the spawn.
-
-    Everything here was already validated where it was parsed; this repeats it at the sink so the
-    guarantee is local to the launch and survives any later edit that adds an argv element. It raises
-    rather than returning a verdict — reaching the spawn with an argv this function would reject is a bug
-    in this module, not a user error (user errors are caught earlier, with actionable messages).
-
-    What each class of element is allowed to be:
-      * the launcher — an absolute path that ``shutil.which`` resolved, so it names a real executable;
-      * hosts / interface / forwarded env names — must re-match ``_HOST_TOKEN_RE`` / ``_IFACE_RE`` /
-        ``_ENV_NAME_RE``, the same allowlists their parse sites applied;
-      * this module's own literal flags, ``sys.executable`` and the module path — fixed strings;
-      * ``sys.argv[1:]`` — this process's OWN command line, passed through so every flag reaches the
-        ranks. It is not third-party input: whoever set it already chose what this process runs.
-    No element may contain a NUL, which is the one byte that would truncate an argument at the execve
-    boundary rather than being carried through literally.
-    """
-    if not cmd or cmd[0] != launcher or not os.path.isabs(launcher):
-        raise ValueError(f"[migration_driver] launch argv must start with the resolved launcher path, got {cmd[:1]}")
-    for tok in cmd:
-        if not isinstance(tok, str) or "\x00" in tok:
-            raise ValueError(f"[migration_driver] launch argv element is not a NUL-free string: {tok!r}")
-    for host in hosts:
-        if not _HOST_TOKEN_RE.match(host):
-            raise ValueError(f"[migration_driver] launch argv carries an unvalidated host token: {host!r}")
-    if iface is not None and not _IFACE_RE.match(iface):
-        raise ValueError(f"[migration_driver] launch argv carries an unvalidated interface name: {iface!r}")
-    for name in forwarded:
-        if not _ENV_NAME_RE.match(name):
-            raise ValueError(f"[migration_driver] launch argv carries an unvalidated env var name: {name!r}")
-
-
-def _maybe_relaunch_under_mpi(args) -> None:
-    """Re-exec this module under an MPI launcher across the configured hosts, so that the plain
-
-        python3 -m models.demos.common.prefill.runners.migration_driver --manifest <manifest>
-
-    validates EVERY rank's layers instead of only this host's. Returns (doing nothing) when there is
-    nothing to relaunch for; otherwise it never returns — it runs mpirun to completion and exits with
-    mpirun's status, so that is the status the caller sees.
-
-    Why a relaunch at all: both read-backs go over UMD, which reaches only the chips attached to the host
-    the process runs on, so covering an N-host pipeline needs N processes. Doing it here rather than in a
-    wrapper script keeps ONE documented command for both topologies — the host list is config (manifest
-    ``migration.driver_hosts``), not a different way to launch.
-
-    Skipped, each time leaving the single-process behaviour untouched:
-      * already under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) or already exec'd by this function;
-      * no host list configured — the default, and what a 1-galaxy run wants;
-      * a single host, where mpirun would add a process manager and change nothing about coverage.
-    """
-    if os.environ.get(_RELAUNCH_GUARD) == "1" or int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
-        return
-    hosts = _resolve_driver_hosts(args.hosts, args.manifest)
-    if not hosts:
-        return
-    if len(hosts) == 1:
-        logger.info(f"[migration_driver] driver_hosts lists one host ({hosts[0]}); running single-process.")
-        return
-
-    import shutil
-    import socket
-
-    # rank 0 must be THIS host: it alone connects the H2D service and the migration cmd queue, both of
-    # which live where the runner's rank 0 runs. A wrong order fails later and less clearly (a service
-    # descriptor timeout on a remote rank), so say it now. Warn rather than exit: aliases/FQDNs make an
-    # exact hostname match unreliable, and the user may know better.
-    local, rank0 = socket.gethostname(), hosts[0].split(":")[0]
-    if not (local == rank0 or local.split(".")[0] == rank0.split(".")[0]):
-        logger.warning(
-            f"[migration_driver] driver_hosts starts with {rank0!r} but this host is {local!r}. Rank 0 must "
-            "be the host running the runner's rank 0 (it owns the H2D service and the migration queues); "
-            "list the hosts in the SAME order you passed to run_pipeline_prefill.sh."
-        )
-
-    # Resolve the launcher to an ABSOLUTE path here, and spawn by that path below. PATH is consulted
-    # exactly once, in this lookup, rather than again inside the spawn — so what runs is decided here and
-    # is visible in the log line, and a missing launcher is a clear error rather than a bare name handed
-    # to a PATH search.
-    launcher = shutil.which("mpirun-ulfm") or shutil.which("mpirun")
-    if not launcher:
-        logger.error(
-            "[migration_driver] migration.driver_hosts asks for a multi-host run but neither mpirun-ulfm "
-            "nor mpirun is on PATH. Install/activate the MPI launcher, or clear driver_hosts to run "
-            "single-process (this host's layers only)."
-        )
-        sys.exit(1)
-
-    # Reuse ttrun's own MCA arguments rather than restating them: the runner these ranks read KV behind was
-    # launched with exactly these (run_pipeline_prefill.sh --tcp-interface -> ttrun), and both jobs have to
-    # agree on the network or MPI_Init hangs. Import is ~0.4 s here because ttnn is already loaded.
-    from ttnn.distributed.ttrun import default_multihost_mpi_args
-
-    iface = args.tcp_interface if args.tcp_interface is not None else _RELAUNCH_TCP_IFACE_DEFAULT
-    iface = iface.strip()
-    if iface.lower() in ("", "none", "auto"):  # opt out -> ttrun's exclude-docker0,lo variant
-        iface = None
-    elif not _IFACE_RE.match(iface):
-        logger.error(
-            f"[migration_driver] --tcp-interface / PREFILL_DRIVER_TCP_IFACE {iface!r} is not a valid "
-            "interface name (letters, digits, '.', '-' and '_' only). Pass the NIC the runner was "
-            "launched with, e.g. 'ens5f0np0'."
-        )
-        sys.exit(1)
-    mca_args = default_multihost_mpi_args(iface)
-    # A peer rank inherits neither the shell that ran this nor its venv activation, so `python3 -m
-    # models...` there resolves against whatever PYTHONPATH is forwarded. Default both to this clone's
-    # root (this file is <root>/models/demos/common/prefill/runners/) when the launching shell left them
-    # unset, so the run does not depend on the caller having exported them.
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 5))
-    os.environ.setdefault("TT_METAL_HOME", repo_root)
-    os.environ.setdefault("PYTHONPATH", repo_root)
-    # `-x NAME` forwards a variable BY NAME; mpirun also accepts `-x NAME=VALUE`, which assigns one. Only
-    # identifier-shaped names get through, so a variable whose name embedded an '=' (impossible from a
-    # shell, possible via execve) can never turn a forward into an assignment.
-    forward = [
-        k
-        for k in list(_RELAUNCH_FORWARD_VARS)
-        + sorted(k for k in os.environ if k.startswith(("PREFILL_", "MIGRATION_")) and k not in _RELAUNCH_FORWARD_VARS)
-        if _ENV_NAME_RE.match(k)
-    ]
-    os.environ[_RELAUNCH_GUARD] = "1"
-    cmd = [
-        launcher,
-        "--host",
-        ",".join(hosts),
-        "--map-by",
-        "slot",
-        "--bind-to",
-        "none",
-        "--tag-output",
-        "--allow-run-as-root",
-    ] + mca_args
-    for var in forward:
-        if var in os.environ:
-            cmd += ["-x", var]
-    # sys.executable, not "python3": the peer must use the venv interpreter, and every host has this clone
-    # at the identical path (the same assumption run_pipeline_prefill.sh makes). argv[1:] is passed through
-    # verbatim, so every flag of the original command reaches all ranks.
-    cmd += [sys.executable, "-m", "models.demos.common.prefill.runners.migration_driver"] + sys.argv[1:]
-    logger.info(
-        f"[migration_driver] relaunching across {len(hosts)} host(s) {hosts} under {launcher} "
-        f"(tcp interface {iface or 'auto, excluding docker0/lo'}) — rank 0 prefills and migrates, every "
-        f"rank verifies its own host's layers. (Set {_RELAUNCH_GUARD}=1 or clear migration.driver_hosts "
-        "to stay single-process.)"
-    )
-    logger.info(f"[migration_driver] launching: {' '.join(cmd)}")
-    # Containment check AT THE SINK: re-assert that every externally-derived element of the argv matches
-    # its allowlist, immediately before the launch. The checks in _resolve_driver_hosts and above are the
-    # real ones, but they live in other frames/branches, so this repeats them where the dataflow ends --
-    # the same shape as the containment re-check in models/demos/deepseek_v3_d_p/utils/perf_utils.py, and
-    # what silences Cycode SAST "unsanitized user input in OS command" on the spawn below.
-    _assert_launch_argv_safe(cmd, launcher=launcher, hosts=hosts, iface=iface, forwarded=forward)
-    # subprocess.run with an ARGUMENT VECTOR and no shell -- the same way ttnn/ttnn/distributed/ttrun.py
-    # spawns mpirun for the runner (see its `subprocess.run(mpi_cmd, ...)`), so the two launchers behave
-    # alike and this one is not the odd path out. Deliberately NOT os.exec*/shell=True: no shell is
-    # involved anywhere here, so nothing in `cmd` can be reinterpreted as a command, redirection or
-    # metacharacter -- each element arrives at mpirun as one literal argument.
-    #
-    # The cost of waiting rather than exec'ing is one idle parent (this process, with ttnn imported) on
-    # the launch host for the run's duration. It holds no device -- everything here is device-less -- so
-    # it cannot contend for the CHIP_IN_USE lock its own rank-0 child takes.
-    try:
-        result = subprocess.run(cmd)
-    except OSError as e:
-        logger.error(f"[migration_driver] could not launch {launcher}: {type(e).__name__}: {e}")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        # Ctrl-C reached mpirun through the foreground process group; it has already torn the ranks down.
-        logger.error("[migration_driver] interrupted")
-        sys.exit(130)  # 128 + SIGINT, matching ttrun
-    sys.exit(result.returncode)  # mpirun's status is the one the caller sees
 
 
 class MigrationDriver:
@@ -1277,24 +987,6 @@ def main() -> None:
         "manifest's migration.pairs and the uniform migration.dst_slot_offset fallback.",
     )
     parser.add_argument(
-        "--hosts",
-        default=None,
-        help="Rank-ordered host list to span, 'h0,h1,...' (rank 0 first, and it MUST be the host running "
-        "the runner's rank 0). With more than one host this module relaunches itself under mpirun, one "
-        "process per host, so that the read-backs cover every rank's layers instead of only this host's "
-        "— UMD can read no other host's chips. Overrides PREFILL_DRIVER_HOSTS and the manifest's "
-        "migration.driver_hosts; unset/one host = plain single-process run.",
-    )
-    parser.add_argument(
-        "--tcp-interface",
-        default=os.environ.get("PREFILL_DRIVER_TCP_IFACE"),
-        help="NIC for MPI TCP on the multi-host relaunch, passed through as ttrun's "
-        f"'--mca btl self,tcp --mca btl_tcp_if_include <iface>' (default {_RELAUNCH_TCP_IFACE_DEFAULT!r}, "
-        "the same default run_pipeline_prefill.sh uses). MUST match the interface the RUNNER was launched "
-        "with — these hosts are multi-homed and a mismatch hangs MPI_Init with every rank silent after "
-        "'applied manifest'. '' / 'none' falls back to excluding docker0,lo.",
-    )
-    parser.add_argument(
         "--dump-src-kv",
         default=os.environ.get("PREFILL_MIGRATION_DUMP_SRC_KV"),
         help="Directory to save each source slot's KV into as src_slot<N>.pt, for a decode-side consumer "
@@ -1328,11 +1020,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Multi-host coverage: relaunch under mpirun across migration.driver_hosts (one process per host) before
-    # touching the environment, so every rank applies the manifest itself from the same starting point.
-    # No host list configured => no-op, and everything below runs exactly as it did single-process.
-    _maybe_relaunch_under_mpi(args)
-
     # Manifest order matters: the producer applies `env:` first (so a raw PREFILL_* key wins) plus its own
     # typed blocks, and hands back the parsed document; we then apply `migration:` from it. setdefault
     # throughout, so an exported env var still beats both.
@@ -1347,8 +1034,9 @@ def main() -> None:
     # the env so every rank derives the same config from the same source.
     #
     # The log line matters: _mr_config() calls MPI_Init, which BLOCKS until every rank has joined, and a
-    # network misconfiguration (ranks on different NICs -- see _RELAUNCH_TCP_IFACE_DEFAULT) makes that
-    # block forever. Announcing it turns an otherwise silent hang into a visible "waiting for N ranks".
+    # network misconfiguration (ranks placed on different NICs -- see run_migration_driver.sh's tcp_iface
+    # argument) makes that block forever. Announcing it turns an otherwise silent hang into a visible
+    # "waiting for N ranks".
     if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
         logger.info(
             f"[migration_driver] joining the distributed context "

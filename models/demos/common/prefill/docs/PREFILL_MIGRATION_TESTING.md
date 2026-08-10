@@ -57,7 +57,7 @@ export MODEL_MANIFEST=models/demos/<your_model>/tt/runners/manifests/<your_model
 
 # multi-host only: ONE rank-ordered host list, rank 0 first, reused by all three terminals
 export HOSTS=<H0>,<H1>            # endpoint:  --prefill_hosts
-export HOSTSP=<H0>:1,<H1>:1       # runner:    the --host list;  driver: migration.driver_hosts
+export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to both launchers
 ```
 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
@@ -130,7 +130,7 @@ agree*). Leave them unset in a binding whose verdicts come from the driver.
 | module | what it is |
 |--------|------------|
 | `prefill_producer` | The plain runner test. H2D push, ack drain, golden PCC. Knows nothing about migration. |
-| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, both sidecar files, and — for loopback — the destination read-back that proves the copy landed. On a multi-host runner it also fans itself out one process per host so those read-backs cover every rank (*Covering every rank*, below). |
+| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, both sidecar files, and — for loopback — the destination read-back that proves the copy landed. On a multi-host runner, launch it with `run_migration_driver.sh` so those read-backs cover every rank (*Covering every rank*, below). |
 
 The dependency runs one way: `prefill_producer` imports nothing from `migration_driver`, so a runner-only run
 can never pull migration in. Migration has to share the producer's process — it needs that run's
@@ -179,8 +179,6 @@ migration:
   dest_endpoint_id: 1             # == our own id => loopback
   dst_slot_offset: 2              # dst = src + 2  (0->2, 1->3)
   timeout_ms: 3600000
-  # driver_hosts: "$HOSTSP"       # multi-host runner ONLY: one driver process per host, so the read-backs
-                                  # cover every rank. See "Covering every rank" below. Omit on one host.
   done_file: /tmp/migration_done.sentinel                # driver-side only; no runner counterpart
   table_path: /tmp/prefill_kv_chunk_table.pb             # [MATCH RUNNER] shared storage if multi-host
   cmd_queue: /mig_ep1_cmd                                # [MATCH ENDPOINT]
@@ -319,25 +317,24 @@ else, and that applies to *both* driver read-backs — the source `check_pcc` an
 the layers: every other rank's layers resolve to no local `unique_id` and are skipped. The run still says
 `PASSED`, and it is telling the truth about a fraction of the model.
 
-The fix is one process per host, and it is **config, not a different command**. Name the hosts in the
-producer manifest and `migration_driver` re-execs itself under `mpirun-ulfm`:
-
-```yaml
-migration:
-  driver_hosts: "$HOSTSP"     # rank order, rank 0 FIRST; or [host0, host1] / "host0:1,host1:1"
-```
+The fix is one process per host, and placing them is the **launcher's** job — `run_migration_driver.sh`,
+the sibling of `run_pipeline_prefill.sh`. The module itself spawns nothing; it only splits by rank once MPI
+has placed it, which keeps launch concerns (host list, MPI transport, env forwarding) in shell on both
+sides of the run.
 
 ```bash
-# unchanged — the driver expands $HOSTSP itself and relaunches
-python -m models.demos.common.prefill.runners.migration_driver --manifest $MANIFEST
+# multi-host: <manifest> <host_list> [tcp_iface] [extra driver args...]
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST "$HOSTSP"
+
+# one galaxy: no host list, no MPI — or invoke the module directly, same thing
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST
 ```
 
-`$VAR` is expanded from the environment so a shared manifest can reuse the very host list that was passed to
-`run_pipeline_prefill.sh`, rather than pinning one lab's machines. An unset variable is a **hard error** — a
-silent fall back to one process would re-introduce exactly the partial coverage this exists to fix. Equivalents:
-`--hosts`, `PREFILL_DRIVER_HOSTS`. Omit it (or list one host) and nothing changes: one process, no MPI.
+The host list is in **rank order, rank 0 first**, and is the same list you gave `run_pipeline_prefill.sh` —
+which is why it stays a command-line argument rather than a manifest field, exactly as on the runner side.
+Pass one host (or none) and the script runs the module directly: one process, no MPI, this host's layers.
 
-Roles, once relaunched:
+Roles, once launched:
 
 | rank | does |
 |------|------|
@@ -345,11 +342,12 @@ Roles, once relaunched:
 | every other | a device-less **validator**: no H2D connect, no client, no migrate. It reads its own host's KV back and votes |
 
 Rank 0 must be the runner's rank-0 host: it alone attaches the H2D service and the `/mig_ep*` queues, which
-exist only there. The driver warns if `driver_hosts[0]` is not the local machine.
+exist only there. The script prints the rank-0 host next to `hostname` so a wrong order is visible before
+anything hangs.
 
 Three collectives over the distributed context (host-side MPI, no mesh device) sequence it, so every rank
-must see the same env — the relaunch forwards every `PREFILL_*`/`MIGRATION_*` variable and each rank applies
-the same manifest itself:
+must see the same env — the script forwards every exported `PREFILL_*`/`MIGRATION_*` variable and each rank
+applies the same manifest itself:
 
 | barrier | when | releases |
 |---------|------|----------|
@@ -378,16 +376,17 @@ directions:
 
 **The MPI interface must match the runner's.** These hosts are multi-homed and `docker0` carries the *same*
 address on every one, so unpinned OpenMPI advertises addresses on one NIC and connects on another. The
-relaunch reuses `ttrun`'s own `default_multihost_mpi_args` (`--mca btl self,tcp --mca btl_tcp_if_include
-<iface>`), defaulting to `ens5f0np0` — the same default `run_pipeline_prefill.sh` uses. Pass
-`--tcp-interface` / `PREFILL_DRIVER_TCP_IFACE` if you launched the runner with a different NIC (its 3rd
-positional argument). Get this wrong and `MPI_Init` never completes: **every rank logs `applied manifest`
+script passes the same transport arguments `ttrun` gives the runner (`--mca btl self,tcp --mca
+btl_tcp_if_include <iface>`), defaulting to `ens5f0np0` — the same default `run_pipeline_prefill.sh` uses.
+Override it with the script's 3rd argument if you launched the runner with a different NIC (its own 3rd
+argument). Get this wrong and `MPI_Init` never completes: **every rank logs `applied manifest`
 and then goes silent**, usually alongside OpenMPI's *"accepted a TCP connection … cannot find a
 corresponding process entry for that peer"*. The driver announces `joining the distributed context (N
 rank(s) expected)` first so the hang is visible rather than mysterious.
 
 `--dump-src-kv` stays rank-0-only (every rank would write the same `src_slot<N>.pt` with a different layer
-subset and clobber the rest), so its dump covers one host's layers and warns when it does.
+subset and clobber the rest), so its dump covers one host's layers and warns when it does. Extra driver
+flags go after the script's three positional arguments and reach every rank verbatim.
 
 ---
 
@@ -465,8 +464,8 @@ Three terminals, and the shared-memory queues plus the H2D socket are host-local
 on the same host** — the runner's rank-0 host. On a **pipelined runner** that stays true and each side simply
 fans out from there, always in rank order with rank 0 first: the endpoint gets `--prefill_hosts <H0>,…,<Hn>`
 (one `migration_endpoint` per host, each reading its own DRAM), the runner gets `<H0>:1,…,<Hn>:1`, and the
-driver gets the same list via `migration.driver_hosts` so it relaunches one process per host (*Covering every
-rank*, above). Host order must be identical in all three.
+driver is launched with `run_migration_driver.sh <manifest> <same list>`, which places one process per host
+(*Covering every rank*, above). Host order must be identical in all three.
 
 Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear stale state:
 
@@ -487,9 +486,10 @@ ls /dev/shm/mig_ep1_*      # all three queues must exist BEFORE starting B
 cd $TT_METAL_HOME && $RUN $BINDING $HOST:1            # multi-host: $RUN $BINDING $HOSTSP
                                                       # (with an N-rank $BINDING)
 
-# ---- Terminal C — prefill + migrate ----   IDENTICAL either way: the host list is in the manifest
+# ---- Terminal C — prefill + migrate ----
 cd $TT_METAL_HOME
-python -m models.demos.common.prefill.runners.migration_driver --manifest $MANIFEST
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST      # one host
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST "$HOSTSP"   # multi-host
 ```
 
 `migration_driver`, not `prefill_producer` — this gate migrates. See "Two producer entry points" above.
@@ -562,8 +562,8 @@ gets a branch there, and both gates work.
 | sentinel | — (driver-side only) | `migration.done_file` | — |
 | queues | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` | `--prefill-{cmd,table,resp}-queue` |
 | client `.so` | `PREFILL_MIGRATION_CLIENT_DIR` | exported (not in the manifest) | — |
-| host list | the `--host` list given to `run_pipeline_prefill.sh` | `migration.driver_hosts`, same order | `--prefill_hosts`, same order |
-| MPI NIC | `run_pipeline_prefill.sh`'s 3rd arg (`ens5f0np0`) | `PREFILL_DRIVER_TCP_IFACE` / `--tcp-interface` | — |
+| host list | the `--host` list given to `run_pipeline_prefill.sh` | `run_migration_driver.sh`'s 2nd arg, same order | `--prefill_hosts`, same order |
+| MPI NIC | `run_pipeline_prefill.sh`'s 3rd arg (`ens5f0np0`) | `run_migration_driver.sh`'s 3rd arg, same value | — |
 | slot count | `PREFILL_NUM_USERS` | ≥ max dst slot + 1 | — |
 
 The two path rows pull in opposite directions once more than one host is involved: the **table** must be on
