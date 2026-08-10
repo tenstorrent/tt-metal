@@ -1,11 +1,11 @@
 # TT-DiT Tests
 
-Notes about about TT-DiT (diffusion transformer) tests. **PLEASE UPDATE THIS** if anything is wrong or out of date! These notes are intended to give people some context/understanding about these tests, which seem out of place if you don't know why it's here.
+Notes about TT-DiT (diffusion transformer) tests. **PLEASE UPDATE THIS** if anything is wrong or out of date! These notes are intended to give people some context/understanding about these tests, which seem out of place if you don't know why it's here.
 
 TT-DiT code lives in `tt-metal/models/tt_dit`.  Test code for tt_dit lives in `tt-metal/models/tt_dit/tests`.
 
 ## Background
-TT-DiT should be viewed as an independent arm within the models directory. It has it's own layers, it's own pipelines, some of it's own ops etc. etc.
+TT-DiT should be viewed as an independent arm within the models directory. It has it's own layers, it's own pipelines, some of it's own ops etc.
 
 Given the development of TT-DiT has been somewhat independent of the development of the parent `models`, naturally the tests in `tt_dit/tests` do not necessarily reflect the same principles or strategy that `models` had.
 
@@ -28,6 +28,6 @@ The curent structure is as follows:
 
 The intent of the current structure is to make it simple to integrate a TT-DiT model into the Models CI testing framework.
 
-For example when adding a new Model test to the Models CI framework, you would add a subfolder to `models` e.g. for Flux 1 there is the subfolder `models/flux1/`, and place all relevant tests for that model (layers/pipelines/attention etc.) into that directory.
+For example when adding a new Model test to the Models CI framework, you would add a subfolder to `models` e.g. for Flux 1 there is the subfolder `models/tt_dit/tests/models/flux1/`, and place all relevant tests for that model (layers/pipelines/attention etc.) into that directory.
 
-At the top level testing YAML, you can then declare the Flux 1 tests command to be simply `pytest models/flux1/`. This avoids having to declare Flux 1 tests as a long list of different `.py` files that each pull the component you care about for said model (which you would be stuck with doing if the test directory was required to be a 1-1 match with the repo).
+At the top level testing YAML, you can then declare the Flux 1 tests command to be simply `pytest models/tt_dit/tests/models/flux1/`. This avoids having to declare Flux 1 tests as a long list of different `.py` files that each pull the component you care about for said model (which you would be stuck with doing if the test directory was required to be a 1-1 match with the repo).
