@@ -101,6 +101,7 @@ def _kv_cache_model(spans, head_dim=16):
 
 def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
     tensors = {name: _FakeTensor((name,)) for name in ("prev", "signal-a", "signal-b", "cos", "sin")}
+    released_prefix_windows = []
     adapter = object.__new__(DenoiseLogitsAdapter)
     adapter.prev_logits = tensors["prev"]
     adapter.signal_buf = tensors["signal-a"]
@@ -109,10 +110,14 @@ def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
     adapter.signal_ping_pong = True
     adapter._canvas_rope_bufs = {"sliding_attention": (tensors["cos"], tensors["sin"])}
     adapter.use_canvas_rope = True
+    adapter.prompt_hidden_by_layer = SimpleNamespace(
+        release_window_buffers=lambda: released_prefix_windows.append(True)
+    )
 
     adapter.reset()
 
     assert all(tensor.deallocated for tensor in tensors.values())
+    assert released_prefix_windows == [True]
     assert adapter.prev_logits is None
     assert adapter.signal_buf is None
     assert adapter.signal_buf_b is None

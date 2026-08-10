@@ -193,14 +193,28 @@ def test_coarse_prefill_buckets_cover_every_power_of_two_through_256k(monkeypatc
 
     monkeypatch.setenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "1")
     for bucket in expected:
-        assert (
-            generator_vllm._resolve_prefill_execution_len(bucket, max_model_len=262144) == bucket
-        )
+        assert generator_vllm._resolve_prefill_execution_len(bucket, max_model_len=262144) == bucket
         if bucket > expected[0]:
-            assert (
-                generator_vllm._resolve_prefill_execution_len(bucket // 2 + 1, max_model_len=262144)
-                == bucket
-            )
+            assert generator_vllm._resolve_prefill_execution_len(bucket // 2 + 1, max_model_len=262144) == bucket
+
+
+def test_chunked_long_prefill_lengths_share_one_warmed_program():
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    assert generator_vllm._prefill_execution_len_is_warmed(131072, {65536})
+    assert generator_vllm._prefill_execution_len_is_warmed(262144, {65536})
+    assert not generator_vllm._prefill_execution_len_is_warmed(65536, {32768})
+    assert not generator_vllm._prefill_execution_len_is_warmed(16384, {4096})
+
+
+def test_fixed_chunk_prefill_uses_one_warmed_program_for_every_length(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_PREFILL_FIXED_CHUNKS", "1")
+    for execution_len in generator_vllm.PREFILL_BUCKETS:
+        assert generator_vllm._prefill_execution_len_is_warmed(execution_len, {32})
 
 
 def test_coarse_prefill_buckets_are_opt_in_and_capacity_bounded(monkeypatch, expect_error):
@@ -633,9 +647,7 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     monkeypatch.setattr(
         serving,
         "prefill_prompt_tokens",
-        lambda *args, **kwargs: (
-            prefill_calls.append(kwargs) or SimpleNamespace(prompt_len=3, cache_len=32)
-        ),
+        lambda *args, **kwargs: (prefill_calls.append(kwargs) or SimpleNamespace(prompt_len=3, cache_len=32)),
     )
 
     assert session.prefill(torch.tensor([[1, 2, 3]], dtype=torch.long)) == 32
@@ -923,6 +935,59 @@ def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
 
     with expect_error(RuntimeError, match="requires its compile-only prefill warmup"):
         wrapper.warmup_model_prefill(None, True, True)
+
+
+def test_vllm_cold_prefill_reserves_full_attention_concat_holes(monkeypatch):
+    pytest.importorskip("vllm")
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    allocations = []
+    releases = []
+    metrics = []
+
+    class _Reservation:
+        def deallocate(self, force):
+            releases.append(force)
+
+    def fake_empty(shape, **kwargs):
+        allocations.append((shape, kwargs))
+        return _Reservation()
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.canvas_length = 256
+    wrapper._upfront_pmax = 262144
+    wrapper.model = [
+        SimpleNamespace(
+            mesh_device="mesh",
+            hf_config=SimpleNamespace(text_config=SimpleNamespace(global_head_dim=512)),
+        )
+    ]
+
+    monkeypatch.setattr(ttnn, "empty", fake_empty)
+    monkeypatch.setattr(generator_vllm, "_metric", lambda event, **fields: metrics.append((event, fields)))
+
+    reservations = wrapper._reserve_cold_recapture_holes()
+
+    assert len(reservations) == 4
+    assert [entry[0] for entry in allocations] == [[1, 1, 262400, 512]] * 4
+    assert all(entry[1]["dtype"] == ttnn.bfloat16 for entry in allocations)
+    assert all(entry[1]["layout"] == ttnn.TILE_LAYOUT for entry in allocations)
+    assert all(entry[1]["device"] == "mesh" for entry in allocations)
+    assert metrics == [
+        (
+            "cold_prefill_recapture_holes_reserved",
+            {
+                "buffers": 4,
+                "shape": [1, 1, 262400, 512],
+                "bytes_per_buffer": 268697600,
+            },
+        )
+    ]
+
+    wrapper._release_cold_recapture_holes(reservations)
+    assert releases == [True] * 4
 
 
 def test_vllm_cold_prefill_rebuild_releases_trace_before_compile(monkeypatch):

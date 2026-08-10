@@ -68,7 +68,7 @@ from loguru import logger
 import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
-from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
+from models.experimental.diffusion_gemma.tt.generate import fixed_prefill_chunks_enabled, prefill_prompt_tokens
 from models.experimental.diffusion_gemma.tt.hybrid_kv import (
     attach_model_owned_hybrid_kv,
     model_owned_hybrid_kv_enabled,
@@ -252,6 +252,25 @@ def _resolve_prefill_execution_len(prompt_len: int, *, max_model_len: int | None
     raise ValueError(
         f"no power-of-two prefill bucket can cover aligned length {aligned} within max_model_len={capacity}"
     )
+
+
+def _prefill_execution_len_is_warmed(execution_len: int, warmed) -> bool:
+    """Whether the runtime shape has an already-compiled prefill program.
+
+    With ``DG_PREFILL_FIXED_CHUNKS=1`` every prompt executes as fixed
+    ``DG_PREFILL_CHUNK_SIZE`` chunks, so any startup warmup compiles the one
+    program used by every request length. On the legacy mixed path, only prompts
+    above 32K share that chunked program; short prompts require their bucket.
+    """
+    execution_len = int(execution_len)
+    warmed = frozenset(int(value) for value in warmed)
+    if fixed_prefill_chunks_enabled():
+        # Every prompt is padded to, and iterated as, the same fixed-size
+        # DG_PREFILL_CHUNK_SIZE model call. Once startup has compiled one such
+        # chunk, a different total prompt length cannot introduce a model
+        # program-cache miss and therefore needs no trace rebuild.
+        return bool(warmed)
+    return execution_len in warmed or (execution_len > 32768 and any(warmed_len > 32768 for warmed_len in warmed))
 
 
 def _committed_ids(tokens) -> list:
@@ -803,6 +822,53 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             except BaseException as cleanup_error:
                 logger.error(f"failed to release {label} adapter: {cleanup_error}")
 
+    def _reserve_cold_recapture_holes(self) -> list:
+        """Protect the four large holes needed to restart long-context capture.
+
+        Releasing the resident trace exposes the large DRAM blocks used by the
+        full-attention prefix+canvas K/V concats. A cold prefill can split those
+        blocks into smaller allocations before recapture, leaving enough total
+        free memory but no contiguous block large enough. Capture first needs two
+        full-vocabulary Gumbel buffers, then simultaneous prefix+canvas K and V
+        concats. Hold four concat-sized buffers across the prefill, then release
+        them immediately before recapture so those allocations can reuse the
+        preserved holes.
+        """
+        p_max = int(getattr(self, "_upfront_pmax", 0) or 0)
+        if p_max < 65536:
+            return []
+        tt_model = self.model[0]
+        text_config = getattr(tt_model.hf_config, "text_config", tt_model.hf_config)
+        head_dim = int(getattr(text_config, "global_head_dim", None) or getattr(text_config, "head_dim"))
+        shape = [1, 1, p_max + int(self.canvas_length), head_dim]
+        reservations = []
+        try:
+            for _ in range(4):
+                reservations.append(
+                    ttnn.empty(
+                        shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=tt_model.mesh_device,
+                    )
+                )
+        except BaseException:
+            for reservation in reservations:
+                reservation.deallocate(True)
+            raise
+        _metric(
+            "cold_prefill_recapture_holes_reserved",
+            buffers=len(reservations),
+            shape=shape,
+            bytes_per_buffer=2 * (p_max + int(self.canvas_length)) * head_dim,
+        )
+        return reservations
+
+    @staticmethod
+    def _release_cold_recapture_holes(reservations) -> None:
+        for reservation in reservations:
+            reservation.deallocate(True)
+
     def _rebuild_for_cold_prefill(
         self,
         session,
@@ -842,13 +908,17 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 execution_len=execution_len,
             )
 
-            cache_len = session.prefill(prompt_tokens)
-            if cache_len != expected_cache_len:
-                raise RuntimeError(
-                    f"cold prefill aligned to {cache_len}, expected {expected_cache_len}; "
-                    "refusing to publish a mismatched trace"
-                )
-            ttnn.synchronize_device(self.model[0].mesh_device)
+            recapture_holes = self._reserve_cold_recapture_holes()
+            try:
+                cache_len = session.prefill(prompt_tokens)
+                if cache_len != expected_cache_len:
+                    raise RuntimeError(
+                        f"cold prefill aligned to {cache_len}, expected {expected_cache_len}; "
+                        "refusing to publish a mismatched trace"
+                    )
+                ttnn.synchronize_device(self.model[0].mesh_device)
+            finally:
+                self._release_cold_recapture_holes(recapture_holes)
             _metric("cold_prefill_compiled", cache_len=cache_len, execution_len=execution_len)
 
             emission, adapter, trace_stats = self._capture_prefilled_session(session)
@@ -1020,7 +1090,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         f"{cache_len} + {self.canvas_length} > {p_max}"
                     )
                 warmed = getattr(self, "_upfront_prefill_warmup_lens", frozenset())
-                if execution_len not in warmed:
+                if not _prefill_execution_len_is_warmed(execution_len, warmed):
                     if _lazy_prefill_recapture_enabled():
                         cold_rebuild = True
                         logger.info(

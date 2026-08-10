@@ -1997,6 +1997,43 @@ def test_prefill_bucket_at_or_above_32k_uses_fixed_bounded_chunks(
     assert kwargs["page_tables_per_layer"] == ["device-pages"]
 
 
+def test_fixed_prefill_chunks_use_one_program_for_short_prompts(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import chunked_prefill as CP
+
+    calls = []
+    model = SimpleNamespace(
+        _dg_model_owned_hybrid_kv=True,
+        _dg_hybrid_host_page_tables_per_layer=["host-pages"],
+        _dg_hybrid_page_tables_per_layer=["device-pages"],
+        _dg_hybrid_block_size=64,
+        tt_kv_cache=["kv"],
+    )
+    monkeypatch.setenv("DG_PREFILL_FIXED_CHUNKS", "1")
+    monkeypatch.setenv("DG_PREFILL_CHUNK_SIZE", "4096")
+    monkeypatch.setattr(
+        CP,
+        "chunked_prefill",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    prompt = torch.ones((1, 129), dtype=torch.long)
+    result = prefill_prompt_tokens(
+        model,
+        prompt,
+        page_tables_per_layer=["device-pages"],
+        execution_len=256,
+    )
+
+    assert result == PromptPrefill(prompt_len=129, cache_len=160)
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == (model,)
+    assert kwargs["input_ids_torch"].shape == (1, 4096)
+    assert kwargs["valid_prompt_len"] == 129
+    assert kwargs["chunk_size"] == 4096
+    assert kwargs["return_last_logits"] is False
+
+
 # --- device generation hook factories -------------------------------------------------------
 
 

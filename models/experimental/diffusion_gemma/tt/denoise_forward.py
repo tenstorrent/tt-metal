@@ -1110,7 +1110,9 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
     )
 
 
-def hybrid_cache_sequence_segments(*, seq_len_start: int, prompt_len: int, capacity: int) -> tuple[tuple[int, int], ...]:
+def hybrid_cache_sequence_segments(
+    *, seq_len_start: int, prompt_len: int, capacity: int
+) -> tuple[tuple[int, int], ...]:
     """Physical circular-cache segments for one absolute logical span.
 
     Returned bounds are half-open and ordered chronologically.  The model-owned
@@ -2053,6 +2055,9 @@ class DenoiseLogitsAdapter:
                         logger.error(f"failed to release trace self-conditioning {name}: {cleanup_error}")
             self.release_canvas_rope_buffers()
             self.release_reveal_mask_buffers()
+            release_prefix_windows = getattr(self.prompt_hidden_by_layer, "release_window_buffers", None)
+            if callable(release_prefix_windows):
+                release_prefix_windows()
         finally:
             self.prev_logits = None
             self.signal_buf = None

@@ -259,6 +259,56 @@ def test_tuned_prefill_moe_does_not_leak_across_threads(monkeypatch, contextual_
     assert stock.result() == ("original", 32, 192, 1)
 
 
+def test_one_tile_causal_sdpa_fallback_is_diffusion_gemma_context_local(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        PM,
+        "_original_sdpa",
+        lambda query, key, value, *args, **kwargs: (
+            calls.append(("stock", query.shape[-2], kwargs.get("is_causal"), kwargs.get("attn_mask"))) or "stock"
+        ),
+    )
+    monkeypatch.setattr(
+        PM,
+        "_manual_one_tile_causal_attention",
+        lambda query, key, value: calls.append(("manual", query.shape[-2])) or "manual",
+    )
+    monkeypatch.setattr(
+        PM,
+        "_manual_chunked_causal_attention",
+        lambda query, key, value, sliding_window: calls.append(("manual-chunked", query.shape[-2], sliding_window))
+        or "manual-chunked",
+    )
+    one_tile = SimpleNamespace(shape=(1, 4, ttnn.TILE_SIZE, 256))
+    two_tiles = SimpleNamespace(shape=(1, 4, 2 * ttnn.TILE_SIZE, 256))
+
+    assert PM._contextual_sdpa(one_tile, one_tile, one_tile, is_causal=True, scale=1.0) == "stock"
+    token = PM._dg_ccl_active.set(True)
+    try:
+        assert PM._contextual_sdpa(one_tile, one_tile, one_tile, is_causal=True, scale=1.0) == "manual"
+        assert (
+            PM._contextual_sdpa(
+                two_tiles,
+                two_tiles,
+                two_tiles,
+                is_causal=True,
+                scale=1.0,
+                sliding_window_size=1024,
+            )
+            == "manual-chunked"
+        )
+        assert PM._contextual_sdpa(one_tile, one_tile, one_tile, is_causal=False, scale=1.0) == "stock"
+    finally:
+        PM._dg_ccl_active.reset(token)
+
+    assert calls == [
+        ("stock", 32, True, None),
+        ("manual", 32),
+        ("manual-chunked", 64, 1024),
+        ("stock", 32, False, None),
+    ]
+
+
 def test_use_ragged_for_window_follows_long_flag(monkeypatch):
     monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")
     # Long off: original 1 < S <= RAGGED_PREFILL_CHUNK window.

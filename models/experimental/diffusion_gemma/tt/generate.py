@@ -327,6 +327,16 @@ def _pad_prompt_tokens_for_prefill(prompt_tokens: torch.Tensor, *, multiple: int
     return torch.cat([prompt_tokens, padding], dim=1)
 
 
+def fixed_prefill_chunks_enabled() -> bool:
+    """Whether every prompt uses the one fixed-size bounded prefill program."""
+    return os.environ.get("DG_PREFILL_FIXED_CHUNKS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def prefill_prompt_tokens(
     tt_model,
     prompt_tokens: torch.Tensor,
@@ -360,9 +370,12 @@ def prefill_prompt_tokens(
     # the 32K denoise trace is captured, that temporary no longer fits beside
     # the resident trace on QB2, so the next request kills EngineCore. Keep the
     # boundary itself in the same bounded-memory regime as larger prefills.
-    use_bounded_chunks = execution_len is not None and int(execution_len) >= 32768
+    use_fixed_chunks = fixed_prefill_chunks_enabled()
+    use_bounded_chunks = use_fixed_chunks or (execution_len is not None and int(execution_len) >= 32768)
     if execution_len is None:
-        prefill_tokens = cache_tokens
+        prefill_tokens = (
+            _pad_prompt_tokens_for_prefill(prompt_tokens, multiple=chunk_size) if use_fixed_chunks else cache_tokens
+        )
     else:
         execution_len = int(execution_len)
         if execution_len <= 0 or execution_len % ttnn.TILE_SIZE != 0:
