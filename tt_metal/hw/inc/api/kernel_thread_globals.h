@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+#include "api/debug/assert.h"
+
 #if defined(ARCH_QUASAR)
 
 // Per-processor kernel thread info, set by Quasar dm.cc/trisc.cc from kernel_config before kernel runs.
@@ -115,13 +117,15 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
-// barrier_idx is unchecked; out of range it RMWs whatever firmware global follows the array.
+// Out of range would RMW whatever firmware global follows the array -- watcher ASSERT,
+// like dataflow_api.h's runtime-arg index guard.
 inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;
     }
 
 #if defined(ARCH_QUASAR)
+    ASSERT(barrier_idx < NUM_KERNEL_BARRIERS);
     wait_threads_on(g_kernel_barrier[barrier_idx], participants);
 #endif
 }

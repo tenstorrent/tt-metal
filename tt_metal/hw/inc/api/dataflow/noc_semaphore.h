@@ -291,7 +291,7 @@ public:
                 do {
                     invalidate_l1_cache();
                 } while ((*sem_addr) < value);
-                if (consumed_cas4(/*cmp=*/0, /*swap=*/1) != 0) {
+                if (consumed_cas4(/*cmp4=*/0, /*swap4=*/1) != 0) {
                     continue;  // contended: back to the lock-free wait
                 }
                 // Re-check under the lock: no other consumer can decrement now; producers only add.
@@ -305,10 +305,15 @@ public:
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
                     WAYPOINT("NSDD");  // re-arm past the barrier's internal waypoints
-                    while (*ret_word == kCasSentinel) {
+                    // BOUNDED poll: the barrier already orders the return write (keystone-pinned:
+                    // TestAtomicCasReturnsPreOpValue), so this exits on its first check. The bound
+                    // exists so a semaphore that VIOLATES the 0xFFFFFFFF invariant (its pre-op value
+                    // equals the sentinel) cannot spin forever inside the lock and wedge every other
+                    // consumer of this id; the subtract itself completed at the barrier either way.
+                    for (uint32_t spin = 0; spin < 1024u && *ret_word == kCasSentinel; spin++) {
                     }
                 }
-                consumed_cas4(/*cmp=*/1, /*swap=*/0);  // release (holder-only, always succeeds)
+                consumed_cas4(/*cmp4=*/1, /*swap4=*/0);  // release (holder-only, always succeeds)
                 if (ok) {
                     return;
                 }
