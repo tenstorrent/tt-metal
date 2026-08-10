@@ -20,6 +20,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ApproximationMode,
     DestAccumulation,
     DestSync,
     SdpaFwOp,
@@ -30,6 +31,7 @@ from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DEST_SYNC,
     SDPA_EXP_SCALE,
     SDPA_FW_OP,
@@ -130,15 +132,21 @@ def _variants():
     """
     Valid variants per op.
 
-    Only the exp body varies with the scale, so recip is run once. dest_sync only moves the
-    Dest base, so each op gets one DestSync.Full variant rather than crossing it over
-    everything.
+    Only the exp body varies with the scale, so recip is run once per approx mode. dest_sync
+    only moves the Dest base, so each op gets one DestSync.Full variant rather than crossing it
+    over everything.
     """
     return [
-        (SdpaFwOp.Recip, EXP_SCALE_BF16_VALUES[0], DestSync.Half),
-        (SdpaFwOp.Recip, EXP_SCALE_BF16_VALUES[0], DestSync.Full),
-        *((SdpaFwOp.Exp, scale, DestSync.Half) for scale in EXP_SCALE_BF16_VALUES),
-        (SdpaFwOp.Exp, EXP_SCALE_BF16_VALUES[-1], DestSync.Full),
+        *(
+            (SdpaFwOp.Recip, EXP_SCALE_BF16_VALUES[0], DestSync.Half, approx)
+            for approx in ApproximationMode
+        ),
+        (SdpaFwOp.Recip, EXP_SCALE_BF16_VALUES[0], DestSync.Full, ApproximationMode.No),
+        *(
+            (SdpaFwOp.Exp, scale, DestSync.Half, ApproximationMode.No)
+            for scale in EXP_SCALE_BF16_VALUES
+        ),
+        (SdpaFwOp.Exp, EXP_SCALE_BF16_VALUES[-1], DestSync.Full, ApproximationMode.No),
     ]
 
 
@@ -147,7 +155,7 @@ def _variants():
     precision=list(Precision),
 )
 def test_sfpu_sdpa_fw(variant, precision):
-    op, exp_scale_bf16, dest_sync = variant
+    op, exp_scale_bf16, dest_sync, approx_mode = variant
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
     torch_format = format_dict[formats.input_format]
@@ -170,6 +178,7 @@ def test_sfpu_sdpa_fw(variant, precision):
         formats,
         templates=[
             SDPA_FW_OP(op),
+            APPROX_MODE(approx_mode),
             DEST_SYNC(dest_sync),
             SDPA_EXP_SCALE(scale_bf16=exp_scale_bf16),
         ],

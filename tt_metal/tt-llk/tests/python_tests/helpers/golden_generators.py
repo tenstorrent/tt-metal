@@ -4574,7 +4574,9 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
+        if op == SdpaOp.RecipLegacy:
+            transformed = torch.reciprocal(x.abs())
+        elif op == SdpaOp.RecipIter:
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).

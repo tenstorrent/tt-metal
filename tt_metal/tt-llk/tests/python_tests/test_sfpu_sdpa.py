@@ -64,18 +64,15 @@ class SoftplusParams(NamedTuple):
 
 
 # At beta 1.0 both beta and its reciprocal are 1.0, so a dropped or swapped multiply is
-# invisible; the beta 2.0 case pins them. The threshold is unreachable from the stimulus at
-# 20.0, so the last case lowers it to take the body's pass-through arm.
-#
-# That low threshold is half a ramp step off the grid on purpose. The kernel computes while
-# t < threshold, whereas torch's softplus computes unless beta*x > threshold, so the two
-# disagree by the full pass-through step for any element landing exactly on it.
+# invisible; the beta 2.0 cases pin them. At threshold 20.0 the body's pass-through arm is
+# unreachable, so the low-threshold cases take it. Both betas are paired with both thresholds.
 SOFTPLUS_LOW_THRESHOLD = 2.0 + 4.0 / ELEMENTS_PER_TILE
 
 SOFTPLUS_CONFIGS = (
     SoftplusParams(1.0, 20.0),
     SoftplusParams(2.0, 20.0),
     SoftplusParams(1.0, SOFTPLUS_LOW_THRESHOLD),
+    SoftplusParams(2.0, SOFTPLUS_LOW_THRESHOLD),
 )
 
 
@@ -116,26 +113,31 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
     )
 
 
-def _tolerance(op, precision, approx_mode):
-    """(atol, rtol) based on measured values for each path."""
-    approx = approx_mode == ApproximationMode.Yes
-    fp32 = precision == Precision.Fp32E2E
+# (atol, rtol) per path, derived from measurements: rtol is 2x the largest relative error on that
+# path, and atol is 2x the largest absolute error but capped at 1% of the smallest output the path
+# produces, so the floor doesn't decide a comparison.
 
-    if op == SdpaOp.Correction:
-        return (1e-6, 1e-6) if fp32 else (5e-3, 2.0e-2)
-    if op == SdpaOp.Softplus:
-        return (5e-4, 4.0e-3) if fp32 else (2e-3, 1.0e-2)
-    if op == SdpaOp.ExpAccurate:
-        return (1e-7, 1e-6) if fp32 else (1e-3, 1.2e-2)
-    if op == SdpaOp.ExpPoly:
-        return (1e-6, 1e-5) if fp32 else (1e-3, 1.2e-2)
-    if op == SdpaOp.RecipIter:
-        if approx:
-            return (1e-4, 1.2e-2) if fp32 else (1e-3, 1.2e-2)
-        return (1e-7, 1e-6) if fp32 else (1e-3, 1.0e-2)
-    if approx:
-        return (2e-3, 8.0e-2)
-    return (1e-4, 4.0e-3) if fp32 else (1e-3, 1.0e-2)
+# Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
+# The exceptions are the two paths that are not limited by the rounding precision: correction
+# accumulates across five tiles, and RecipLegacy under APPROX is a 7-bit arecip with no Newton step.
+_TOLERANCES = {
+    # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
+    (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
+    (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
+    (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
+    (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
+    (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
+    (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
+    (SdpaOp.RecipLegacy, False): ((2.5e-3, 1.2e-2), (1.5e-3, 3.0e-3)),
+    (SdpaOp.RecipLegacy, True): ((2.5e-3, 1.0e-1), (2.5e-3, 8.0e-2)),
+}
+
+
+def _tolerance(op, precision, approx_mode):
+    """(atol, rtol) for one path."""
+    approx = approx_mode == ApproximationMode.Yes if op in RECIP_OPS else None
+    bf16_packed, fp32_e2e = _TOLERANCES[(op, approx)]
+    return fp32_e2e if precision == Precision.Fp32E2E else bf16_packed
 
 
 def _footprint_violations(src_2d, res_2d):
@@ -177,14 +179,10 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         # would let the tolerance decide the result instead of the kernel. Starting above 1.0
         # keeps any element from being its own reciprocal, which would be written yet compare
         # equal to the input and read as a footprint gap.
+
+        # RecipIter returns 1/x, RecipLegacy returns |1/x|. Goldens are written to match that.
+        # Sign alternates by row, not by flat index, because the kernel writes every other row.
         magnitudes = _ramp(1.25, 5.0)
-
-        if op is SdpaOp.RecipLegacy:
-            # Positive only. The kernel effectively returns the absolute value.
-            return magnitudes
-
-        # RecipIter handles the sign itself, so it gets both positives and negatives.
-        # Sign alternates by row, so flat index i sits at column i % TILE_DIM.
         rows = torch.arange(ELEMENTS_PER_TILE) // TILE_DIM
         signs = torch.where(rows % 2 == 0, torch.tensor(1.0), torch.tensor(-1.0))
         return magnitudes * signs
