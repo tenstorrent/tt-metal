@@ -58,17 +58,40 @@ OUT=${OUT_DIR:-$(dirname "$REPO")/drisc_wedge}/$TAG
 N=${N:-60}
 DELAY=${DELAY:-125}
 ITERS=${ITERS:-500}
+# DECODE=0 (default) sets TT_METAL_PERF_DEBUG_NO_DECODE=1: the reader does read()+ack and NOTHING else --
+# no decode, no publish. That is right for hunting the wedge (cheaper runs, and the wedge is classified
+# from the process outcome and card state, neither of which needs decode) but it makes the HOST-DERIVED
+# stats void: marker count and producer stall zones are produced BY the decode, so with it off they read 0
+# no matter what the device did. Set DECODE=1 to measure those. This script records them as "nodecode"
+# rather than 0 when decode is off, because a 0 in a data column is indistinguishable from a measurement.
+DECODE=${DECODE:-0}
 # Producer grid. NEVER "--gx 0" (= whatever the device offers): under slow dispatch that returns the
 # full 12x10 while the drainer holds the last column back, so producers land on a column nothing polls,
 # block forever in ring_ensure_room, and the run dies in wait_until_cores_done. That harness bug was
 # misread as 26/26 slow-dispatch TEARDOWNs. 11x10 also matches the fast-dispatch grid, so every 2x2
 # cell offers the identical 110-core / 550-lane load.
-GX=${GX:-11}; GY=${GY:-10}
 ARMED=${ARMED:-0}
 STOP_ON_WEDGE=${STOP_ON_WEDGE:-1}
 ALLOW_REBOOT=${ALLOW_REBOOT:-0}
 DISPATCH=${DISPATCH:-fast}
 DRAINER=${DRAINER:-drisc}
+
+# Grid defaults follow what the DRAINER actually polls, which differs by dispatch mode:
+#   fast dispatch  -> compute_with_storage_grid_size() is 11x10, so 110 cores / 550 lanes.
+#   slow dispatch  -> the full 12x10 is available, and the DRISC drainer polls all of it, so 120 cores /
+#                     600 lanes. Pinning 11x10 here (and forcing RESERVE_COLUMN) was for A/B parity with
+#                     the Tensix drainer, which must hold its own column back -- it is NOT the right
+#                     default for a DRISC measurement, which should use the whole grid.
+# NEVER pass --gx 0: it returns whatever the device offers, which under slow dispatch put producers on a
+# column no drainer polls -- they block forever in ring_ensure_room and the run dies in the core wait.
+if [ "$DISPATCH" = "slow" ] && [ "$DRAINER" = "drisc" ]; then
+    GX=${GX:-12}; GY=${GY:-10}
+    RESERVE_COLUMN=${RESERVE_COLUMN:-0}
+else
+    GX=${GX:-11}; GY=${GY:-10}
+    # The Tensix drainer lives in the last column, so it must always reserve it.
+    RESERVE_COLUMN=${RESERVE_COLUMN:-1}
+fi
 RUN_TIMEOUT=${RUN_TIMEOUT:-300}
 # Stop after this many consecutive non-CLEAN runs. Once the box enters a persistent state every further
 # run just pays the timeout again: a real sweep sat at 16 consecutive MASKED (45 s each) learning nothing,
@@ -139,6 +162,26 @@ else
     fi
 fi
 
+# Refuse to append to an existing sweep. Reusing a TAG silently concatenated sweeps into one runs.csv
+# with restarting k values and different settings, which makes any rate computed off it wrong and
+# unrecoverable after the fact. Deliberately AFTER every check that can exit, so a failed preflight (e.g.
+# DevSta unreadable) leaves at most an empty directory rather than poisoning the tag for the retry.
+if [ -f "$CSV" ] && [ "${APPEND:-0}" != "1" ]; then
+    echo "FATAL: $CSV already exists -- that sweep's rows would be mixed with this one's."
+    echo "  use a fresh TAG=...   (or APPEND=1 to deliberately continue the same sweep)"
+    exit 1
+fi
+# The HEADER matters beyond tidiness: without it every "awk NR>1" silently drops the FIRST DATA ROW, and
+# a 6-run sample quietly became 5.
+[ -f "$CSV" ] || echo "k,delay,armed,rc,dur_s,ep_link,rp_link,devsta,class,sweep,ack_ns,read_ns,markers,l1_stalls,l1_cores,l1_worst,cw_us" > "$CSV"
+# Settings live next to the rows, so a csv is still interpretable months later -- decode state above all,
+# since with DECODE=0 the marker and stall columns are not measurements.
+{ echo "date=$(date -Is) host=$(hostname) tag=$TAG sweep=$SWEEP_ID"
+  echo "N=$N DELAY=$DELAY ITERS=$ITERS GX=$GX GY=$GY ARMED=$ARMED DECODE=$DECODE"
+  echo "DISPATCH=$DISPATCH DRAINER=$DRAINER STOP_ON_WEDGE=$STOP_ON_WEDGE ALLOW_REBOOT=$ALLOW_REBOOT"
+  echo "MAX_CONSEC_FAIL=$MAX_CONSEC_FAIL RUN_TIMEOUT=$RUN_TIMEOUT BIN=$BIN"
+} >> "$OUT/params.txt"
+
 # Endpoint config space reads ALL-ONES once wedged, so its own sysfs cannot tell you anything: an
 # all-ones link speed surfaces as "Unknown". That is the wedge signature, not downtraining -- always
 # corroborate with the ROOT PORT, which stays linked at 32 GT/s x16 through a wedge.
@@ -198,17 +241,25 @@ recover(){ local st
   return 0; }
 
 ENVX=""; [ "$ARMED" = "1" ] && ENVX="TT_METAL_OPERATION_TIMEOUT_SECONDS=45"
+DECODEX=""; [ "$DECODE" != "1" ] && DECODEX="TT_METAL_PERF_DEBUG_NO_DECODE=1"
 CELLX=""
-[ "$DISPATCH" = "slow" ] && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1"
+[ "$DISPATCH" = "slow" ] && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1"
+[ "$RESERVE_COLUMN" = "1" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1"
 [ "$DRAINER" = "tensix" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1"
 # rpath points into build_Release/lib, which lacks the installed libs; the repo-root lib/ has them.
 LIBS=$REPO/lib; [ -d "$LIBS" ] || LIBS=$REPO/build_Release/lib
 
-log "=== drisc_wedge_watch: N=$N delay=$DELAY armed=$ARMED grid=${GX}x${GY} dispatch=$DISPATCH drainer=$DRAINER ==="
+log "=== drisc_wedge_watch: N=$N delay=$DELAY armed=$ARMED grid=${GX}x${GY} ($((GX*GY)) cores) dispatch=$DISPATCH drainer=$DRAINER reserve_col=$RESERVE_COLUMN ==="
 log "    host=$(hostname) out=$OUT stop_on_wedge=$STOP_ON_WEDGE allow_reboot=$ALLOW_REBOOT"
 log "    baseline endpoint=$(link_state "$EP") root_port=$(link_state "$RP")"
 log "    NOTE 2.5GT/s on either side = a DEGRADED link (cold power cycle), a different failure to WEDGE"
 log "    health thresholds: ack >= ${ACK_MAX_NS} ns => 13x state | read >= ${READ_MAX_NS} ns => Gen1 downtrain"
+if [ "$DECODE" = "1" ]; then
+  log "    DECODE=1: marker counts measured too (producer stalls always come from the L1 counters)"
+else
+  log "    DECODE=0 (NO_DECODE): read+ack only -- markers/stalls recorded as 'nodecode', NOT as 0"
+  log "    producer stalls still MEASURED via the L1 control-buffer counters; cw_us is the drainer's own wait"
+fi
 
 nclean=0; nwedge=0; nteardown=0; nmasked=0; nmmio=0; nabort=0; nconsec=0
 for k in $(seq 1 "$N"); do
@@ -218,7 +269,7 @@ for k in $(seq 1 "$N"); do
   devsta_clear
   t0=$SECONDS
   ( cd "$REPO" && timeout -k 15 "$RUN_TIMEOUT" env \
-      TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 \
+      TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 $DECODEX \
       LD_LIBRARY_PATH="$LIBS" $ENVX $CELLX \
       "$BIN" --gx "$GX" --gy "$GY" --iters "$ITERS" --delay "$DELAY" ) > "$RUNLOG" 2>&1
   rc=$?
@@ -270,7 +321,38 @@ for k in $(seq 1 "$N"); do
   read_ns=$(grep -ahoE "DEVICE-READ probe: [0-9]+ ns" "$RUNLOG" 2>/dev/null | grep -oE "[0-9]+" | head -1)
   ack_ns=${ack_ns:-NA}; read_ns=${read_ns:-NA}
 
-  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class,$SWEEP_ID,$ack_ns,$read_ns" >> "$CSV"
+  # PRODUCER STALLS come from the CONTROL BUFFER, not from decode. Each RISC bumps
+  # profiler_control_buffer[SPSC_STALL_COUNT_0 + risc] in ring_ensure_room, and the host sums them per
+  # core with read_core() at teardown -- so this is valid with DECODE=0 too, and profiler_common.h calls
+  # it "the knee metric ... rather than being counted from decoded PROFILER_STALL_ZONE". The decoded
+  # "producer stall zones" line is the decode-dependent one; do NOT use it as the knee signal.
+  l1=$(grep -aoE "L1 STALL COUNTERS -- [0-9]+ producer stalls across [0-9]+ of [0-9]+ cores \(worst core [0-9]+\)" "$RUNLOG" 2>/dev/null | head -1)
+  if [ -n "$l1" ]; then
+    l1_stalls=$(printf '%s' "$l1" | sed -E 's/.*-- ([0-9]+) producer.*/\1/')
+    l1_cores=$(printf '%s' "$l1" | sed -E 's/.*across ([0-9]+) of.*/\1/')
+    l1_worst=$(printf '%s' "$l1" | sed -E 's/.*worst core ([0-9]+).*/\1/')
+    [ "$l1_stalls" != "0" ] && log "  [stalls] k=$k L1 producer stalls=$l1_stalls across $l1_cores cores (worst core $l1_worst) -- capture perturbed the workload"
+  else
+    l1_stalls=NA; l1_cores=NA; l1_worst=NA
+  fi
+
+  # Marker count IS decode-derived, so it stays gated -- recorded as "nodecode" rather than a 0 that
+  # would read like a measurement.
+  if [ "$DECODE" = "1" ]; then
+    markers=$(grep -aoE "socket [01] drained: .*markers" "$RUNLOG" 2>/dev/null \
+              | awk '!seen[$2]++ {m+=$6} END{print (m==""?0:m)}')
+    markers=${markers:-0}
+  else
+    markers=nodecode
+  fi
+
+  # Worst credit-wait, in us: the DRISC's own back-pressure counter, living in device L1 and read at
+  # teardown -- so unlike markers/stalls it stays VALID with DECODE=0. That makes it the only usable knee
+  # signal for a no-decode sweep. Max across the drainers (worst of the worsts). ~0.1 us = no back-pressure.
+  cw_us=$(grep -aoE "worst credit-wait [0-9.]+ us" "$RUNLOG" 2>/dev/null | grep -oE "[0-9.]+" | sort -g | tail -1)
+  cw_us=${cw_us:-NA}
+
+  echo "$k,$DELAY,$ARMED,$rc,$dur,$ep,$rp,$ds,$class,$SWEEP_ID,$ack_ns,$read_ns,$markers,$l1_stalls,$l1_cores,$l1_worst,$cw_us" >> "$CSV"
 
   # A degraded card makes every subsequent number describe the LINK, not the bug -- so stop rather than
   # keep sweeping. Reads inflate 3.5x on a Gen1 downtrain, which changes durations, poll costs and very
