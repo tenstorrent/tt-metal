@@ -383,6 +383,24 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
     return false;
 }
 
+// True only when (noc_x,noc_y) maps to a WORKER core in this chip's core_map.
+// Used by the mcast semaphore walk to tell an *expected grid gap* (an ARC/DRAM/eth
+// node with no worker NIU — false here) from a *genuine* worker-resolve miss.
+// On the unharvested BH grid the worker columns are non-contiguous (ARC=x8,
+// DRAM=x9), so a full-grid mcast bbox legitimately straddles non-worker nodes;
+// silicon simply has no worker semaphore there. Mirrors __emule_noc_addr_is_dram.
+extern "C" bool __emule_noc_addr_is_worker(uint64_t noc_addr) {
+    emule_require_self(__func__);
+    if (!__emule_self->core_map) {
+        return false;
+    }
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+    auto it = __emule_self->core_map->find(key);
+    return it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER;
+}
+
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
 // Real firmware encoding: x_start [53:48], y_start [59:54], x_end [41:36], y_end [47:42], addr [35:0]
 //
