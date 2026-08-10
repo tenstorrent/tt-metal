@@ -18,6 +18,7 @@ from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
     ImpliedMathFormat,
@@ -818,6 +819,16 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
         return (
             f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
         )
+
+
+@dataclass
+class SFPU_DST_ROUNDING_MODE(TemplateParameter):
+    """Selects the bf16 narrowing mode for binary SFPU ADD/SUB results."""
+
+    mode: DstRoundingMode = DstRoundingMode.Default
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.mode.cpp_enum_value};"
 
 
 @dataclass

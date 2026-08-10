@@ -57,7 +57,7 @@ enum ThreadId
 // happens in that case.
 enum class DstRoundingMode : std::uint8_t
 {
-    Default     = 0, // Whatever the arch does natively on store (Quasar truncates; BH/WH FPU rounds)
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
     NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
 };
 

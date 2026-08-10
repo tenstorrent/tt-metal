@@ -250,7 +250,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     SFPU_BINARY_OP,
                     dest_sync,
                     is_fp32_dest_acc_en,
-                    ckernel::DstRoundingMode::Default,
+                    SFPU_DST_ROUNDING_MODE,
                     SFPU_ITERATIONS,
                     SFPU_SIGN_MAGNITUDE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

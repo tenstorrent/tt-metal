@@ -386,6 +386,9 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
  * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam dst_rounding_mode Controls bf16 narrowing for ADD/SUB results. Default truncates;
+ *         NearestEven applies software RNE before the store. Ignored for MUL (no narrowing)
+ *         and DIV (always rounds RNE regardless). No-op when is_fp32_dest_acc_en is true.
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
  *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
