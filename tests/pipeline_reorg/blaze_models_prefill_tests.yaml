@@ -583,7 +583,7 @@
 
 # MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
 # Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
-# Allowed range: ~3400–4100 tok/s (3750 +/- ~9.33%).
+# Allowed range: ~4185–4815 tok/s (4500 +/- 7%).
 # If this test fails: first check whether it is a true regression or a performance improvement.
 # If neither (CI noise), widen this range or comment out this test due to CI instability.
 - name: "Blaze - MiniMax-M3 Prefill Perf"
@@ -600,8 +600,8 @@
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
-    export PREFILL_EXPECTED_TPS=3750
-    export PREFILL_PERF_MARGIN=0.0933
+    export PREFILL_EXPECTED_TPS=4500
+    export PREFILL_PERF_MARGIN=0.07
     mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
