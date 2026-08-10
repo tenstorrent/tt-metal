@@ -19,6 +19,7 @@ from helpers.llk_params import (
     PackerReluType,
     ReduceDimension,
     ReducePool,
+    SdpaOp,
     TopKSortDirection,
     format_dict,
     pack_relu_config,
@@ -4555,6 +4556,74 @@ class TopKGolden:
         )
 
         return result
+
+
+@register_golden
+class SdpaSfpuGolden:
+    # Columns the kernel writes to.
+    TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)
+
+    def __call__(
+        self,
+        input_2d,
+        op,
+        exp_scale: float = 1.0,
+        softplus_beta: float = 1.0,
+        softplus_threshold: float = 20.0,
+    ):
+        x = input_2d.to(torch.float32).clone()
+        out = x.clone()
+
+        if op == SdpaOp.RecipLegacy:
+            transformed = torch.reciprocal(x.abs())
+        elif op == SdpaOp.RecipIter:
+            transformed = torch.reciprocal(x)
+        elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
+            # Both fold the scale, so the reference is exp(scale * x).
+            transformed = torch.exp(exp_scale * x)
+        elif op == SdpaOp.Softplus:
+            transformed = torch.nn.functional.softplus(
+                x, beta=softplus_beta, threshold=softplus_threshold
+            )
+        else:
+            raise ValueError(f"SdpaSfpuGolden: unhandled op {op}")
+
+        cols = torch.tensor(self.TRANSFORMED_COLS, dtype=torch.long)
+        out[:, cols] = transformed[:, cols]
+        return out
+
+
+@register_golden
+class SdpaCorrectionGolden:
+    """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
+
+    def __call__(self, tiles, scale: float):
+        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+            t.to(torch.float32) for t in tiles
+        )
+
+        cur_max = torch.maximum(prev_max, worker_max)
+        exp_prev = torch.exp(scale * (prev_max - cur_max))
+        exp_worker = torch.exp(scale * (worker_max - cur_max))
+        corrected_worker_sum = exp_worker * worker_sum
+        corrected_prev_sum = exp_prev * prev_sum
+
+        computed = [
+            exp_prev,
+            exp_worker,
+            cur_max,
+            corrected_worker_sum + corrected_prev_sum,
+            corrected_worker_sum,
+        ]
+
+        cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
+        seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        out = []
+        for seed, value in zip(seeds, computed):
+            tile = seed.clone()
+            tile[:, cols] = value[:, cols]
+            out.append(tile)
+        return out
 
 
 @register_golden
