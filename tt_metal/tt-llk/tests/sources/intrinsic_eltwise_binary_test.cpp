@@ -129,10 +129,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // intrinsics (stallwait/rmwciB*) which pass_rvtt_config consumes and
     // coalesces; the compile-time MATH_FORMAT drives constant-folded immediates.
     // _llk_math_pack_sync_init_ also programs the dest section base (SETC16).
-    // The per-compute reconfig for the elwmul below is compiler-emitted (from
-    // the intrinsic's format operands).  The runtime-formats path is skipped (a
-    // runtime format is the U8 escape hatch -- the compiler cannot derive config
-    // from it, so no constant config is emitted).
+    // The elwmul intrinsic is the bare TTELWMUL instruction; the ALU formats /
+    // INT8 / zero-flag state it runs on is established by the hw_configure
+    // below (and, on the runtime-formats path, re-derived per call).
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FORMAT, MATH_FORMAT);
@@ -148,19 +147,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // TTELWMUL twice.
     _llk_math_wait_for_dest_available_<dest_sync>();
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(
+        ckernel::to_underlying(formats.math), ckernel::to_underlying(formats.math));
     INTR_ELWMUL(
-        ckernel::to_underlying(formats.math),
-        ckernel::to_underlying(formats.math),
         0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
     TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
     INTR_ELWMUL(
-        ckernel::to_underlying(formats.math),
-        ckernel::to_underlying(formats.math),
         0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
 #else
-    INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+    INTR_ELWMUL(0, 0, 0, 0, 0);
     TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
-    INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+    INTR_ELWMUL(0, 0, 0, 0, 0);
 #endif
     // Leave the simulator in a clean state for the next kernel (ttsim persists
     // across tests in one process): clear the SrcA/B valid bits so a following

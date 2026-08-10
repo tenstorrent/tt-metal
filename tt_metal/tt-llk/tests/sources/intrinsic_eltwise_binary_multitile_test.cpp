@@ -110,10 +110,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Semaphore + dest-section sync only.  The compiler's config pass emits the
-    // ALU hw_configure baseline (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/
-    // zero-flag/dest-base) and the per-compute reconfig for the intrinsics.
+    // Semaphore + dest-section sync, then the LLK's one-time math config
+    // (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/zero-flag/dest-base) issued
+    // through the config-write intrinsics; pass_rvtt_config coalesces those.
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FORMAT, MATH_FORMAT);
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks     = params.NUM_BLOCKS;
@@ -127,22 +128,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
 
             // One 16-row face: two TTELWMULs (8 rows each) with an INCRWC
-            // row-advance between (the compiler emits config once, state
-            // tracked, and TTELWMUL twice per tile).
+            // row-advance between (the pass coalesces the config established
+            // once above; TTELWMUL fires twice per tile).
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(
+                ckernel::to_underlying(formats.math), ckernel::to_underlying(formats.math));
             INTR_ELWMUL(
-                ckernel::to_underlying(formats.math),
-                ckernel::to_underlying(formats.math),
                 0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
             TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
             INTR_ELWMUL(
-                ckernel::to_underlying(formats.math),
-                ckernel::to_underlying(formats.math),
                 0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
 #else
-            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            INTR_ELWMUL(0, 0, 0, 0, 0);
             TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
-            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            INTR_ELWMUL(0, 0, 0, 0, 0);
 #endif
             // Release the source banks for the next tile and reset the RWC
             // A/B/D counters (they sit at 8 after the face).

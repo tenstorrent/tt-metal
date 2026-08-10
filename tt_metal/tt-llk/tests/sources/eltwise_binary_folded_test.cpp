@@ -115,8 +115,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     (void)ACC_TO_DEST;
 
     // Original structure: sync init, then hw_configure (issues the one-time ALU
-    // baseline through the config-write intrinsics; the per-compute reconfig is
-    // compiler-emitted from the elwmul's format operands).
+    // baseline through the config-write intrinsics; the elwmul intrinsics below
+    // are the bare TTELWMUL instruction and run on that state).
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -130,23 +130,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Dest-walking (author-owned; the LLK eltwise-binary API does this
             // internally via set_dst_write_addr): per-tile dest base, then the
-            // folded compute.  The compiler emits config once (state tracking)
-            // + two TTELWMULs with the INCRWC row-advance between (16-row face).
+            // folded compute.  The pass coalesces the config established once
+            // above; TTELWMUL fires twice with the INCRWC row-advance between
+            // (16-row face).
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(
+                ckernel::to_underlying(formats.math), ckernel::to_underlying(formats.math));
             INTR_ELWMUL(
-                ckernel::to_underlying(formats.math),
-                ckernel::to_underlying(formats.math),
                 0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
             TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
             INTR_ELWMUL(
-                ckernel::to_underlying(formats.math),
-                ckernel::to_underlying(formats.math),
                 0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
 #else
-            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            INTR_ELWMUL(0, 0, 0, 0, 0);
             TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
-            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            INTR_ELWMUL(0, 0, 0, 0, 0);
 #endif
             // Release the source banks for the next tile and reset the RWC
             // A/B/D counters (they sit at 8 after the face).
