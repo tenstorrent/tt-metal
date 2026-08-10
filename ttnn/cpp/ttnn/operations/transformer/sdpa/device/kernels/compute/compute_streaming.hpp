@@ -1029,7 +1029,6 @@ static void apply_lightweight_mask_streaming(
     constexpr uint32_t trailing_remainder = has_sliding_window && !is_causal_sdpa ? (half_window % TILE_HEIGHT) : 0;
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
-
         // Causal / sliding mask: per-row diagonal stamps plus full-neginf regions.
         if constexpr (is_causal_sdpa || has_sliding_window) {
             if (apply_causal || apply_sliding_window || kv_pad_rotation_enabled) {
@@ -2462,34 +2461,47 @@ void sdpa_ring_v2(
 
     // -----------------------------------------------------------------------
 
-    for (uint32_t q = global_q_start; q < global_q_end; q++) {
+    constexpr uint32_t q_iter_step =
+#ifdef Q_TINY_PAIR
+        2;
+#else
+        1;
+#endif
+    for (uint32_t q = global_q_start; q < global_q_end; q += q_iter_step) {
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
-#ifdef Q_TINY_TILE
+        uint32_t q_chunk = remap_q_index_grouped(q, num_q_chunks, use_zigzag_balancing, q_iter_step) % num_q_chunks;
+#ifdef Q_TINY_PAIR
         const uint32_t q_chunk_full_tile = q_chunk / 2;
-        const uint32_t q_chunk_half = q_chunk & 1u;
+        constexpr uint32_t q_chunk_half = 0;
 #else
         const uint32_t q_chunk_full_tile = q_chunk;
         constexpr uint32_t q_chunk_half = 0;
 #endif
+        constexpr uint32_t q_chunk_full_stride =
+#ifdef Q_TINY_PAIR
+            1;
+#else
+            Sq_chunk_t;
+#endif
+        constexpr uint32_t q_full_tile_rows = q_chunk_full_stride;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
         uint32_t q_start_tile = 0;
         if constexpr (has_sliding_window) {
             q_start_tile = logical_nt - ring_size * q_local_padded_Nt + chunked.ring_index * q_local_padded_Nt +
-                           q_chunk_full_tile * Sq_chunk_t;
+                           q_chunk_full_tile * q_chunk_full_stride;
         } else if constexpr (is_causal_sdpa) {
             if (is_causal_iter) {
-                q_start_tile = q_chunk_full_tile * Sq_chunk_t;
-                causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                q_start_tile = q_chunk_full_tile * q_chunk_full_stride;
+                causal_k_limit = (q_start_tile + q_full_tile_rows + Sk_chunk_t - 1) / Sk_chunk_t;
             }
         } else if constexpr (chunked_enabled) {
             // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
-            q_start_tile =
-                chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt + q_chunk_full_tile * Sq_chunk_t;
+            q_start_tile = chunked.q_start_idx_t + chunked.ring_index * q_local_padded_Nt +
+                           q_chunk_full_tile * q_chunk_full_stride;
         }
 
         if (try_balanced_skip(q_chunk)) {
@@ -2676,13 +2688,13 @@ void sdpa_ring_v2(
                     const uint32_t k_global_start =
                         kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                             source_ring_id, source_k_chunk * Sk_chunk_t);
-                    const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
+                    const uint32_t q_global_end = q_start_tile + q_full_tile_rows;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }
                 } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
-                    const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                    const uint32_t causal_active = q_start_tile + q_full_tile_rows - k_chunk * Sk_chunk_t;
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
@@ -2716,7 +2728,7 @@ void sdpa_ring_v2(
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
-                           q_start_tile + Sq_chunk_t > step_k_start_tile;
+                           q_start_tile + q_full_tile_rows > step_k_start_tile;
                 }
                 return is_causal_iter;
             }();
@@ -2800,7 +2812,7 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk_full_tile * Sq_chunk_t : q_start_tile,
+                kv_pad_rotation_enabled ? q_chunk_full_tile * q_chunk_full_stride : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx + q_chunk_half,

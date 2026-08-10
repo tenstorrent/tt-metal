@@ -5721,8 +5721,9 @@ else:
         # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
-        # Genuine 16x32 tiny-tile baseline. Measured 2026-08-10.
-        ("kimi_k3", 16, 640, 4, 35.44),
+        # q16 logical scheduling with adjacent-pair physical tile fusion. Measured 2026-08-10:
+        # 4.885 ms, 66.53% math utilization on QB.
+        ("kimi_k3", 16, 640, 4, 66.53),
     ]
 
 

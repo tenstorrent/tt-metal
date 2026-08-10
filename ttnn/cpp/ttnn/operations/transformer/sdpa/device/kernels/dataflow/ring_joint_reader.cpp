@@ -776,7 +776,13 @@ void kernel_main() {
         }
         uint32_t gqa_group_q_iter = 0;
 
-        for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+        constexpr uint32_t q_iter_step =
+#ifdef Q_TINY_PAIR
+            2;
+#else
+            1;
+#endif
+        for (uint32_t q_iter = 0; q_iter < loop_q_count; q_iter += q_iter_step) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
@@ -784,18 +790,29 @@ void kernel_main() {
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
             const auto decoded_q =
+#ifdef Q_TINY_PAIR
+                decompose_global_q_index_grouped(
+                    global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing, q_iter_step);
+#else
                 decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
+#endif
             const uint32_t nb = decoded_q.nb;
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;
             const uint32_t nk = nq / q_heads_per_k;
+#ifdef Q_TINY_PAIR
+            const auto q_row_start_tile = q_chunk / 2;
+            const auto q_half_row_start = q_row_start_tile;
+#else
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+            const auto q_half_row_start = q_row_start_tile;
+#endif
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
             const uint32_t q_iter_local = [&]() {
                 if constexpr (enable_kv_chains && gqa_grouped_kv) {
                     return gqa_group_q_iter;
                 } else {
-                    return q_iter;
+                    return q_iter / q_iter_step;
                 }
             }();
             if constexpr (enable_kv_chains && gqa_grouped_kv) {
@@ -838,11 +855,16 @@ void kernel_main() {
             }
 
             // Default to local Q tensor; override below for joint Q when applicable.
-            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            Slice q_slice(nb, nq, q_half_row_start, q_half_row_start + Sq_chunk_t, 0, DHt);
             [[maybe_unused]] uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
-                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    const uint32_t joint_q_row_start_tile =
+#ifdef Q_TINY_PAIR
+                        (q_chunk - num_local_q_chunks) / 2;
+#else
+                        (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+#endif
                     q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
                     // Lt_local: per-device joint-Q shard tile count (== Lt on the replicated path).
                     // joint_q is a local tensor starting at row 0; the mesh tensor tracks which global
@@ -1109,11 +1131,17 @@ void kernel_main() {
                         if (ring_iter == 0) {
                             // Local causal chunks beyond this limit are fully masked. Compute still
                             // advances the K/V FIFO phase, but does not consume V values for them.
+                            constexpr uint32_t q_full_tile_rows =
+#ifdef Q_TINY_PAIR
+                                1;
+#else
+                                Sq_chunk_t;
+#endif
                             const uint32_t causal_k_limit =
-                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                                (q_row_start_tile + q_full_tile_rows + Sk_chunk_t - 1) / Sk_chunk_t;
                             skip_v_materialization = k_chunk >= causal_k_limit;
                             if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
-                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                                const uint32_t active_rows = q_row_start_tile + q_full_tile_rows - k_chunk * Sk_chunk_t;
                                 if (active_rows < Sk_chunk_t) {
                                     // Compute narrows active_Sk to this same row count, so the unfilled tail
                                     // of the fixed-size V entry is kept for FIFO phase only and is never read.
