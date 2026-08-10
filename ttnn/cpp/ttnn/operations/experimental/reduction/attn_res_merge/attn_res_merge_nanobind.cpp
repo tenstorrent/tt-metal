@@ -42,6 +42,18 @@ void bind_attn_res_merge(nb::module_& mod) {
             of 1, and `prefix_sum` is one plane: a single live stream sits behind
             every read site.
 
+            Above zero `num_partials`, `live_scores` carries the statistics the live
+            score comes from rather than the score — `[1, 2 * num_partials, N, 1]`,
+            each rank's sum of squares then its dots, stacked rank-major the way a
+            gathering collective leaves them — and this op sums the ranks and
+            normalizes them itself:
+
+                live_scores = dots * rsqrt(sum_squares * inv_hidden_size + eps)
+
+            The chain runs in the same dest registers that already derive the row
+            weights, so scoring separately costs a device program and a DRAM round
+            trip and buys nothing. `inv_hidden_size` and `eps` are unread at zero.
+
             Equivalent to the eleven-op expression above without its full-size
             intermediates: the division folds into the row scalars, so the full-width
             work is two broadcast MACs and each operand is read exactly once.
@@ -54,6 +66,9 @@ void bind_attn_res_merge(nb::module_& mod) {
         nb::arg("live_scores").noconvert(),
         nb::kw_only(),
         nb::arg("site") = 0,
+        nb::arg("num_partials") = 0,
+        nb::arg("inv_hidden_size") = 0.0f,
+        nb::arg("eps") = 0.0f,
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }

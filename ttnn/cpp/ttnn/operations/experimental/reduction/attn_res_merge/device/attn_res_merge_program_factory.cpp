@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/reduction/attn_res_merge/device/attn_res_merge_program_factory.hpp"
 
+#include <bit>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -26,9 +28,11 @@ constexpr auto kAttnResMergeKernelDir =
 // partial and prefix_sum, interleaved into one CB so both broadcast MACs read
 // the same CB pair and the compute kernel needs a single `init_bcast`.
 constexpr uint32_t kOperands = 2;
-// The row weights `a` and `b`, and the scalars they are derived from.
+// The row weights `a` and `b`, and the shift and mass they are derived from.
 constexpr uint32_t kRowWeights = 2;
-constexpr uint32_t kScalars = 3;
+constexpr uint32_t kFixedScalars = 2;
+// A rank's contribution to the live score: its sum of squares and its dots.
+constexpr uint32_t kStatsPerPartial = 2;
 
 }  // namespace
 
@@ -62,6 +66,13 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     const uint32_t shift_page_offset = scalar_page_offset(tensor_args.shift);
     const uint32_t mass_page_offset = scalar_page_offset(tensor_args.mass);
     const uint32_t live_scores_page_offset = scalar_page_offset(tensor_args.live_scores);
+
+    // Unsummed statistics arrive as [1, 2P, N, 1]: one tile-plane of Ht pages per
+    // half, a rank's two halves Ht apart and the next rank a pair further on.
+    const uint32_t num_partials = operation_attributes.num_partials;
+    const uint32_t kScalars = kFixedScalars + (num_partials == 0 ? 1 : kStatsPerPartial * num_partials);
+    const uint32_t live_dots_page_offset = Ht;
+    const uint32_t live_partial_page_stride = kStatsPerPartial * Ht;
 
     // The partial is full width, so its dim-0 plane is a whole Ht*Wt block. Same
     // selection as the scalars, different stride: a caller that reduced every read
@@ -112,8 +123,9 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
         }}},
     });
 
-    // shift, mass, live_scores — one tile each per token row, in one CB so the
-    // derivation reads all three through a single unpack configuration.
+    // shift and mass, then whatever the live score comes from — one tile each per
+    // token row, in one CB so the derivation reads them all through a single
+    // unpack configuration. That is why they share a dtype.
     desc.cbs.push_back(CBDescriptor{
         .total_size = kScalars * 2 * scalar_tile_size,
         .core_ranges = all_cores,
@@ -139,7 +151,7 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     // Wt is a compile-time arg because the reader divides by it once per output
     // tile to find the token row, and RISC-V has no divide instruction.
-    std::vector<uint32_t> reader_compile_time_args = {Wt};
+    std::vector<uint32_t> reader_compile_time_args = {Wt, num_partials};
     TensorAccessorArgs(*tensor_args.partial.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*tensor_args.prefix_sum.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*tensor_args.shift.buffer()).append_to(reader_compile_time_args);
@@ -170,7 +182,11 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
     compute_kernel_desc.kernel_source = std::string(kAttnResMergeKernelDir) + "attn_res_merge.cpp";
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = {Wt};
+    compute_kernel_desc.compile_time_args = {
+        Wt,
+        num_partials,
+        std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
+        std::bit_cast<uint32_t>(operation_attributes.eps)};
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -216,7 +232,9 @@ tt::tt_metal::ProgramDescriptor AttnResMergeProgramFactory::create_descriptor(
              shift_page_offset,
              mass_page_offset,
              live_scores_page_offset,
-             partial_page_offset});
+             partial_page_offset,
+             live_dots_page_offset,
+             live_partial_page_stride});
         writer_kernel_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, start_id});
         compute_kernel_desc.emplace_runtime_args(core, {num_tiles_per_core, start_id});
 
