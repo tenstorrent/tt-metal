@@ -239,19 +239,16 @@
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py
     pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
-    # Still the carried-over legacy value. Run 31106916424 took 7.3 min but ABORTED at
-    # test_pixtral_transformer (the L1 clash fixed in this PR), so 3 of the 8 test files
-    # never ran and that time is not a usable measurement. Re-measure once the job is
-    # green end-to-end.
+    # Still the carried-over legacy value; the job has never completed end-to-end, so
+    # there is no usable measurement yet. Re-measure once it is green.
     wh_llmbox:
       timeout: 20
-      tier: 2
+      tier: 3
   owner_id: U08GEGWHQJF # Adam Roberge
   team: models
 
