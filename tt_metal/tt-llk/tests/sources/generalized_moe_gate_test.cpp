@@ -208,10 +208,11 @@ static inline void mop_dest_reset()
 static inline void gmg_sanitize_scratch()
 {
     // Address everything through sfpi dst_reg -- the one mapping proven to land on the right rows here
-    // (raw SFP offsets / ZEROACC start mid-tile). Each packed DEST tile is 32 dst_reg rows; the 4 tiles
-    // span dst_reg[0..127]. A packed 16-col row is split across TWO dst_reg rows -- even columns in
-    // dst_reg[2r], odd columns in dst_reg[2r+1] -- so the answer (packed row 0 of SCORES/IDS) lives in
-    // dst_reg pairs {0,1} and {IDS: 64,65}. Keep those four; zero every other dst_reg row.
+    // (raw SFP offsets / ZEROACC start mid-tile). dst_reg[k] maps to TTI address 2k, so each packed DEST
+    // tile is 32 dst_reg rows and the 4 tiles span dst_reg[0..127]. A packed 16-col row is split across
+    // TWO dst_reg rows -- even columns in dst_reg[2r], odd columns in dst_reg[2r+1] -- so the answer
+    // (packed row 0 of SCORES/IDS) lives in dst_reg pairs {0,1} (SCORES) and {32,33} (IDS). Keep those
+    // four; zero every other dst_reg row.
     constexpr int DREG_PER_TILE = ckernel::sfpu::dst_tile_offset / 2; // 32
     constexpr int SCORES_LO     = SCORES_TILE * DREG_PER_TILE;        // 0  (even cols of SCORES row 0)
     constexpr int SCORES_HI     = SCORES_LO + 1;                      // 1  (odd  cols)
