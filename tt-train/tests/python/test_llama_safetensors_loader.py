@@ -488,6 +488,7 @@ class TestCoverageAgainstRealModels:
             (TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
             (TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, WeightTyingType.Enabled),
             (TPStrategy.TENSOR, EmbeddingPlacement.FeatureParallel, WeightTyingType.Disabled),
+            (TPStrategy.TENSOR_SEQUENCE, EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
         ],
         ids=lambda v: v.name,
     )
@@ -549,6 +550,28 @@ class TestLoadIntoModel:
         }[placement]
         got = read_param(params, "Llama/tok_emb/weight", embedding_dims)
         assert np.array_equal(got, as_bf16(hf["model.embed_tokens.weight"])), "token embedding"
+
+    def test_sequence_parallel_layout_matches_tensor_parallel(self, tmp_path):
+        """SP changes the collectives, not the weight sharding, so the loader needs no SP path."""
+        write_hf_checkpoint(tmp_path)
+        weights = {}
+        for strategy in (TPStrategy.TENSOR, TPStrategy.TENSOR_SEQUENCE):
+            config = e2e_config(strategy, EmbeddingPlacement.VocabParallel)
+            model = Llama(config)
+            load_from_safetensors(model, tmp_path, config)
+            params = model.parameters()
+            weights[strategy] = {
+                name: read_param(params, name, dims)
+                for name, dims in (
+                    ("Llama/blocks/0/attention/qkv_linear/weight", {"tp": 2}),
+                    ("Llama/blocks/0/mlp/w_gate_up/weight", {"tp": 2}),
+                    ("Llama/blocks/0/attention/out_linear/weight", {"tp": 3}),
+                    ("Llama/tok_emb/weight", {"tp": 2}),
+                )
+            }
+
+        for name, tp_weight in weights[TPStrategy.TENSOR].items():
+            assert np.array_equal(weights[TPStrategy.TENSOR_SEQUENCE][name], tp_weight), f"{name}: SP layout differs"
 
     def test_reports_a_clean_load(self, tmp_path, capsys):
         hf = write_hf_checkpoint(tmp_path)
