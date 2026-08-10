@@ -44,7 +44,7 @@ def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
 
 
 def pack_dest_init(
-    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False
+    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False, **kwargs
 ) -> str:
     if quasar_use_dvalid:
         return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"

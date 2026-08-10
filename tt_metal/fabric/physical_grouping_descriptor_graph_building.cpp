@@ -392,7 +392,9 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
 
     // Collect instance IDs and build items list
     std::vector<uint32_t> instance_ids;
+    instance_ids.reserve(grouping.instances().size());
     std::vector<uint32_t> asic_locations;  // For tray groupings, use ASIC locations as node IDs
+    asic_locations.reserve(grouping.instances().size());
     bool has_asic_locations = false;
 
     for (const auto& instance : grouping.instances()) {
@@ -939,12 +941,25 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
     std::vector<tt::tt_fabric::GroupingInfo> possible_groupings;
     auto name_it = cache.find(item.grouping_name);
     if (name_it != cache.end()) {
+        size_t total_groupings = 0;
+        for (const auto& [type, groupings] : name_it->second) {
+            total_groupings += groupings.size();
+        }
+        possible_groupings.reserve(total_groupings);
         for (const auto& [type, groupings] : name_it->second) {
             possible_groupings.insert(possible_groupings.end(), groupings.begin(), groupings.end());
         }
     }
     if (possible_groupings.empty()) {
         // Fallback: search by type (handles refs like custom_type "tray" where cache key is grouping name)
+        size_t total_groupings = 0;
+        for (const auto& [name, type_map] : cache) {
+            auto type_it = type_map.find(item.grouping_name);
+            if (type_it != type_map.end()) {
+                total_groupings += type_it->second.size();
+            }
+        }
+        possible_groupings.reserve(total_groupings);
         for (const auto& [name, type_map] : cache) {
             auto type_it = type_map.find(item.grouping_name);
             if (type_it != type_map.end()) {

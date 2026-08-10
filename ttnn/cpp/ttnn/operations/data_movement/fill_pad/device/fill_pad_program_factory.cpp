@@ -376,6 +376,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
     };
 
     std::vector<ShardCoreInfo> active;
+    active.reserve(all_shard_cores.size());
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(all_shard_cores.size()); ++i) {
         uint32_t row, col;
