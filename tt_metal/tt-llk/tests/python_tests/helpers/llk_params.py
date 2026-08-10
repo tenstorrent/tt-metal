@@ -753,8 +753,7 @@ class ReluConfig(Enum):
 class SdpaOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa.h the sfpu_sdpa test drives."""
 
-
-
+    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
     RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
     ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
     ExpPoly = 3  # calculate_exponential_first_column<false, scale>
@@ -765,8 +764,7 @@ class SdpaOp(Enum):
 class SdpaFwOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
 
-
-    """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
+    Recip = 0  # calculate_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
     Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
 
 
