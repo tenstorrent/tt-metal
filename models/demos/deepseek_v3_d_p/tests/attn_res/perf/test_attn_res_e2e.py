@@ -9,8 +9,8 @@ microsecond of host time, so it cannot say what a model pays to *issue* 186 read
 Python.
 
 This file runs the schedule, host-dispatched, program by program, the way a model costs
-it before anyone captures a trace. `attn_res_stack` walks all 93 layers with the real
-seal cadence, `S` ramping 0 -> 8 across 186 reads, at the 640 rows per chip prefill
+it before anyone captures a trace. `attn_res_stack_split` walks all 93 layers with the
+real seal cadence, `S` ramping 0 -> 8 across 186 reads, at the 640 rows per chip prefill
 shards to. What it reports is the cumulative cost of AttnRes across a whole forward.
 
 Enqueue is reported separately from completion because their gap bounds how much of the
@@ -20,6 +20,8 @@ dispatch looks the same when host and device happen to run at matched rates.
 
 No timing assertion appears here. A wall-clock threshold on a shared box is a flake
 generator; the numbers go out through loguru, so `pytest -s` is what makes them visible.
+The one assertion in the file is `test_walk_matches_reference`, which gates the walk the
+timings are taken over — CI runs that test alone, by node id.
 """
 
 import time
@@ -30,9 +32,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res_stack
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack, attn_res_stack_split
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack_split
 
 HIDDEN_SIZE = 7168
 PRODUCTION_TOKENS = 5120
@@ -50,8 +52,9 @@ READS = 2 * LAYERS
 # executed read, so `S` ramps 1 -> MAX_SEALED and no read runs at `S == 0`.
 MAX_SEALED = -(-LAYERS // BLOCK_SIZE)
 
-# The same gate the correctness suite holds the op to. Here it separates the two stack
-# drivers, whose only legitimate difference is rounding order.
+# The same gate the single-read suite holds the op to, and the walk clears it: 186 rounds of
+# bf16 accumulation against an fp32 reference cost about as much as one read does, because
+# every read renormalizes the stream against the sealed set rather than compounding it.
 PCC_GATE = 0.9999
 
 # Cross-mesh comparisons hold tokens *per chip* fixed: production is
@@ -100,25 +103,31 @@ def _module_stub(h):
     return ttnn.multiply(h, MODULE_SCALE)
 
 
-def _place_stack(op, seed=0):
-    """Everything the walk consumes, placed once: the embeddings and all 187 queries.
-
-    `attn_res_stack` takes ownership of the stream it is handed and frees it, so each
-    timed iteration needs its own copy. The caller clones this on device — a host transfer
-    inside the timed region would swamp what is being measured.
-    """
+def _make_stack(op, seed=0):
+    """Everything the walk consumes, on host: the embeddings and all 187 folded queries."""
     generator = torch.Generator().manual_seed(seed)
     randn = lambda *shape: torch.randn(*shape, generator=generator)
 
-    hidden_states = randn(1, 1, PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE)
-    embeddings = ttnn.from_torch(
-        hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=op.mesh_device, mesh_mapper=op.stream_mapper
-    )
+    hidden_states = randn(PER_CHIP_TOKENS * op.sp_factor, HIDDEN_SIZE)
+    fold = lambda: (1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE))
+    return hidden_states, [fold() for _ in range(LAYERS)], [fold() for _ in range(LAYERS)], fold()
 
-    fold = lambda: op.to_query((1.0 + 0.1 * randn(HIDDEN_SIZE)) * (PROJ_STD * randn(HIDDEN_SIZE)))
-    q_pre = [fold() for _ in range(LAYERS)]
-    q_post = [fold() for _ in range(LAYERS)]
-    return embeddings, q_pre, q_post, fold()
+
+def _place_stack(op, hidden_states, q_pre, q_post, q_out):
+    """The same inputs on device, placed once.
+
+    `attn_res_stack_split` takes ownership of the stream it is handed and frees it, so each
+    timed iteration needs its own copy. The caller clones the embeddings on device — a host
+    transfer inside the timed region would swamp what is being measured.
+    """
+    embeddings = ttnn.from_torch(
+        hidden_states.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=op.mesh_device,
+        mesh_mapper=op.stream_mapper,
+    )
+    return embeddings, [op.to_query(q) for q in q_pre], [op.to_query(q) for q in q_post], op.to_query(q_out)
 
 
 def _min_of(mesh_device, body):
@@ -153,17 +162,14 @@ def _pcc(got, want):
     return torch.corrcoef(stacked)[0, 1].item()
 
 
-FORMS = {"direct": attn_res_stack, "split": attn_res_stack_split}
-
-
-def _walker(drive, op, embeddings, queries, stub):
+def _walker(op, embeddings, queries, stub):
     """The whole 93-layer walk as a nullary callable.
 
-    `attn_res_stack` takes ownership of the stream it is handed and frees it, so every
+    `attn_res_stack_split` takes ownership of the stream it is handed and frees it, so every
     iteration clones the embeddings on device rather than re-placing them from host.
     """
     q_pre, q_post, q_out = queries
-    return lambda: drive(
+    return lambda: attn_res_stack_split(
         op,
         ttnn.clone(embeddings),
         q_pre,
@@ -176,46 +182,57 @@ def _walker(drive, op, embeddings, queries, stub):
 
 
 @on_placements
-def test_split_matches_direct(mesh_device, device_params):
-    """The two stack drivers agree, which is what makes their timings comparable.
+def test_walk_matches_reference(mesh_device, device_params):
+    """The device walk against the torch reference walk, which is what makes the timing below
+    a number for the right computation.
 
-    A driver that batches the wrong sites is fast and wrong, and nothing else in the repo
-    walks the schedule through `merge`, so this gate is the only thing standing between the
-    split timing below and a number for the wrong computation.
+    A driver that batches the wrong sites, or seals on the wrong layer, is fast and wrong.
+    The single-read suite cannot see either: it issues one `inter_block` and indexes its
+    sites by hand, so it never exercises the seal cadence or the site bookkeeping across a
+    stack. This is the only thing in the repo that does, which is why CI runs it even though
+    the timing tests beside it are bringup-only.
     """
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    embeddings, q_pre, q_post, q_out = _place_stack(op)
+    hidden_states, q_pre, q_post, q_out = _make_stack(op)
+    embeddings, tt_pre, tt_post, tt_out = _place_stack(op, hidden_states, q_pre, q_post, q_out)
 
-    outputs = {}
-    for name, drive in FORMS.items():
-        out = _walker(drive, op, embeddings, (q_pre, q_post, q_out), _module_stub)()
-        outputs[name] = ttnn.to_torch(out, mesh_composer=op.stream_composer)
-        ttnn.deallocate(out)
+    device_walk = _walker(op, embeddings, (tt_pre, tt_post, tt_out), _module_stub)()
+    got = ttnn.to_torch(device_walk, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
+    ttnn.deallocate(device_walk)
 
-    pcc = _pcc(outputs["split"], outputs["direct"])
-    logger.info(f"split vs direct over {LAYERS} layers, {READS} reads: PCC {pcc:.7f}")
-    assert pcc >= PCC_GATE, f"split driver disagrees with direct: PCC {pcc:.7f} < {PCC_GATE}"
+    torch_stub = lambda h: h * MODULE_SCALE
+    want = attn_res_stack(
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        [torch_stub] * LAYERS,
+        [torch_stub] * LAYERS,
+        block_size=BLOCK_SIZE,
+        eps=EPS,
+    )
 
-    for tensor in (embeddings, q_out, *q_pre, *q_post):
+    pcc = _pcc(got, want)
+    logger.info(f"device vs reference over {LAYERS} layers, {READS} reads: PCC {pcc:.7f}")
+    assert pcc >= PCC_GATE, f"device walk disagrees with the reference: PCC {pcc:.7f} < {PCC_GATE}"
+
+    for tensor in (embeddings, tt_out, *tt_pre, *tt_post):
         ttnn.deallocate(tensor)
 
 
 @on_placements
-@pytest.mark.parametrize("form", list(FORMS), ids=lambda name: f"form-{name}")
-def test_e2e_split_vs_direct(mesh_device, device_params, request, form):
-    """Both read forms over the whole schedule, host-dispatched and replayed from a trace.
+def test_e2e_untraced_vs_traced(mesh_device, device_params, request):
+    """The whole schedule, host-dispatched and replayed from a trace.
 
-    The forms trade host work against device work in opposite directions, so which one wins
-    depends on which side is the critical path. The split form hoists the sealed half of 24
-    reads into one `inter_block`, cutting device time; whether it also cuts the ~22 programs
-    a read dispatches is what the untraced column answers. The traced column is the same
-    walk with host dispatch removed, so the pair brackets the model's two operating points:
-    a forward that captures a trace, and one that does not.
+    The traced column is the same walk with host dispatch removed, so the pair brackets the
+    model's two operating points: a forward that captures a trace, and one that does not.
+    Their difference is what the read's dispatch count costs, which is the quantity every
+    fusion in this module is aimed at.
     """
     placement = request.node.callspec.id
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    embeddings, q_pre, q_post, q_out = _place_stack(op)
-    walk = _walker(FORMS[form], op, embeddings, (q_pre, q_post, q_out), _module_stub)
+    embeddings, q_pre, q_post, q_out = _place_stack(op, *_make_stack(op))
+    walk = _walker(op, embeddings, (q_pre, q_post, q_out), _module_stub)
 
     untraced_enqueue, untraced_total = _min_of(mesh_device, walk)
 

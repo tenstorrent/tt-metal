@@ -15,10 +15,6 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    attn_res_accum_stats/device/kernels/*.cpp
-    attn_res_merge/device/kernels/*.cpp
-    attn_res_scores/device/kernels/*.cpp
-    attn_res_stats/device/kernels/*.cpp
     deepseek_grouped_gate/device/kernels/*.cpp
     deepseek_moe_fast_reduce_nc/device/kernels/*.cpp
     deepseek_moe_fast_reduce_nc_fused/device/kernels/*.cpp

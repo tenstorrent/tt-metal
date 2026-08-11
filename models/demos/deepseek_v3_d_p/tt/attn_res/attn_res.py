@@ -12,13 +12,16 @@ forced by ttnn:
   * "no sealed snapshots" is `block_residual=None`, not a zero-width tensor —
     ttnn has no zero-extent dimension. The read is the identity there anyway.
 
-Both forms of the read live here. `forward` is direct. `inter_block` + `merge`
-split the mixture so the sealed half amortizes across a whole 12-layer block: the
-reciprocal-RMS pass and the dots each collapse to a single pass over the sealed
-set for all 24 read sites, which leaves the weighted sum as the only per-site
-traffic over it. That one does not batch in composed form — it contracts over the
-candidate axis, and reaching it with a matmul means making that axis a tile axis,
+The read is split: `inter_block` + `merge`. The sealed half amortizes across a whole
+12-layer block — the reciprocal-RMS pass and the dots each collapse to a single pass
+over the sealed set for all 24 read sites, which leaves the weighted sum as the only
+per-site traffic over it. That one does not batch in composed form: it contracts over
+the candidate axis, and reaching it with a matmul means making that axis a tile axis,
 whose two permutes over the sealed set cost what the matmul saves.
+
+`merge` is one dispatch. `ttnn.experimental.attn_res_gather_merge` takes the live
+stream's statistics, crosses the tensor-parallel axis, and folds the sealed partial in,
+which is why nothing between the statistics and the result exists as a tensor.
 
 Distribution: the stream stays sharded `[1, 1, T/R, d/C]` exactly as the analog
 leaves it, the sequence axis communicates nothing, and each read all-reduces
@@ -53,34 +56,19 @@ STATS_FIDELITY = ttnn.WormholeComputeKernelConfig(
 # between those are exactly 8 192 B per tile of width, so the ceiling is 177 tiles.
 # Past it the op throws at program build rather than degrading, and
 # `use_2d_core_grid=True` is not the escape hatch — it splits tokens, not the row,
-# and asks for more (1 971 072 B at 7 168). Any `tp_factor >= 2` on a 7 168-wide
-# model fits; `tp_factor == 1` does not, so the read falls back there instead of
-# making the caller carry the constraint. Wormhole's smaller L1 moves this bound,
-# which is why the fallback exists at all rather than an assert.
+# and asks for more (1 971 072 B at 7 168). Every shard width the read admits on
+# Blackhole fits; Wormhole's smaller L1 moves the bound, which is why this is a
+# fallback rather than an assert.
 ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
 
 # Folding the candidate axis into the last dim trades the collective's padded
 # payload against two permutes, so it only pays once the axis is wide enough to
 # have been paying for padding. Traced on `(2,4)` at 640 rows per chip, one
 # `all_reduce` folded against unfolded: C=2 costs 6.0 us, C=4 buys 2.7, C=8 buys
-# 12.5, C=16 buys 50.5, C=32 buys 96.0. `merge`'s live read crosses at C=2 — it
-# packs two statistics for one candidate — so an ungated fold is a straight loss
-# on the most frequent collective in the walk.
+# 12.5, C=16 buys 50.5, C=32 buys 96.0. The sealed set starts at one snapshot and
+# grows a snapshot a block, so the first blocks of a walk cross below the crossover
+# and an ungated fold would be a straight loss on them.
 FOLD_MIN_CANDIDATES = 4
-
-# `attn_res_stats` holds the same row of `v` that kernel does, double-buffered,
-# plus `q` and one transformed copy of the row, so its circular buffers step by
-# the same 8 192 B per tile of width at bf16. Only the fixed part differs — 10 240 B
-# against ~115 584 — which buys it 189 tiles where the statistics kernel clears 177.
-# fp32 doubles every one of those buffers, so it clears 94.
-FUSED_STATS_MAX_WIDTH = 189 * ttnn.TILE_SIZE
-FUSED_STATS_MAX_WIDTH_FP32 = 94 * ttnn.TILE_SIZE
-
-# Taking the accumulation in the same pass costs L1 for both addends double-buffered
-# on top of what the statistics alone hold, so the width it admits is a little under
-# half. The op's own guard is the authority; this is the gate that keeps a caller
-# from reaching it.
-FUSED_ACCUM_STATS_MAX_WIDTH = 88 * ttnn.TILE_SIZE
 
 
 class TtAttnRes(LightweightModule):
@@ -100,8 +88,10 @@ class TtAttnRes(LightweightModule):
         sp_axis, tp_axis: mesh axes the sequence and the hidden dim are sharded
             across. `sp_axis` is placement only — the op never communicates on it,
             which is the whole reason the sequence split is free. Both live here
-            rather than in the caller so the layout has one definition; `forward`
-            checks its input against it.
+            rather than in the caller so the layout has one definition; `merge`
+            checks its input against it. The tensor-parallel axis must be wider than
+            one chip: the read's exchange is what its one dispatch is built around,
+            and there is no exchange to absorb at `tp_factor == 1`.
         num_links: fabric links for the statistics all-reduce.
         topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Galaxy
             prefill is `[LINE, RING]`; applying a scalar `Ring` to a linear axis
@@ -132,43 +122,6 @@ class TtAttnRes(LightweightModule):
             3 136 us read. Requires `STATS_FIDELITY`; see the note there. The
             squares half is width-gated and falls back on its own, so this stays
             a single knob for the caller — see `ONE_PASS_SQUARES_MAX_WIDTH`.
-        fused_mix: take the mixture with `ttnn.experimental.fast_weighted_reduce_nc`
-            instead of `mul` then `sum`. The composed form writes a full second
-            `[1, C, N, d/tp]` to DRAM and reads it back, so it moves 3x the bytes
-            of the reduction it is performing; the op MACs the weight into the
-            accumulator during the one pass that has to happen anyway. Phase 10 on
-            `(2,4)` at `C = 9`: 687 us -> 257 us, 2.67x, against a 228 us floor
-            measured as unweighted `fast_reduce_nc` over the same tensor. The 29 us
-            over that floor is what the weighting itself costs. Off is the composed
-            form, kept because it is the reference the op is gated against.
-        fused_merge: take `merge`'s online-softmax fold with
-            `ttnn.experimental.attn_res_merge` instead of the eleven-op chain.
-            Only three of those ops are full-width; the rest are per-row scalar
-            work whose cost is almost entirely the launch. Folding the division
-            into the row scalars turns the full-width half into two column
-            broadcasts MAC'd into one accumulator, so the site reads `partial`
-            and `prefix_sum` once and writes the result once instead of moving
-            nine `[1, 1, N, d/tp]` planes. Off is the composed form, kept because
-            it is the reference the op is gated against.
-        fused_scores: take everything between the score collective and the score
-            itself with `ttnn.experimental.attn_res_scores` — the narrowing
-            typecast, the two `slice` calls that unpack the statistics pair, and
-            the four elementwise ops that normalize. All seven run on tensors
-            carrying one scalar per `(token, candidate)`, so each costs far more
-            to launch than to run. The op splits the pair by page arithmetic and
-            keeps the whole normalization in dest registers, so the result rounds
-            to `dtype` once instead of five times. Off is the composed form, kept
-            because it is the reference the op is gated against.
-        fused_stats: take everything between `v` and the score collective with
-            `ttnn.experimental.attn_res_stats` — the RMSNorm statistics kernel,
-            the `slice` that pulls its sum out of a 32-wide row, the query
-            transpose, the matmul, and the `concat` and typecast that stack the
-            pair for the crossing. `one_pass_stats` already reads `v` once per
-            statistic; this reads it once for both, and emits the packed layout
-            `attn_res_scores` expects rather than building it in DRAM. Requires
-            `fused_scores`, which is that layout's only consumer, and is width-gated
-            on its own — see `FUSED_STATS_MAX_WIDTH`. Off is the composed form,
-            kept because it is the reference the op is gated against.
     """
 
     def __init__(
@@ -185,10 +138,6 @@ class TtAttnRes(LightweightModule):
         stats_dtype=ttnn.float32,
         fold_stats=True,
         one_pass_stats=True,
-        fused_mix=True,
-        fused_merge=True,
-        fused_scores=True,
-        fused_stats=True,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -201,9 +150,9 @@ class TtAttnRes(LightweightModule):
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
-        self.fused_mix = fused_mix
-        self.fused_merge = fused_merge
-        self.fused_scores = fused_scores
+        # Sized by the token count, which reaches the op and not the constructor.
+        self._exchange_scratch = {}
+        self._exchange_sem = None
 
         mesh_shape = tuple(mesh_device.shape)
         self.tp_factor = mesh_shape[tp_axis]
@@ -214,6 +163,12 @@ class TtAttnRes(LightweightModule):
             "pass one Topology per axis (Galaxy prefill is [LINE, RING])"
         )
 
+        # The read is one program because the exchange runs inside it. Without a
+        # tensor-parallel axis there is no exchange, and no read either.
+        assert self.tp_factor > 1, (
+            f"AttnRes needs a tensor-parallel axis wider than one chip, got tp_factor {self.tp_factor} "
+            f"on mesh axis {tp_axis} of a {mesh_shape} mesh"
+        )
         assert (
             hidden_size % self.tp_factor == 0
         ), f"hidden_size {hidden_size} not divisible by TP factor {self.tp_factor}"
@@ -226,42 +181,23 @@ class TtAttnRes(LightweightModule):
         # The matvec has no width limit; the RMSNorm statistics kernel does.
         self.one_pass_squares = one_pass_stats and self.shard_width <= ONE_PASS_SQUARES_MAX_WIDTH
 
-        # `attn_res_scores` is the only consumer of the packed layout the fused
-        # statistics op emits, so without it the pair would have to be unpacked
-        # and narrowed by hand — the chain the op exists to delete.
-        stats_width_limit = FUSED_STATS_MAX_WIDTH if dtype == ttnn.bfloat16 else FUSED_STATS_MAX_WIDTH_FP32
-        self.fused_stats = (
-            fused_stats
-            and fused_scores
-            and dtype in (ttnn.bfloat16, ttnn.float32)
-            and self.shard_width <= stats_width_limit
-        )
-
-        # Both mappers are None at a single device, so placement there is exactly
-        # what it was before distribution existed and every prior measurement
-        # stays comparable.
-        self.stream_mapper, self.vector_mapper = None, None
-        if self.tp_factor > 1 or self.sp_factor > 1:
-            stream_dims, vector_dims = [None] * len(mesh_shape), [None] * len(mesh_shape)
-            if self.sp_factor > 1:
-                stream_dims[sp_axis] = 2  # tokens split across the sequence axis
-            if self.tp_factor > 1:
-                stream_dims[tp_axis] = 3  # hidden split across the tensor axis
-                vector_dims[tp_axis] = 3
-            self.stream_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=stream_dims, mesh_shape=mesh_device.shape)
-            if self.tp_factor > 1:
-                self.vector_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=vector_dims, mesh_shape=mesh_device.shape)
+        stream_dims, vector_dims = [None] * len(mesh_shape), [None] * len(mesh_shape)
+        stream_dims[tp_axis] = 3  # hidden split across the tensor axis
+        vector_dims[tp_axis] = 3
+        # A mesh may be one chip deep on the sequence axis; the hidden split never is.
+        if self.sp_factor > 1:
+            stream_dims[sp_axis] = 2  # tokens split across the sequence axis
+        self.stream_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=stream_dims, mesh_shape=mesh_device.shape)
+        self.vector_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=vector_dims, mesh_shape=mesh_device.shape)
 
         # The inverse of `stream_mapper`, for tests and for the pipeline boundary.
         # `ConcatMesh2dToTensor` needs a real dim on both axes, so a replicated
         # axis composes as a concat of identical copies — the caller slices.
-        self.stream_composer = None
-        if self.stream_mapper is not None:
-            compose_dims = [0, 0]
-            compose_dims[sp_axis], compose_dims[tp_axis] = 2, 3
-            self.stream_composer = ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=tuple(compose_dims), mesh_shape=mesh_device.shape
-            )
+        compose_dims = [0, 0]
+        compose_dims[sp_axis], compose_dims[tp_axis] = 2, 3
+        self.stream_composer = ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=tuple(compose_dims), mesh_shape=mesh_device.shape
+        )
 
         # Query layouts the op owns: one column per query, one stack per block.
         # Both key on identity because `ttnn.Tensor.__eq__` is elementwise, which
@@ -281,7 +217,7 @@ class TtAttnRes(LightweightModule):
         The transposed column the dot matmul contracts against is placed here too.
         It is a function of the weight alone, so preparing it on first use instead
         would land a permute per read site wherever the caller happens to be — and
-        a caller that captures a trace on its first forward would capture those
+        a caller that captures a trace on its first read would capture those
         permutes and replay them for nothing. Weight layout belongs at weight
         placement, which is the one point that is unambiguously outside a trace.
         """
@@ -316,11 +252,7 @@ class TtAttnRes(LightweightModule):
     def _reduce_stats(self, stats):
         """Sum a `[1, C, N, k]` statistics tensor across the TP axis.
 
-        Takes ownership. At `tp_factor == 1` this is the identity and adds no op
-        to the trace, so every single-device measurement stays comparable."""
-        if self.tp_factor == 1:
-            return stats
-
+        Takes ownership."""
         wide = ttnn.typecast(stats, self.stats_dtype) if stats.dtype != self.stats_dtype else stats
         reduced = self._collective(wide)
         if wide is not stats:
@@ -349,7 +281,7 @@ class TtAttnRes(LightweightModule):
         axis was the only dim that could qualify for reduce-scatter and the folded
         shape does not have it. Neither layout is exact to begin with and both stay
         ~50x inside one bf16 ULP, so the gate is the 186-read depth PCC in
-        `test_split_matches_direct`, not exactness: measured there, the two differ
+        `test_walk_matches_reference`, not exactness: measured there, the two differ
         by <=5e-6 in *either* direction, which is reassociation noise rather than a
         precision cost."""
         if not (self.fold_stats and wide.shape[-1] == 1 and FOLD_MIN_CANDIDATES <= wide.shape[1] <= ttnn.TILE_SIZE):
@@ -371,68 +303,6 @@ class TtAttnRes(LightweightModule):
         unfolded = ttnn.permute(crossed, [0, 3, 2, 1])
         ttnn.deallocate(crossed)
         return unfolded
-
-    def _reduce_stats_pair(self, first, second):
-        """Reduce two `[1, C, N, 1]` statistics in **one** collective.
-
-        Packed on dim 1 rather than the last dim: the halves come back out with
-        `ttnn.slice` on a tile-plane boundary instead of a sub-tile read of a
-        2-wide last dim. Both forms tile-pad the last dim 1 -> 32 anyway, so
-        stacking on dim 1 costs 2x a payload that is already 0.2% of the op's
-        traffic and buys a slice that cannot land mid-tile."""
-        if self.tp_factor == 1:
-            return first, second
-
-        candidates = first.shape[1]
-        packed = ttnn.concat([first, second], dim=1)
-        ttnn.deallocate(first)
-        ttnn.deallocate(second)
-
-        reduced = self._reduce_stats(packed)
-        shape = list(reduced.shape)
-        head = ttnn.slice(reduced, [0, 0, 0, 0], [shape[0], candidates, shape[2], shape[3]])
-        tail = ttnn.slice(reduced, [0, candidates, 0, 0], shape)
-        ttnn.deallocate(reduced)
-        return head, tail
-
-    def _reduce_stats_packed(self, first, second):
-        """Same one crossing as `_reduce_stats_pair`, left stacked on dim 1.
-
-        Consumes both inputs. Stays at `stats_dtype` on the way out: the consumer
-        splits the pair by page arithmetic and normalizes in dest registers, so
-        neither the split nor the narrowing needs its own pass."""
-        packed = ttnn.concat([first, second], dim=1)
-        ttnn.deallocate(first)
-        ttnn.deallocate(second)
-        if self.tp_factor == 1:
-            return packed
-
-        wide = ttnn.typecast(packed, self.stats_dtype) if packed.dtype != self.stats_dtype else packed
-        crossed = self._gather_stats(wide)
-        if wide is not packed:
-            ttnn.deallocate(wide)
-        ttnn.deallocate(packed)
-        return crossed
-
-    def _gather_stats(self, wide):
-        """Cross the TP axis for statistics headed straight into `attn_res_scores`.
-
-        Gathers instead of reducing, and leaves the ranks stacked on dim 1 for the
-        consumer to sum. Reducing on the wire costs a second device program —
-        `all_reduce` decomposes into reduce-scatter plus all-gather — to deliver a
-        payload of two scalars per token, while the sum it saves is a pair of dest
-        register adds inside a pass that already loads those tiles. Does not consume
-        `wide`; the identity at `tp_factor == 1`, where the consumer's own default
-        of one partial already matches."""
-        if self.tp_factor == 1:
-            return wide
-        return ttnn.all_gather(
-            wide,
-            dim=1,
-            cluster_axis=self.tp_axis,
-            num_links=self.num_links,
-            topology=self.topology[self.tp_axis],
-        )
 
     def _local_sum_squares(self, v):
         """[1, C, N, d/tp] -> [1, C, N, 1]. Not yet summed across ranks.
@@ -545,31 +415,16 @@ class TtAttnRes(LightweightModule):
     def _site_major(stacked):
         """`[1, ..., R]` -> `[R, ..., 1]`, consuming its input. Identity at `R == 1`.
 
-        The batch is built with the sites in the last dim because that is where
-        the matmul wants them, but the mixture loop takes them back out one at a
-        time and a 1-wide last-dim slice lands mid-tile: ttnn untilizes the whole
-        batch, cuts the column, and re-tilizes. On dim 0 the same column is a
-        whole tile plane and the slice stays in tile layout — 26.8 -> 2.07 µs per
-        extraction, against 128.6 µs for the one permute that buys it."""
+        The batch is built with the sites in the last dim because that is where the
+        matmul wants them, but every consumer below addresses one site at a time. On
+        the last dim a site is a 1-wide cut mid-tile, which costs an untilize of the
+        whole batch and a re-tilize; on dim 0 it is a whole tile plane and so a page
+        offset — 26.8 -> 2.07 µs per site, against 128.6 µs for the one permute."""
         if stacked.shape[-1] == 1:
             return stacked
         moved = ttnn.permute(stacked, [3, 1, 2, 0])
         ttnn.deallocate(stacked)
         return moved
-
-    @staticmethod
-    def _site_column(stacked, site):
-        """One read site's plane out of a `[R, ...]` batch, borrowed from it.
-
-        Only for the unfused paths — the fused ops take the site index and read
-        the plane themselves, which is why nothing on the production path calls
-        this. Never deallocate the result: at `R == 1` it *is* `stacked`, since a
-        `ttnn.slice` spanning its input hands back a fresh handle onto the same
-        device buffer. Dropping the reference releases a real slice's buffer."""
-        shape = list(stacked.shape)
-        if shape[0] == 1:
-            return stacked
-        return ttnn.slice(stacked, [site, 0, 0, 0], [site + 1] + shape[1:])
 
     def _to_reciprocal_rms(self, sum_squares):
         """Globally summed squares -> `rsqrt(mean + eps)`. Consumes its input.
@@ -589,98 +444,40 @@ class TtAttnRes(LightweightModule):
         sealed set's share of the communication amortizes with its arithmetic."""
         return self._to_reciprocal_rms(self._reduce_stats(self._local_sum_squares(v)))
 
-    def _scores(self, v, q):
-        """[1, C, N, d/tp] -> [1, C, N, 1]. Scores the normalized key against `q`
-        without ever materializing the normalized tensor.
+    def _exchange_semaphore(self):
+        """Arrival semaphore for the fused read's exchange.
 
-        Both `d`-reductions ride one collective — this is the per-read cost on a
-        TP mesh, and it is `2(S+1)` scalars per token."""
-        stats = self._stats_for_scores(v, q)
-        if stats is not None:
-            return self._scores_from_stats(stats)
-
-        sum_squares, dots = self._reduce_stats_pair(self._local_sum_squares(v), self._local_dots(v, q))
-        reciprocal_rms = self._to_reciprocal_rms(sum_squares)
-        scores = ttnn.mul(dots, reciprocal_rms)
-        ttnn.deallocate(dots)
-        ttnn.deallocate(reciprocal_rms)
-        return scores
-
-    @property
-    def merge_folds_stats(self):
-        """`merge` hands the statistics to `attn_res_merge` and lets it score.
-
-        The score is a per-row scalar chain and `attn_res_merge` already runs one
-        in dest registers, so the read's whole normalization collapses into a pass
-        it makes anyway: no scoring program, and the score never reaches DRAM."""
-        return self.fused_merge and (self.fused_stats or self.fused_scores)
-
-    @property
-    def fused_accum_stats(self):
-        """The write into the stream and the read out of it share one pass.
-
-        A read site reduces exactly what the accumulation before it produced, so
-        unfused the sum crosses DRAM twice for nothing. Only where `merge` takes
-        packed statistics — the direct form reduces the sealed snapshots
-        alongside the live stream and has no such pair to collapse. The op sums
-        on the FPU, which is exact for bfloat16 and not for anything wider.
+        Global rather than program-local: a program-local semaphore is re-initialized
+        at every launch, which races a peer already a read ahead. One serves the whole
+        walk — the op resets it in kernel after waiting on it.
         """
-        return (
-            self.fused_stats
-            and self.merge_folds_stats
-            and self.dtype == ttnn.bfloat16
-            and self.shard_width <= FUSED_ACCUM_STATS_MAX_WIDTH
-        )
+        if self._exchange_sem is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            self._exchange_sem = ttnn.create_global_semaphore(
+                self.mesh_device,
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+                0,
+            )
+        return self._exchange_sem
 
-    def accum_stats(self, a, b, q):
-        """`a + b`, and the rank-crossed statistics of that sum against `q`.
+    def _exchange_stats(self, num_tokens):
+        """Scratch for one read's statistics, this rank's plane and its peers'.
 
-        Borrows both addends. Returns `(total, stats)`, with `stats` None where
-        the read that follows does not take the packed layout and has to reduce
-        the sum itself.
+        Written and read back inside the one pass, so it carries nothing between reads
+        and a single buffer per token count serves the walk. Replicated rather than
+        mapped: a peer's plane is written by page address, so the buffer has to sit at
+        the same address on every chip of the tensor-parallel axis.
         """
-        if not self.fused_accum_stats:
-            return ttnn.add(a, b), None
-
-        total, packed = ttnn.experimental.attn_res_accum_stats(a, b, q, stats_dtype=self.stats_dtype)
-        if self.tp_factor == 1:
-            return total, packed
-        crossed = self._gather_stats(packed)
-        ttnn.deallocate(packed)
-        return total, crossed
-
-    def _stats_for_scores(self, v, q):
-        """[1, C, N, d/tp] -> rank-stacked `[1, 2C * tp, N, 1]` statistics, or None.
-
-        None where the configuration reduces the two halves separately and never
-        forms the packed layout — the caller falls back to its own chain there."""
-        if self.fused_stats:
-            packed = ttnn.experimental.attn_res_stats(v, q, dtype=self.stats_dtype)
-            if self.tp_factor == 1:
-                return packed
-            crossed = self._gather_stats(packed)
-            ttnn.deallocate(packed)
-            return crossed
-
-        if self.fused_scores:
-            return self._reduce_stats_packed(self._local_sum_squares(v), self._local_dots(v, q))
-
-        return None
-
-    def _scores_from_stats(self, stats):
-        """Rank-stacked `[1, 2C * tp, N, 1]` statistics -> `[1, C, N, 1]` scores.
-
-        Consumes `stats`. The op splits the pair and sums the ranks itself, so
-        neither the halves nor the cross-rank total ever exist as tensors."""
-        scores = ttnn.experimental.attn_res_scores(
-            stats,
-            1.0 / self.hidden_size,
-            self.eps,
-            num_partials=self.tp_factor,
-            dtype=self.dtype,
-        )
-        ttnn.deallocate(stats)
-        return scores
+        stats = self._exchange_scratch.get(num_tokens)
+        if stats is None:
+            stats = ttnn.zeros(
+                [1, 2 * self.tp_factor, num_tokens, 1],
+                dtype=self.stats_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+            self._exchange_scratch[num_tokens] = stats
+        return stats
 
     def _mix(self, v, weights):
         """Weighted sum over the candidate axis, one per read site batched on
@@ -693,65 +490,11 @@ class TtAttnRes(LightweightModule):
 
         Batching the sites into the op is what keeps `v` out of the loop. `v` is
         the largest tensor in the module and every site weights the same one, so
-        a site-at-a-time mixture streams it R times; the fused op reads it once
-        per group of sites instead. It also takes the fp32 `weights` directly —
-        its weight operand accepts fp32 precisely so this call site does not have
-        to downcast the score chain's output to hand it over. See `fused_mix`."""
-        if self.fused_mix:
-            return ttnn.experimental.fast_weighted_reduce_nc(v, weights, dim=1)
-
-        per_site = []
-        for site in range(weights.shape[0]):
-            weighted = ttnn.mul(v, self._site_column(weights, site))
-            per_site.append(ttnn.sum(weighted, dim=1, keepdim=True))
-            ttnn.deallocate(weighted)
-        return self._concat_sites(per_site, dim=0)
-
-    def _softmax_over_candidates(self, scores):
-        """[1, C, N, 1] -> [1, C, N, 1], hand-rolled rather than `ttnn.softmax`.
-
-        `ttnn.softmax` only reaches its attention-optimized kernel when reducing
-        the last dim; the dim-1 fallback loses ~4% of the softmax mass even in
-        fp32 (measured rel err 1.4e-2, row sums to 0.962), and neither
-        `numeric_stable` nor `fp32_dest_acc_en` moves it. This chain measures
-        15-27x closer. `ttnn.exp` itself is exact to 6e-8, so the deficit is the
-        fallback reduction, not the exponential.
-
-        Rank-local: `scores` is already identical on every TP rank."""
-        shift = ttnn.max(scores, dim=1, keepdim=True)
-        exponentials = ttnn.exp(ttnn.sub(scores, shift))
-        ttnn.deallocate(shift)
-        total = ttnn.sum(exponentials, dim=1, keepdim=True)
-        weights = ttnn.div(exponentials, total)
-        ttnn.deallocate(exponentials)
-        ttnn.deallocate(total)
-        return weights
-
-    def forward(self, prefix_sum, block_residual, q):
-        """The AttnRes read.
-
-        Args:
-            prefix_sum: `[1, 1, N, d/tp_factor]` live residual stream.
-            block_residual: `[1, S, N, d/tp_factor]` sealed snapshots, or None
-                for `S == 0`.
-            q: `[1, 1, 1, d/tp_factor]` folded query.
-
-        Returns:
-            `[1, 1, N, d/tp_factor]`. A fresh tensor even at `S == 0`, so the
-            caller's deallocation is uniform across the two paths.
-        """
-        self._assert_shard_width(prefix_sum)
-        if block_residual is None:
-            return ttnn.clone(prefix_sum)
-
-        v = ttnn.concat([block_residual, prefix_sum], dim=1)
-        scores = self._scores(v, q)
-        weights = self._softmax_over_candidates(scores)
-        ttnn.deallocate(scores)
-        mixed = self._mix(v, weights)
-        ttnn.deallocate(weights)
-        ttnn.deallocate(v)
-        return mixed
+        a site-at-a-time mixture streams it R times; the op reads it once per group
+        of sites instead. It also takes the fp32 `weights` directly — its weight
+        operand accepts fp32 precisely so this call site does not have to downcast
+        the score chain's output to hand it over."""
+        return ttnn.experimental.fast_weighted_reduce_nc(v, weights, dim=1)
 
     def inter_block(self, block_residual, queries):
         """Sealed-snapshot half of the mixture, for every read site in a block.
@@ -768,8 +511,8 @@ class TtAttnRes(LightweightModule):
         one site already paid for.
 
         Args:
-            block_residual: `[1, S, N, d/tp_factor]`. Not None — `S == 0` has no
-                sealed half, and `forward`'s identity path covers it.
+            block_residual: `[1, S, N, d/tp_factor]`. Not None — the walk places no
+                read site before the first seal, so every executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
 
         Returns:
@@ -801,20 +544,19 @@ class TtAttnRes(LightweightModule):
         site_shifts = self._site_major(site_shifts)
         site_masses = self._site_major(site_masses)
 
-        if self.merge_folds_stats:
-            # `merge` reads these alongside the live stream's statistics through one
-            # circular buffer, which is one unpack configuration and so one dtype.
-            # Widening here is exact and costs two dispatches a block against the
-            # scoring program it lets every one of the block's reads drop.
-            site_shifts = self._to_stats_dtype(site_shifts)
-            site_masses = self._to_stats_dtype(site_masses)
+        # `merge` reads these alongside the live stream's statistics through one
+        # circular buffer, which is one unpack configuration and so one dtype.
+        # Widening here is exact and costs two dispatches a block against the
+        # scoring program it lets every one of the block's reads drop.
+        site_shifts = self._to_stats_dtype(site_shifts)
+        site_masses = self._to_stats_dtype(site_masses)
 
         partials = self._mix(block_residual, exponentials)
 
         ttnn.deallocate(exponentials)
         return partials, site_shifts, site_masses
 
-    def merge(self, partial, shift, mass, prefix_sum, q, site=0, live_stats=None):
+    def merge(self, partial, shift, mass, prefix_sum, q, site=0, pending=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.
 
         Args:
@@ -825,58 +567,30 @@ class TtAttnRes(LightweightModule):
             q: `[1, 1, 1, d/tp_factor]` folded query, the one that built site
                 `site`'s partial.
             site: which read site of the batches this is.
-            live_stats: `prefix_sum`'s rank-stacked statistics against `q`, where
-                the caller already has them from `accum_stats`. Consumed. Taken
-                here otherwise.
+            pending: a write into the stream the caller has not settled yet. Scored
+                and folded as part of `prefix_sum`, and handed back summed. Borrowed.
 
         Returns:
-            `[1, 1, N, d/tp_factor]`, equal to `forward` up to rounding.
+            `[1, 1, N, d/tp_factor]` — or, where `pending` was given, that and the
+            settled stream behind it.
         """
         self._assert_shard_width(prefix_sum)
 
-        if self.merge_folds_stats:
-            if live_stats is None:
-                live_stats = self._stats_for_scores(prefix_sum, q)
-            merged = ttnn.experimental.attn_res_merge(
-                partial,
-                prefix_sum,
-                shift,
-                mass,
-                live_stats,
-                site=site,
-                num_partials=self.tp_factor,
-                inv_hidden_size=1.0 / self.hidden_size,
-                eps=self.eps,
-            )
-            ttnn.deallocate(live_stats)
-            return merged
-
-        # Only the packed path above can use them, and the caller handed over ownership.
-        if live_stats is not None:
-            ttnn.deallocate(live_stats)
-        live_scores = self._scores(prefix_sum, q)
-
-        if self.fused_merge:
-            merged = ttnn.experimental.attn_res_merge(partial, prefix_sum, shift, mass, live_scores, site=site)
-            ttnn.deallocate(live_scores)
-            return merged
-
-        partial = self._site_column(partial, site)
-        shift = self._site_column(shift, site)
-        mass = self._site_column(mass, site)
-
-        merged_shift = ttnn.maximum(shift, live_scores)
-        rescale = ttnn.exp(ttnn.sub(shift, merged_shift))
-        live_weight = ttnn.exp(ttnn.sub(live_scores, merged_shift))
-        ttnn.deallocate(live_scores)
-        ttnn.deallocate(merged_shift)
-
-        numerator = ttnn.add(ttnn.mul(partial, rescale), ttnn.mul(prefix_sum, live_weight))
-        denominator = ttnn.add(ttnn.mul(mass, rescale), live_weight)
-        ttnn.deallocate(rescale)
-        ttnn.deallocate(live_weight)
-
-        merged = ttnn.div(numerator, denominator)
-        ttnn.deallocate(numerator)
-        ttnn.deallocate(denominator)
-        return merged
+        # The live stream's statistics are taken inside this program, which is why the
+        # exchange they need is here rather than around it and why the read is one
+        # dispatch. Nothing between the statistics and the result exists as a tensor.
+        outputs = ttnn.experimental.attn_res_gather_merge(
+            partial,
+            prefix_sum,
+            shift,
+            mass,
+            q,
+            self._exchange_stats(prefix_sum.shape[-2]),
+            self._exchange_semaphore(),
+            site=site,
+            cluster_axis=self.tp_axis,
+            inv_hidden_size=1.0 / self.hidden_size,
+            eps=self.eps,
+            pending=pending,
+        )
+        return tuple(outputs) if pending is not None else outputs[0]

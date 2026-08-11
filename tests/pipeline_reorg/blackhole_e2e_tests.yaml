@@ -272,16 +272,25 @@
   model-name: kimi_k3
   # AttnRes shards the hidden axis over TP and reduces its read statistics across it, so
   # the reduction only exists at tp > 1 — a single-card SKU would run a green arm over a
-  # computation the model never executes. bh_loudbox is the smallest box carrying Galaxy's
-  # TP factor of 4. Every case is parametrized at (2,4) and (8,4); the (8,4) half skips
-  # here on chip count and is registered nowhere else — it holds the same TP factor over a
-  # wider sequence axis, which the op is indifferent to, so it adds no coverage this row
-  # does not already have. 640 rows per chip is prefill's own shape.
+  # computation the model never executes. That holds for the op as much as the module,
+  # which is why the op's own PCC gate rides this row instead of a single-card ops job.
+  # bh_loudbox is the smallest box carrying Galaxy's TP factor of 4. Every model case is
+  # parametrized at (2,4) and (8,4); the (8,4) half skips here on chip count and is
+  # registered nowhere else — it holds the same TP factor over a wider sequence axis,
+  # which the op is indifferent to, so it adds no coverage this row does not already
+  # have. 640 rows per chip is prefill's own shape.
+  # The e2e file is a timing harness, so it rides here by node id: one test, the only thing
+  # that walks all 93 layers and so the only thing that can catch a driver reading the wrong
+  # site or sealing on the wrong layer. Its siblings there are bringup-only sweeps.
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res.py -vvv --tb=short
+    pytest \
+      models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res.py \
+      models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_e2e.py::test_walk_matches_reference \
+      tests/ttnn/unit_tests/operations/ccl/test_attn_res_gather_merge.py \
+      -vvv --tb=short
   skus:
     bh_loudbox:
-      timeout: 3
+      timeout: 5
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
