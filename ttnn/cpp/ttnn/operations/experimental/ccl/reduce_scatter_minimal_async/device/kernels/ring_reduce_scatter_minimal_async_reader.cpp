@@ -16,6 +16,27 @@
 
 #ifdef DEBUG_PRINT_ENABLED
 #include "api/debug/dprint.h"
+
+// Credit audit for the Qwen3.6-27B P300X2 prefill-trace hang.
+//
+// Poll iterations to allow before calling a credit late. Each iteration is one volatile L1 load, so
+// this is on the order of 100 ms at 1.35 GHz -- far longer than a normal chunk transfer, far shorter
+// than the 30 s TT_METAL_OPERATION_TIMEOUT_SECONDS the hang trips. A healthy wait leaves the loop on
+// its first test and prints nothing.
+constexpr uint32_t RSAUDIT_WAIT_LOOPS = 20000000;
+
+// Report `sem_addr` once if it has not reached `want` within the window above. Does not consume the
+// credit and does not replace the real wait, which still runs immediately after.
+#define RSAUDIT_REPORT_IF_LATE(tag, sem_addr, want)                                                                 \
+    do {                                                                                                            \
+        volatile tt_l1_ptr uint32_t* _p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);                 \
+        const uint32_t _want = (want);                                                                              \
+        for (uint32_t _i = 0; _i < RSAUDIT_WAIT_LOOPS && *_p < _want; ++_i) {                                       \
+        }                                                                                                           \
+        if (*_p < _want) {                                                                                          \
+            DPRINT(tag " chip={} dir={} want={} have={}\n", (uint32_t)my_chip_id, (uint32_t)direction, _want, *_p); \
+        }                                                                                                           \
+    } while (0)
 #endif
 
 using address_t = uint32_t;
@@ -311,7 +332,10 @@ void kernel_main() {
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
 
-#ifdef DEBUG_PRINT_ENABLED
+// One line per kernel invocation per core. A prefill wave runs thousands of reduce-scatters across
+// 16 cores, so this alone was ~25% of the 20 GB log in tt-shield run 31427208691. Kept for local
+// runs behind RS_AUDIT_VERBOSE, matching the writer's convention; the stall reports carry the signal.
+#if defined(DEBUG_PRINT_ENABLED) && defined(RS_AUDIT_VERBOSE)
     DPRINT("RSAUDIT_START chip={} dir={}\n", (uint32_t)my_chip_id, (uint32_t)direction);
 #endif
 
@@ -421,42 +445,24 @@ void kernel_main() {
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {
                             if (chunk_count == 0) {
-                                // Credit audit for the P300X2 prefill-trace hang: log what this
-                                // reader is about to require and what the semaphore already holds,
-                                // BEFORE the wait. On a hang the last line printed per core is the
-                                // wait that never completed, so have-vs-want is visible per
-                                // direction. 0xA1 = forward credit, 0xA2 = reverse credit
-                                // (out2_ready_sem, the one CI blocks on at this line).
-                                // Print ONLY a wait that is not already satisfied. In a healthy run
-                                // the sender is several credits ahead (have > want) and every wait
-                                // passes on entry, so this stays silent. Printing every wait costs
-                                // ~800 lines per reduce-scatter, which is millions of lines over a
-                                // prefill wave; printing only the stalls costs nothing until the
-                                // stall we are hunting actually happens.
+                                // Credit audit for the P300X2 prefill-trace hang. Report a credit
+                                // that is LATE, then let the real wait run unchanged.
+                                //
+                                // "not yet satisfied on entry" is the wrong test: the first credit
+                                // of every reduce-scatter has not arrived yet, so that fires on
+                                // healthy waits. It produced a 20 GB job log in tt-shield run
+                                // 31427208691. RSAUDIT_WAIT_LOOPS gives the credit a window far
+                                // longer than a normal transfer and far shorter than the 30 s device
+                                // timeout, so only a genuine stall prints, at most once per wait.
 #ifdef DEBUG_PRINT_ENABLED
-                                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) < sem_target + 1) {
-                                    DPRINT(
-                                        "RSAUDIT_STALL1 chip={} dir={} want={} have={}\n",
-                                        (uint32_t)my_chip_id,
-                                        (uint32_t)direction,
-                                        sem_target + 1,
-                                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem));
-                                }
+                                RSAUDIT_REPORT_IF_LATE("RSAUDIT_STALL1", out_ready_sem, sem_target + 1);
 #endif
                                 noc_semaphore_wait_min(
                                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                                 ++sem_target;
                                 if (reduce_output) {
 #ifdef DEBUG_PRINT_ENABLED
-                                    if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem) <
-                                        sem2_target + 1) {
-                                        DPRINT(
-                                            "RSAUDIT_STALL2 chip={} dir={} want={} have={}\n",
-                                            (uint32_t)my_chip_id,
-                                            (uint32_t)direction,
-                                            sem2_target + 1,
-                                            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem));
-                                    }
+                                    RSAUDIT_REPORT_IF_LATE("RSAUDIT_STALL2", out2_ready_sem, sem2_target + 1);
 #endif
                                     noc_semaphore_wait_min(
                                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem),
