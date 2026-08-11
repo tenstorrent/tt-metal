@@ -239,15 +239,24 @@ def _coarse_prefill_buckets_enabled() -> bool:
 def _reveal_buckets_enabled() -> bool:
     """Whether the up-front denoise trace binds a per-request reveal-span bucket.
 
-    Default ON: captures bind the smallest power-of-two span covering the
-    request's current prefix plus one canvas, growing by release-and-recapture
-    at block boundaries when a long generation crosses its bucket. Set
-    ``DG_DENOISE_REVEAL_BUCKETS=0`` to restore the single deployment-wide span
+    Off (default): every capture binds the single deployment-wide span
     (DG_DENOISE_REVEAL_PMAX / max_model_len), where every denoise step pays the
     worst-case SDPA regardless of the live request: measured 440 ms/step at
     262144 against 205 ms/step at 4096 for the same block (P150x4, 2026-08-10).
+    On, captures bind the smallest power-of-two span covering the request's
+    current prefix plus one canvas, growing by release-and-recapture at block
+    boundaries when a long generation crosses its bucket.
+
+    NOT default-on yet: at the 256K serving geometry steady-state DRAM runs
+    ~99% allocated, and the first MID-REQUEST recapture OOMed allocating the
+    new controller's [canvas, vocab] noise buffer (134 MB against an 8 MB
+    largest free block; tt-shield run 31448367055, 2026-08-11). Flipping the
+    default needs mid-request growth to be provisioned at admission (or the
+    recapture to reserve its controller buffers the way cold-prefill reserves
+    its concat holes) and an upshift failure to cost one request, not the
+    engine.
     """
-    return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "1").strip().lower() in (
+    return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "0").strip().lower() in (
         "1",
         "true",
         "yes",
