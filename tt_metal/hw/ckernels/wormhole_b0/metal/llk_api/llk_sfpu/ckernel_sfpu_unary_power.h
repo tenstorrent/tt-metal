@@ -81,10 +81,13 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_bf16_impl_(sfpi::vFloat base, sfpi::v
         PolynomialEvaluator::eval(z - k, 1.00000012f, 0.69310534f, 0.240218654f, 0.0560058281f, 0.00968570821f);
 
     // Scale by 2**k. setexp wraps the 8-bit exponent field instead of saturating,
-    // so both ends need an explicit check.
+    // so both ends need an explicit check. Check overflow on the argument z (like
+    // the fp32 path) rather than on out_exp: k_int is 8-bit and round(128.0)
+    // wraps to -128, which would corrupt out_exp and let the check below miss the
+    // overflow exactly at the 2**128 boundary.
     sfpi::vInt out_exp = sfpi::exexp(q, sfpi::ExponentMode::Biased) + k_int;
     sfpi::vFloat y = sfpi::setexp(q, out_exp);
-    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_if(z >= 128.0f) { y = std::numeric_limits<float>::infinity(); }
     v_elseif(out_exp <= 0) { y = 0.0f; }
     v_endif;
 
@@ -302,8 +305,14 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
 template <int ITERATIONS>
 inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
+    // Convert exponent to float. The scalar exponent reaches this kernel as the
+    // fp32 bit pattern of the Python float, but the torch reference computes
+    // pow(bf16_base, scalar) with the scalar first cast to the bf16 dtype. Round
+    // to nearest bf16 so we match that reference (e.g. -3.56 -> -3.5625); a
+    // non-rounded fp32 exponent would otherwise land 2 ULP off.
+    float pow_scalar = Converter::as_float(exponent);
+    const std::uint32_t pow_bits = __builtin_bit_cast(std::uint32_t, pow_scalar);
+    pow_scalar = __builtin_bit_cast(float, (pow_bits + 0x4000u) & 0xFFFF0000u);
     const sfpi::vFloat pow = pow_scalar;
 
     if (pow_scalar >= 0.0f) {

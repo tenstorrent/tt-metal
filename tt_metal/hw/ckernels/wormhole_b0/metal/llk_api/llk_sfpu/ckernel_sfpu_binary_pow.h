@@ -78,10 +78,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_bf16_(sfpi::vFloat base, sfpi::vFloa
         PolynomialEvaluator::eval(z - k, 1.00000012f, 0.69310534f, 0.240218654f, 0.0560058281f, 0.00968570821f);
 
     // Scale by 2**k. setexp wraps the 8-bit exponent field instead of saturating,
-    // so both ends need an explicit check.
+    // so both ends need an explicit check. Check overflow on the argument z (like
+    // the fp32 path) rather than on out_exp: k_int is 8-bit and round(128.0)
+    // wraps to -128, which would corrupt out_exp and let the check below miss the
+    // overflow exactly at the 2**128 boundary.
     sfpi::vInt out_exp = sfpi::exexp(q, sfpi::ExponentMode::Biased) + k_int;
     sfpi::vFloat y = sfpi::setexp(q, out_exp);
-    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_if(z >= 128.0f) { y = std::numeric_limits<float>::infinity(); }
     v_elseif(out_exp <= 0) { y = 0.0f; }
     v_endif;
 
