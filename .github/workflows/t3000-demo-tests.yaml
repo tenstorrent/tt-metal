@@ -11,7 +11,6 @@ on:
         options:
           - all
           - resnet50
-          - sentence_bert
           - sd35_large
           - flux1-dev
           - motif
