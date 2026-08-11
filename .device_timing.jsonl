@@ -125,3 +125,4 @@
 {"source":"run_safe_pytest","pid":3942867,"started_at_ms":1786489263744,"wait_ms":2,"run_ms":49932,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":20}
 {"source":"tt-probe","pid":3944320,"started_at_ms":1786489399548,"wait_ms":154,"run_ms":48907,"test_path":"rms_norm","exit_code":0}
 {"source":"run_safe_pytest","pid":3944866,"started_at_ms":1786489464771,"wait_ms":2,"run_ms":24547,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":19}
+{"source":"run_safe_pytest","pid":3946960,"started_at_ms":1786489600776,"wait_ms":2,"run_ms":89115,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":54}

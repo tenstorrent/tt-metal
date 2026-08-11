@@ -210,3 +210,74 @@
   structurally** on the program descriptor. That last one matters: an accessor read of a core's own
   shard returns the same bytes, so no numerical test can tell "sharding implemented" from "sharding
   tolerated" — only the descriptor can.
+
+## Refinement 2b — HEIGHT_SHARDED wide-`W`: chunk the hidden axis inside a core
+- Date: 2026-08-11
+- **What was done**: added **one block factor**, `w_chunk_tiles` (WC), the block extent along
+  `hidden` of every buffer that only *streams* over that axis (`cb_gamma_tiles`, `cb_normed`,
+  `cb_output_tiles`, `cb_output_rm`, `cb_input_rm`). It is a single compile-time arg
+  (`CB_CHUNK_TILES`) in all three kernels, from which `NUM_CHUNKS = ceil(C / WC)` is derived; at its
+  default `WC == C` every loop it introduces runs exactly once, so the interleaved and
+  already-fitting sharded schedules are unchanged. `cb_input_tiles` is deliberately **not** chunked:
+  the block stays whole-resident, which is what makes this a nearly free regime R3 — R3's fatal cost
+  in the traffic ranking is a second whole-tensor read for the apply pass, and a resident shard is
+  already in L1, so that read does not exist.
+  - The residency solve turns the knob only as a last resort and takes the **coarsest** chunk that
+    fits: the depth ladder runs first at `WC == C` (so nothing that fits today changes), then WC
+    walks down from `C - 1`. Gated by `_chunking_supported()` on a resident shard with a *uniform*
+    per-core hidden geometry (the chunk count sets `cb_stat_sq`'s column stride and every chunked
+    CB's push/pop quantum, which must divide a capacity shared group-wide) and on input and output
+    being both pinned or both staged.
+  - **Per-chunk statistics without an L1 accumulator**: each chunk's partial `Σ x²` packs into its
+    OWN `cb_stat_sq` column, and `reduce_stat_block` — which already folds a tile-row's `nc` columns
+    (the ragged-tail column proved the pattern) — sums them for free. `eltwise_chain` forbids
+    `L1Accumulation` together with `DestAccumulation` (`eltwise_chain.inl:1034`), so the DEST
+    accumulation that `sumsq_block` is built on is preserved rather than traded away.
+  - **Two block layouts, one decoder**: a ROW_MAJOR block is chunk-major (`tilize<WC>` emits chunks
+    back to back), a TILE block (interleaved or pinned shard) stays row-major at stride `C`.
+    `in_ref(g, rows)` in the compute kernel is the only place that knows which, and the two coincide
+    at `NUM_CHUNKS == 1`.
+  - **Pinned output**: with the output shard pinned, the apply packs at a strided offset under a
+    caller-managed reserve/push (the shard's layout is not the compute order), which also costs the
+    CB arena nothing. The writer is untouched on that leg.
+  - Gamma is re-fed per chunk from inside the block loop when chunked (`W` bytes per block, on
+    geometries whose whole slice would not fit at all); the `cb_gamma_rm → cb_input_rm` alias is
+    disabled there, since the two lifetimes then interleave instead of being disjoint.
+- **Accuracy achieved**: PCC ≥ 0.99987 on every recovered cell — `(1,1,32,4064)` 0.999996 /
+  `(1,1,96,6144)` 1.000000 / `(1,1,992,3000)` 0.999924 / `(3,1,736,5119)` 0.999866 /
+  `(1,1,32,4095)` 0.999998 / `(100,5120)` 0.999995 / `(3104,4064)` 0.999894 (TILE and ROW_MAJOR),
+  and `(1,224,11008)` / `(1,1,160,11008)` ROW_MAJOR 1.000000 / 0.999963. Chunking with a real
+  cross-core combine (pinned `[32,8192]` WIDTH shard on 2 cores, and the BLOCK equivalent) is
+  PCC 1.000000.
+- **Golden test progress**: HEIGHT loose slice **91/93** (was 81/93 — 10 of the 12 named failures
+  recovered); cartesian `1x1x32x4096` HEIGHT column **39/39**, including all 19 fp32-activation /
+  fp32-gamma cells that previously refused; WIDTH+BLOCK loose 187/188 and INTERLEAVED loose 103/103
+  unchanged. Interleaved device-kernel perf re-measured on all 8 perf shapes: within ±2 % of the
+  recorded numbers (8192×7168 594 707 ns vs 597 240 ns), i.e. the strided apply costs nothing.
+- **Issues encountered**:
+  1. `eltwise_chain` rejects `L1Accumulation` + `DestAccumulation` in one chain, which ruled out the
+     obvious "accumulate each chunk into one stat tile" shape — resolved by the per-chunk stat column
+     above, which is cheaper anyway (one reduce per block, not per chunk).
+  2. The CB wrap rule (`dataflow_api.h:216-221`) makes a ragged chunk illegal for a depth-limited
+     streaming CB, so the chunk quantum is uniform `WC` and the block width the chunked buffers span
+     is `ceil(C/WC)·WC` — the same pad convention the ragged hidden split already carries. The one
+     place a uniform chunk would overrun is a *strided* pack into a row-major-`C` pinned shard, where
+     the last chunk is clamped to `C - k·WC` instead.
+  3. Two `W = 11008` **TILE** cells still fail, now with an explicit byte accounting and for a
+     different reason than chunking addresses: the input and output shards take 1 409 024 B of the
+     1 441 792 B budget, leaving 32 768 B against a **fixed** 26 624 B statistics pipeline and a
+     chunked working set that bottoms out near 182 KiB (`26 624 + 4096·(⌈344/WC⌉ + WC)`, optimum
+     `WC ≈ 19`). No chunk size closes a 5.5× gap. The lever that would is collapsing the degenerate
+     `G == 1` combine — at `w_group_size = 1` the gather is a self-write and the multicast a local
+     copy, so four of those seven fp32 buffers are copies of one another — which is a combine-topology
+     change on the much-travelled interleaved R1 path, not a chunking one. Recorded as a finding.
+  4. Known bound, no cell needs it today: on the ROW_MAJOR legs `cb_input_tiles` stays `O(R·C)`, so a
+     ROW_MAJOR shard whose tilized block alone overruns L1 is still out of reach. The true two-pass R3
+     (re-stride each chunk from the resident shard once per pass) would make it `O(WC)` at the cost of
+     the block residency.
+- **Tests added**: `test_rms_norm_sharded.py` grows to 39 cases —
+  `test_rms_norm_height_shard_wide_w` (3 wide shapes × TILE/ROW_MAJOR: both layouts are covered
+  because they chunk *different* buffers) and `test_rms_norm_hidden_chunking_is_a_live_knob`, a
+  structural check that a narrow geometry keeps the single-chunk schedule while a wide HEIGHT shard
+  comes back with a strictly smaller chunk — invisible to any numerical check, exactly like the
+  zero-copy assertion next to it.

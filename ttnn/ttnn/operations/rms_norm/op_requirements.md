@@ -179,7 +179,7 @@ pattern 3, same producer and consumer, guarded on equal page formats). **Deferre
 remaining failure — 12 loose + 16 cartesian in the slices run — is the *same* capacity limit, not a
 correctness gap. See Refinement 2b.
 
-### [ ] Refinement 2b — HEIGHT_SHARDED wide-`W`: chunk the hidden axis inside a core
+### [x] Refinement 2b — HEIGHT_SHARDED wide-`W`: chunk the hidden axis inside a core
 
 **Goal**: close the one class Refinement 2 left failing. `HEIGHT_SHARDED` cuts the **independent**
 `row` axis, so `w_group_size == 1` by construction and `core_w_tiles == tensor_w_tiles` — the caller
@@ -212,6 +212,47 @@ chunk too — at `C = 344` it is 688 KiB on its own, which is most of the overru
 **Done when**: the `HEIGHT_SHARDED` cells above pass (or, where even a one-tile chunk cannot fit,
 fail for a *different*, documented reason), no currently-passing cell regresses, and
 `test_rms_norm_sharded.py` gains a wide-`W` HEIGHT case per layout.
+
+**Outcome**: landed as **one new block factor**, `w_chunk_tiles` (WC), threaded as a single
+compile-time arg (`CB_CHUNK_TILES`) into all three kernels and defaulted to `C` — at which every
+loop it introduces runs exactly once, so the interleaved and already-fitting sharded schedules are
+byte-identical (measured: the 8 interleaved perf shapes are within ±2 % of their recorded numbers,
+prefill slightly *faster*: 8192×7168 594 707 ns vs 597 240 ns recorded). WC sizes only the buffers
+that **stream** over `hidden` (`cb_gamma_tiles`, `cb_normed`, `cb_output_*`, `cb_input_rm`); the
+block itself stays whole-resident in `cb_input_tiles`, so R3's headline cost — a second whole-tensor
+read for the apply pass — is **not** paid: the shard is already in L1 and is never re-fetched. Three
+structural pieces the scheme needed: (1) each chunk's partial `Σ x²` packs into its **own**
+`cb_stat_sq` column, because `reduce_stat_block` already sums a tile-row's columns (the tail column
+proved the pattern) — `eltwise_chain` forbids `L1Accumulation` together with `DestAccumulation`
+(`eltwise_chain.inl:1034`), so an L1 read-modify-write accumulator was not an option and this costs
+nothing extra; (2) a ROW_MAJOR block becomes **chunk-major** (`tilize<WC>` emits chunks back to
+back) while a TILE block stays row-major-`C`, so one `in_ref(g, rows)` helper is the only place that
+knows the layout; (3) with a **pinned** output shard the apply packs at a strided offset under a
+caller-managed reserve/push, since the shard's layout is not the compute order. The residency solve
+takes the **coarsest** WC that fits, only after the depth ladder has failed at WC == C, and only on
+a resident shard whose per-core hidden geometry is uniform (`_chunking_supported`).
+**Measured**: 10 of the 12 named loose `HEIGHT_SHARDED` failures now pass — `W ∈ {3000, 4064, 4095,
+5119, 5120, 6144}` in both layouts and `11008` in ROW_MAJOR — at PCC ≥ 0.99987; the golden HEIGHT
+loose slice is 91/93 (was 81/93), the cartesian `1x1x32x4096` HEIGHT column is 39/39 including all
+19 fp32-activation / fp32-gamma cells (was 16 failing), WIDTH+BLOCK 187/188 and INTERLEAVED loose
+103/103 unchanged. Chunking was also verified against a real cross-core combine (a pinned
+`[32, 8192]` WIDTH shard on 2 cores and the BLOCK equivalent, PCC 1.000000), so it is not
+HEIGHT-only.
+**What is left, and why it is not a follow-up**: the two `W = 11008` **TILE** cells
+(`1x1x160x11008`, `1x224x11008`) still fail, now with an explicit byte accounting instead of a
+generic refusal — and for a *different* reason than chunking addresses. Their `32 × 11008` bf16
+input and output shards occupy 1 409 024 B of the 1 441 792 B budget, leaving 32 768 B, while the
+per-core **fixed** statistics pipeline alone (scaler, zero tile, `cb_stat_partial`, `_gather`,
+`_sum`, `cb_rstd_send`, `cb_rstd`) is 26 624 B and the chunked working set bottoms out near
+`26 624 + 4096·(⌈344/WC⌉ + WC) ≈ 182 KiB` at its optimum `WC ≈ 19`. No chunk size closes a 5.5×
+gap: the lever that would is collapsing the **degenerate `G == 1` combine** (at `w_group_size = 1`
+the gather is a self-write and the multicast a local copy, so four of those seven fp32 buffers are
+copies of each other), which is a combine-topology change, not a chunking one, and it touches the
+much-travelled interleaved R1 path. Left as a recorded finding. One further known bound, also not a
+regression: on the ROW_MAJOR legs `cb_input_tiles` stays `O(R·C)` (the tilized block), so a
+ROW_MAJOR shard wider than that CB alone cannot be rescued by chunking either — the true two-pass
+R3 (re-stride each chunk from the resident shard twice, once per pass) would make it `O(WC)` at the
+cost of the block residency, and no golden cell needs it today.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged wide interleaved decode profile
 
