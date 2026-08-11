@@ -27,8 +27,7 @@ turned out to be the **golden** or the **kernel's own documented range**.
 **Revision 6 — 2026-08-07. Phase 2 done.**
 Phase 2 is now **done** on `ldjurovic/sfpu_edge_cases_2` — see §4. Phase 3 and Phase 4 are
 still open, but §5 and §7 have been corrected against what building Phase 2 established;
-the corrections are marked inline. Sequencing for the current PR is in
-[SFPU_EDGE_CASE_PR2_PLAN.md](SFPU_EDGE_CASE_PR2_PLAN.md) §3.
+the corrections are marked inline.
 
 **Revision 5 — 2026-08-05.**
 The two completed phases have been removed from here — see
