@@ -35,6 +35,7 @@ class MinimalMatmulStridedReduceScatterTestConfig:
     layout: object = None  # ttnn.Layout, set in __post_init__
     input_dtype: object = None  # ttnn.DataType, set in __post_init__
     num_workers_per_link: object = None  # Optional[int]
+    mm_window_blocks: object = None  # Optional[int]: rolling L1 window over the MM output, in M blocks
 
     def __post_init__(self):
         if self.layout is None:
@@ -82,6 +83,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     allowed_pcc=0.99,
     addcmul_scalar=None,
     broadcast_gate=True,
+    check_correctness=True,
+    mm_window_blocks=None,
 ):
     torch.manual_seed(0)
 
@@ -102,6 +105,39 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
     # RS needs 3 semaphores per iteration
+    # Caller-owned MM->RS progress counter array, the same thing CCLManager hands the model
+    # (see CCLManager.get_mm_progress_counters_buffer). Passing it exercises the shared-array path;
+    # leaving it None makes each compiled program allocate its own, which permanently lowers the
+    # device's L1 floor. One uint32 slot per matmul core, one row per core, L1 HEIGHT_SHARDED so
+    # every RS worker core sees its row at the same local address.
+    _counter_slots = compute_grid_size.x * compute_grid_size.y
+    mm_progress_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
+    # Caller-owned RS->MM window credit array, the CCLManager counterpart of the progress array
+    # above (see CCLManager.get_mm_credit_counters_buffer). One uint32 slot per RS reader, one row
+    # per matmul core; only consumed when mm_window_blocks is set.
+    mm_credit_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
 
@@ -160,22 +196,23 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
         # Golden: per-device MM outputs (each device has different weights)
-        torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
-        mm_outputs = []
-        for d in range(num_devices):
-            mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
-            mm_outputs.append(mm_out_d)
-        torch_mm_output_per_device_list.append(mm_outputs)
+        if check_correctness:
+            torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
+            mm_outputs = []
+            for d in range(num_devices):
+                mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
+                mm_outputs.append(mm_out_d)
+            torch_mm_output_per_device_list.append(mm_outputs)
 
-        # Golden: RS reduce (sum across devices) then scatter
-        torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
-        torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
-        if addcmul_scalar is not None:
-            torch_rs_scattered = tuple(
-                torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
-                for chunk in torch_rs_scattered
-            )
-        torch_rs_output_list.append(torch_rs_scattered)
+            # Golden: RS reduce (sum across devices) then scatter
+            torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
+            torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
+            if addcmul_scalar is not None:
+                torch_rs_scattered = tuple(
+                    torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
+                    for chunk in torch_rs_scattered
+                )
+            torch_rs_output_list.append(torch_rs_scattered)
 
         # Create device tensors
         # Input: replicated (same on all devices)
@@ -258,6 +295,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 fused_ternary_scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=mm_window_blocks,
+                mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters,
             )
             return tt_mm_out, tt_rs_out
         else:
@@ -345,6 +385,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     ##### Verify results #####
+    if not check_correctness:
+        logger.info("Skipping correctness check (perf/sweep mode)")
+        return
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
     concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
@@ -365,7 +408,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         )
         mm_goldens = torch_mm_output_per_device_list[golden_idx]
 
-        for device_id in range(num_devices):
+        # With a rolling window the MM output tensor holds only the last mm_window_blocks M blocks
+        # per core, not the full [M, N] result, so there is nothing to compare it against. The RS
+        # output below is the real correctness signal — it is only right if every windowed block was
+        # produced and consumed correctly.
+        for device_id in range(0 if mm_window_blocks is None else num_devices, num_devices):
             tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
             eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
             logger.info(f"MM output device {device_id}, iter {i}: {output}")
