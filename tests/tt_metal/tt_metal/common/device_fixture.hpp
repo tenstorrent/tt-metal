@@ -122,11 +122,15 @@ protected:
 
     virtual size_t num_command_queues() const { return 1; }
 
-    void create_devices() {
+    virtual void create_devices() {
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
             ids.push_back(id);
         }
+        create_devices(ids);
+    }
+
+    void create_devices(const std::vector<ChipId>& ids) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
@@ -164,6 +168,29 @@ protected:
 };
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
+
+// Single unit-mesh fixture: always owns exactly one MeshDevice and exposes
+// RunProgram / FinishCommands overloads that do not take a device arg.
+class UnitMeshFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *device_; }
+
+    void RunProgram(Program program, bool skip_finish = false) {
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)), std::move(program));
+        MeshDispatchFixture::RunProgram(device_, workload, skip_finish);
+    }
+    void FinishCommands() { MeshDispatchFixture::FinishCommands(device_); }
+
+private:
+    void create_devices() override {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
+        device_ = devices_.front();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> device_;
+};
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:

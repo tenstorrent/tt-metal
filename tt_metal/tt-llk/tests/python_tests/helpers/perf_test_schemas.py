@@ -4,11 +4,10 @@
 
 """Per-perf-test CSV schema catalog.
 
-One entry per perf test: the deliberate, reviewed set of CSV columns that test
-emits, plus a ``version`` bumped whenever those columns change, and an
-``aliases`` map (old_column -> new_column) that bridges a renamed column FOR
-THAT TEST only. The gate in test_perf_csv_header_gate.py re-derives each test's
-live columns and fails, per test, on any drift from this catalog.
+One entry per perf test: its reviewed set of CSV columns, a ``version`` bumped
+when those columns change, and an ``aliases`` map (old -> new) for a column
+renamed in that test. The gate in test_perf_csv_header_gate.py re-derives each
+test's columns and fails on any drift from this catalog.
 """
 
 
@@ -385,6 +384,7 @@ PERF_TEST_SCHEMAS = {
         "version": 2,
         "columns": [
             "approx_mode",
+            "binop_mathop",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -395,7 +395,6 @@ PERF_TEST_SCHEMAS = {
             "iterations",
             "loop_factor",
             "marker",
-            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
@@ -405,7 +404,9 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
             "value_bits",
         ],
-        "aliases": {},
+        "aliases": {
+            "mathop": "binop_mathop",
+        },
     },
     "perf_sfpu_comp": {
         "version": 2,
@@ -541,17 +542,20 @@ PERF_TEST_SCHEMAS = {
             "iterations",
             "loop_factor",
             "marker",
-            "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "ternary_mathop",
+            "ternary_scalar_bits",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
-            "value_bits",
         ],
-        "aliases": {},
+        "aliases": {
+            "mathop": "ternary_mathop",
+            "value_bits": "ternary_scalar_bits",
+        },
     },
     "perf_unpack_a_bcast_eltwise": {
         "version": 2,
@@ -684,6 +688,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
+            "input_num_tiles_in_block",
             "input_tile_cnt",
             "loop_factor",
             "marker",
@@ -695,6 +700,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_B",
             "num_tiles_in_block",
             "output_num_blocks",
+            "output_num_tiles_in_block",
             "output_tile_cnt",
             "reuse_dest_type",
             "unpack_to_dest",
@@ -776,6 +782,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
+            "input_num_tiles_in_block",
             "loop_factor",
             "marker",
             "num_blocks",
@@ -784,6 +791,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_B",
             "num_tiles_in_block",
             "output_num_blocks",
+            "output_num_tiles_in_block",
             "relu_config",
             "tile_cnt",
             "unpack_to_dest",
@@ -881,7 +889,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_transpose_dest_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -896,12 +904,22 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_math",
             "implied_math_format",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
             "loop_factor",
             "marker",
             "math_transpose_faces",
+            "num_blocks",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
             "tile_cnt",
             "unpack_to_dest",
             "unpacker_engine_sel",
@@ -924,6 +942,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_math",
             "implied_math_format",
             "input_num_blocks",
+            "input_num_tiles_in_block",
             "loop_factor",
             "marker",
             "num_blocks",
@@ -936,6 +955,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_r_dim_B",
             "num_tiles_in_block",
             "output_num_blocks",
+            "output_num_tiles_in_block",
             "tile_cnt",
             "unpack_to_dest",
             "unpacker_engine_sel",
@@ -943,7 +963,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_unpack_reduce_col_tilizeA_strided_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -963,6 +983,10 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
             "pool_type",
             "tile_cnt",
             "unpack_to_dest",

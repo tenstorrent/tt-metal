@@ -119,7 +119,7 @@ jobs:
       #   if: ${{ failure() && steps.t3k-ttnn-multiprocess-tests.outcome == 'failure' }}
       #   with:
       #     slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-      #     owner: UBHPP2NDP #Joseph Chu
+      #     owner: U07D5N7QL4U #Joseph Chu
 
       - name: Run t3k ttnn ccl tests
         id: t3k-ttnn-ccl-tests

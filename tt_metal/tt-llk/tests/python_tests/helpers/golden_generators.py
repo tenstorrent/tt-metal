@@ -19,6 +19,7 @@ from helpers.llk_params import (
     PackerReluType,
     ReduceDimension,
     ReducePool,
+    SdpaOp,
     TopKSortDirection,
     format_dict,
     pack_relu_config,
@@ -2272,6 +2273,11 @@ class UnarySFPUGolden:
         self._int_shift_amount = 3
         self._int_maxmin_scalar = 1000
         self.data_format = None
+        # Precision the SFPU actually evaluates at, which is Dest's and not the output
+        # format's. The per-element ops below read this rather than data_format: no
+        # output format can restore precision the value has already lost, and none can
+        # take away precision Dest still holds.
+        self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
     def __call__(
@@ -2289,6 +2295,7 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
     ):
         self.data_format = data_format
+        self.dst_format = data_format
         self.dest_acc = dest_acc
 
         if operation not in self.ops:
@@ -2305,13 +2312,12 @@ class UnarySFPUGolden:
         ):
             return self._call_integer(operation, operand1, input_format, dimensions)
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp2_b:
-            operand1 = _bfp2b_to_float16b(operand1)
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
-        if input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        # Quantize input to match what hardware actually sees after unpack from L1.
+        # Matters most for discontinuous ops (floor/ceil/trunc/frac), where a sub-ULP
+        # quantization step across an integer becomes a full 1.0 error.
+        operand1 = quantize_input_to_unpack_format(
+            operand1, input_format, all_mx_formats=True
+        )
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
@@ -2327,6 +2333,8 @@ class UnarySFPUGolden:
             dst_format = DataFormat.Float16
         else:
             dst_format = DataFormat.Float16_b
+
+        self.dst_format = dst_format
 
         if self.dest_acc == DestAccumulation.No and input_format == DataFormat.Float32:
             # dst in 16-bit mode and 32-bit input: truncation may occur when unpacked to dst
@@ -2666,7 +2674,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
@@ -2674,7 +2682,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.silu(input_tensor).item()
 
@@ -2696,7 +2704,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softshrink(input_tensor, lambd=lambd).item()
 
@@ -2705,7 +2713,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softsign(input_tensor).item()
 
@@ -2737,7 +2745,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
@@ -2745,7 +2753,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(input_tensor).item()
 
@@ -2753,7 +2761,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp2(input_tensor).item()
 
@@ -2764,7 +2772,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(0.5 * input_tensor).item()
 
@@ -2814,7 +2822,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
 
@@ -2824,7 +2832,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
@@ -2840,7 +2848,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return input_tensor.fill_(const_value).item()
 
@@ -2848,7 +2856,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.hardsigmoid(input_tensor).item()
 
@@ -2856,7 +2864,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.sigmoid(input_tensor).item()
 
@@ -2864,7 +2872,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
@@ -2872,7 +2880,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
 
@@ -2880,7 +2888,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
@@ -2888,7 +2896,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.leaky_relu(
             input_tensor, negative_slope=negative_slope
@@ -4558,6 +4566,147 @@ class TopKGolden:
 
 
 @register_golden
+class SdpaSfpuGolden:
+    # Columns the kernel writes to.
+    TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)
+
+    def __call__(
+        self,
+        input_2d,
+        op,
+        exp_scale: float = 1.0,
+        softplus_beta: float = 1.0,
+        softplus_threshold: float = 20.0,
+    ):
+        x = input_2d.to(torch.float32).clone()
+        out = x.clone()
+
+        if op == SdpaOp.RecipLegacy:
+            transformed = torch.reciprocal(x.abs())
+        elif op == SdpaOp.RecipIter:
+            transformed = torch.reciprocal(x)
+        elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
+            # Both fold the scale, so the reference is exp(scale * x).
+            transformed = torch.exp(exp_scale * x)
+        elif op == SdpaOp.Softplus:
+            transformed = torch.nn.functional.softplus(
+                x, beta=softplus_beta, threshold=softplus_threshold
+            )
+        else:
+            raise ValueError(f"SdpaSfpuGolden: unhandled op {op}")
+
+        cols = torch.tensor(self.TRANSFORMED_COLS, dtype=torch.long)
+        out[:, cols] = transformed[:, cols]
+        return out
+
+
+@register_golden
+class SdpaCorrectionGolden:
+    """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
+
+    def __call__(self, tiles, scale: float):
+        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+            t.to(torch.float32) for t in tiles
+        )
+
+        cur_max = torch.maximum(prev_max, worker_max)
+        exp_prev = torch.exp(scale * (prev_max - cur_max))
+        exp_worker = torch.exp(scale * (worker_max - cur_max))
+        corrected_worker_sum = exp_worker * worker_sum
+        corrected_prev_sum = exp_prev * prev_sum
+
+        computed = [
+            exp_prev,
+            exp_worker,
+            cur_max,
+            corrected_worker_sum + corrected_prev_sum,
+            corrected_worker_sum,
+        ]
+
+        cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
+        seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        out = []
+        for seed, value in zip(seeds, computed):
+            tile = seed.clone()
+            tile[:, cols] = value[:, cols]
+            out.append(tile)
+        return out
+
+
+@register_golden
+class GeneralizedMoeGateGolden:
+    """Golden generator for the generalized_moe_gate LLK.
+
+    The gate ranks experts by the score+bias sort key but emits the unbiased payload score of the
+    winners, normalized over the kept ranks and scaled. Grouped keeps the four column-pair groups
+    {2g, 2g+1} with the largest top-2 key sum, takes the top 8 of their 128 members, and pins topk
+    to 8 with linear output.
+
+    Args:
+        keys, payload, ids: [16, 16] DEST faces of the sort key, the emitted score and the id.
+        topk: how many ranks survive; ranks beyond it emit weight 0 and id 0.
+        eps: added to the normalization sum before the reciprocal. scale multiplies the reciprocal.
+    Returns:
+        float tensor [2, 8], the weight and id per rank, descending by key. One tensor, as the
+        golden cache requires.
+    """
+
+    def __call__(
+        self,
+        keys,
+        payload,
+        ids,
+        topk=8,
+        output_softmax=False,
+        eps=0.0,
+        scale=1.0,
+        grouped=False,
+    ):
+        keys = keys.reshape(-1).to(torch.float32)
+        payload = payload.reshape(-1).to(torch.float32)
+        ids = ids.reshape(-1).to(torch.float32)
+
+        candidates = torch.arange(keys.numel())
+        if grouped:
+            groups = candidates.reshape(16, 16).t().reshape(8, 32)
+            top2 = keys[groups].sort(dim=-1, descending=True).values[:, :2].sum(dim=-1)
+            candidates = groups[top2.argsort(descending=True)[:4]].reshape(-1)
+            topk, output_softmax = 8, False
+
+        order = candidates[keys[candidates].argsort(descending=True)[:8]]
+        weights = payload[order]
+        if output_softmax:
+            # The kernel subtracts rank 0's payload before the exp, not the largest payload.
+            # Softmax is shift invariant so the normalized result is the same either way.
+            weights = torch.exp(weights - weights[0])
+        weights[topk:] = 0.0
+
+        weights = weights * (scale / (weights[:topk].sum() + eps))
+        selected_ids = ids[order]
+        selected_ids[topk:] = 0.0
+        return torch.stack([weights, selected_ids])
+
+
+@register_golden
+class TopKXLGolden:
+    """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
+
+    TopK-XL takes row-major values and returns row-major indices, so the golden
+    is a plain per-row torch.topk.
+
+    Args:
+        rows: float tensor [num_rows, search_len] of the per-row values.
+        K: number of top elements per row.
+    Returns:
+        indices: sorted int64 tensor [num_rows, K] of the top-K row-major positions.
+    """
+
+    def __call__(self, rows, K):
+        _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
+        return indices
+
+
+@register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
         # Element-wise select matching the C++ sfpu_ternary_function:
@@ -4669,3 +4818,207 @@ class ScalarBinopGolden:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
         return result.to(format_dict[data_format]).flatten()
+
+
+def truncate_to_bfloat16(values: torch.Tensor) -> torch.Tensor:
+    """SFPSTORE into a 16-bit Dest truncates rather than rounds.
+
+    Clearing the low 16 bits of the IEEE-754 pattern drops mantissa bits without
+    touching sign or exponent, i.e. moves toward zero for either sign.
+    """
+    return (
+        (values.to(torch.float32).contiguous().view(torch.int32) & ~0xFFFF)
+        .view(torch.float32)
+        .clone()
+    )
+
+
+def round_to_dest_width(
+    values: torch.Tensor, dest_acc: DestAccumulation
+) -> torch.Tensor:
+    """A value as it sits in Dest, at the width dest_acc selects."""
+    if dest_acc == DestAccumulation.Yes:
+        return values.to(torch.float32)
+    return values.to(torch.bfloat16).to(torch.float32)
+
+
+@register_golden
+class SoftmaxKGolden:
+    """Golden for the softmax_k SFPU entry (experimental/ckernel_sfpu_softmax_k.h).
+
+    Per-row softmax over the 16 columns of face 0's first row band, with the row
+    maximum supplied by the caller instead of being reduced on the fly:
+
+        out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
+        out[r][c] = 0                                                        c >= k
+
+    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
+    code from |even-column value| before subtracting the max and only re-enables all
+    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
+    reciprocal. Rows outside the processed band come back untouched.
+
+    The kernel round-trips through Dest three times -- x - max, exp(), and the
+    normalized result -- so the golden quantizes at each of those stores to the width
+    dest_acc selects. Plain SFPSTORE truncates; only the exp kernels round, via the
+    SFP_STOCH_RND(RND_EVEN, FP32_TO_FP16B) they do before their own store.
+    """
+
+    def __call__(self, input_tile, logits, k, dest_acc, rows=4, face_dim=16):
+        golden = input_tile.to(torch.float32).clone()
+
+        def stored(values):
+            """A plain SFPSTORE: truncating on a 16-bit Dest, exact on a 32-bit one."""
+            if dest_acc == DestAccumulation.Yes:
+                return values.to(torch.float32)
+            return truncate_to_bfloat16(values)
+
+        for row in range(rows):
+            shifted = stored(logits[row] - logits[row].max())
+            exponentials = round_to_dest_width(torch.exp(shifted), dest_acc)
+            golden[row, :k] = stored(exponentials / exponentials.sum())
+            golden[row, k:face_dim] = 0.0
+        return golden
+
+
+@register_golden
+class MoeGateTopkGolden:
+    """Golden for the generic MoE-gate top-k SFPU entry
+    (experimental/ckernel_sfpu_generic_moe_gate_topk.h).
+
+    The kernel sorts on the *biased* keys but carries the raw score as the payload, so
+    the winners are chosen by `sort_keys` and the expected scores are looked up from
+    `scores` by the winning id. That split is the whole point: reporting the key instead
+    of the score, or pairing a score with the wrong id, both show up here.
+
+    With normalize the kernel divides each winner score by the sum of the winners' raw
+    scores (plus eps) and multiplies by scale; without it the scores pass through.
+
+    Returns (winner_ids, expected_scores) where winner_ids is in descending-key order
+    and expected_scores[i] corresponds to winner_ids[i]. Callers that only know the
+    winners as an unordered set should reorder via `scores_for_ids`.
+    """
+
+    def __call__(
+        self,
+        sort_keys,
+        scores,
+        num_winners: int,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        winner_ids = torch.argsort(sort_keys, descending=True)[:num_winners].tolist()
+        return winner_ids, self.scores_for_ids(
+            winner_ids, winner_ids, scores, normalize, eps, scale
+        )
+
+    def scores_for_ids(
+        self,
+        ids,
+        winner_ids,
+        scores,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        """Expected scores for `ids`, normalized over the `winner_ids` set.
+
+        The normalization denominator is fixed by the winner set, not by `ids`, so a
+        caller can ask for the scores in the order the device returned them while
+        still dividing by the same total.
+        """
+        factor = 1.0
+        if normalize:
+            total = scores[winner_ids].to(torch.float32).sum()
+            factor = scale / (total + eps)
+        return torch.tensor(
+            [scores[i].item() * factor for i in ids], dtype=torch.float32
+        )
+
+
+@register_golden
+class SdpaExpUnclampedGolden:
+    """Golden for the upper-unclamped exp helpers
+    (experimental/ckernel_sfpu_sdpa_exp_unclamped.h).
+
+    The kernel is the accurate 21f exp with the upper input clamp removed, so across
+    the domain its caller uses -- val <= 0, and anywhere well below the clamp point
+    at val ~= 88.7 -- it is just exp(val * scale). The scale arrives as a *bfloat16*
+    bit pattern, which is what sfpi::sFloat16b() consumes, not an fp32 one.
+
+    The kernel static_asserts !is_fp32_dest_acc_en and then does
+    `convert<vFloat16b>(y, NearestEven)` unconditionally before the store, so the value
+    that reaches Dest is always bf16 regardless of the pack format -- hence the
+    round_to_dest_width(DestAccumulation.No) below. The pack format only decides
+    whether that value is converted a second time (a no-op) on the way to L1.
+    """
+
+    def __call__(self, operand, scale_bits: int, data_format: DataFormat):
+        scale = (
+            torch.tensor([scale_bits << 16], dtype=torch.int32)
+            .view(torch.float32)
+            .item()
+        )
+        result = torch.exp(operand.flatten().to(torch.float32) * scale)
+        return round_to_dest_width(result, DestAccumulation.No).to(
+            format_dict[data_format]
+        )
+
+
+@register_golden
+class SamplingGolden:
+    """Golden for the sampling SFPU helpers
+    (experimental/llk_sfpu/ckernel_sfpu_sampling.h).
+
+    Element-wise reference per op, followed by the store each one actually performs.
+    SFPSTORE into a 16-bit Dest truncates, and only recip_scalar compensates for that
+    (convert<vFloat16b>(Nearest), and only when !(DST_ACCUM_MODE || APPROX)); with a
+    32-bit Dest nothing rounds at all. Callers pass the scalar operand as a raw fp32
+    bit pattern so it decodes exactly the way Converter::as_float does on device.
+    """
+
+    # The only helper that converts before storing, so the only one that rounds
+    # rather than truncates on a 16-bit Dest.
+    ROUND_TO_NEAREST_OPS = {"recip_scalar"}
+
+    def __call__(
+        self,
+        op: str,
+        operand_a,
+        operand_b,
+        scalar_bits: int,
+        dest_acc: DestAccumulation,
+    ):
+        scalar = struct.unpack("<f", struct.pack("<I", scalar_bits & 0xFFFFFFFF))[0]
+        a = operand_a.to(torch.float32)
+        b = operand_b.to(torch.float32)
+
+        if op == "recip_scalar":
+            result = 1.0 / a
+        elif op == "clamp_max_scalar":
+            result = torch.minimum(a, torch.full_like(a, scalar))
+        elif op == "mul_unary_scalar":
+            result = a * scalar
+        elif op == "le":
+            result = (a <= b).to(torch.float32)
+        elif op == "lt":
+            result = (a < b).to(torch.float32)
+        elif op == "ge":
+            result = (a >= b).to(torch.float32)
+        elif op == "add":
+            result = a + b
+        elif op == "sub":
+            result = a - b
+        elif op == "mul":
+            result = a * b
+        else:
+            raise ValueError(f"Unsupported sampling operation: {op}")
+
+        return self._store(result, op, dest_acc)
+
+    def _store(self, values, op: str, dest_acc: DestAccumulation):
+        if dest_acc == DestAccumulation.Yes:
+            return values.to(torch.float32)  # the whole fp32 LReg lands in Dest
+        if op in self.ROUND_TO_NEAREST_OPS:
+            return values.to(torch.bfloat16).to(torch.float32)
+        return truncate_to_bfloat16(values)

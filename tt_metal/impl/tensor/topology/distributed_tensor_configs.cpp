@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal::distributed {
+namespace {
+
+bool is_nonzero_mesh_offset(const MeshCoordinate& offset) {
+    return std::any_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v != 0; });
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
     std::visit(
@@ -29,6 +38,9 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
     os << "]";
     if (config.mesh_shape_override.has_value()) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
+    }
+    if (is_nonzero_mesh_offset(config.mesh_offset_override)) {
+        os << ", mesh_offset_override=" << config.mesh_offset_override;
     }
     os << ")";
     return os;
@@ -57,6 +69,9 @@ std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
     os << "]";
     if (config.mesh_shape_override.has_value()) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
+    }
+    if (is_nonzero_mesh_offset(config.mesh_offset_override)) {
+        os << ", mesh_offset_override=" << config.mesh_offset_override;
     }
     os << ")";
     return os;

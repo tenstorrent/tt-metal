@@ -293,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
+            active_seq_len=seq_len,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
@@ -472,6 +473,8 @@ class TtPrefillBlock(LightweightModule):
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -493,8 +496,18 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
-                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                this layer's KV cache has been populated on device. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
+                outbound_socket_service_sync device op on the same CQ — no host sync. This is the
+                single-host (LayerAckService) ack path; mutually exclusive with on_layer_complete.
+            record_dev: the chunk's PrefillMetadata device tensor sent as the ack record; required when
+                d2h_service is set. Distinct from `metadata`: record_dev is the socket record handed to
+                the host, `metadata` is the per-element scalar triple read by the on-device ops.
+            on_layer_complete: optional per-layer migration ack fired on the HOST. In chunked prefill,
+                after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
+                fires this. Used by pipelined prefill (the layer-completion router), which the device-side
+                d2h_service path does not cover.
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -556,13 +569,20 @@ class TtPrefillBlock(LightweightModule):
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
         # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
-        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
-        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
-        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
-        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
-        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
-        if on_layer_complete is not None:
+        # 128-boundary; zero that pad window so the decode side reads clean zeros.
+        #
+        # Two ack transports share that zero, and exactly one is wired per run:
+        #   d2h_service (single host)   — the ack is a DEVICE op enqueued on the same CQ right after the
+        #       zero, so the record only reaches the host after the zero has executed; the ack (driven by
+        #       record arrival) implies zero-complete with NO host sync.
+        #   on_layer_complete (pipeline) — a HOST callback, so the zero must be flushed first: the
+        #       migration worker reads the cache over NoC out-of-band from the ttnn command queue and
+        #       without the flush could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
+        #       across pipeline ranks).
+        # cache_layer_idx is the LOCAL per-rank cache slot in both.
+        if d2h_service is not None or on_layer_complete is not None:
             assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
+            assert d2h_service is None or record_dev is not None, "record_dev required when d2h_service is set"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
@@ -590,18 +610,27 @@ class TtPrefillBlock(LightweightModule):
                         seq_len_local * self.mla.sp_factor,
                         self.mla.sp_axis,
                     )
-            # Trace path: route the ack through the controller. At capture it splits the trace here (a host
-            # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
-            # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
-            # synchronize then call directly. The controller takes precedence iff it carries an ack callback
-            # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
-            # is False (and on_layer_complete is None there, so neither fires).
-            tc = getattr(self, "_trace_controller", None)
-            if tc is not None and tc.has_layer_ack():
-                tc.layer_ack(self.mla.layer_idx)
+            if d2h_service is not None:
+                # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
+                # host before the zero has executed, so the ack implies zero-complete with no host sync —
+                # unlike the host-callback path below, which needs an explicit flush.
+                # NOT used under trace: record_dev is the per-chunk socket metadata tensor, so its address
+                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
+                # asserts d2h_service is None when use_trace.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
             else:
-                ttnn.synchronize_device(self.mesh_device)
-                on_layer_complete(self.mla.layer_idx)
+                # Trace path: route the ack through the controller. At capture it splits the trace here (a host
+                # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
+                # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
+                # synchronize then call directly. The controller takes precedence iff it carries an ack callback
+                # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
+                # is False (and on_layer_complete is None there, so neither fires).
+                tc = getattr(self, "_trace_controller", None)
+                if tc is not None and tc.has_layer_ack():
+                    tc.layer_ack(self.mla.layer_idx)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block

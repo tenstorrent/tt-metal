@@ -2,9 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from fuser.fused_operand import Operand
+from typing import TYPE_CHECKING
+
+from fuser.operand import Operand
 from helpers.format_config import DataFormat
-from helpers.llk_params import L1Accumulation
+from helpers.golden_generators import PackGolden
+
+if TYPE_CHECKING:
+    from fuser.fuser_config import GlobalConfig
+    from fuser.l1_operation import L1Operation
+    from fuser.pack_node import PackNode
 
 
 def hw_configure_pack(
@@ -34,39 +41,53 @@ def configure_pack(
     )
 
 
-def relu_config(relu_config_val: int, dest_acc: str) -> str:
+def relu_config(
+    config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
+) -> str:
+    dest_acc = config.dest_acc.cpp_enum_value
+    pack_src_format = config.sentinel._pack_src
+
+    relu_config_val = PackGolden.generate_relu_config(
+        node.pack_relu, node.relu_threshold, pack_src_format
+    )
     return f"_llk_pack_relu_config_<p_pacr::PACK0, {dest_acc}>(ReluConfig::from_packed({relu_config_val}));\n"
 
 
-def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
-    l1_acc = "true" if pack_l1_accumulation == L1Accumulation.Yes else "false"
+def l1_accumulation_config(
+    config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
+) -> str:
+    l1_acc = node.pack_l1_accumulation.cpp_enum_value
     return f"_llk_pack_set_l1_acc_<p_pacr::PACK0>({l1_acc});\n"
 
 
 def pack_dest_init(
-    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False, **kwargs
+    config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
-    if quasar_use_dvalid:
+    if config.quasar_use_dvalid:
         return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    return f"_llk_pack_dest_init_<p_pacr::PACK0, {dest_sync}>();\n"
+    elif operation.stage_id != 1:
+        return ""
+    return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
 
 
-def packer_wait_for_math(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
+def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return "_llk_packer_wait_for_math_done_();\n"
 
 
-def packer_dest_section_done(
-    dest_sync: str, dest_acc: str, quasar_use_dvalid: bool = False
-) -> str:
-    if quasar_use_dvalid:
+def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if config.skip_sync:
+        return ""
+    dest_sync = operation.dest_sync.cpp_enum_value
+    dest_acc = config.dest_acc.cpp_enum_value
+    if config.quasar_use_dvalid:
         return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
     return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
 
 
-def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
-    if has_pack_consumer:
+def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if operation.has_pack_consumer:
         return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
     return ""
 

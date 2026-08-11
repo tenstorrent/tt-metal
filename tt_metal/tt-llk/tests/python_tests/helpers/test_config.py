@@ -452,7 +452,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -464,11 +466,17 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                # Some SFPU kernels include their neighbours unqualified
+                # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
+                # resolves with this on the path. Listed last so the tt-llk copy still
+                # wins the basenames that exist in both trees.
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
@@ -599,8 +607,13 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        # Always have a fresh build when compiling. Under xdist, only the
+        # controller may remove the shared artifact tree; workers can already
+        # be compiling variants under it.
+        if (
+            TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
+            and worker_id == "master"
+        ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
     # === Instance fields and methods ===
