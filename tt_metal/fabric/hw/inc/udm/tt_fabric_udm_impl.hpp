@@ -95,14 +95,49 @@ struct udm_read_fields {
 /**
  * @brief Calculate the initial direction for a packet based on routing path
  *
- * Determines which direction (EAST, WEST, NORTH, SOUTH) a packet should initially
- * take to reach the destination chip in a 2D mesh topology.
+ * Determines which direction (EAST, WEST, NORTH, SOUTH — or Z on express meshes when the
+ * first hop is an express chord) a packet should initially take to reach the destination
+ * chip in a 2D mesh topology.
  *
  * @param dst_chip_id Destination chip ID
  * @param my_chip_id Source chip ID
  * @return Initial direction as uint32_t (eth_chan_directions enum value)
  */
 FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t my_chip_id) {
+#if defined(FABRIC_EXPRESS_ENABLED)
+    // On an express mesh the 2D union slot holds the indexed destination-keyed vectors, so the
+    // legacy hop counts below are not readable. The initial direction is the action the source
+    // coordinate carries toward the destination: the Y-axis action while rows differ (dimension
+    // order), else the X-axis action. Can legitimately be Z (express chord).
+    auto* routing_info = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    constexpr uint32_t y_size = FABRIC_EXPRESS_MESH_Y_SIZE;
+    constexpr uint32_t x_size = FABRIC_EXPRESS_MESH_X_SIZE;
+    ASSERT(y_size > 0 && x_size > 0);  // the host emits the shape defines to express worker kernels
+    ASSERT(dst_chip_id < y_size * x_size);
+    const uint32_t dst_y = dst_chip_id / x_size;
+    const uint32_t dst_x = dst_chip_id % x_size;
+    const uint32_t my_y = routing_info->my_mesh_coord_y;
+    const uint32_t my_x = routing_info->my_mesh_coord_x;
+    (void)my_chip_id;
+    if (my_y != dst_y) {
+        const std::uint8_t* y_vec =
+            IndexedMeshRoutingFields::y_row(routing_info->indexed_route_vectors.data, y_size, dst_y);
+        switch (IndexedMeshRoutingFields::get_action_2bit(y_vec, my_y)) {
+            case IndexedMeshRoutingFields::Y2_NORTH: return static_cast<uint32_t>(eth_chan_directions::NORTH);
+            case IndexedMeshRoutingFields::Y2_SOUTH: return static_cast<uint32_t>(eth_chan_directions::SOUTH);
+            case IndexedMeshRoutingFields::Y2_Z: return static_cast<uint32_t>(eth_chan_directions::Z);
+            default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
+        }
+    } else {
+        const std::uint8_t* x_vec =
+            IndexedMeshRoutingFields::x_row(routing_info->indexed_route_vectors.data, y_size, x_size, dst_x);
+        switch (IndexedMeshRoutingFields::get_action_2bit(x_vec, my_x)) {
+            case IndexedMeshRoutingFields::X2_EAST: return static_cast<uint32_t>(eth_chan_directions::EAST);
+            case IndexedMeshRoutingFields::X2_WEST: return static_cast<uint32_t>(eth_chan_directions::WEST);
+            default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
+        }
+    }
+#else
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
 
     uint32_t initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
@@ -123,6 +158,7 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     }
 
     return initial_dir;
+#endif
 }
 
 /**

@@ -93,16 +93,16 @@ The packet hop-byte ABI does not currently provide an intramesh Z action bit. WH
 
 ### 2.3 `NOOP` overload
 
-The current non-WH-VC1 admission path treats `NOOP` with `z_router_enabled` as a Z space check.
-Edge handling also treats `NOOP` as a trigger for `recompute_path`.
+Edge handling treats `NOOP` as a trigger for `recompute_path`, so a hop command that means "no
+forwarding here" is indistinguishable from "rewrite this packet's route".
 
 ```text
-current: NOOP may mean Z forwarding or edge recompute
+current: NOOP may mean plain no-op or edge recompute
 target:  Z is an action output; current/final mesh identity plus INTERMESH edge capability identifies
          boundary egress and landing
 ```
 
-The target must remove both `NOOP` meanings. Mesh-id inequality says that the final mesh is still
+The target must remove the overload. Mesh-id inequality says that the final mesh is still
 remote, while edge capability identifies the actual boundary; direction alone must not classify a
 hop as intermesh.
 
