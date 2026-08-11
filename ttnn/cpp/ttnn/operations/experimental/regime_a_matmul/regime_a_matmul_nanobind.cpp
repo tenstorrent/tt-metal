@@ -40,6 +40,38 @@ void bind_regime_a_matmul(nb::module_& mod) {
         WIDTH_SHARDED across 8 banks — build its MemoryConfig with
         ``ttnn.create_regime_a_weight_memory_config``. Output is [.., M, N] in TILE layout.
 
+        SUPPORTED DOMAIN
+        ----------------
+        Blackhole only. Rank >= 2 with all leading dims 1 (no batching), TILE layout, BFLOAT16 in/out.
+        Two SHAPE-DOMAIN limits are structural rather than tuning gaps, so a shape hitting either can only
+        be served by a standard matmul:
+
+        1. N must be wide enough to fill the 8-bank in1 width shard: ``7*ceil(Nt/8) < Nt`` where
+           ``Nt = ceil(N/32)``, else the trailing banks would be entirely padding. The smallest workable
+           widths are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, 768, 928..). So narrow
+           N — e.g. N=8 or N=128 — is out of domain.
+        2. The in0 k-slice is kept L1-RESIDENT, so cb0 alone is ~``(Mt/Sm)*(Kt/Pk)`` tiles while core
+           feasibility caps ``8*Pk*Ns*Sm <= 104`` cores (``Pk*Ns*Sm <= 13``). Large Mt with deep K cannot
+           satisfy both: e.g. Mt=152 (M=4864), Kt=128 (K=4096) would need ``Sm*Pk >~ 32``.
+
+        Subblocks are additionally bounded by the 4-tile fp32 DST limit, and ``regime_a_matmul_split``
+        requires ``dim == -1`` with N divisible by ``chunks`` and each chunk a multiple of TILE_WIDTH.
+
+        FALLBACK BEHAVIOUR
+        ------------------
+        There is no silent fallback to another matmul: an out-of-domain shape raises at program build with a
+        message naming which of the two limits above it hit and why, so it fails loudly rather than running
+        slowly or wrongly. Within the domain, ``config=None`` degrades gracefully instead of failing:
+
+        - the measured lookup table is consulted first; if a table entry no longer fits L1 once fusion CBs
+          are added, it is skipped and the cost model is used, yielding a slower-but-valid config rather
+          than an error;
+        - if no ``m_slices == 1`` config fits L1, an M-split (``Sm > 1``) config is searched as a rescue
+          before giving up — this is what serves large-Mt deep-K shapes such as 512x15360x768.
+
+        An explicit ``config`` is NOT rescued: it is validated and rejected if infeasible, because silently
+        substituting a different config would invalidate any measurement taken against it.
+
         Parameters
         ----------
         input_tensor : ttnn.Tensor
