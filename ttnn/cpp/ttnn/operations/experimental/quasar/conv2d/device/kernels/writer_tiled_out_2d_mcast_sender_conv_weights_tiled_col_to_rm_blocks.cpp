@@ -8,7 +8,6 @@
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #endif
 

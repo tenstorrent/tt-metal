@@ -162,11 +162,48 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
 
+    def reset_global_semaphores(self):
+        """Reset all global semaphores to 0 and rotating indices, so a reused CCL behaves like a
+        freshly-created one. close() only resets the stall group and leaves semaphores intact, so
+        when a CCL is reused across repeat batches the semaphore values drift away from the
+        trace-capture-time state (which assumes fresh 0-valued semaphores), eventually hanging the
+        CCL ops. Resetting here re-establishes that clean state at each mode switch."""
+
+        def _reset(obj):
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _reset(item)
+            elif obj is not None:
+                ttnn.reset_global_semaphore_value(obj, 0)
+
+        for container in (
+            self.gather_semaphore_handles,
+            self.barrier_semaphore_handles,
+            getattr(self, "from_semaphore_handles", None),
+            getattr(self, "to_semaphore_handles", None),
+            getattr(self, "reduce_semaphore_handles", None),
+        ):
+            _reset(container)
+        self.reset_gather_and_buffer_idx()
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_ag_semaphore_handles(self, cluster_axis):
+        # All-gather semaphore accessor for the force-argmax sampling path (Blackhole).
+        # ttnn.experimental.all_gather_async requires two global semaphores; build the pair from
+        # consecutive entries of the per-axis gather semaphore ring (same construction the internal
+        # all_gather_async path uses), then advance the rotating index.
+        current_idx = self.gather_idx[cluster_axis]
+        semaphores = [
+            self.gather_semaphore_handles[cluster_axis][current_idx],
+            self.gather_semaphore_handles[cluster_axis][(current_idx + 1) % self.num_cbs],
+        ]
+        self.gather_idx[cluster_axis] = (current_idx + 1) % self.num_cbs
+        return semaphores
 
     def get_all_gather_concat_inter_buffer(self):
         if ttnn.get_arch_name().lower() == "blackhole":

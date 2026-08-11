@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_tdma_guard.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
@@ -444,8 +445,8 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
  * Currently supported buffer descriptor dimensions are:
  * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
  *
- * @tparam MODE: L1 access mode. Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = 1 so L1
- *        rows are indexed as tiles; Continuous keeps the tensor-shape derived y_dim.
+ * @tparam MODE: L1 access mode. Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = 1 and z_dim = 1
+ *        so L1 rows are indexed as tiles; Continuous keeps the tensor-shape derived y_dim, z_dim.
  * @param tensor_shape: Tile/face dimensions and shape of input tensor
  * @param base_l1_16B: base address of the buffer in L1
  * @param data_format: L1 data encoding format
@@ -474,6 +475,7 @@ inline tdma_descriptor_t construct_tdma_desc(
     {
         // PACR_STRIDE quirk: program BD as 1x1x16 so L1 addressing indexes rows as tiles.
         buf_desc.f.y_dim = 1;
+        buf_desc.f.z_dim = 1;
     }
 
     validate_buffer_desc<MODE>(buf_desc);

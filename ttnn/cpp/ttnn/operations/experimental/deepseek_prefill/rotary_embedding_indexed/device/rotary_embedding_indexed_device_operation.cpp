@@ -5,44 +5,52 @@
 #include "rotary_embedding_indexed_device_operation.hpp"
 
 #include <cstdint>
+#include <unordered_map>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
+// Reused-kernel binding vocabulary (CB / tensor names, writer+compute sources) — single-sourced here.
+using namespace ttnn::experimental::prim::rope_metal2;
 
 namespace {
 
 // Writer + compute kernels are reused verbatim from the rotary_embedding_llama prefill path (they
 // consume cos/sin from the CB and write output indexed by local seq tile -- neither touches the
 // cos/sin source index). Only the reader is forked to derive the per-device cos/sin shard offset.
+// The shared CB/tensor names and the writer/compute sources come from rope_metal2 (kWriterSource,
+// kComputeSource, INPUT_DFB, OUT_DFB, OUTPUT_PARAM, ...) so the reused-kernel binding contract has one
+// source of truth; only the reader source and the metadata-path names are local.
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
     "reader_rotary_embedding_indexed_interleaved_start_id.cpp";
-constexpr auto kWriterKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-    "writer_rotary_embedding_llama_interleaved_start_id.cpp";
-constexpr auto kComputeKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-    "rotary_embedding_llama.cpp";
 
 // Metadata path only: L1-scratch CB the reader reads the metadata page into. The metadata tensor is a
 // dedicated 1-element uint32 tensor holding kv_actual_global directly at element [0]; the reader
 // NoC-reads only that one element (4 bytes). kMetadataBytes is the CB page size, kept at the 16-byte
 // L1 page-alignment floor -- the read itself is 4 bytes.
-constexpr uint8_t kMetaCbIndex = tt::CBIndex::c_4;
 constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor); only 4B (element [0]) is read
+
+// Metadata-path-only names (everything else comes from rope_metal2).
+const DFBSpecName META_DFB{"meta"};
+const TensorParamName METADATA_PARAM{"metadata"};
 
 // Structural + per-call checks shared by the cache-miss and cache-hit paths. The structural checks
 // (cluster_axis, 2D mesh, chunk height) run on both paths; the kv_actual_global VALUE checks run only
@@ -67,11 +75,10 @@ void validate_runtime_args(
 
     if (tensor_args.metadata.has_value()) {
         // Metadata path: kv_actual_global is read on-device from element [0] of the metadata tensor, so
-        // its VALUE is the caller's responsibility. But the tensor is dereferenced host-side
-        // (buffer()->address(), baked as a runtime arg) and read on-device as uint32, so validate the
-        // tensor itself here (runs on both cache miss and hit, since the metadata tensor can differ per
-        // call). dtype is NOT part of the program hash, so without this guard a uint32-then-bf16 sequence
-        // would silently reuse the cached program and misread the value.
+        // its VALUE is the caller's responsibility. But the tensor is bound as tensor::metadata and read
+        // on-device as uint32, so validate the tensor itself here (runs on both cache miss and hit,
+        // since the metadata tensor can differ per call). dtype is NOT part of the program hash, so
+        // without this guard a uint32-then-bf16 sequence would silently reuse the cached program.
         const auto& metadata = tensor_args.metadata.value();
         TT_FATAL(metadata.storage_type() == StorageType::DEVICE, "metadata must be on device");
         TT_FATAL(metadata.buffer() != nullptr, "metadata must be allocated in a buffer on device");
@@ -137,8 +144,8 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(sin.storage_type() == StorageType::DEVICE, "sin must be on device");
     TT_FATAL(trans_mat.storage_type() == StorageType::DEVICE, "trans_mat must be on device");
 
-    // create_descriptor() dispatches on input.device() but passes every tensor's buffer address into
-    // the kernels, so all operands must be allocated and live on that same device.
+    // Every operand is bound as a tensor parameter and accessed on the input's mesh device, so all
+    // must be allocated and live on that same device.
     TT_FATAL(input.buffer() != nullptr, "input must be allocated in a buffer on device");
     TT_FATAL(cos.buffer() != nullptr, "cos must be allocated in a buffer on device");
     TT_FATAL(sin.buffer() != nullptr, "sin must be allocated in a buffer on device");
@@ -200,54 +207,63 @@ RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // kv_actual_global is a runtime arg read by the reader kernel and intentionally NOT hashed, so
-    // successive chunks reuse the cached program. cluster_axis stays IN (structural -- governs which
-    // mesh dim is SP and thus the per-device sharding).
-    // Hash the full padded shapes, not just their volumes: the descriptor derives seq/head tile
-    // counts, the work split and CB sizing from specific dimensions, so two differently-shaped
-    // tensors that happen to share a volume must NOT collide onto the same cached program.
-    const auto& input = tensor_args.input;
-    const auto& cos = tensor_args.cos;
-    // args.kv_actual_global (the per-call scalar) is intentionally NOT hashed -- it is a common
-    // runtime arg patched on cache hits, so successive chunks with different KV lengths reuse one
-    // cached program.
-    // The metadata-vs-scalar choice changes the program (compile args + which kernel branch compiles),
-    // so hash metadata.has_value() to keep the two variants distinct; kv_actual_global itself is never
-    // hashed on either path. Also hash the metadata tensor's memory_config: its TensorAccessorArgs are
-    // baked as compile-time args at program creation and only its address is patched on a cache hit, so
-    // two metadata-path calls that share this structural hash but pass metadata tensors with different
-    // memory layouts must not collide onto one cached program (the baked accessor would be wrong for the
-    // second). A default MemoryConfig stands in on the scalar path (already separated by has_value=false).
-    const MemoryConfig metadata_mem_config =
-        tensor_args.metadata.has_value() ? tensor_args.metadata->memory_config() : MemoryConfig{};
-    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
-        tensor_args.metadata.has_value(),
-        metadata_mem_config,
-        args.cluster_axis,
-        args.compute_kernel_config,
-        input.dtype(),
-        input.memory_config(),
-        input.padded_shape(),
-        cos.dtype(),
-        cos.memory_config(),
-        cos.padded_shape());
-}
-
-tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFactory::create_descriptor(
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "RotaryEmbeddingIndexed::create_descriptor requires a mesh dispatch coordinate");
-    const auto& coord = mesh_dispatch_coordinate.value();
-
+    // The cache key must cover every structural spec the program is built from -- in particular every
+    // TensorParameter's declared TensorSpec -- because on a cache hit UpdateProgramRunArgs REJECTS (does
+    // not recompile) a tensor whose spec doesn't match the one baked at creation. So hash the full input,
+    // cos, sin and trans_mat specs, the output spec (via output_mem_config; its dtype/shape follow input),
+    // cluster_axis, compute_kernel_config, and metadata.has_value() + the metadata tensor's spec.
+    //
+    // Only kv_actual_global is excluded: it is a reader runtime arg patched on cache hits, so successive
+    // chunks reuse one cached program. Per-device my_sp_coord is a per-coordinate compile-time arg the
+    // mesh adapter already folds into the workload hash via the target coordinates. Full shapes (not just
+    // volumes) are hashed since the work split and CB sizing derive from specific dimensions.
     const auto& input = tensor_args.input;
     const auto& cos = tensor_args.cos;
     const auto& sin = tensor_args.sin;
     const auto& trans_mat = tensor_args.trans_mat;
+    // metadata is an optional TensorParameter; stand in with defaults on the scalar path (already
+    // separated by has_value=false) so its spec still participates in the key when present.
+    const MemoryConfig metadata_mem_config =
+        tensor_args.metadata.has_value() ? tensor_args.metadata->memory_config() : MemoryConfig{};
+    const Shape metadata_padded_shape =
+        tensor_args.metadata.has_value() ? tensor_args.metadata->padded_shape() : Shape{};
+    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
+        tensor_args.metadata.has_value(),
+        metadata_mem_config,
+        metadata_padded_shape,
+        args.cluster_axis,
+        args.compute_kernel_config,
+        args.output_mem_config,
+        input.dtype(),
+        input.memory_config(),
+        input.logical_shape(),
+        input.padded_shape(),
+        input.layout(),
+        cos.dtype(),
+        cos.memory_config(),
+        cos.padded_shape(),
+        sin.dtype(),
+        sin.memory_config(),
+        sin.padded_shape(),
+        trans_mat.dtype(),
+        trans_mat.memory_config(),
+        trans_mat.padded_shape());
+}
+
+RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::cached_program_t
+RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& cos = tensor_args.cos.mesh_tensor();
+    const auto& sin = tensor_args.sin.mesh_tensor();
+    const auto& trans_mat = tensor_args.trans_mat.mesh_tensor();
+    const auto& out = output.mesh_tensor();
     const bool has_metadata = tensor_args.metadata.has_value();
+
+    auto* mesh_device = tensor_args.input.device();
 
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -257,7 +273,7 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
     const tt::DataFormat trans_mat_cb_data_format = datatype_to_dataformat_converter(trans_mat.dtype());
     const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(out.dtype());
     const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const uint32_t batch = input.padded_shape()[0];
@@ -268,15 +284,21 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     const uint32_t sin_seq_len_t = sin.padded_shape()[2] / TILE_HEIGHT;
     // cos/sin are the (much taller) per-device shards, so rotary coverage is bounded by the input.
     const uint32_t rotary_seq_len_t = seq_len_t;
-
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    auto* device = input.device();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
+    // Per-device cos/sin shard offset inputs, baked into this coordinate's program as compile-time args:
+    // sp_factor is the mesh extent along the cluster axis and my_sp_coord is this chip's index along it.
+    // Both are structural (per mesh coordinate) and constant across calls, so they are baked as CTAs.
+    const auto& mesh_view = mesh_device->get_view();
+    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t my_sp_coord =
+        ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.cos, coord, args.cluster_axis);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+
+    auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -303,192 +325,194 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
         num_cos_sin_tiles = num_input_tiles;
     }
 
-    tt::tt_metal::ProgramDescriptor desc;
-
-    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_num_tiles * input_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = input_cb_index, .data_format = input_cb_data_format, .page_size = input_single_tile_size}}},
-    });
-    constexpr uint8_t cos_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * cos_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_cb_index, .data_format = cos_cb_data_format, .page_size = cos_single_tile_size}}},
-    });
-    constexpr uint8_t sin_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * sin_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_cb_index, .data_format = sin_cb_data_format, .page_size = sin_single_tile_size}}},
-    });
-    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 1 * trans_mat_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = trans_mat_cb_index,
-            .data_format = trans_mat_cb_data_format,
-            .page_size = trans_mat_single_tile_size}}},
-    });
-    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = head_dim_t * input_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size}}},
-    });
-    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = head_dim_t * cos_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_interm_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size}}},
-    });
-    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = head_dim_t * sin_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_interm_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size}}},
-    });
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size}}},
-    });
-    constexpr uint8_t zero_cb_index = tt::CBIndex::c_27;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = head_dim_t * output_single_tile_size,
-        .core_ranges = CoreRangeSet(all_cores),
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = zero_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size}}},
-    });
-    // Metadata path: L1-scratch CB the reader reads the metadata page into (one 16B page).
+    // ------------------------------------------------------------------ dataflow buffers
+    std::vector<DataflowBufferSpec> dfbs = {
+        DataflowBufferSpec{
+            .unique_id = INPUT_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = input_cb_num_tiles,
+            .data_format_metadata = input_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = COS_DFB,
+            .entry_size = cos_single_tile_size,
+            .num_entries = num_cos_sin_tiles,
+            .data_format_metadata = cos_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = SIN_DFB,
+            .entry_size = sin_single_tile_size,
+            .num_entries = num_cos_sin_tiles,
+            .data_format_metadata = sin_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = TRANS_MAT_DFB,
+            .entry_size = trans_mat_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = trans_mat_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = ROTATED_INTERM_DFB,
+            .entry_size = input_single_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = input_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = COS_INTERM_DFB,
+            .entry_size = cos_single_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = cos_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = SIN_INTERM_DFB,
+            .entry_size = sin_single_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = sin_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = OUT_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = num_output_tiles,
+            .data_format_metadata = output_cb_data_format},
+        DataflowBufferSpec{
+            .unique_id = ZERO_DFB,
+            .entry_size = output_single_tile_size,
+            .num_entries = head_dim_t,
+            .data_format_metadata = output_cb_data_format},
+    };
     if (has_metadata) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kMetadataBytes,
-            .core_ranges = CoreRangeSet(all_cores),
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = kMetaCbIndex, .data_format = tt::DataFormat::UInt32, .page_size = kMetadataBytes}}},
-        });
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = META_DFB,
+            .entry_size = kMetadataBytes,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32});
     }
 
-    KernelDescriptor::Defines kernel_defines;
-    kernel_defines.emplace_back("RELOAD_IMPL", use_reload_impl ? "1" : "0");
-
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* trans_mat_buffer = trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
-
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        (uint32_t)input_cb_index,
-        (uint32_t)cos_cb_index,
-        (uint32_t)sin_cb_index,
-        (uint32_t)trans_mat_cb_index,
-        (uint32_t)n_heads,
-        (uint32_t)seq_len_t,
-        (uint32_t)head_dim_t,
-        (uint32_t)freq_per_head,
-        (uint32_t)cos_seq_len_t,
-        (uint32_t)sin_seq_len_t,
-        (uint32_t)rotary_seq_len_t,
-        (uint32_t)TILE_HEIGHT,  // reader divides kv_actual_global (tokens) into tiles
-        // [12] has_metadata, [13] metadata CB index (placeholder 0 on the scalar path). The metadata
-        // accessor (when present) is appended after the four operand accessors below, so the reader's
-        // operand-accessor offsets stay fixed at <14>.
-        (uint32_t)has_metadata,
-        (uint32_t)(has_metadata ? kMetaCbIndex : 0),
+    // ------------------------------------------------------------------ tensor parameters
+    std::vector<TensorParameter> tensor_params = {
+        TensorParameter{.unique_id = INPUT_PARAM, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = COS_PARAM, .spec = cos.tensor_spec()},
+        TensorParameter{.unique_id = SIN_PARAM, .spec = sin.tensor_spec()},
+        TensorParameter{.unique_id = TRANS_MAT_PARAM, .spec = trans_mat.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT_PARAM, .spec = out.tensor_spec()},
     };
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*trans_mat_buffer).append_to(reader_compile_time_args);
     if (has_metadata) {
-        TensorAccessorArgs(*tensor_args.metadata->buffer()).append_to(reader_compile_time_args);
+        tensor_params.push_back(
+            TensorParameter{.unique_id = METADATA_PARAM, .spec = tensor_args.metadata->mesh_tensor().tensor_spec()});
     }
 
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        (uint32_t)output_cb_index,
-        (uint32_t)zero_cb_index,
-        (uint32_t)n_heads,
-        (uint32_t)head_dim_t,
-        (uint32_t)seq_len_t,
-        (uint32_t)rotary_seq_len_t,
+    const ComputeHardwareConfig compute_hw_config =
+        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+
+    const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
+    KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
+    if (has_metadata) {
+        reader_defines.emplace("HAS_METADATA", "1");
+    }
+
+    // ------------------------------------------------------------------ reader spec (this op's own)
+    std::vector<DFBBinding> reader_dfbs = {
+        DFBBinding{.dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = TRANS_MAT_DFB, .accessor_name = "trans_mat", .endpoint_type = DFBEndpointType::PRODUCER},
     };
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    // Per-chip cos/sin shard offset inputs. These are structural (per cached program / mesh coord):
-    // sp_factor is the mesh extent along the cluster axis and my_sp_coord is this chip's index along
-    // it, so they are constant across calls and safe to bake once even on the binding fast path.
-    // Reader common arg index 2 is the per-call value patched on cache hits by
-    // MeshWorkloadFactory::override_runtime_arguments: the metadata tensor's raw DRAM address (metadata
-    // path) or kv_actual_global (scalar path).
-    const auto& mesh_view = device->get_view();
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cos, coord, args.cluster_axis);
-    const uint32_t reader_per_call_arg =
-        has_metadata ? static_cast<uint32_t>(tensor_args.metadata->buffer()->address()) : args.kv_actual_global;
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderKernelPath;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = CoreRangeSet(all_cores);
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = kernel_defines;
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.emplace_common_runtime_args({my_sp_coord, sp_factor, reader_per_call_arg});
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterKernelPath;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = CoreRangeSet(all_cores);
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = kernel_defines;
-    writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor::CompileTimeArgs compute_kernel_args = {
-        (uint32_t)input_cb_index,
-        (uint32_t)cos_cb_index,
-        (uint32_t)sin_cb_index,
-        (uint32_t)trans_mat_cb_index,
-        (uint32_t)rotated_input_interm_cb_index,
-        (uint32_t)cos_interm_cb_index,
-        (uint32_t)sin_interm_cb_index,
-        (uint32_t)output_cb_index,
-        (uint32_t)head_dim_t,
-        (uint32_t)n_heads,
-        (uint32_t)rotary_seq_len_t,
+    std::vector<TensorBinding> reader_tensors = {
+        TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+        TensorBinding{.tensor_parameter_name = COS_PARAM, .accessor_name = "cos"},
+        TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
+        TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
     };
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kComputeKernelPath;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = CoreRangeSet(all_cores);
-    compute_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_desc.defines = kernel_defines;
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-    };
+    if (has_metadata) {
+        // meta scratch CB is a single-toucher (reader fills + reads it) → self-loop.
+        reader_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::CONSUMER});
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = METADATA_PARAM, .accessor_name = "metadata"});
+    }
 
+    KernelSpec::RuntimeArgSchema reader_schema{
+        .runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}};
+    if (!has_metadata) {
+        reader_schema.common_runtime_arg_names = {"kv_actual_global"};
+    }
+
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path{kReaderKernelPath},
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings = reader_dfbs,
+        .tensor_bindings = reader_tensors,
+        .compile_time_args =
+            {{"n_heads", n_heads},
+             {"Ht", seq_len_t},
+             {"Wt", head_dim_t},
+             {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
+             {"cos_Ht", cos_seq_len_t},
+             {"sin_Ht", sin_seq_len_t},
+             {"rotary_Ht", rotary_seq_len_t},
+             {"tile_height", TILE_HEIGHT},  // reader divides kv_actual_global (tokens) into tiles
+             {"my_sp_coord", my_sp_coord},
+             {"sp_factor", sp_factor}},
+        .runtime_arg_schema = reader_schema,
+        .hw_config = create_reader_datamovement_config(mesh_device->arch())};
+
+    // ------------------------------------------------------------------ writer + compute (reused llama)
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = kWriterSource,
+        .compiler_options = {.defines = reload_define},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+             // zero is a single-toucher (writer fills + reads it) -> self-loop (PRODUCER + CONSUMER).
+             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = create_writer_datamovement_config(mesh_device->arch())};
+
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = kComputeSource,
+        .compiler_options = {.defines = reload_define},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = TRANS_MAT_DFB,
+                 .accessor_name = "trans_mat",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+             // Intermediate CBs: compute is the sole toucher -> each is a self-loop (PRODUCER + CONSUMER).
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = compute_hw_config};
+
+    // ------------------------------------------------------------------ per-node runtime args
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     struct CoreArgs {
@@ -498,7 +522,6 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
         uint32_t end_seq = 0;
     };
     std::vector<CoreArgs> per_core_args(cores.size());
-
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
             uint32_t core_idx = (batch_parallel * seq_parallel_factor) + seq_parallel;
@@ -513,26 +536,61 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
         }
     }
 
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
-    compute_desc.runtime_args.reserve(cores.size());
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
+    if (!has_metadata) {
+        reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
+    }
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
-        // Pass buffers as Buffer* bindings so cache hits take the fast path that patches addresses
-        // and skips create_descriptor. The one per-call scalar (kv_actual_global) is a common runtime
-        // arg patched separately by override_runtime_arguments, so no per-core scalar goes stale.
-        reader_desc.emplace_runtime_args(
-            cores[i],
-            {src_buffer, cos_buffer, sin_buffer, trans_mat_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
-        writer_desc.emplace_runtime_args(cores[i], {dst_buffer, a.start_batch, a.end_batch, a.start_seq, a.end_seq});
-        compute_desc.runtime_args.emplace_back(
-            cores[i], KernelDescriptor::CoreRuntimeArgs{a.start_batch, a.end_batch, a.start_seq, a.end_seq});
+        const NodeCoord node = cores[i];
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
-    return desc;
+    // ------------------------------------------------------------------ assemble + compile
+    ProgramSpec spec{
+        .name = "rotary_embedding_indexed",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = dfbs,
+        .tensor_parameters = tensor_params,
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run};
+    run_args.tensor_args = {
+        {INPUT_PARAM, TensorArgument{input}},
+        {COS_PARAM, TensorArgument{cos}},
+        {SIN_PARAM, TensorArgument{sin}},
+        {TRANS_MAT_PARAM, TensorArgument{trans_mat}},
+        {OUTPUT_PARAM, TensorArgument{out}}};
+    if (has_metadata) {
+        run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
+    }
+
+    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    SetProgramRunArgs(program, run_args);
+    return {std::move(program), SharedVariables{}};
 }
 
 RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::cached_mesh_workload_t
@@ -541,7 +599,14 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_mesh_workload
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(args, coord, tensor_args, output);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
 void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtime_arguments(
@@ -549,22 +614,29 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // Reader common runtime arg 2 holds the per-call value the buffer-binding fast path would otherwise
-    // leave stale: the metadata tensor's raw DRAM address (metadata path) or kv_actual_global (scalar
-    // path). Patch it on every cached program (one per mesh coordinate).
-    constexpr uint32_t kReaderKernelHandle = 0;  // reader is pushed first in create_descriptor
-    constexpr uint32_t kPerCallCommonArgIdx = 2;
-    const uint32_t per_call_arg = tensor_args.metadata.has_value()
-                                      ? static_cast<uint32_t>(tensor_args.metadata->buffer()->address())
-                                      : args.kv_actual_global;
+    // kv_actual_global is not hashed and can change per chunk; per-core RTAs and my_sp_coord are stable
+    // (same shapes / same coordinate), so a cache hit only refreshes tensor addresses and, on the scalar
+    // path, the kv_actual_global common arg. The metadata path advances the value on-device (the reader
+    // re-reads element [0]), so only its tensor address needs refreshing. has_metadata is hashed, so it
+    // matches the cached program on every hit -- read it straight from tensor_args. The run args are
+    // coordinate-independent, so build them once and apply to every stamped program.
+    ProgramRunArgs run_args;
+    run_args.tensor_args = {
+        {INPUT_PARAM, TensorArgument{tensor_args.input.mesh_tensor()}},
+        {COS_PARAM, TensorArgument{tensor_args.cos.mesh_tensor()}},
+        {SIN_PARAM, TensorArgument{tensor_args.sin.mesh_tensor()}},
+        {TRANS_MAT_PARAM, TensorArgument{tensor_args.trans_mat.mesh_tensor()}},
+        {OUTPUT_PARAM, TensorArgument{output.mesh_tensor()}}};
+    if (tensor_args.metadata.has_value()) {
+        run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
+    } else {
+        KernelRunArgs reader_run{.kernel = READER};
+        reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
+        run_args.kernel_run_args = {reader_run};
+    }
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
-        TT_FATAL(
-            kPerCallCommonArgIdx < reader_common.size(),
-            "rotary_embedding_indexed reader is missing its per-call common runtime arg");
-        reader_common[kPerCallCommonArgIdx] = per_call_arg;
+        UpdateProgramRunArgs(program, run_args);
     }
 }
 

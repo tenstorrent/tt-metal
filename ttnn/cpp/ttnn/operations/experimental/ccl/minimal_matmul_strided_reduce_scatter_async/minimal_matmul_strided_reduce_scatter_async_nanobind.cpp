@@ -63,6 +63,23 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
             * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
             * :attr:`addcmul_input_tensor2` (Optional[ttnn.Tensor]): Second additional input tensor for fused addcmul (gate/multiplier).
+            * :attr:`mm_progress_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the MM->RS
+              per-core progress counters: a uint32 ROW_MAJOR tensor of shape [num_cores, slots], L1
+              HEIGHT_SHARDED with shard [1, slots] over a core grid covering the RS worker cores, where
+              slots >= the device compute grid area. Share one such tensor across every MMRS call (see
+              CCLManager.get_mm_progress_counters_buffer); otherwise each compiled program allocates its
+              own and permanently lowers the device's L1 floor.
+            * :attr:`mm_window_blocks` (Optional[int]): Keep only this many M blocks of the matmul output
+              resident in L1 per core, recycling slot ``m % mm_window_blocks``, instead of the whole
+              output. Lets M grow past the point where the resident shard crowds out the circular
+              buffers. The returned matmul output is then smaller than [M, N] and does NOT hold the
+              full matmul result, so leave this unset if you need to read it.
+            * :attr:`mm_credit_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the RS->MM
+              window credits: a uint32 ROW_MAJOR tensor, L1 HEIGHT_SHARDED with shard [1, slots] over a
+              core grid covering the matmul cores, where slots >= the number of RS readers
+              (2 * num_links * num_workers_per_link). Only used when mm_window_blocks is set. Share one
+              across every MMRS call (see CCLManager.get_mm_credit_counters_buffer) for the same reason
+              as mm_progress_counters.
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
@@ -92,7 +109,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("addcmul_input_tensor1") = nb::none(),
         nb::arg("addcmul_input_tensor2") = nb::none(),
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("mm_progress_counters") = nb::none(),
+        nb::arg("mm_window_blocks") = nb::none(),
+        nb::arg("mm_credit_counters") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
