@@ -594,8 +594,7 @@ void exchange_metadata(
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context->recv(
-                ttsl::as_writable_bytes(
-                    ttsl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
@@ -788,11 +787,10 @@ PhysicalSystemDescriptor run_physical_system_discovery(
                                    : dispatch_live_discovery;
 
     PhysicalSystemDescriptor psd =
-        dispatch_live
-            ? discovery_impl::run_local_discovery_live(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
-            : discovery_impl::run_local_discovery(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+        dispatch_live ? discovery_impl::run_local_discovery_live(
+                            cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
+                      : discovery_impl::run_local_discovery(
+                            cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());

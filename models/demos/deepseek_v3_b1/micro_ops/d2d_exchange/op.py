@@ -356,24 +356,19 @@ class SocketInterface:
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
-            same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
-            # Rank-scoped sockets are required when one logical stage spans multiple
-            # hosts: the data edge is still point-to-point between endpoint owners,
-            # even if the two owners live on different meshes.
-            if same_mesh or self.use_rank_scoped_mesh_socket:
-                socket_config = ttnn.SocketConfig(
-                    connections=[socket_connection],
-                    memory_config=socket_memory_config,
-                    sender_rank=sender_mesh.get_rank(),
-                    receiver_rank=receiver_mesh.get_rank(),
-                )
-            else:
-                socket_config = ttnn.SocketConfig(
-                    connections=[socket_connection],
-                    memory_config=socket_memory_config,
-                    sender_mesh_id=sender_mesh.get_mesh_id(),
-                    receiver_mesh_id=receiver_mesh.get_mesh_id(),
-                )
+            # Always address the socket by explicit (sender_rank, receiver_rank) — both are
+            # known here (the local endpoint's rank and the remote stage's rank). This drives
+            # the rank-based point-to-point MeshSocket handshake, which works whether the two
+            # ranks are on the same mesh OR different meshes (inter-mesh routing is resolved by
+            # the kernels via fabric node ids). Passing mesh ids instead would force the
+            # all-hosts-of-both-meshes handshake, which deadlocks a pipeline that only has the
+            # two endpoint stages create the socket.
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_rank=sender_mesh.get_rank(),
+                receiver_rank=receiver_mesh.get_rank(),
+            )
             self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:

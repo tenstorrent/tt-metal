@@ -10,6 +10,7 @@
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -48,8 +49,6 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
-
-class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -276,7 +275,8 @@ public:
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(
+        ChipId chip_id, bool skip_reserved_cores = false) const;
     std::unordered_set<tt::tt_metal::CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map

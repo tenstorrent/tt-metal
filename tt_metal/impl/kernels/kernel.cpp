@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -337,7 +338,6 @@ void Kernel::process_scratchpad_binding_handles(
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
     }
 }
-
 ////////////////////////////////////////////////////////////
 // Blaze-only experimental named args
 // Removal is tracked by issue #50953
@@ -667,15 +667,6 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
-// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
-// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
-// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
-// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
-// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
-// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
-// enforced at program finalize.
-constexpr uint32_t max_runtime_args_tensix = 4096;
-
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 // num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
@@ -685,14 +676,14 @@ void Kernel::validate_runtime_args_size(
 
     // The enforced ceiling is no longer the conservative public floor (kernel_types.hpp:max_runtime_args).
     // Large unique RTAs are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, so they are no longer
-    // bounded by a single dispatch page.
+    // bounded by a single dispatch page. The RTA/CRTA region offset is stored in a uint16_t launch-message
+    // field (dev_msgs.h rta_offset_t), which caps the region at uint16_t max bytes.
     switch (this->get_kernel_programmable_core_type()) {
         case HalProgrammableCoreType::TENSIX:
             // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
-            // finalize, not available from the HAL here), so bound by the dispatch-core-independent
-            // large-unicast cap (see max_runtime_args_tensix above). The actual L1 fit is enforced later
-            // against the kernel-config ring buffer.
-            expected_max_rt_args = max_runtime_args_tensix;
+            // finalize, not available from the HAL here), so bound only by the uint16_t RTA offset field.
+            // The actual L1 fit is enforced later against the kernel-config ring buffer.
+            expected_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
@@ -1155,12 +1146,12 @@ void experimental::quasar::DispatchEngineKernel::read_binaries(IDevice* device, 
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
-    auto load_type = MetalContext::instance()
-                         .hal()
-                         .get_jit_build_config(dispatch_core_type, dm_class_idx, riscv_id)
-                         .memory_load;
-    const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_binary_path(
-        device->build_id(), dispatch_core_type, dm_class_idx, riscv_id, binary_root, this->kernel_full_name_);
+    auto load_type =
+        MetalContext::instance().hal().get_jit_build_config(dispatch_core_type, dm_class_idx, riscv_id).memory_load;
+    const auto binary_path =
+        BuildEnvManager::get_instance(extract_context_id(device))
+            .get_kernel_binary_path(
+                device->build_id(), dispatch_core_type, dm_class_idx, riscv_id, binary_root, this->kernel_full_name_);
     const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
     std::vector<const ll_api::memory*> binaries = {&binary_mem};
     this->set_binaries(
@@ -1180,7 +1171,8 @@ bool experimental::quasar::DispatchEngineKernel::configure(
     const CoreCoord& logical_core,
     [[maybe_unused]] uint32_t base_address,
     [[maybe_unused]] const uint32_t offsets[]) const {
-    TT_FATAL(is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
+    TT_FATAL(
+        is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
     const auto& hal = MetalContext::instance().hal();
     const ChipId device_id = device->id();
     const CoreCoord dispatch_core = device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
@@ -1254,7 +1246,7 @@ void QuasarComputeKernel::init_trisc_binary_groups() {
             static_cast<size_t>(enchantum::to_underlying(p) % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
         buckets[trisc_slot].push_back(p);
     }
-    for (auto & bucket : buckets) {
+    for (auto& bucket : buckets) {
         if (!bucket.empty()) {
             trisc_binary_groups_.push_back(std::move(bucket));
         }
@@ -1303,8 +1295,9 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         jit_build_for_processors(targets, this);
     } else {
         const int canonical_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
-        const JitBuildState& build_state = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, canonical_id);
+        const JitBuildState& build_state =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, canonical_id);
         jit_build(build_state, this);
     }
 }
@@ -1323,8 +1316,14 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string&
                                  .hal()
                                  .get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
                                  .memory_load;
-            const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_binary_path(
-                device->build_id(), tensix_core_type, dm_class_idx, riscv_id, binary_root, this->kernel_full_name_);
+            const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device))
+                                         .get_kernel_binary_path(
+                                             device->build_id(),
+                                             tensix_core_type,
+                                             dm_class_idx,
+                                             riscv_id,
+                                             binary_root,
+                                             this->kernel_full_name_);
             const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
             binaries.push_back(&binary_mem);
         }
@@ -1334,8 +1333,14 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string&
                              .hal()
                              .get_jit_build_config(tensix_core_type, dm_class_idx, canonical_id)
                              .memory_load;
-        const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_binary_path(
-            device->build_id(), tensix_core_type, dm_class_idx, canonical_id, binary_root, this->kernel_full_name_);
+        const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device))
+                                     .get_kernel_binary_path(
+                                         device->build_id(),
+                                         tensix_core_type,
+                                         dm_class_idx,
+                                         canonical_id,
+                                         binary_root,
+                                         this->kernel_full_name_);
         const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
         binaries.push_back(&binary_mem);
     }
@@ -1430,8 +1435,9 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
     // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
     for (const auto& group : this->trisc_binary_groups_) {
         const int processor_id = static_cast<int>(enchantum::to_underlying(group[0]));
-        const JitBuildState& build_state = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, processor_id);
+        const JitBuildState& build_state =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(device->build_id(), tensix_core_type, compute_class_idx, processor_id);
         jit_build(build_state, this);
     }
 }
@@ -1450,13 +1456,14 @@ void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& bina
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, processor_id)
                              .memory_load;
-        const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_binary_path(
-            device->build_id(),
-            tensix_core_type,
-            compute_class_idx,
-            processor_id,
-            binary_root,
-            this->kernel_full_name_);
+        const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device))
+                                     .get_kernel_binary_path(
+                                         device->build_id(),
+                                         tensix_core_type,
+                                         compute_class_idx,
+                                         processor_id,
+                                         binary_root,
+                                         this->kernel_full_name_);
         const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
         binaries.push_back(&binary_mem);
     }

@@ -1122,8 +1122,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         for (auto& meshe : meshes) {
             for (auto& variant : flattened_mesh_to_topology_variants(grouping, meshe)) {
-                if (physical_system_descriptor != nullptr &&
-                    !can_map_to_psd(variant, *physical_system_descriptor)) {
+                if (physical_system_descriptor != nullptr && !can_map_to_psd(variant, *physical_system_descriptor)) {
                     continue;
                 }
                 result.push_back(std::move(variant));

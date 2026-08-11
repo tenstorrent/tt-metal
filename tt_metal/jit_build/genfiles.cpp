@@ -480,6 +480,10 @@ bool write_named_args_generated_header(const string& out_dir, const JitBuildSett
     std::ostringstream content;
     content << "#pragma once\n#include \"experimental/blaze_rt_arg.h\"\n\n";
     content << "namespace blaze_ct_args {\n" << ct_str << "}\n";
+    // Blaze kernels from before the experimental API was namespaced use ct_args::<namespace>.
+    // Keep that spelling as a generated-header alias without duplicating the schema or changing
+    // the current blaze_ct_args host/device contract.
+    content << "namespace ct_args = blaze_ct_args;\n";
     write_file(out_dir + "named_args_generated.h", content.str());
     return true;
 }

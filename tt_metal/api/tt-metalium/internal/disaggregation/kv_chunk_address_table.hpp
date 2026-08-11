@@ -137,7 +137,8 @@ public:
     // (first FabricNodeId in the chunk's DeviceGroup). Returns a buffer
     // of size loc.size_bytes. Resolves the device internally via the
     // global ControlPlane — no device list required from the caller.
-    std::vector<uint8_t> read_device_chunk(uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
+    std::vector<uint8_t> read_device_chunk(
+        uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
     std::vector<uint8_t> read_device_chunk(
         uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
 

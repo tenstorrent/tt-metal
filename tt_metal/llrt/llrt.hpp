@@ -61,12 +61,16 @@ bool test_load_multicast_write_risc_binary(
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
 
-void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const tt::tt_metal::CoreCoord& core, uint32_t address);
+void write_binary_to_address(
+    const ll_api::memory& mem, ChipId chip_id, const tt::tt_metal::CoreCoord& core, uint32_t address);
 
 namespace internal_ {
 
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
+    ChipId device_id,
+    int run_state,
+    std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores,
+    int timeout_ms = 0);
 
 void wait_for_idle(ChipId device_id, const std::vector<std::vector<tt::tt_metal::CoreCoord>>& logical_cores);
 

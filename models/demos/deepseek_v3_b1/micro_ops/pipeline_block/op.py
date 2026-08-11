@@ -64,21 +64,8 @@ from typing import Protocol, runtime_checkable
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.pipeline_routing import (
-    EdgeTransport,
-    LocalStageEdge,
-    LocalStageSocketPlan,
-    StageEndpointRef,
-    local_input_edge,
-    local_output_edge,
-)
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
-    MeshWrapper,
-    SocketInterface,
-    _create_socket_resource,
-    _group_by_device,
-)
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface, _group_by_device
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -223,8 +210,10 @@ class PipelineBlock:
         my_stage_idx=None,
         stages_metadata=None,
         pipeline_config=None,
-        stage_plan: LocalStageSocketPlan | None = None,
         forward_metadata=False,
+        forward_metadata_size_bytes=None,
+        io_socket_descriptor_prefix=None,
+        second_pipeline_core_coord=None,
     ):
         if loopback is None:
             # Middle stages don't need a loopback config; fall back to a no-loopback placeholder.
@@ -244,11 +233,13 @@ class PipelineBlock:
         self.initialize_loopback = loopback.initialize_loopback
         self._loopback_mode = loopback._mode  # "fabric" | "host" | "none"
         self.mesh_device = mesh_device
-        self._stage_plan = stage_plan
+        # Second core used for a forwarding stage's exit-send kernel when its entry and exit
+        # d2d_exchange land on the same chip (two persistent kernels can't share one core).
+        # Falls back to pipeline_core_coord when not supplied.
+        self.second_pipeline_core_coord = (
+            second_pipeline_core_coord if second_pipeline_core_coord is not None else pipeline_core_coord
+        )
         self.parallel_devices = pipeline_device_coords is not None and len(pipeline_device_coords) > 0
-        # Compute stages route input/output through dedicated compute cores; the plan-driven
-        # builder does not yet model those taps, so they keep their dedicated init paths.
-        self._has_compute_taps = entry_node_downstream is not None or exit_node_upstream is not None
         if stages_metadata is None:
             self._stages = {i: StageMetadata(rank=i, mesh_id=i) for i in range(self.num_procs)}
             pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(
@@ -258,12 +249,11 @@ class PipelineBlock:
             self._stages = stages_metadata
             assert pipeline_config is not None, "pipeline_config must be provided when stages_metadata is set"
 
-        self.num_stages = len(pipeline_config) - 1 if self.initialize_loopback else len(pipeline_config)
         if self.initialize_loopback:
-            assert len(pipeline_config) == self.num_stages + 1
+            assert len(pipeline_config) == self.num_procs + 1
 
         self.is_pipeline_start = self.my_stage_idx == 0
-        self.is_last_stage = self.my_stage_idx == self.num_stages - 1
+        self.is_last_stage = self.my_stage_idx == self.num_procs - 1
         self.has_exit = not self.is_last_stage or self.initialize_loopback
         self.has_d2h = (self.is_last_stage and not self.initialize_loopback) or (
             self.is_pipeline_start and self.initialize_loopback
@@ -274,7 +264,6 @@ class PipelineBlock:
         self.d2h_socket = None
         self.entry_socket_interface = None
         self.exit_socket_interface = None
-        self._plan_forwarders = []
         self._h2d_page_size_bytes = None
         self._d2h_page_size_bytes = None
 
@@ -305,24 +294,6 @@ class PipelineBlock:
                 exit_upstream_page_size=exit_upstream_page_size,
                 host_io_placement=loopback.host_io_placement,
             )
-        elif self._uses_plan():
-            self._init_from_plan(
-                mesh_device,
-                pipeline_core_coord,
-                token_size_bytes,
-                upstream_d2d_socket_fifo_size,
-                downstream_d2d_socket_fifo_size,
-                upstream_d2d_socket_page_size,
-                downstream_d2d_socket_page_size,
-                h2d_socket_fifo_size,
-                d2h_socket_fifo_size,
-                d2h_socket_page_size,
-                embedding_tensor,
-                forward_metadata,
-                entry_node_downstream,
-                exit_node_upstream,
-                loopback.host_io_placement,
-            )
         elif self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,
@@ -339,6 +310,9 @@ class PipelineBlock:
                 embedding_tensor,
                 forward_metadata,
                 host_io_placement=loopback.host_io_placement,
+                exit_node_upstream=exit_node_upstream,
+                entry_node_downstream=entry_node_downstream,
+                io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             )
         elif self.is_last_stage and not self.initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -385,276 +359,10 @@ class PipelineBlock:
                     entry_node_downstream,
                     exit_node_upstream,
                     exit_upstream_page_size,
-                    DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
+                    forward_metadata_size_bytes
+                    if forward_metadata_size_bytes is not None
+                    else (DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0),
                 )
-
-    def _uses_plan(self) -> bool:
-        """Route a stage through the unified plan-driven socket builder (:meth:`_init_from_plan`).
-
-        Covers every transport / host-I/O stage that has a resolved plan: split stages
-        (any role), non-split pure-forwarding stages, and non-split stages that own host
-        I/O — stage-0 embedding ingress and host-/fabric-loopback egress (the plan builder
-        does rank-local host-socket placement via ``host_io_placement``, so H2D/D2H kernels
-        no longer collide with their feeder forwarders).
-
-        Stages that still use their dedicated init paths:
-          - compute-tap stages (decoder / LM head): the plan does not yet model compute
-            input/output cores (``entry_node_downstream`` / ``exit_node_upstream``);
-          - per-device parallel mode;
-          - the no-plan fallback, when ``_stage_plan is None``.
-        """
-        if self._stage_plan is None or self.parallel_devices or self._has_compute_taps:
-            return False
-        return True
-
-    @staticmethod
-    def _entry_owner(stage) -> int:
-        if hasattr(stage, "entry_owner_rank"):
-            return int(stage.entry_owner_rank)
-        return int(stage.rank)
-
-    @staticmethod
-    def _exit_owner(stage) -> int:
-        if hasattr(stage, "exit_owner_rank"):
-            return int(stage.exit_owner_rank)
-        return int(stage.rank)
-
-    @staticmethod
-    def _mesh_id(stage) -> int:
-        return int(stage.mesh_id)
-
-    @staticmethod
-    def _core_for_endpoint(endpoint: StageEndpointRef, pipeline_core_coord: ttnn.CoreCoord) -> ttnn.MeshCoreCoord:
-        return ttnn.MeshCoreCoord(endpoint.placement.mesh_coord, pipeline_core_coord)
-
-    @staticmethod
-    def _mesh_wrapper_for_endpoint(mesh_device, endpoint: StageEndpointRef, my_rank: int) -> MeshWrapper:
-        if endpoint.owner_rank == my_rank:
-            return MeshWrapper(mesh_device)
-        return MeshWrapper(rank=endpoint.owner_rank, mesh_id=endpoint.mesh_id)
-
-    def _create_socket_resource_for_edge(
-        self,
-        edge: LocalStageEdge,
-        pipeline_core_coord: ttnn.CoreCoord,
-        socket_fifo_size: int,
-        local_endpoint_type,
-    ):
-        # Rank-scope every socket. A mesh-id-scoped handshake requires *all* host ranks of a
-        # mesh to create the socket, but on a split (multi-host) mesh only the endpoint owner
-        # does, so the handshake times out. Keying on the specific sender/receiver ranks works
-        # uniformly for both CROSS_MESH (stage->stage) and SAME_MESH_CROSS_RANK (split intra)
-        # edges. Both ends of an edge must agree, so the legacy SocketInterface paths
-        # (_init_first_stage) rank-scope too.
-        return _create_socket_resource(
-            self.mesh_device,
-            self._core_for_endpoint(edge.src, pipeline_core_coord),
-            self._core_for_endpoint(edge.dst, pipeline_core_coord),
-            socket_fifo_size,
-            self._mesh_wrapper_for_endpoint(self.mesh_device, edge.src, self._stage_plan.my_rank),
-            self._mesh_wrapper_for_endpoint(self.mesh_device, edge.dst, self._stage_plan.my_rank),
-            use_rank_scoped_mesh_socket=True,
-            local_endpoint_type=local_endpoint_type,
-        )
-
-    def _create_local_socket_pair_for_edge(
-        self, edge: LocalStageEdge, pipeline_core_coord: ttnn.CoreCoord, socket_fifo_size: int
-    ):
-        socket_connection = ttnn.SocketConnection(
-            self._core_for_endpoint(edge.src, pipeline_core_coord),
-            self._core_for_endpoint(edge.dst, pipeline_core_coord),
-        )
-        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
-        socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-        return ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
-
-    def _build_forwarder_from_existing_sockets(
-        self,
-        runtime_endpoint: StageEndpointRef,
-        upstream_socket,
-        downstream_socket,
-        page_size: int,
-        pipeline_core_coord: ttnn.CoreCoord,
-    ):
-        return SocketInterface.from_existing_sockets(
-            page_size,
-            page_size,
-            mesh_device=self.mesh_device,
-            runtime_core_coord=self._core_for_endpoint(runtime_endpoint, pipeline_core_coord),
-            upstream_socket=upstream_socket,
-            downstream_socket=downstream_socket,
-        )
-
-    def _init_from_plan(
-        self,
-        mesh_device,
-        pipeline_core_coord,
-        token_size_bytes,
-        upstream_d2d_socket_fifo_size,
-        downstream_d2d_socket_fifo_size,
-        upstream_d2d_socket_page_size,
-        downstream_d2d_socket_page_size,
-        h2d_socket_fifo_size,
-        d2h_socket_fifo_size,
-        d2h_socket_page_size,
-        embedding_tensor,
-        forward_metadata,
-        entry_node_downstream,
-        exit_node_upstream,
-        host_io_placement,
-    ):
-        """Unified plan-driven socket builder for split and non-split transport stages.
-
-        Builds the recv/send/intra forwarders and host I/O sockets a rank owns from its
-        resolved :class:`LocalStageSocketPlan`. Works for both same-rank (LOCAL intra,
-        shared socket pair) and cross-rank (SAME_MESH_CROSS_RANK intra, rank-scoped
-        forwarder) stages. Compute taps are not yet modeled here (see :meth:`_uses_plan`).
-        """
-        if entry_node_downstream is not None or exit_node_upstream is not None:
-            raise RuntimeError("Plan-driven PipelineBlock routing currently supports passthrough/host I/O stages only")
-        assert self._stage_plan is not None
-        stage_plan = self._stage_plan
-
-        if stage_plan.host_io.owns_h2d:
-            assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
-            assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
-            # Place the H2D kernel on host_io_placement.h2d_core, not pipeline_core_coord:
-            # when this rank also owns the forward D2D forwarder (same chip), two persistent
-            # kernels would otherwise land on the same Tensix core and fail program merge.
-            self.h2d_socket = ttnn.H2DSocket(
-                mesh_device,
-                self._core_for_endpoint(stage_plan.host_io.h2d_target, host_io_placement.h2d_core),
-                ttnn.BufferType.L1,
-                h2d_socket_fifo_size,
-                ttnn.H2DMode.HOST_PUSH,
-            )
-            self._h2d_page_size_bytes = token_size_bytes
-
-        if stage_plan.host_io.owns_d2h:
-            assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to host egress stage"
-            # Same rationale as H2D: keep the D2H kernel off the upstream forwarder's core
-            # (host loopback puts the D2H on the last stage's entry chip, shared with the
-            # incoming forwarder) so the per-device program merge has distinct core ranges.
-            self.d2h_socket = ttnn.D2HSocket(
-                mesh_device,
-                self._core_for_endpoint(stage_plan.host_io.d2h_source, host_io_placement.d2h_core),
-                d2h_socket_fifo_size,
-            )
-            self._d2h_page_size_bytes = d2h_socket_page_size
-
-        input_edge = local_input_edge(stage_plan)
-        output_edge = local_output_edge(stage_plan)
-        local_intra_socket_pair = None
-        if (
-            stage_plan.intra_stage_edge is not None
-            and stage_plan.intra_stage_edge.transport == EdgeTransport.LOCAL
-            and not stage_plan.host_io.owns_h2d
-            and not stage_plan.host_io.owns_d2h
-        ):
-            local_intra_socket_pair = self._create_local_socket_pair_for_edge(
-                stage_plan.intra_stage_edge, pipeline_core_coord, downstream_d2d_socket_fifo_size
-            )
-
-        h2d_downstream_core = None
-        if stage_plan.host_io.owns_h2d:
-            assert output_edge is not None, "Host ingress requires a local output edge"
-            h2d_downstream_core = self._core_for_endpoint(output_edge.src, pipeline_core_coord)
-
-        d2h_upstream_core = None
-        if stage_plan.host_io.owns_d2h:
-            assert input_edge is not None, "Host egress requires a local input edge"
-            d2h_upstream_core = self._core_for_endpoint(input_edge.dst, pipeline_core_coord)
-
-        if self.h2d_socket is not None or self.d2h_socket is not None:
-            embedding_size_bytes = (
-                embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype) if embedding_tensor is not None else 0
-            )
-            metadata_size_bytes = downstream_d2d_socket_page_size - embedding_size_bytes if forward_metadata else 0
-            self.host_io = HostInterface(
-                self.h2d_socket,
-                self.d2h_socket,
-                token_size_bytes,
-                d2h_socket_page_size,
-                core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
-                h2d_downstream_core=h2d_downstream_core,
-                d2h_upstream_core=d2h_upstream_core,
-                embedding_tensor=embedding_tensor,
-                metadata_size_bytes=metadata_size_bytes,
-            )
-
-        forwarders = []
-
-        def build_input_forwarder():
-            # Receiver edge: incoming activation (or split cross-rank intra) -> D2H / local intra pair.
-            if input_edge is not None and (stage_plan.host_io.owns_d2h or local_intra_socket_pair is not None):
-                upstream_socket = self._create_socket_resource_for_edge(
-                    input_edge,
-                    pipeline_core_coord,
-                    upstream_d2d_socket_fifo_size,
-                    ttnn.SocketEndpoint.RECEIVER,
-                )
-                downstream_socket = (
-                    self.host_io.get_upstream_socket() if stage_plan.host_io.owns_d2h else local_intra_socket_pair[0]
-                )
-                forwarders.append(
-                    self._build_forwarder_from_existing_sockets(
-                        input_edge.dst,
-                        upstream_socket,
-                        downstream_socket,
-                        upstream_d2d_socket_page_size,
-                        pipeline_core_coord,
-                    )
-                )
-
-        def build_output_forwarder():
-            # Sender edge: H2D / local intra / split-recv -> outgoing activation.
-            if output_edge is not None:
-                if stage_plan.host_io.owns_h2d:
-                    upstream_socket = self.host_io.get_downstream_socket()
-                elif local_intra_socket_pair is not None:
-                    upstream_socket = local_intra_socket_pair[1]
-                else:
-                    assert input_edge is not None, "Expected an input edge for split output forwarding"
-                    upstream_socket = self._create_socket_resource_for_edge(
-                        input_edge,
-                        pipeline_core_coord,
-                        upstream_d2d_socket_fifo_size,
-                        ttnn.SocketEndpoint.RECEIVER,
-                    )
-                downstream_socket = self._create_socket_resource_for_edge(
-                    output_edge,
-                    pipeline_core_coord,
-                    downstream_d2d_socket_fifo_size,
-                    ttnn.SocketEndpoint.SENDER,
-                )
-                forwarders.append(
-                    self._build_forwarder_from_existing_sockets(
-                        output_edge.src,
-                        upstream_socket,
-                        downstream_socket,
-                        downstream_d2d_socket_page_size,
-                        pipeline_core_coord,
-                    )
-                )
-
-        # MeshSocket construction blocks on the cross-host handshake. Fabric loopback closes the
-        # pipeline into a ring (last stage -> stage-0 loopback entry), so if every rank created its
-        # receiver socket before its sender the whole ring deadlocks: each rank blocks on its
-        # incoming handshake and never reaches its outgoing one. The pipeline-start stage is the
-        # only rank that owns both a forward sender (H2D -> stage 1) and a loopback receiver
-        # (last stage -> D2H); building its sender first -- mirroring legacy _init_first_stage --
-        # breaks the cycle so the handshakes cascade around the ring. Every other stage keeps
-        # receiver-first ordering (relied on by the linear/host-loopback and split cases).
-        if stage_plan.host_io.owns_h2d and stage_plan.host_io.owns_d2h:
-            build_output_forwarder()
-            build_input_forwarder()
-        else:
-            build_input_forwarder()
-            build_output_forwarder()
-
-        self._plan_forwarders = forwarders
-        self.entry_socket_interface = forwarders[0] if len(forwarders) == 1 else forwarders
-        self.exit_socket_interface = None
 
     def _init_first_stage(
         self,
@@ -672,18 +380,29 @@ class PipelineBlock:
         embedding_tensor,
         forward_metadata,
         host_io_placement=None,
+        exit_node_upstream=None,
+        entry_node_downstream=None,
+        io_socket_descriptor_prefix=None,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
-        assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
         assert host_io_placement is not None, "host_io_placement must be provided to first pipeline stage"
 
         h2d_device_coord = pipeline_config[self.my_stage_idx].entry_node_coord
-        embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
-        if forward_metadata:
-            assert downstream_d2d_socket_page_size == embedding_size_bytes + DeepseekMetadata.aligned_size_bytes()
+        if embedding_tensor is not None:
+            embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
+            if forward_metadata:
+                assert downstream_d2d_socket_page_size == embedding_size_bytes + DeepseekMetadata.aligned_size_bytes()
+            else:
+                assert downstream_d2d_socket_page_size == embedding_size_bytes
         else:
-            assert downstream_d2d_socket_page_size == embedding_size_bytes
+            # Blaze owns the embedding stage: H2D forwards raw tokens to the lookup core
+            # (entry_node_downstream), Blaze writes activations into a fresh upstream pair,
+            # and exit_socket_interface drains that pair to fabric.
+            assert exit_node_upstream is not None, (
+                "exit_node_upstream must be provided when embedding_tensor is None " "(Blaze-owned embedding stage)"
+            )
+            embedding_size_bytes = 0
 
         if self.initialize_loopback:
             assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
@@ -703,11 +422,15 @@ class PipelineBlock:
         self._h2d_page_size_bytes = token_size_bytes
 
         if self.initialize_loopback:
-            d2h_device_coord = pipeline_config[self.num_stages].exit_node_coord
+            d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
             self.d2h_socket = ttnn.D2HSocket(
                 mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, host_io_placement.d2h_core), d2h_socket_fifo_size
             )
             self._d2h_page_size_bytes = d2h_socket_page_size
+
+        if io_socket_descriptor_prefix is not None:
+            self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
+            self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
 
         self.host_io = HostInterface(
             self.h2d_socket,
@@ -715,52 +438,84 @@ class PipelineBlock:
             token_size_bytes,
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
-            h2d_downstream_core=ttnn.MeshCoreCoord(
-                pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core
+            # In the integrated-embedding path the fused H2D+embedding kernel reads
+            # at ``fwd_d2d_core`` and the exit d2d_exchange kernel also runs there
+            # (different chips, no collision). In the Blaze-owned path the blaze
+            # graph runs its receiver/embedding/sender kernels on the EXIT chip,
+            # all on the BRISC of the H2D landing core, and the exit_socket_interface
+            # d2d_exchange ALSO runs on the BRISC of ``fwd_d2d_core`` on that same
+            # exit chip — two BRISC kernels on one core would collide. ``EmbeddingStage``
+            # routes blaze to a separate core (e.g. (12, 9)) and passes
+            # ``entry_node_downstream`` here so H2D delivers to that same core.
+            h2d_downstream_core=(
+                entry_node_downstream
+                if (embedding_tensor is None and entry_node_downstream is not None)
+                else ttnn.MeshCoreCoord(
+                    pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core
+                )
             ),
             d2h_upstream_core=(
-                ttnn.MeshCoreCoord(pipeline_config[self.num_stages].entry_node_coord, host_io_placement.lb_d2d_core)
+                ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, host_io_placement.lb_d2d_core)
                 if self.initialize_loopback
                 else None
             ),
             embedding_tensor=embedding_tensor,
-            metadata_size_bytes=downstream_d2d_socket_page_size - embedding_size_bytes,
+            # The H2D kernel forwards (embedding + metadata) downstream ONLY when
+            # the integrated-embedding path is active (embedding_tensor != None).
+            # In the Blaze-owned case the H2D kernel just forwards the raw token
+            # page (h2d_socket_page_size bytes) to the lookup core, and Blaze's
+            # embedding op produces the activation that the separate
+            # exit_socket_interface forwards. Conflating the two payload sizes
+            # made the H2D kernel compute fabric packet sizes from
+            # ``h2d_page_size + (downstream activation + metadata)`` and try to
+            # send 14464 B per page after reading only 64 B from PCIe, hanging
+            # the pipeline at the first H2D push.
+            metadata_size_bytes=(
+                (downstream_d2d_socket_page_size - embedding_size_bytes) if embedding_tensor is not None else 0
+            ),
         )
 
         next_stage = self.my_stage_idx + 1
         ns = self._stages[next_stage]
-        next_entry_owner = self._entry_owner(ns)
-        self.exit_socket_interface = SocketInterface(
-            downstream_d2d_socket_page_size,
-            downstream_d2d_socket_fifo_size,
-            downstream_d2d_socket_page_size,
-            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
-            ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
-            upstream_socket=self.host_io.get_downstream_socket(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
-            # Rank-scope so this legacy stage-0 sender agrees with the (plan-driven)
-            # receiver on the next stage. Mesh-id scoping is ambiguous once that stage's
-            # mesh spans multiple host ranks. See _create_socket_resource_for_edge.
-            use_rank_scoped_mesh_socket=True,
-        )
+        if embedding_tensor is not None:
+            # Fused H2D-embedding kernel produces activations directly into the H2D-forwarded
+            # socket; exit_socket_interface forwards those across fabric to the next stage.
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
+                upstream_socket=self.host_io.get_downstream_socket(),
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
+            )
+        else:
+            # Blaze owns the embedding stage: read from the fresh upstream pair Blaze writes into,
+            # rather than the host_io downstream socket.
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, host_io_placement.fwd_d2d_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_stage].entry_node_coord, pipeline_core_coord),
+                upstream_core_coord=exit_node_upstream,
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
+            )
 
-        last_stage = self.num_stages - 1
+        last_stage = self.num_procs - 1
         ls = self._stages[last_stage]
-        last_exit_owner = self._exit_owner(ls)
         if self.initialize_loopback:
             self.entry_socket_interface = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
                 upstream_d2d_socket_page_size,
                 ttnn.MeshCoreCoord(pipeline_config[last_stage].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[self.num_stages].entry_node_coord, host_io_placement.lb_d2d_core),
+                ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, host_io_placement.lb_d2d_core),
                 downstream_socket=self.host_io.get_upstream_socket(),
-                sender_mesh=MeshWrapper(rank=last_exit_owner, mesh_id=self._mesh_id(ls)),
+                sender_mesh=MeshWrapper(rank=ls.rank, mesh_id=ls.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
-                # Rank-scope to agree with the plan-driven last-stage sender (the loopback
-                # entry edge); mesh-id scoping is ambiguous for multi-host last stages.
-                use_rank_scoped_mesh_socket=True,
             )
 
     def _init_combined_h2d_d2h_stage(
@@ -874,7 +629,7 @@ class PipelineBlock:
         # d2h_device_coord ends up on the same chip as the entry recv kernel.  Use
         # host_io_placement.d2h_core (rather than pipeline_core_coord) so the D2H kernel
         # lands on a different core and avoids a same-core dispatch deadlock.
-        d2h_device_coord = pipeline_config[self.num_stages - 1].entry_node_coord
+        d2h_device_coord = pipeline_config[self.num_procs - 1].entry_node_coord
         d2h_core = host_io_placement.d2h_core
         d2h_upstream_core = (
             exit_node_upstream
@@ -901,7 +656,6 @@ class PipelineBlock:
 
         prev_stage = self.my_stage_idx - 1
         ps = self._stages[prev_stage]
-        prev_exit_owner = self._exit_owner(ps)
         if entry_node_downstream is not None:
             # Compute stage (e.g. LMHead): entry socket delivers to the compute input core;
             # D2H reads independently from the compute output core (exit_node_upstream).
@@ -912,7 +666,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
                 downstream_core_coord=entry_node_downstream,
-                sender_mesh=MeshWrapper(rank=prev_exit_owner, mesh_id=self._mesh_id(ps)),
+                sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
         else:
@@ -924,7 +678,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
                 downstream_socket=self.host_io.get_upstream_socket(),
-                sender_mesh=MeshWrapper(rank=prev_exit_owner, mesh_id=self._mesh_id(ps)),
+                sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
 
@@ -944,29 +698,47 @@ class PipelineBlock:
     ):
         prev_stage = self.my_stage_idx - 1
         ps = self._stages[prev_stage]
-        prev_exit_owner = self._exit_owner(ps)
+        next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
+        ns = self._stages[next_stage]
+        # pipeline_config index: always my_stage_idx+1 (sequential), even for
+        # the last stage where it points to the loopback config entry at
+        # pipeline_config[num_procs] rather than wrapping to 0.
+        next_cfg_idx = self.my_stage_idx + 1
+
+        # Multiple d2d_exchange on the same chip: a stage's entry-recv and exit-send kernels
+        # would collide if its entry and exit land on the same chip. Keep entry-recv on the
+        # primary core and move exit-send to the second core in that case. A stage's exit-send
+        # core is the *sender* core of the socket to the next stage, so adjacent stages must
+        # agree on it — each derives a neighbor's conflict from pipeline_config (entry==exit),
+        # which is identical on every rank.
+        primary = pipeline_core_coord
+        second = self.second_pipeline_core_coord
+
+        def _same_chip(a, b):
+            return int(a[0]) == int(b[0]) and int(a[1]) == int(b[1])
+
+        def _exit_send_core(stage_idx):
+            cfg = pipeline_config[stage_idx]
+            return second if _same_chip(cfg.entry_node_coord, cfg.exit_node_coord) else primary
+
+        prev_exit_send_core = _exit_send_core(prev_stage)  # sender core of the prev -> me socket
+        my_exit_send_core = _exit_send_core(self.my_stage_idx)  # sender core of the me -> next socket
+
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
             upstream_d2d_socket_fifo_size,
             upstream_d2d_socket_page_size,
-            ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
-            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
+            ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, prev_exit_send_core),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, primary),
             downstream_core_coord=(
                 entry_node_downstream
                 if entry_node_downstream
-                else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord)
+                else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core)
             ),
-            sender_mesh=MeshWrapper(rank=prev_exit_owner, mesh_id=self._mesh_id(ps)),
+            sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
             receiver_mesh=MeshWrapper(mesh_device),
         )
 
-        next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
-        ns = self._stages[next_stage]
-        next_entry_owner = self._entry_owner(ns)
-        # pipeline_config index: always my_stage_idx+1 (sequential), even for
-        # the last stage where it points to the loopback config entry at
-        # pipeline_config[num_stages] rather than wrapping to 0.
-        next_cfg_idx = self.my_stage_idx + 1
         use_multi_upstream = isinstance(exit_node_upstream, list)
         if use_multi_upstream:
             assert exit_upstream_page_size is not None, "exit_upstream_page_size required for multi-upstream mode"
@@ -974,10 +746,10 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
                 downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, primary),
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                 upstream_core_coords=exit_node_upstream,
                 upstream_page_size=exit_upstream_page_size,
                 forward_metadata_size_bytes=forward_metadata_size_bytes,
@@ -987,12 +759,12 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
                 downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, primary),
                 upstream_core_coord=exit_node_upstream,
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
+                receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
             )
 
     def _init_parallel_device_forwarding_stage(
@@ -1033,10 +805,8 @@ class PipelineBlock:
         use_multi_upstream = isinstance(exit_upstream_cores, list)
         prev_stage = self.my_stage_idx - 1
         ps = self._stages[prev_stage]
-        prev_exit_owner = self._exit_owner(ps)
         next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
         ns = self._stages[next_stage]
-        next_entry_owner = self._entry_owner(ns)
 
         self.entry_socket_interface = []
         self.exit_socket_interface = []
@@ -1059,7 +829,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(dc, core_exit),
                 ttnn.MeshCoreCoord(dc, core_entry),
                 downstream_core_coord=ttnn.MeshCoreCoord(dc, effective_downstream_core),
-                sender_mesh=MeshWrapper(rank=prev_exit_owner, mesh_id=self._mesh_id(ps)),
+                sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
             )
             self.entry_socket_interface.append(entry_si)
@@ -1076,7 +846,7 @@ class PipelineBlock:
                     ttnn.MeshCoreCoord(dc, core_exit),
                     ttnn.MeshCoreCoord(dc, core_entry),
                     sender_mesh=MeshWrapper(mesh_device),
-                    receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
+                    receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                     upstream_core_coords=per_device_upstream_cores,
                     upstream_page_size=exit_upstream_page_size,
                 )
@@ -1088,7 +858,7 @@ class PipelineBlock:
                     ttnn.MeshCoreCoord(dc, core_exit),
                     ttnn.MeshCoreCoord(dc, core_entry),
                     sender_mesh=MeshWrapper(mesh_device),
-                    receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
+                    receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                     upstream_sockets=[entry_si.get_downstream_socket()],
                     upstream_page_size=upstream_d2d_socket_page_size,
                 )
@@ -1101,7 +871,7 @@ class PipelineBlock:
                     ttnn.MeshCoreCoord(dc, core_entry),
                     upstream_socket=entry_si.get_downstream_socket(),
                     sender_mesh=MeshWrapper(mesh_device),
-                    receiver_mesh=MeshWrapper(rank=next_entry_owner, mesh_id=self._mesh_id(ns)),
+                    receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                 )
             self.exit_socket_interface.append(exit_si)
 
@@ -1128,46 +898,11 @@ class PipelineBlock:
             self.is_pipeline_start and self.is_last_stage and not self.initialize_loopback and not self.parallel_devices
         )
 
-    def _run_from_plan(self):
-        all_entries = []
-        if self.host_io is not None:
-            all_entries.extend(self.host_io._build_programs())
-        for forwarder in self._plan_forwarders:
-            all_entries.extend(forwarder.build_programs())
-
-        if not all_entries:
-            return
-
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
-        groups = _group_by_device(all_entries)
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        for device_coord, progs in groups:
-            merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
-            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
-
-        ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
-
-    def _terminate_from_plan(self):
-        for forwarder in self._plan_forwarders:
-            forwarder.terminate(False)
-        if self.host_io is not None:
-            # Plan-path host I/O only exists on split (multi-host) stages, where the idle peer
-            # rank owns no host_io and so does NOT call it. synchronize_device is collective
-            # across the mesh's host ranks, so terminating host_io with sync=True here issues an
-            # extra collective sync the peer never matches -> the two split halves deadlock. Pass
-            # sync=False; the outer Pipeline.terminate synchronize_device (called by every rank)
-            # drains the device symmetrically and still waits for the D2H/forwarder kernels.
-            self.host_io.terminate(False)
-
     def run(self):
         if self.parallel_devices:
             self._dispatch_parallel_device_programs()
         elif self._is_combined_h2d_d2h_stage():
             self.host_io.run()
-        elif self._uses_plan():
-            self._run_from_plan()
         elif self.is_pipeline_start:
             self.host_io.run()
             self.exit_socket_interface.run()
@@ -1190,8 +925,6 @@ class PipelineBlock:
                 si.terminate(last)
         elif self._is_combined_h2d_d2h_stage():
             self.host_io.terminate(True)
-        elif self._uses_plan():
-            self._terminate_from_plan()
         elif self.is_pipeline_start:
             self.host_io.terminate(False)
             if self.initialize_loopback:
@@ -1231,15 +964,11 @@ class PipelineBlock:
             # ttnn.to_torch returns a copy, so we can't write back through it.
             # Return the received torch tensor directly instead.
             backing = ttnn.to_torch(output_tensor)
-            last_stage = self._stages[self.num_stages - 1]
-            raw = recv_bytes(backing.numel() * backing.element_size(), self._exit_owner(last_stage))
+            raw = recv_bytes(backing.numel() * backing.element_size(), self.num_procs - 1)
             received = torch.frombuffer(bytearray(raw), dtype=backing.dtype).reshape(backing.shape)
             return received
-        elif self.is_last_stage and self.d2h_socket is not None:
-            # The last stage's D2H owner reads from the D2H socket then forwards to rank 0 via
-            # host MPI. On a split last stage only the entry/egress owner holds the D2H (rank 0
-            # receives from _exit_owner(last_stage), which falls back to the entry owner); the
-            # peer half of the split has no D2H and must not read or send.
+        elif self.is_last_stage:
+            # Rank N-1 reads from the D2H socket then forwards to rank 0 via host MPI.
             self.d2h_socket.read_tensor(output_tensor)
             result = ttnn.to_torch(output_tensor).reshape(-1).contiguous()
             send_bytes(result.view(torch.uint8).numpy().tobytes(), 0)

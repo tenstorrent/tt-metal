@@ -273,6 +273,7 @@ protected:
         mesh_groupings[MeshId{0}] = {as0[0], as0[1]};
         mesh_groupings[MeshId{1}] = {as1[0], as1[1]};
         mesh_groupings[MeshId{2}] = {as2[0], as2[1]};
+
         physical = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
     }
 
@@ -2009,6 +2010,7 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_SingleMesh)
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {asic0, asic1, asic2};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
@@ -2037,6 +2039,7 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_TwoMeshes) 
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3};
     mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
@@ -2069,6 +2072,7 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleCha
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2};
     mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 3u);
@@ -2092,6 +2096,7 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_ThreeMeshes
     mesh_groupings[MeshId{0}] = {asic0};
     mesh_groupings[MeshId{1}] = {asic1};
     mesh_groupings[MeshId{2}] = {asic2};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
@@ -2131,6 +2136,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_DisconnectedMeshe
     mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
     mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3};
     mesh_groupings[MeshId{2}] = {asic2_0, asic2_1};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
@@ -2167,6 +2173,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodes
     mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
     mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2};
     mesh_groupings[MeshId{2}] = {asic2_0, asic2_1, asic2_2};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 5u);
@@ -2201,6 +2208,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MeshWithOnlyExitN
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
     mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3, asic1_4};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 5u);
@@ -2240,6 +2248,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_UnassignedASICs) 
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {asic0};
     mesh_groupings[MeshId{1}] = {asic1};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 1u);
@@ -2266,6 +2275,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_RingTopology) {
     mesh_groupings[MeshId{1}] = {asic1};
     mesh_groupings[MeshId{2}] = {asic2};
     mesh_groupings[MeshId{3}] = {asic3};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
@@ -2296,6 +2306,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_StarTopology) {
     mesh_groupings[MeshId{1}] = {asic1};
     mesh_groupings[MeshId{2}] = {asic2};
     mesh_groupings[MeshId{3}] = {asic3};
+
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_connectivity(multi_mesh_graph, MeshId{0}, 3u);
@@ -2392,6 +2403,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
         std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m0.begin(), physical_asics_m0.end());
     mesh_groupings[MeshId{1}] =
         std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m1.begin(), physical_asics_m1.end());
+
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
     PhysicalMultiMeshGraph physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
@@ -3949,6 +3961,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     // All ASICs belong to the same mesh (rank information is not needed for graph building)
     std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     mesh_groupings[MeshId{0}] = {physical_asics[0], physical_asics[1], physical_asics[2], physical_asics[3]};
+
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
     PhysicalMultiMeshGraph physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
@@ -4708,10 +4721,22 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), expected_fabric_nodes);
 
     std::set<std::string> hosts_spanning_blitz_mapped;
+    std::map<std::string, std::set<std::uint32_t>> host_to_logical_meshes;
     for (const auto& [fabric_node, asic_id] : mapping_result.fabric_node_to_asic) {
-        hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
+        const auto host = psd.get_host_name_for_asic(asic_id);
+        hosts_spanning_blitz_mapped.insert(host);
+        host_to_logical_meshes[host].insert(*fabric_node.mesh_id);
     }
     EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
+    if (hosts_spanning_blitz_mapped.size() != 8u) {
+        for (const auto& [host, meshes] : host_to_logical_meshes) {
+            std::cout << host << " <-";
+            for (const auto m : meshes) {
+                std::cout << " " << m;
+            }
+            std::cout << std::endl;
+        }
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {

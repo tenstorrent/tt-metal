@@ -62,8 +62,8 @@ void bind_ttnn_cluster(nb::module_& mod) {
             Resolve a FabricNodeId (mesh_id, chip_id) to the chip's hardware-stable 64-bit ASIC unique id.
 
             This is the chip's physical, host-global-unique identity (the same value fabric sockets
-            route by and the migration worker keys per-chip state on). It is NOT the process-local
-            logical device id (ttnn.MeshDevice.get_device_id), which collides across the meshes on a host.
+            route by and the worker keys per-chip state on). It is NOT the process-local logical device
+            id (ttnn.MeshDevice.get_device_id), which collides across the meshes on a host.
 
             Args:
                 mesh_id (int): The fabric mesh id of the node.

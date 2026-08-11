@@ -19,11 +19,9 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
 
-# transformers 5.x moved no_init_weights to transformers.initialization; fall back
-# to the old location for transformers < 5.x.
-try:
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
     from transformers.initialization import no_init_weights
-except ImportError:
+except ImportError:  # transformers < 5
     from transformers.modeling_utils import no_init_weights
 
 import ttnn
@@ -765,12 +763,12 @@ def test_rmsnorm_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     assert passing, f"RMSNorm1D output does not meet PCC requirement {pcc}: {pcc_message}."
 
 
-def test_rmsnorm_1d_rejects_galaxy():
+def test_rmsnorm_1d_rejects_galaxy(expect_error):
     """Test that RMSNorm1D.from_model_args raises error for Galaxy devices."""
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="cannot be used for Galaxy devices"):
+    with expect_error(ValueError, "cannot be used for Galaxy devices"):
         RMSNorm1D.from_model_args(
             mesh_device=MagicMock(),
             tt_ccl=MagicMock(),

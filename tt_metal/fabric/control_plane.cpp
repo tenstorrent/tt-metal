@@ -2116,7 +2116,8 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
         // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
         // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
 
-        tt::tt_metal::CoreCoord virtual_eth_core = this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
+        tt::tt_metal::CoreCoord virtual_eth_core =
+            this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
         this->cluster_.get().write_core(
             telemetry.data(),
             telemetry.size(),
@@ -2246,7 +2247,8 @@ bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) con
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
-std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
+std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_cores(
+    ChipId chip_id, bool skip_reserved_cores) const {
     const auto& cluster = this->cluster_.get();
 
     std::unordered_set<tt::tt_metal::CoreCoord> active_ethernet_cores;
@@ -2528,7 +2530,8 @@ void ControlPlane::populate_fabric_connection_info(
     // Always populate fabric router config for normal workers
     const auto& edm_config = builder_context.get_fabric_router_config(
         fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
-    tt::tt_metal::CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+    tt::tt_metal::CoreCoord fabric_router_virtual_core =
+        cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
         worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
@@ -2571,8 +2574,10 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Get mux and dispatcher cores
-    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
-    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated =
+        tensix_config.get_translated_fabric_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated =
+        tensix_config.get_translated_dispatch_mux_cores();
 
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
@@ -3119,8 +3124,7 @@ void ControlPlane::forward_descriptors_to_controller(
         serialized_table = serialize_to_bytes(port_descriptors);
         serialized_table_size = serialized_table.size();
         distributed_context.send(
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{CONTROLLER_RANK},
             Tag{0});
         distributed_context.send(
@@ -3205,14 +3209,12 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
         }
     } else {
         distributed_context.recv(
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{0},
             Tag{1});
         serialized_connections.resize(serialized_table_size);
         distributed_context.recv(
-            ttsl::as_writable_bytes(
-                ttsl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
             Rank{0},
             Tag{1});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);

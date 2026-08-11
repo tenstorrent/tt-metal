@@ -103,7 +103,7 @@ struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
     // in this binding's CRTA section.
     // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
@@ -536,9 +536,7 @@ public:
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
-        TT_FATAL(
-            config.num_threads_per_cluster == 1,
-            "DispatchEngineKernel requires num_threads_per_cluster=1");
+        TT_FATAL(config.num_threads_per_cluster == 1, "DispatchEngineKernel requires num_threads_per_cluster=1");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
@@ -553,7 +551,8 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(std::function<void(const std::string& define, const std::string& value)> callback) const override;
+    void process_defines(
+        std::function<void(const std::string& define, const std::string& value)> callback) const override;
 
     std::string_view get_compiler_opt_level() const override;
 

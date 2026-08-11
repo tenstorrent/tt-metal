@@ -7,9 +7,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
@@ -338,6 +338,15 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "get_all_mgd_fabric_types",
+        &tt::tt_fabric::get_all_mgd_fabric_types,
+        R"(
+            Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
+            the active mesh graph descriptor. Callers can map these to a FabricConfig to match
+            the wired topology (RING/LINE) instead of inferring it from process count.
+        )");
+
+    mod.def(
         "get_physical_mesh_shapes",
         []() {
             // Return plain ints ({mesh_id: (rows, cols)}) to avoid MeshId/MeshShape
@@ -399,12 +408,22 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
-        "get_all_mgd_fabric_types",
-        &tt::tt_fabric::get_all_mgd_fabric_types,
+        "get_physical_mesh_shapes",
+        []() {
+            // Return plain ints ({mesh_id: (rows, cols)}) to avoid MeshId/MeshShape
+            // Python-type friction -- callers just need the open shape per local mesh.
+            std::unordered_map<uint32_t, std::array<uint32_t, 2>> out;
+            for (const auto& [mid, shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+                out[*mid] = {shape[0], shape[1]};
+            }
+            return out;
+        },
         R"(
-            Returns the FabricType each compute mesh's dim_types imply, one entry per mesh in
-            the active mesh graph descriptor. Callers can map these to a FabricConfig to match
-            the wired topology (RING/LINE) instead of inferring it from process count.
+            Physical shape of each mesh local to this rank, read from the active mesh graph descriptor.
+
+            Returns a {mesh_id: (rows, cols)} map scoped to get_user_physical_mesh_ids() -- i.e. only
+            this rank's local mesh(es). This is exactly the shape to pass to open_mesh_device, so it is
+            safe to call before the device is opened (the control plane lazily inits from the MGD).
         )");
 }
 

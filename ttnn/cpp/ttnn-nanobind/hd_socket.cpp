@@ -85,6 +85,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::write,
             nb::arg("data"),
             nb::arg("num_pages"),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Writes data pages to the socket FIFO.
 
@@ -117,6 +118,7 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             nb::arg("tensor"),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Writes a host tensor's data to the socket FIFO.
 
@@ -162,6 +164,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until the device has acknowledged all written data.
 
@@ -214,6 +217,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing H2DSocket from another process.
             )doc");
@@ -253,6 +257,7 @@ void py_module_types(nb::module_& mod) {
             "set_page_size",
             &tt::tt_metal::distributed::D2HSocket::set_page_size,
             nb::arg("page_size"),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Sets the page size for subsequent read operations.
 
@@ -265,6 +270,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::arg("notify_sender") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reads data pages from the socket FIFO.
 
@@ -307,6 +313,7 @@ void py_module_types(nb::module_& mod) {
             },
             nb::arg("tensor"),
             nb::arg("notify_sender") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reads data from the socket FIFO into a host tensor.
 
@@ -364,6 +371,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until all sent data has been acknowledged.
 
@@ -427,6 +435,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::D2HSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing D2HSocket from another process.
             )doc");

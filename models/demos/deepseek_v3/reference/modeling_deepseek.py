@@ -42,7 +42,6 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
-import torch.fx
 import torch.nn.functional as F
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
@@ -67,9 +66,15 @@ from transformers.utils import (
 from .configuration_deepseek import DeepseekV3Config
 from .reference_utils import topk_bitonic
 
+try:
+    import torch.fx as torch_fx
+except ImportError:
+    torch_fx = None
+
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
-_prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
+if torch_fx is not None:
+    _prepare_4d_causal_attention_mask = torch_fx.wrap(_prepare_4d_causal_attention_mask)
 
 
 logger = logging.get_logger(__name__)
@@ -1122,7 +1127,7 @@ class DeepseekV3DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = ATTENTION_CLASSES[config._attn_implementation or "eager"](config=config, layer_idx=layer_idx)
+        self.self_attn = ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
 
         self.mlp = (
             DeepseekV3MoE(config)

@@ -178,8 +178,8 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
         svc_data_l1_addr_ = raw_addr;
 
-        auto shard_params = ShardSpecBuffer(
-            CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        auto shard_params =
+            ShardSpecBuffer(CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
         DeviceLocalBufferConfig data_buffer_specs = {
             .page_size = static_cast<uint32_t>(alloc_size),
             .buffer_type = buffer_type_,
@@ -570,8 +570,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     // non-power-of-two (e.g. 2560 = 5×512 for some shard sizes), where
     // tt::align(5120, 2560) returns 7168 instead of 5120. Use modular
     // arithmetic so this works for any positive alignment.
-    uint32_t next_fifo_wr_ptr =
-        ((write_ptr_ + page_size - 1) / page_size) * page_size;
+    uint32_t next_fifo_wr_ptr = ((write_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_wr_ptr >= fifo_page_aligned_size) {
@@ -710,9 +709,10 @@ std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDesc
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
     // Must match the owner-side coord; empty mesh_coord (pre-mesh-coord descriptors) defaults to (0, 0).
-    MeshCoordinate device_coord = desc.mesh_coord.empty()
-        ? MeshCoordinate(0, 0)
-        : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
+    MeshCoordinate device_coord =
+        desc.mesh_coord.empty()
+            ? MeshCoordinate(0, 0)
+            : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
     socket->recv_core_ = MeshCoreCoord(device_coord, CoreCoord(desc.core_x, desc.core_y));
     socket->h2d_mode_ = static_cast<H2DMode>(desc.h2d_mode);
     socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;

@@ -60,6 +60,7 @@ protected:
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void invalidate_prefetcher_cache_after_pinned_write() {}
+    virtual void drain_deferred_writes_nolock() {}
 
     tt::TargetDevice get_target_device_type() const;
 
