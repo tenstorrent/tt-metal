@@ -122,12 +122,29 @@ private:
     //
     // kNSockets is still 2, and that is the point: the number of D2H sockets, host reader threads, decoder
     // threads and decode streams is unchanged, so nothing downstream of the socket knows this feature exists.
-    // What changes is that with the knob on there are FOUR DRISCs rather than two, and the job is split:
+    // What changes is that with the knob on there are SIX DRISCs rather than two, and the job is split:
     //
-    //   index 0,1  FILLER  sweep the worker rings -> write frames into their own device-DRAM ring.
-    //                      No socket, no PCIe, no host MMIO. Banks 5 and 6 (cores 9-9 and 9-5).
-    //   index 2,3  MOVER   read a DRAM ring -> push to socket 0 / socket 1, exactly as today.
-    //                      Banks 0 and 3 (cores 0-0 and 9-0) -- the only two host-facing-safe cores.
+    //   index 0..3  FILLER  sweep a QUARTER of the worker grid -> write frames into their own device-DRAM ring.
+    //                       No socket, no PCIe, no host MMIO. Banks 5, 6, 4, 1 (cores 9-9, 9-5, 9-2, 0-3).
+    //   index 4,5   MOVER   read TWO DRAM rings -> push to socket 0 / socket 1, exactly as today.
+    //                       Banks 0 and 3 (cores 0-0 and 9-0) -- the only two host-facing-safe cores.
+    //                       Mover m drains fillers m and m + kNSockets (so 4 -> {0,2}, 5 -> {1,3}).
+    //
+    // WHY 4 FILLERS AND ONLY 2 MOVERS. The knee is the FILLER's SCAN over its share of the grid (FINDINGS
+    // N+28), so halving each filler's slice from 60 cores to 30 is the same lever that gave 5x going 1 -> 2
+    // drainers (N+34). Movers cannot be scaled the same way -- there are exactly two host-facing-safe cores
+    // (y == 0) and only 16 TLB windows for 7-window sockets -- but they are ~97% idle (0.3-0.4 us idle
+    // sweeps, ~3,900 busy of ~450,000), so each absorbs a second ring.
+    //
+    // A dual-ring mover walks its peers SEQUENTIALLY, each with the WHOLE staging area, with the existing
+    // per-push write barrier in between. So `max batch` stays 7 per peer -- splitting the 7 slots two ways
+    // (which would have raised per-frame egress overhead exactly where the credit-wait knee lives) is not
+    // needed, because egress is serialized on one socket anyway. MEASURED: max batch 7 on all four peers.
+    //
+    // The four rings are FREE in DRAM: the HAL reserves the profiler region at the same offset in EVERY bank
+    // (7 of them, 64.0 MiB each = 448 MiB) and only 2 banks carried a ring before, so rings 2 and 3 cost
+    // nothing. Full ring/drainer channel disjointness is no longer possible (6 drainer channels + 4 rings >
+    // 7 allocator banks); rings stay off the two MOVER banks, which is where the measured hazard lives.
     //
     // WHY. The knee is the worst sweep's CREDIT-WAIT (50-97 us of an 86-127 us worst sweep, vs 1.3 us when
     // the host keeps up), and that is burst absorption, not bandwidth: sustained egress is ~1.37 GB/s
@@ -142,13 +159,15 @@ private:
     // the HOST-FACING role. Measured on bank 5 (N+29's worst core, 5/25 for a full-job drainer): 0/25
     // failures held in stream mode and 0/25 doing filler-only duty. The role-aware TT_FATAL in boot_device
     // enforces kSafeBanks for movers only.
-    static constexpr uint32_t kMaxDrisc = 4;
-    // DRAM banks the RINGS live in. Deliberately neither a mover bank (0, 3) nor a filler bank (5, 6): a
-    // ring's traffic goes to its channel's PREFERRED WORKER endpoint while a drainer sits on that channel's
-    // unused subchannel, so they are provably different cores -- but keeping ring traffic off a channel that
-    // also hosts a stream-mode NIU costs one wasted ring's worth of address space and removes an untested
-    // interaction. Overridable with TT_METAL_PERF_DEBUG_ROLE_RING_BANKS.
-    static constexpr uint32_t kNFillers = kNSockets;
+    static constexpr uint32_t kMaxDrisc = 6;
+    // FOUR fillers, two movers. kNFillers must stay a whole multiple of kNSockets: mover m takes fillers
+    // m, m + kNSockets, ... and kNPeerMax bounds the per-mover peer state (device compile args and L1
+    // telemetry words are per-peer, so raising this is not free).
+    static constexpr uint32_t kNFillers = 4;
+    static constexpr uint32_t kNPeerMax = 2;
+    static_assert(kNFillers % kNSockets == 0, "each mover must drain a whole number of fillers");
+    static_assert(kNFillers / kNSockets <= kNPeerMax, "a mover cannot drain more than kNPeerMax rings");
+    static_assert(kNFillers + kNSockets <= kMaxDrisc, "kMaxDrisc must cover every filler and mover");
     // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
     // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
     // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
@@ -223,14 +242,20 @@ private:
         uint32_t done_addr[kMaxDrisc] = {};     // drainer publishes 0xD09E**** once its last page is out
         uint32_t results_addr[kMaxDrisc] = {};
         // ---- role split (all zero / kRoleFull when the knob is off) ----
-        uint32_t n_drisc = kNSockets;             // 2 normally, 4 with the role split on
+        uint32_t n_drisc = kNSockets;             // 2 normally, kNFillers + kNSockets with the role split on
         uint32_t role[kMaxDrisc] = {};            // 0 = full job, 1 = filler, 2 = mover
         uint32_t sock_of[kMaxDrisc] = {};         // socket index this DRISC owns, or kNoSocket
         uint32_t hs_addr[kMaxDrisc] = {};         // filler's handshake block (head/tail/probes) in its L1
-        uint32_t peer_of[kMaxDrisc] = {};         // mover -> the filler index it drains
-        uint32_t dram_bank[kMaxDrisc] = {};       // ring bank, per filler/mover pair
-        uint32_t dram_addr = 0;                   // bank-relative base of every ring (same in each bank)
-        uint32_t dram_frames = 0;                 // ring capacity in whole frames
+        // mover -> the filler indices it drains, and how many. n_peer is 0 for a filler / full-job drainer.
+        uint32_t peer_of[kMaxDrisc][kNPeerMax] = {};
+        uint32_t n_peer[kMaxDrisc] = {};
+        uint32_t dram_bank[kMaxDrisc] = {};       // ring bank of the ring DRISC d OWNS (fillers; 0 for movers)
+        // Bank-relative base of the ring DRISC d owns. PER-DRISC rather than one shared value: the kernel
+        // reaches its ring through get_noc_addr_from_bank_id, which adds bank_to_dram_offset[bank] itself, so
+        // the host has to subtract THAT BANK's offset. It measures 0 in every bank on bh-26, but with four
+        // rings a single shared address would silently mis-address any bank whose offset differed.
+        uint32_t dram_addr[kMaxDrisc] = {};
+        uint32_t dram_frames = 0;                 // ring capacity in whole frames (identical for every ring)
         // No buffer handle: the rings live in the HAL's per-bank DRAM PROFILER region, which is reserved for
         // the profiler's whole lifetime by construction. Nothing to own, nothing to free.
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
