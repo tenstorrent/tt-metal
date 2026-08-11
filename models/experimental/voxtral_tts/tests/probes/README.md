@@ -32,6 +32,9 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `perceptual.py` | MCD / F0 / codec transparency vs the fp32 reference | codec SNR 42.9 dB, LSD 0.62 dB; **MCD failed its self-test and is not reported** (§6.59) |
 | `frame_ab.py` | does a block A/B predict the frame? | **no** — −2.124 ms on the blocks, 0 on the frame (§6.63) |
 | `rtf_repeat.sh` | how repeatable is the generator? | **0.390 ms** over three identical runs, so it can decide (§6.63) |
+| `opmap.py` | where does each block's time go, per op? | eager map -- ranks by LAUNCH cost, and got concat vs rms_norm backwards (§6.67) |
+| `traced_cost.py` / `traced_ops.py` | what does an op cost INSIDE the trace? | the one that decides: concat 2.6 µs, rms_norm 63.5, heads 6.2, sdpa 22.4 (§6.67, §6.68) |
+| `norm_traced.py` | is the sharded norm faster once traced? | **yes, +5.4 ms/frame** — reverses §6.39/§6.40 (§6.67) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
 
 **Read `frame_ab.py` before trusting any block A/B.** A tight loop measures device time with
