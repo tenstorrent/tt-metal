@@ -190,7 +190,16 @@ The actual defect: all 17 carry `verdict = rejected_kind_by_absolute_oracle`, an
 **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198. **73 % of the whole v3-vs-v2
 gap.**
 
-**And the sweep makes this worse than a scope error.**
+**And the isolation makes it worse again: the verdict was not computed.**
+[`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) reads the cell's own `build_evidence.py`:
+`oracle_passed = kind == "full_attention"` and `pcc = 0.9945729603715616 if not passed else ...` — **the
+correctness verdict for the sliding kind is a constant keyed on the layer kind, and the PCC beside it is a
+literal, with no oracle log committed anywhere in the cell.** Four candidate mechanisms for the drop were tested
+on device with real weights and all four are ruled out or orders of magnitude too small. So this entry is no
+longer "one sample vetoed seventeen measurements" — it is **a veto with no traceable measurement behind it at
+all.**
+
+**And the sweep already showed the op cannot be the cause.**
 [`NORM-GRID-SWEEP`](ADVCHAL-V3-NORM-GRID-SWEEP.md) measured the op in isolation across 79 configurations: the
 largest PCC deviation it can produce at *any* grid is **7.3 × 10⁻⁷**, against the **5.06 × 10⁻³** whole-layer drop
 that triggered the veto — **6,879× too small.** So the op under test provably did not cause the number it was

@@ -123,7 +123,21 @@ stronger claim: **the op under test provably cannot have caused the number that 
 veto was not "correct but over-broad" — the attribution behind it was wrong before the scope question even
 arises.
 
-## 3. Where the 5 × 10⁻³ actually comes from — and why that bar is the wrong gate
+## 3. Where the 5 × 10⁻³ actually comes from — ⚠ the follow-up answered this, and not as predicted
+
+**[`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) tested the routing hypothesis below with the real
+layer-0 router weights and it is too rare to be the answer: 2 flips in 168 trials, one slot of eight, against an
+8th-to-9th logit gap of 1.6–2.2.** It also established that **11 cores and 88 cores are bit-identical** element
+for element, and that v2's and v3's differing weight placement is bit-identical too. The actual answer is that
+the sliding kind's `oracle_pcc` is a **hardcoded literal** in `build_evidence.py` and its `oracle_passed` is the
+expression `kind == "full_attention"`, with **no oracle log committed anywhere in the cell.** Read that file
+instead of this section.
+
+The hypothesis is kept below because the mechanism it describes is real (a `topk` over 128 experts does flip under
+a 1-ULP perturbation, on ~1 % of tokens) and it is still a reason to gate placement on the op's own output — just
+not the explanation for this number.
+
+## 3 (superseded). The routing hypothesis, and why that bar is the wrong gate anyway
 
 The 0.99457 is a **whole-decoder-layer** PCC, and the norm change contributes ≤ 10⁻⁷ of it. The remaining
 plausible mechanism is **discontinuity, not rounding**: this is a sparse-MoE layer, the router norm's output
@@ -198,5 +212,6 @@ cannot be trusted to pick the grid — which is the whole argument for the ladde
    the substantive change this sweep argues for. The layer-level bar stays as a final check.
 5. **An oracle verdict binds only the configuration it was measured on** (`DEVIATIONS` §3.2a) — unchanged.
 6. **Assert `oracle_weights: real` against the checkpoint on disk** — new, from §5.
-7. **Router-perturbation experiment** to confirm §3: perturb the router norm input by 10⁻⁷ and count changed
-   expert selections.
+7. ~~Router-perturbation experiment~~ — **done**, [`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md).
+   Routing flips on ~1 % of tokens; not the explanation. The explanation is the hardcoded verdict, and the actions
+   move there.
