@@ -8,6 +8,8 @@
 #include <limits>
 #include <string_view>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -17,6 +19,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
@@ -35,7 +38,10 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
 
     // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
     // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
-    const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config())
+    // Use DRAM_MEMORY_CONFIG (non-sharded) to avoid the shard-alignment check added to TensorLayoutImpl:
+    // sharding doesn't affect padded-shape computation, but a ROW_MAJOR shard may have non-tile-aligned
+    // dimensions that would trigger the TILE shard alignment check.
+    const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, ttnn::DRAM_MEMORY_CONFIG)
                                   .compute_padded_shape(tensor.padded_shape());
     return tensor.padded_shape() != padded_shape;
 }
@@ -91,6 +97,24 @@ Tensor to_layout_impl(
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
+    // When converting to TILE without an explicit memory_config, the inherited shard spec from
+    // a ROW_MAJOR tensor may have non-tile-aligned dimensions.  Round shard height/width up to the
+    // nearest tile boundary so that downstream TensorLayout construction and tilize() succeed.
+    if (layout == ttnn::TILE_LAYOUT && !memory_config.has_value() && output_memory_config.is_sharded()) {
+        if (output_memory_config.shard_spec().has_value()) {
+            auto shard = output_memory_config.shard_spec().value();
+            constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
+            constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
+            if (shard.shape[0] % tile_h != 0 || shard.shape[1] % tile_w != 0) {
+                shard.shape = {tt::round_up(shard.shape[0], tile_h), tt::round_up(shard.shape[1], tile_w)};
+                output_memory_config = ttnn::MemoryConfig(
+                    output_memory_config.memory_layout(),
+                    output_memory_config.buffer_type(),
+                    shard);
+            }
+        }
+    }
+
     tt::tt_metal::PageConfig page_config = tt::tt_metal::PageConfig(Layout::TILE);
     if (tensor_arg.layout() == Layout::TILE) {
         page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
@@ -98,7 +122,9 @@ Tensor to_layout_impl(
     // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
     // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype flows
     // through `dtype` into tilize()/untilize() below.
-    auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config)
+    // Use DRAM_MEMORY_CONFIG (non-sharded) to avoid the shard-alignment check: sharding doesn't affect
+    // padded-shape computation but a non-tile-aligned shard would trigger TensorLayoutImpl's TILE check.
+    auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, ttnn::DRAM_MEMORY_CONFIG)
                                    .compute_padded_shape(tensor_arg.logical_shape());
     auto original_rank = tensor_arg.logical_shape().rank();
     const auto& original_shape = tensor_arg.logical_shape();
@@ -146,7 +172,10 @@ Tensor to_layout_impl(
                         shard_h = nd_spec.shard_shape[-2];
                         shard_w = nd_spec.shard_shape[-1];
                     }
-                    if (shard_h % tile_height != 0 or shard_w % tile_width != 0) {
+                    // For TILE→TILE resharding the shard must already be tile-aligned.
+                    // For ROW_MAJOR→TILE, tilize() pads each shard to the tile boundary internally.
+                    if (tensor.layout() == ttnn::TILE_LAYOUT &&
+                        (shard_h % tile_height != 0 or shard_w % tile_width != 0)) {
                         TT_THROW(
                             "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
                             "TILE_SIZE!");
@@ -209,14 +238,34 @@ Tensor to_layout_impl(
                         "Pad value must be in the range of UINT32 type");
                     pad_value_variant = (uint32_t)pad_value;
                 }
-                tensor = ttnn::tilize_with_val_padding(
-                    tensor,
-                    Shape(padded_output_shape),
-                    pad_value_variant,
-                    output_memory_config,
-                    dtype,
-                    use_multicore_tilize,
-                    sub_core_grids);
+                if (tensor.memory_config().memory_layout() ==
+                    tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+                    // BLOCK_SHARDED tilize_with_val_padding triggers cross-core NOC reads that
+                    // deadlock at high L1 addresses.  Route via DRAM: deshard → tilize in DRAM
+                    // → reshard back to L1.  The DRAM hop is the fix; no CQ drain is needed
+                    // because all three ops are serialized in the same command queue.
+                    // NOTE: do NOT add from_device/to_device here — those are forbidden inside
+                    // a trace capture window and corrupt the recorded op sequence.
+                    tensor = ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG);
+                    tensor = ttnn::tilize_with_val_padding(
+                        tensor,
+                        Shape(padded_output_shape),
+                        pad_value_variant,
+                        ttnn::DRAM_MEMORY_CONFIG,
+                        dtype,
+                        use_multicore_tilize,
+                        sub_core_grids);
+                    tensor = ttnn::to_memory_config(tensor, output_memory_config);
+                } else {
+                    tensor = ttnn::tilize_with_val_padding(
+                        tensor,
+                        Shape(padded_output_shape),
+                        pad_value_variant,
+                        output_memory_config,
+                        dtype,
+                        use_multicore_tilize,
+                        sub_core_grids);
+                }
             }
             if (original_rank < 2) {
                 return ttnn::reshape(
