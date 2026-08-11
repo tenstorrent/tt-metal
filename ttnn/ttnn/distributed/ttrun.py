@@ -357,6 +357,101 @@ def find_generate_rank_bindings_executable() -> Path:
     )
 
 
+# Key must match C++ :cpp:expr:`kSubcontextMgdMappingYamlKey` in
+# :file:`tools/scaleout/src/generate_rank_bindings_helpers.hpp`
+SUBCONTEXT_MGD_MAPPING_YAML_KEY = "subcontext_id_to_mesh_graph_descriptor"
+
+
+def _resolve_mgd_path_for_subcontext_mapping(path_str: str, base_dir: Path, tt_metal_home: Optional[str]) -> Path:
+    """Resolve one MGD path the same way as C++ :cpp:func:`load_subcontext_id_to_mesh_graph_descriptor_mapping`."""
+    mgd = Path(path_str)
+    if mgd.is_absolute():
+        if not mgd.is_file():
+            raise FileNotFoundError(f"MGD file does not exist: {mgd}")
+        return mgd
+    from_mapping = (base_dir / mgd).resolve()
+    if from_mapping.is_file():
+        return from_mapping
+    if tt_metal_home:
+        from_home = (Path(tt_metal_home) / path_str).resolve()
+        if from_home.is_file():
+            return from_home
+        raise FileNotFoundError(
+            f"MGD file does not exist: {from_mapping} (also tried {from_home} via TT_METAL_HOME={tt_metal_home!r})"
+        )
+    raise FileNotFoundError(
+        f"MGD file does not exist: {from_mapping}. "
+        f"Set environment variable TT_METAL_HOME to the top of your tt-metal checkout so each mapping "
+        f"path (e.g. {path_str!r}) can resolve to $TT_METAL_HOME/{path_str} — the same as "
+        f"generate_rank_bindings for repository-relative MGD entries."
+    )
+
+
+def _load_resolved_mgd_paths_from_mapping_yaml(mapping_yaml_path: Path) -> list[tuple[int, Path]]:
+    """Parse MGD mapping YAML, validate like C++, return ``(subcontext_id, path)`` sorted by id.
+
+    Raises:
+        FileNotFoundError: Mapping file or a referenced MGD is missing.
+        ValueError: Invalid structure (missing key, non-dense ids, etc.).
+    """
+    if not mapping_yaml_path.is_file():
+        raise FileNotFoundError(f"MGD mapping file does not exist: {mapping_yaml_path}")
+    with open(mapping_yaml_path, "r", encoding="utf-8") as f:
+        root = yaml.safe_load(f)
+    if not isinstance(root, dict) or SUBCONTEXT_MGD_MAPPING_YAML_KEY not in root:
+        raise ValueError(
+            f"MGD mapping YAML must contain top-level key '{SUBCONTEXT_MGD_MAPPING_YAML_KEY}': {mapping_yaml_path}"
+        )
+    map_node = root[SUBCONTEXT_MGD_MAPPING_YAML_KEY]
+    if not isinstance(map_node, dict):
+        raise ValueError(f"'{SUBCONTEXT_MGD_MAPPING_YAML_KEY}' must be a mapping in {mapping_yaml_path}")
+    base_dir = mapping_yaml_path.parent if mapping_yaml_path.parent.parts else Path(".")
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    out: dict[int, Path] = {}
+    for k, v in map_node.items():
+        try:
+            subctx = int(k)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"MGD mapping: subcontext id key must be an integer, got {k!r} in {mapping_yaml_path}"
+            ) from e
+        if subctx < 0:
+            raise ValueError(f"MGD mapping: subcontext id must be non-negative, got {subctx} in {mapping_yaml_path}")
+        if subctx in out:
+            raise ValueError(f"MGD mapping: duplicate subcontext id: {subctx} in {mapping_yaml_path}")
+        if v is None or isinstance(v, (list, dict)):
+            raise ValueError(
+                f"MGD mapping: path for subcontext {subctx} must be a string scalar, got {v!r} in {mapping_yaml_path}"
+            )
+        path_str = str(v)
+        out[subctx] = _resolve_mgd_path_for_subcontext_mapping(path_str, base_dir, tt_metal_home)
+    if not out:
+        raise ValueError(f"MGD mapping: must list at least one subcontext_id in {mapping_yaml_path}")
+    max_id = max(out.keys())
+    for i in range(max_id + 1):
+        if i not in out:
+            raise ValueError(
+                f"MGD mapping: subcontext ids must be dense starting at 0; missing subcontext_id {i} in {mapping_yaml_path}"
+            )
+    return sorted(out.items(), key=lambda x: x[0])
+
+
+def mesh_graph_path_is_mgd_mapping_yaml(mgd_path: Path) -> bool:
+    """Return True if ``mgd_path`` is a multi-MGD mapping YAML (``subcontext_id_to_mesh_graph_descriptor``).
+
+    ``generate_rank_bindings`` then needs ``--mesh-graph-descriptor-mapping`` (``-M``), not
+    ``--mesh-graph-descriptor`` (``-m``). Single MGDs use ``.textproto``; a ``.yaml``/``.yml`` with the
+    mapping key is the mapping file from :file:`mgd-rank-binding-plan.md`.
+    """
+    if mgd_path.suffix.lower() not in (".yaml", ".yml"):
+        return False
+    try:
+        head = mgd_path.read_text(encoding="utf-8", errors="replace")[:32768]
+    except OSError:
+        return False
+    return SUBCONTEXT_MGD_MAPPING_YAML_KEY in head
+
+
 def get_generate_rank_bindings_output_paths(output_dir: Path) -> tuple[Path, Path]:
     """Get the output paths for generate_rank_bindings.
 
@@ -373,7 +468,16 @@ def get_generate_rank_bindings_output_paths(output_dir: Path) -> tuple[Path, Pat
     return (rank_bindings_path, rankfile_path)
 
 
+def phase1_rank_bindings_input_path(run_dir: Path, mgd_path_is_mapping_yaml: bool) -> Path:
+    """Path tt-run passes to Phase 2: overlay mapping file for multi-MGD, else ``rank_bindings.yaml``."""
+    if mgd_path_is_mapping_yaml:
+        return run_dir / RANK_BINDINGS_MAPPING_FILENAME
+    return run_dir / "rank_bindings.yaml"
+
+
 PHASE2_MOCK_MAPPING_FILENAME = "phase2_mock_mapping.yaml"
+# Written by ``generate_rank_bindings`` for multi-MGD (matches :func:`parse_rank_bindings_mapping`).
+RANK_BINDINGS_MAPPING_FILENAME = "rank_bindings_mapping.yaml"
 PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
 
 # Short prefix of SHA-256 for cache directory names (balance: path length vs collision risk for local cache).
@@ -384,22 +488,47 @@ def compute_phase1_cache_fingerprint_full(
     mgd_path: Path,
     hosts: Optional[List[str]],
     mock_rank_to_desc: Optional[Dict[int, Path]],
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
 ) -> str:
-    """Full SHA-256 hex (64 chars) of MGD + hosts or mock descriptor contents.
+    """Full SHA-256 hex (64 chars) of MGD (or MGD mapping + all referenced MGDs) + hosts or mock descriptor contents.
+
+    If ``mgd_path`` is a multi-MGD mapping YAML (``mgd_is_mapping_yaml`` True, or when omitted, see
+    :func:`mesh_graph_path_is_mgd_mapping_yaml`), the fingerprint includes the mapping file bytes
+    and each resolved :file:`.textproto` MGD, in subcontext id order, matching
+    C++ :cpp:func:`load_subcontext_id_to_mesh_graph_descriptor_mapping`.
 
     Stored in :data:`PHASE1_CACHE_KEY_FILENAME` to validate cache hits; directory name uses only a prefix.
 
+    Args:
+        mgd_is_mapping_yaml: If set, selects mapping vs single-MGD hashing without sniffing ``mgd_path``.
+            If ``None``, uses :func:`mesh_graph_path_is_mgd_mapping_yaml` (backward compatible).
+
     Raises:
-        ValueError: Invalid host/mock combination.
+        ValueError: Invalid host/mock combination, or invalid mapping YAML.
+        FileNotFoundError: Referenced MGD from mapping is missing.
     """
     if hosts is not None and mock_rank_to_desc is not None:
         raise ValueError("hosts and mock_rank_to_desc are mutually exclusive for cache id")
     if hosts is None and mock_rank_to_desc is None:
         raise ValueError("Either hosts or mock_rank_to_desc is required")
 
+    use_mapping_yaml = (
+        mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
+    )
+
     h = hashlib.sha256()
-    h.update(mgd_path.read_bytes())
-    h.update(b"\0")
+    if use_mapping_yaml:
+        h.update(mgd_path.read_bytes())
+        h.update(b"\0")
+        for subctx, mgd_file in _load_resolved_mgd_paths_from_mapping_yaml(mgd_path):
+            h.update(str(subctx).encode("ascii"))
+            h.update(b"\0")
+            h.update(mgd_file.read_bytes())
+        h.update(b"\0")
+    else:
+        h.update(mgd_path.read_bytes())
+        h.update(b"\0")
     if hosts is not None:
         h.update(json.dumps(hosts, separators=(",", ":"), ensure_ascii=False).encode())
     else:
@@ -415,10 +544,13 @@ def compute_phase1_cache_id(
     mgd_path: Path,
     hosts: Optional[List[str]],
     mock_rank_to_desc: Optional[Dict[int, Path]],
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
 ) -> str:
     """Short hex id for Phase 1 cache directory (prefix of SHA-256).
 
-    Content-based on MGD bytes; host sets are order-invariant (use sorted(hosts) when calling).
+    Content-based on MGD bytes, or on MGD mapping YAML plus every resolved MGD for multi-MGD configs;
+    host sets are order-invariant (use sorted(hosts) when calling).
     Mock mode fingerprints each mock descriptor file by content, keys in sorted order.
 
     Args:
@@ -432,7 +564,9 @@ def compute_phase1_cache_id(
     Raises:
         ValueError: Invalid host/mock combination.
     """
-    return compute_phase1_cache_fingerprint_full(mgd_path, hosts, mock_rank_to_desc)[:PHASE1_CACHE_ID_HEX_LEN]
+    return compute_phase1_cache_fingerprint_full(
+        mgd_path, hosts, mock_rank_to_desc, mgd_is_mapping_yaml=mgd_is_mapping_yaml
+    )[:PHASE1_CACHE_ID_HEX_LEN]
 
 
 def read_stored_phase1_cache_key(run_dir: Path) -> Optional[str]:
@@ -471,9 +605,12 @@ def write_phase1_openmpi_hostfile(hostfile_path: Path, hosts_sorted: List[str]) 
 def phase1_outputs_ready(run_dir: Path, mock_mode: bool) -> bool:
     """True if cached Phase 1 artifacts look complete."""
     rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
-    if not rank_bindings_path.is_file() or not rankfile_path.is_file():
+    mapping_path = run_dir / RANK_BINDINGS_MAPPING_FILENAME
+    rank_bindings_ok = rank_bindings_path.is_file() and rank_bindings_path.stat().st_size > 0
+    mapping_ok = mapping_path.is_file() and mapping_path.stat().st_size > 0
+    if not (rank_bindings_ok or mapping_ok) or not rankfile_path.is_file():
         return False
-    if rank_bindings_path.stat().st_size == 0 or rankfile_path.stat().st_size == 0:
+    if rankfile_path.stat().st_size == 0:
         return False
     if mock_mode:
         p2 = run_dir / PHASE2_MOCK_MAPPING_FILENAME
@@ -752,6 +889,8 @@ def build_generate_rank_bindings_mpi_cmd(
     output_dir: Path,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
 ) -> List[str]:
     """Build MPI command for running generate_rank_bindings.
 
@@ -759,7 +898,7 @@ def build_generate_rank_bindings_mpi_cmd(
 
     Args:
         executable: Path to generate_rank_bindings executable
-        mgd_path: Path to mesh graph descriptor
+        mgd_path: Path to single MGD ``.textproto`` or multi-MGD mapping YAML
         hosts: List of hostnames (for real cluster) or None (for mock)
         output_dir: Output directory for generated files
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
@@ -801,6 +940,13 @@ def build_generate_rank_bindings_mpi_cmd(
     if mpi_args:
         cmd.extend(mpi_args)
 
+    use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
+    mgd_arg = (
+        ["--mesh-graph-descriptor-mapping", str(mgd_path.resolve())]
+        if use_mapping
+        else ["--mesh-graph-descriptor", str(mgd_path.resolve())]
+    )
+
     if mock_rank_to_desc:
         # Mock cluster: all processes on localhost
         # Use per-rank -np 1 segments to set per-rank env vars (similar to legacy_flow)
@@ -817,7 +963,7 @@ def build_generate_rank_bindings_mpi_cmd(
             cmd.extend(["-np", "1"])
             cmd.extend(build_rank_environment_args(binding, phase1_config, parent_env_prefix=parent_env_prefix))
             cmd.append(str(executable.resolve()))
-            cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
+            cmd.extend(mgd_arg)
             cmd.extend(["--output-dir", str(output_dir.resolve())])
 
         # Return early for mock mode (already added executable and args per rank)
@@ -832,7 +978,7 @@ def build_generate_rank_bindings_mpi_cmd(
         cmd.extend(["--host", hosts_str])
         cmd.extend(["-np", str(np)])
         cmd.append(str(executable.resolve()))
-        cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
+        cmd.extend(mgd_arg)
         cmd.extend(["--output-dir", str(output_dir.resolve())])
     else:
         raise ValueError("Either hosts or mock_rank_to_desc must be provided")
@@ -862,8 +1008,10 @@ def run_phase1_generate_rank_bindings(
     subprocess_run=subprocess.run,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
 ) -> tuple[Path, Path]:
-    """Run Phase 1: generate_rank_bindings to produce rank_bindings.yaml and rankfile.
+    """Run Phase 1: generate_rank_bindings for rank_bindings (or overlay mapping), rankfile, and mocks.
 
     Orchestrates the Phase 1 MPI call and validates outputs.  No sleep is needed:
     generate_rank_bindings calls fsync() on every output file and the output directory
@@ -871,7 +1019,7 @@ def run_phase1_generate_rank_bindings(
     the subprocess exits and subprocess.run() returns here.
 
     Args:
-        mgd_path: Path to mesh graph descriptor
+        mgd_path: Path to mesh graph descriptor or to multi-MGD mapping YAML
         hosts: List of hostnames (for real cluster) or None (for mock)
         output_dir: Output directory (typically generated/ttrun)
         subprocess_run: Subprocess run function (injectable for testing)
@@ -879,14 +1027,21 @@ def run_phase1_generate_rank_bindings(
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
 
     Returns:
-        Tuple of (rank_bindings.yaml path, rankfile path)
+        Tuple of (
+            Phase-2 tt-run input (
+                ``rank_bindings.yaml`` path for single-MGD, or ``rank_bindings_mapping.yaml`` for multi-MGD
+            ),
+            rankfile path,
+        )
 
     Raises:
         FileNotFoundError: If generate_rank_bindings executable not found
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
-    cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args)
+    cmd = build_generate_rank_bindings_mpi_cmd(
+        executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args, mgd_is_mapping_yaml=mgd_is_mapping_yaml
+    )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
@@ -897,22 +1052,24 @@ def run_phase1_generate_rank_bindings(
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
 
-    # Validate outputs exist
-    rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
+    # Validate outputs exist (single-MGD: rank_bindings.yaml; multi: rank_bindings_mapping.yaml + per-sub-context YAMLs).
+    _, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
+    use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
+    phase2_bindings_input = phase1_rank_bindings_input_path(output_dir, use_mapping)
 
-    if not rank_bindings_path.exists():
+    if not phase2_bindings_input.exists():
         raise RuntimeError(
-            f"Phase 1 output not found: {rank_bindings_path}. " f"generate_rank_bindings may have failed silently."
+            f"Phase 1 output not found: {phase2_bindings_input}. " "generate_rank_bindings may have failed silently."
         )
 
     if not rankfile_path.exists():
         raise RuntimeError(
-            f"Phase 1 output not found: {rankfile_path}. " f"generate_rank_bindings may have failed silently."
+            f"Phase 1 output not found: {rankfile_path}. " "generate_rank_bindings may have failed silently."
         )
 
-    logger.info(f"{TT_RUN_PREFIX} Phase 1 complete. Generated: {rank_bindings_path}, {rankfile_path}")
+    logger.info(f"{TT_RUN_PREFIX} Phase 1 complete. Generated: {phase2_bindings_input}, {rankfile_path}")
 
-    return (rank_bindings_path, rankfile_path)
+    return (phase2_bindings_input, rankfile_path)
 
 
 def get_local_network_interfaces() -> List[str]:
@@ -1506,7 +1663,6 @@ def get_rank_environment(
             ),
             # Pass the original CWD to subprocesses so they can resolve relative paths correctly
             "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
-            "TT_RUN_RANK": str(binding.rank),  # Expose rank as an environment variable for convenience
         }
     )
 
@@ -2408,6 +2564,8 @@ def _log_new_mode_phase2_rerun_command(
     phase2_mock_binding_path: Optional[Path],
     mpi_args: Optional[List[str]],
     rankfile_syntax: Optional[RankfileSyntax],
+    *,
+    bindings_input_is_rank_bindings_mapping_yaml: bool = False,
 ) -> None:
     """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + --mpi-args + program args)."""
 
@@ -2417,7 +2575,10 @@ def _log_new_mode_phase2_rerun_command(
         except ValueError:
             return str(p)
 
-    phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
+    if bindings_input_is_rank_bindings_mapping_yaml:
+        phase2_parts = ["tt-run", "--rank-bindings-mapping", _path_for_display(rank_bindings_path)]
+    else:
+        phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
     if phase2_mock_binding_path:
         phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
     if rankfile_syntax is not None:
@@ -2453,6 +2614,8 @@ def _log_new_mode_phase2_rerun_command(
 def new_mode_flow(
     ctx: click.Context,
     mesh_graph_descriptor: Path,
+    *,
+    mgd_is_mapping_yaml: bool,
     hosts: Optional[List[str]],
     dry_run: bool,
     verbose: bool,
@@ -2467,15 +2630,16 @@ def new_mode_flow(
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
 ) -> None:
-    """New mode flow for ttrun using mesh graph descriptor.
+    """New mode flow for ttrun using mesh graph descriptor(s).
 
-    This function implements the new mode of ttrun that uses --mesh-graph-descriptor
-    instead of --rank-binding. It runs generate_rank_bindings (Phase 1) to produce
-    rank_bindings.yaml and rankfile, then calls legacy_flow (Phase 2) with those files.
+    This function implements the new mode of tt-run via ``--mesh-graph-descriptor`` / ``--mesh-graph-descriptor-mapping``
+    instead of ``--rank-binding``. It runs generate_rank_bindings (Phase 1) to produce
+    ``rank_bindings.yaml`` (single MGD), or ``rank_bindings_mapping.yaml`` plus per-sub-context
+    overlays plus rankfile (multi-MGD mapping), then calls legacy_flow (Phase 2).
 
     Args:
         ctx: Click context
-        mesh_graph_descriptor: Path to mesh graph descriptor file
+        mesh_graph_descriptor: Path to ``.textproto`` (single MGD) or mapping YAML when ``mgd_is_mapping_yaml``.
         hosts: List of hostnames (required unless mock_cluster_rank_binding is provided)
         dry_run: If True, print commands without executing. In new mode, skips Phase 1 side effects when the Phase 1
             cache misses (no generate_rank_bindings, no cache writes); use a Phase 1 cache hit to dry-run Phase 2 mpirun.
@@ -2493,16 +2657,18 @@ def new_mode_flow(
     if not program:
         raise click.ClickException("No program specified. Please provide a program to run.")
 
-    # Resolve mesh_graph_descriptor path
+    # Resolve mesh graph path (``.textproto`` or mapping YAML depending on CLI).
     resolved_mgd = resolve_path(
         mesh_graph_descriptor,
-        description="Mesh graph descriptor",
+        description="Mesh graph descriptor mapping YAML" if mgd_is_mapping_yaml else "Mesh graph descriptor",
         must_be_file=True,
         must_exist=not skip_mgd_check,
     )
 
     if verbose:
-        logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
+        logger.info(f"{TT_RUN_PREFIX} New mode: Mesh graph input = {resolved_mgd} (mapping YAML={mgd_is_mapping_yaml})")
+
+    mgd_mapping_yaml = mgd_is_mapping_yaml
 
     # Parse mock cluster mapping if provided
     mock_rank_to_desc: Optional[Dict[int, Path]] = None
@@ -2516,7 +2682,9 @@ def new_mode_flow(
 
     hosts_for_phase1: Optional[List[str]] = sorted(hosts) if hosts else None
     try:
-        fingerprint_full = compute_phase1_cache_fingerprint_full(resolved_mgd, hosts_for_phase1, mock_rank_to_desc)
+        fingerprint_full = compute_phase1_cache_fingerprint_full(
+            resolved_mgd, hosts_for_phase1, mock_rank_to_desc, mgd_is_mapping_yaml=mgd_mapping_yaml
+        )
     except FileNotFoundError as e:
         raise click.ClickException(
             f"Cannot compute Phase 1 cache fingerprint: {e}. "
@@ -2551,12 +2719,14 @@ def new_mode_flow(
         phase1_used_cache = True
         run_dir = short_dir
         logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
-        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+        rank_bindings_path = phase1_rank_bindings_input_path(run_dir, mgd_mapping_yaml)
+        rankfile_path = get_generate_rank_bindings_output_paths(run_dir)[1]
     elif not force_rediscovery and phase1_cache_hit_valid(full_dir, fingerprint_full, mock_mode):
         phase1_used_cache = True
         run_dir = full_dir
         logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
-        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+        rank_bindings_path = phase1_rank_bindings_input_path(run_dir, mgd_mapping_yaml)
+        rankfile_path = get_generate_rank_bindings_output_paths(run_dir)[1]
     else:
         if force_rediscovery:
             logger.info(
@@ -2580,7 +2750,8 @@ def new_mode_flow(
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {run_dir}")
 
-        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+        rank_bindings_path = phase1_rank_bindings_input_path(run_dir, mgd_mapping_yaml)
+        rankfile_path = get_generate_rank_bindings_output_paths(run_dir)[1]
 
         if dry_run:
             logger.info(
@@ -2596,6 +2767,7 @@ def new_mode_flow(
                     run_dir,
                     mock_rank_to_desc,
                     phase1_mpi_args,
+                    mgd_is_mapping_yaml=mgd_mapping_yaml,
                 )
                 print_command(
                     phase1_cmd,
@@ -2604,11 +2776,19 @@ def new_mode_flow(
             except FileNotFoundError as e:
                 logger.warning(f"{TT_RUN_PREFIX} Dry-run: could not locate generate_rank_bindings ({e})")
 
-            _log_new_mode_phase2_rerun_command(ctx, rank_bindings_path, rankfile_path, None, mpi_args, rankfile_syntax)
+            _log_new_mode_phase2_rerun_command(
+                ctx,
+                rank_bindings_path,
+                rankfile_path,
+                None,
+                mpi_args,
+                rankfile_syntax,
+                bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
+            )
             logger.info(
-                f"{TT_RUN_PREFIX} Dry-run: Phase 2 mpirun command not printed (requires rank_bindings.yaml from "
-                f"Phase 1). Run without --dry-run to execute Phase 1, or use --dry-run after a Phase 1 cache hit to "
-                f"preview mpirun."
+                f"{TT_RUN_PREFIX} Dry-run: Phase 2 mpirun command not printed (requires Phase 1 rank binding "
+                "inputs). Run without --dry-run to execute Phase 1, or use --dry-run after a Phase 1 cache hit to "
+                "preview mpirun."
             )
             return
 
@@ -2624,6 +2804,7 @@ def new_mode_flow(
                 subprocess_run=subprocess.run,
                 mock_rank_to_desc=mock_rank_to_desc,
                 mpi_args=phase1_mpi_args,
+                mgd_is_mapping_yaml=mgd_mapping_yaml,
             )
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
@@ -2647,7 +2828,13 @@ def new_mode_flow(
 
     # Log Phase 2-only command for re-runs without re-running generate_rank_bindings
     _log_new_mode_phase2_rerun_command(
-        ctx, rank_bindings_path, rankfile_path, phase2_mock_binding_path, mpi_args, rankfile_syntax
+        ctx,
+        rank_bindings_path,
+        rankfile_path,
+        phase2_mock_binding_path,
+        mpi_args,
+        rankfile_syntax,
+        bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
     )
 
     # Stale-cache hint only if Phase 1 was skipped via cache; fresh Phase 1 or --force-rediscovery → no hint.
@@ -2655,8 +2842,8 @@ def new_mode_flow(
 
     legacy_flow(
         ctx,
-        rank_binding=rank_bindings_path,
-        rank_bindings_mapping=None,
+        rank_binding=None if mgd_mapping_yaml else rank_bindings_path,
+        rank_bindings_mapping=rank_bindings_path if mgd_mapping_yaml else None,
         dry_run=dry_run,
         verbose=verbose,
         mpi_args=mpi_args,
@@ -2697,11 +2884,22 @@ def new_mode_flow(
     ),
 )
 @click.option(
+    "-m",
     "--mesh-graph-descriptor",
     type=click.Path(path_type=Path),
     required=False,
-    help="Mesh graph descriptor file. When provided, enables new mode (mutually exclusive with --rank-binding). "
-    "Requires --hosts unless --mock-cluster-rank-binding is provided.",
+    help="Single mesh graph descriptor (``.textproto``). Enables new mode (mutually exclusive with legacy rank-binding "
+    "options). Passed to ``generate_rank_bindings`` as ``-m``. Requires --hosts unless --mock-cluster-rank-binding.",
+)
+@click.option(
+    "-M",
+    "--mesh-graph-descriptor-mapping",
+    type=click.Path(path_type=Path),
+    required=False,
+    default=None,
+    help="YAML with subcontext_id_to_mesh_graph_descriptor: sub-context id → MGD ``.textproto`` path each. "
+    "Enables multi-MGD new mode; mutually exclusive with -m/--mesh-graph-descriptor. "
+    "Passed to generate_rank_bindings as ``-M``.",
 )
 @click.option(
     "--hosts",
@@ -2710,7 +2908,7 @@ def new_mode_flow(
     callback=_parse_hosts_option,
     help="Comma-separated hostnames for MPI processes (e.g. node1,node2,node3). Empty segments are ignored; "
     "duplicates, embedded spaces, and control characters are rejected. "
-    "Required for new mode (--mesh-graph-descriptor) unless --mock-cluster-rank-binding is provided. "
+    "Required for new mode (-m / -M) unless --mock-cluster-rank-binding is provided. "
     "Not used in legacy mode (--rank-binding).",
 )
 @click.option(
@@ -2736,7 +2934,7 @@ def new_mode_flow(
     required=False,
     type=click.Path(path_type=Path),
     help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory. "
-    "When used with new mode (--mesh-graph-descriptor), makes --hosts optional.",
+    "When used with new mode (-m / -M), makes --hosts optional.",
 )
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
@@ -2788,6 +2986,7 @@ def main(
     rank_binding: Optional[Path],
     rank_bindings_mapping: Optional[Path],
     mesh_graph_descriptor: Optional[Path],
+    mesh_graph_descriptor_mapping: Optional[Path],
     hosts: Optional[List[str]],
     dry_run: bool,
     verbose: bool,
@@ -2806,19 +3005,22 @@ def main(
 
     tt-run operates in two modes:
         - Legacy mode: Use --rank-binding (see legacy_flow function for detailed documentation)
-        - New mode: Use --mesh-graph-descriptor (mutually exclusive with --rank-binding)
+        - New mode: Use -m/--mesh-graph-descriptor (single ``.textproto``) or -M/--mesh-graph-descriptor-mapping
+          (YAML map of sub-context id → MGD path). Mutually exclusive with legacy rank-binding inputs.
 
-    The two modes are mutually exclusive - you must specify exactly one.
+    The two modes are mutually exclusive - you must specify exactly one of the launcher inputs.
 
     \b
     Quick Start:
         # Legacy mode
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # New mode (--mesh-graph-descriptor)
-        tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
-        # Or with mock cluster (makes --hosts optional):
-        tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
+        # New mode (single MGD)
+        tt-run -m mesh_graph.textproto --hosts node1,node2 ./my_app
+        # New mode (multiple MGDs)
+        tt-run -M mesh_graphs_mapping.yaml --hosts node1,node2 ./my_app
+        # Or mock cluster (``--hosts`` optional):
+        tt-run -m mesh_graph.textproto --mock-cluster-rank-binding mock.yaml ./my_app
 
     For detailed documentation on legacy mode, see the legacy_flow function docstring.
     """
@@ -2826,24 +3028,45 @@ def main(
         logger.remove()
         logger.add(sys.stderr, level="INFO")
 
-    # Check for mutually exclusive options
-    specified = sum(x is not None for x in [rank_binding, rank_bindings_mapping, mesh_graph_descriptor])
-    if specified != 1:
+    if rank_binding is not None and rank_bindings_mapping is not None:
+        raise click.ClickException("Specify at most one of --rank-binding and --rank-bindings-mapping (not both).")
+    if mesh_graph_descriptor is not None and mesh_graph_descriptor_mapping is not None:
         raise click.ClickException(
-            "Specify exactly one of --rank-binding, --rank-bindings-mapping, or --mesh-graph-descriptor."
+            "Specify at most one of -m/--mesh-graph-descriptor and -M/--mesh-graph-descriptor-mapping (not both)."
+        )
+
+    uses_rank_binding_inputs = rank_binding is not None or rank_bindings_mapping is not None
+    uses_mesh_graph_inputs = mesh_graph_descriptor is not None or mesh_graph_descriptor_mapping is not None
+    if uses_rank_binding_inputs and uses_mesh_graph_inputs:
+        raise click.ClickException(
+            "Do not combine mesh graph options (-m / -M) with rank-binding options (--rank-binding / "
+            "--rank-bindings-mapping)."
+        )
+
+    launcher_count = sum(
+        1
+        for x in (
+            rank_binding,
+            rank_bindings_mapping,
+            mesh_graph_descriptor,
+            mesh_graph_descriptor_mapping,
+        )
+        if x is not None
+    )
+    if launcher_count != 1:
+        raise click.ClickException(
+            "Specify exactly one of --rank-binding, --rank-bindings-mapping, -m/--mesh-graph-descriptor, "
+            "or -M/--mesh-graph-descriptor-mapping."
         )
 
     # Legacy mode: use --rank-binding or --rank-bindings-mapping
     if rank_binding is not None or rank_bindings_mapping is not None:
         if force_rediscovery:
-            logger.warning(
-                f"{TT_RUN_PREFIX} --force-rediscovery applies only to new mode (--mesh-graph-descriptor); ignoring."
-            )
+            logger.warning(f"{TT_RUN_PREFIX} --force-rediscovery applies only to new mode (-m / -M); ignoring.")
         # Warn if new mode options are used with legacy mode
         if hosts is not None:
             logger.warning(
-                f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). "
-                "Use --mesh-graph-descriptor to enable new mode."
+                f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). " "Use -m/-M to enable new mode."
             )
         legacy_flow(
             ctx,
@@ -2863,29 +3086,33 @@ def main(
         )
         return
 
-    # New mode: --mesh-graph-descriptor is provided
-    # Validate required arguments for new mode
-    if mesh_graph_descriptor is not None:
+    # New mode: -m or -M provided
+    if mesh_graph_descriptor is not None or mesh_graph_descriptor_mapping is not None:
+        mesh_input = (
+            mesh_graph_descriptor_mapping if mesh_graph_descriptor_mapping is not None else mesh_graph_descriptor
+        )
+        assert mesh_input is not None
+        mg_new_is_mapping = mesh_graph_descriptor_mapping is not None
         # --hosts is required unless --mock-cluster-rank-binding is provided
         if mock_cluster_rank_binding is None and hosts is None:
             raise click.ClickException(
-                "--hosts is required for new mode (--mesh-graph-descriptor) "
-                "unless --mock-cluster-rank-binding is provided."
+                "--hosts is required for new mode (-m / -M) unless --mock-cluster-rank-binding is provided."
             )
 
         new_mode_flow(
             ctx,
-            mesh_graph_descriptor,
-            hosts,
-            dry_run,
-            verbose,
-            mpi_args,
-            debug_gdbserver,
-            mock_cluster_rank_binding,
-            skip_executable_check,
-            skip_mgd_check,
-            bare,
-            tcp_interface,
+            mesh_input,
+            mgd_is_mapping_yaml=mg_new_is_mapping,
+            hosts=hosts,
+            dry_run=dry_run,
+            verbose=verbose,
+            mpi_args=mpi_args,
+            debug_gdbserver=debug_gdbserver,
+            mock_cluster_rank_binding=mock_cluster_rank_binding,
+            skip_executable_check=skip_executable_check,
+            skip_mgd_check=skip_mgd_check,
+            bare=bare,
+            tcp_interface=tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,

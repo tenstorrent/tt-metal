@@ -2273,6 +2273,11 @@ class UnarySFPUGolden:
         self._int_shift_amount = 3
         self._int_maxmin_scalar = 1000
         self.data_format = None
+        # Precision the SFPU actually evaluates at, which is Dest's and not the output
+        # format's. The per-element ops below read this rather than data_format: no
+        # output format can restore precision the value has already lost, and none can
+        # take away precision Dest still holds.
+        self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
     def __call__(
@@ -2290,6 +2295,7 @@ class UnarySFPUGolden:
         skip_tilize: bool = False,
     ):
         self.data_format = data_format
+        self.dst_format = data_format
         self.dest_acc = dest_acc
 
         if operation not in self.ops:
@@ -2306,13 +2312,12 @@ class UnarySFPUGolden:
         ):
             return self._call_integer(operation, operand1, input_format, dimensions)
 
-        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
-        if input_format == DataFormat.Bfp2_b:
-            operand1 = _bfp2b_to_float16b(operand1)
-        if input_format == DataFormat.Bfp4_b:
-            operand1 = _bfp4b_to_float16b(operand1)
-        if input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+        # Quantize input to match what hardware actually sees after unpack from L1.
+        # Matters most for discontinuous ops (floor/ceil/trunc/frac), where a sub-ULP
+        # quantization step across an integer becomes a full 1.0 error.
+        operand1 = quantize_input_to_unpack_format(
+            operand1, input_format, all_mx_formats=True
+        )
 
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
@@ -2328,6 +2333,8 @@ class UnarySFPUGolden:
             dst_format = DataFormat.Float16
         else:
             dst_format = DataFormat.Float16_b
+
+        self.dst_format = dst_format
 
         if self.dest_acc == DestAccumulation.No and input_format == DataFormat.Float32:
             # dst in 16-bit mode and 32-bit input: truncation may occur when unpacked to dst
@@ -2667,7 +2674,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
@@ -2675,7 +2682,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.silu(input_tensor).item()
 
@@ -2697,7 +2704,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softshrink(input_tensor, lambd=lambd).item()
 
@@ -2706,7 +2713,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.softsign(input_tensor).item()
 
@@ -2738,7 +2745,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
@@ -2746,7 +2753,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(input_tensor).item()
 
@@ -2754,7 +2761,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp2(input_tensor).item()
 
@@ -2765,7 +2772,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.exp(0.5 * input_tensor).item()
 
@@ -2815,7 +2822,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
 
@@ -2825,7 +2832,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
@@ -2841,7 +2848,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return input_tensor.fill_(const_value).item()
 
@@ -2849,7 +2856,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.hardsigmoid(input_tensor).item()
 
@@ -2857,7 +2864,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.sigmoid(input_tensor).item()
 
@@ -2865,7 +2872,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
@@ -2873,7 +2880,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
 
@@ -2881,7 +2888,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
@@ -2889,7 +2896,7 @@ class UnarySFPUGolden:
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+            else torch.tensor(x, dtype=format_dict[self.dst_format])
         )
         return torch.nn.functional.leaky_relu(
             input_tensor, negative_slope=negative_slope
