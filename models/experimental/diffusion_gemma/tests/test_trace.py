@@ -62,6 +62,9 @@ class _FakeTensor:
         self.deallocate_attempted = False
         self.deallocate_error = deallocate_error
 
+    def is_allocated(self):
+        return not self.deallocated
+
     def deallocate(self, force):
         assert force is True
         assert not self.deallocated, self.name
@@ -404,6 +407,62 @@ def test_materialized_renoise_uses_one_stable_buffer_and_consumes_only_requested
     assert controller._refresh_noise(lambda step: fresh, 7) is controller.noise_buf
     assert _FakeTtnn.copies == [("noise-7", "clone(noise-0)")]
     assert fresh.deallocated
+
+
+class _CaptureAdapter:
+    q_rope_offset = 0
+
+    def __init__(self, tt_model):
+        self.tt_model = tt_model
+
+    def reset_signal_buffer(self):
+        pass
+
+    def __call__(self, canvas, step):
+        return _FakeTensor(f"logits-{step}")
+
+
+def _capture_with_pooled_gumbel_reserve(controller, adapter, monkeypatch, *, reveal_pmax):
+    """Run only the capture lifecycle pieces needed to test pool ownership."""
+    controller.consts = object()
+    controller._prepare_adapter_for_capture = lambda _adapter, *, start_pos: setattr(
+        controller, "reveal_pmax", reveal_pmax
+    )
+    controller._initialize_gumbel = lambda _fn: setattr(controller, "gumbel_buf", _FakeTensor("gumbel"))
+    controller._initialize_noise = lambda _fn: None
+    controller._warm_persistent_outputs = lambda _adapter, _canvas: None
+    monkeypatch.setattr(
+        TD,
+        "denoise_step_next_canvas_and_halt",
+        lambda *args, **kwargs: (_FakeTensor("next-canvas"), _FakeTensor("argmax")),
+    )
+    monkeypatch.setattr(TD, "_deallocate_logits_if_unowned", lambda _adapter, logits: logits.deallocate(True))
+    controller.capture(
+        adapter,
+        _FakeTensor("init-canvas"),
+        gumbel_noise_fn=lambda step: _FakeTensor(f"gumbel-{step}"),
+        noise_tokens_fn=lambda step: _FakeTensor(f"noise-{step}"),
+    )
+
+
+def test_gumbel_refresh_reserve_survives_two_captures_at_a_long_context_ceiling(fake_ttnn, monkeypatch):
+    """A floor-bucket startup capture must pin the pool reserve through recapture."""
+    monkeypatch.setattr(TD, "_DEFAULT_REVEAL_PMAX", 262144)
+    adapter = _CaptureAdapter(SimpleNamespace())
+
+    first = _controller()
+    _capture_with_pooled_gumbel_reserve(first, adapter, monkeypatch, reveal_pmax=4096)
+    pool = TD._vocab_noise_pool(adapter)
+    reserve = pool["gumbel_refresh_reserve"]
+    assert reserve.is_allocated(), "the startup floor capture must allocate for the long-context ceiling"
+
+    first.release()
+    assert reserve.is_allocated(), "controller teardown must not release a pool-owned reservation"
+
+    second = _controller()
+    _capture_with_pooled_gumbel_reserve(second, adapter, monkeypatch, reveal_pmax=65536)
+    assert second._gumbel_refresh_reserve is reserve
+    assert pool["gumbel_refresh_reserve"].is_allocated(), "the second capture must reuse a live reservation"
 
 
 # --- trace replay ------------------------------------------------------------
@@ -1146,8 +1205,8 @@ def test_vllm_upfront_prefill_rejects_the_request_not_the_engine():
 
     In vLLM V1 an exception out of ``execute_model`` is fatal to EngineCore, so the old ``raise``
     here meant a single out-of-band request emptied every request queued behind it while the eval
-    still wrote a normal-looking score. Regression test for that: the call returns a stop-id block,
-    frees the partially built session, and leaves no row registered.
+    still wrote a normal-looking score. Regression test for that: the call returns a stop-id block
+    and leaves the finished row registered until vLLM performs its normal cleanup callback.
     """
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
@@ -1183,6 +1242,27 @@ def test_vllm_decode_after_a_rejected_prefill_does_not_kill_the_engine():
 
     assert out.shape == (1, 4)
     assert torch.equal(out, torch.full((1, 4), 7, dtype=torch.long))
+
+
+def test_vllm_aligned_prefill_capacity_rejects_the_request_not_the_engine():
+    """Tile alignment plus a full canvas must not turn vLLM-admitted input fatal."""
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    sessions = []
+    wrapper = _reject_wrapper(generator_vllm, sessions)
+    wrapper._upfront_pmax = 64
+    wrapper._upfront_prefill_warmup_lens = frozenset({64})
+
+    # 33 tokens tile-aligns to 64; the four-token canvas overflows the 64-token
+    # fixed reveal span even though the original prompt length is below it.
+    out = wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
+
+    assert torch.equal(out, torch.full((1, 4), 7, dtype=torch.long))
+    assert sessions[0].reset_calls == 0
+    assert wrapper._sessions == {0: sessions[0]}
+    assert sessions[0].finished is True
+    assert torch.equal(wrapper.decode_forward(), torch.full((1, 4), 7, dtype=torch.long))
 
 
 def test_vllm_upfront_prefill_strict_mode_still_raises(expect_error, monkeypatch):
@@ -1770,14 +1850,20 @@ def test_vllm_failed_upshift_costs_one_request_not_the_engine(monkeypatch):
         raise RuntimeError("DRAM says no")
 
     wrapper._rebuild_for_reveal_upshift = failing_upshift
-    wrapper.release_request = lambda row: events.append(f"release:{row}")
     wrapper._restore_resident_capture = lambda: events.append("restore")
     monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
 
     out = wrapper.decode_forward()
 
-    assert events == ["upshift", "stop_block", "release:0", "restore"]
+    assert events == ["upshift", "restore", "stop_block"]
     assert torch.equal(out, stop_block)
+    assert wrapper._sessions == {0: session}
+    assert session.finished is True
+
+    # If vLLM schedules once more before its finished callback, this must pad
+    # rather than throw ``decode_forward called with no active sessions``.
+    assert torch.equal(wrapper.decode_forward(), stop_block)
+    assert events == ["upshift", "restore", "stop_block", "stop_block"]
 
 
 def test_vllm_failed_upshift_and_failed_restore_is_fatal(monkeypatch, expect_error):

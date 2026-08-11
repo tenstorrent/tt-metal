@@ -1265,9 +1265,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
         Same BOS mock-prompt capture as startup warmup, at whatever span is
         currently registered (the failure path restored the resident bucket).
-        The failed request has been released, so memory is as quiet as any
-        between-requests recapture. A failure HERE leaves the wrapper unable to
-        serve anything and is engine-fatal, matching the startup contract.
+        The failed request remains registered as finished until vLLM consumes
+        its synthetic EOS block, but its live adapter state is detached, so
+        memory is as quiet as any between-requests recapture. A failure HERE
+        leaves the wrapper unable to serve anything and is engine-fatal,
+        matching the startup contract.
         """
         if self._persistent_adapter is not None:
             return
@@ -1422,11 +1424,27 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             if upfront and getattr(self, "_upfront_compile_phase_seen", False):
                 p_max = getattr(self, "_upfront_pmax", None)
                 if p_max is not None and cache_len + self.canvas_length > int(p_max):
-                    session.reset()
-                    raise ValueError(
-                        f"aligned prefill plus canvas exceeds fixed reveal span: "
-                        f"{cache_len} + {self.canvas_length} > {p_max}"
+                    # vLLM admits against the logical prompt length, while the
+                    # model must reserve a tile-aligned prefill plus a complete
+                    # canvas. Reject this one unservable request instead of
+                    # raising out of execute_model and terminating EngineCore.
+                    logger.error(
+                        f"[DiffusionGemma vLLM] REJECTING request on row {row}: aligned prefill plus "
+                        f"canvas exceeds fixed reveal span ({cache_len} + {self.canvas_length} > {p_max}). "
+                        "Ending this request with an empty answer; the server stays up."
                     )
+                    _metric(
+                        "prefill_rejected",
+                        row=row,
+                        cache_len=cache_len,
+                        execution_len=execution_len,
+                        p_max=int(p_max),
+                        reason="aligned_prefill_plus_canvas_exceeds_reveal_span",
+                    )
+                    session.finished = True
+                    self._sessions[row] = session
+                    blocks.append(self._stop_block(session))
+                    continue
                 if _reveal_buckets_enabled() and getattr(self, "_upfront_reveal_bucket", None) is not None:
                     candidate = _resolve_reveal_bucket(
                         max(
@@ -1669,10 +1687,14 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                             f"request and restoring the resident capture: {upshift_error!r}"
                         )
                         _metric("reveal_upshift_request_failed", row=row, error=repr(upshift_error))
-                        stop_block = self._stop_block(session)
-                        self.release_request(row)
+                        # Keep an already-finished row until vLLM observes its
+                        # EOS block and invokes the normal finished callback.
+                        # Removing the sole row makes the next decode raise
+                        # ``no active sessions`` and kills EngineCore.
+                        session.finished = True
+                        self._sessions[row] = session
                         self._restore_resident_capture()
-                        blocks.append(stop_block)
+                        blocks.append(self._stop_block(session))
                         continue
                 else:
                     emission = session.decode_block()
@@ -1718,14 +1740,21 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         Used wherever a row has no real tokens to contribute but must still fill its slot: a session
         that already finished, and a terminal emission from the degeneracy guard.
         """
-        stop_id = 0
-        if session.stop_token_ids:
-            ids = (
-                session.stop_token_ids
-                if isinstance(session.stop_token_ids, (list, tuple))
-                else [session.stop_token_ids]
-            )
+        token_ids = session.stop_token_ids
+        if not token_ids:
+            # The vLLM serving session deliberately disables its own stop
+            # policy, so its ``stop_token_ids`` is normally empty. Synthetic
+            # terminal blocks still need a token vLLM recognizes as EOS.
+            token_ids = getattr(getattr(self, "_tokenizer", None), "eos_token_id", None)
+        if token_ids:
+            ids = token_ids if isinstance(token_ids, (list, tuple)) else [token_ids]
             stop_id = int(ids[0])
+        else:
+            # A production wrapper always has a tokenizer. Keep a shape-safe
+            # fallback for partial test/tokenizer objects rather than raising
+            # from execute_model.
+            logger.error("[DiffusionGemma vLLM] no EOS token is available for a synthetic terminal block")
+            stop_id = 0
         return torch.full((1, self.canvas_length), stop_id, dtype=torch.long)
 
     def _emission_block(self, emission, session, row: int) -> torch.Tensor:

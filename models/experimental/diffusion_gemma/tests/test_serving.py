@@ -228,6 +228,16 @@ def test_terminal_emission_fills_the_row(stop_token_ids, expected_fill):
     assert (block == expected_fill).all()
 
 
+def test_terminal_emission_uses_tokenizer_eos_when_vllm_stop_policy_is_empty():
+    """Synthetic terminal blocks must carry an id the vLLM scheduler recognizes."""
+    wrapper = _wrapper()
+    wrapper._tokenizer = SimpleNamespace(eos_token_id=[106, 1])
+
+    block = wrapper._emission_block(_TerminalEmission(0), _SessionStub(stop_token_ids=[]), row=0)
+
+    assert (block == 106).all()
+
+
 def test_full_canvas_emission_passes_through_unchanged():
     wrapper = _wrapper(canvas_length=4)
     emission = _TerminalEmission(0)

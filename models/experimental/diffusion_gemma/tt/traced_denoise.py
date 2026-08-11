@@ -568,7 +568,12 @@ class UpfrontTracedDenoiseController:
         # and return that same hole. Without this reservation 256K capture
         # succeeds but the first refresh fails with only ~26 MiB as the largest
         # per-bank free block (the draw needs 32 MiB).
-        if int(self.reveal_pmax or 0) >= 65536:
+        # A bucketed startup capture may bind the 4K floor even though the
+        # deployment ceiling can later upshift beyond 64K. Allocate the
+        # span-independent reservation while startup memory is clean in that
+        # case too, rather than waiting for the first fragmented recapture.
+        reserve_span = max(int(self.reveal_pmax or 0), int(_DEFAULT_REVEAL_PMAX or 0))
+        if reserve_span >= 65536:
             pool = _vocab_noise_pool(self.adapter)
             reserve = pool.get("gumbel_refresh_reserve")
             self._gumbel_refresh_reserve = reserve if reserve is not None else ttnn.clone(self.gumbel_buf)
@@ -622,8 +627,6 @@ class UpfrontTracedDenoiseController:
                 set_cache_misses_allowed(True)
 
         ttnn.synchronize_device(self.mesh)
-        _deallocate_tensor(self._gumbel_refresh_reserve)
-        self._gumbel_refresh_reserve = None
         self.captured = True
         self.captured_prompt_len = int(getattr(adapter, "prompt_len", 0) or 0)
         self._last_prompt_len = self.captured_prompt_len
