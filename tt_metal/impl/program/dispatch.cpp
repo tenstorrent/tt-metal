@@ -892,12 +892,6 @@ BatchedTransfers assemble_runtime_args_commands(
                     transfer_info.num_dests,
                     crta_offset,
                     size);
-                log_trace(
-                    tt::LogMetal,
-                    "Kernel runtime args: kernel={} core_range={} common_rt_args={}",
-                    kernel->name(),
-                    core_range.str(),
-                    kernel->common_runtime_args());
                 RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
                 transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                     std::vector<Transfer>{Transfer{
@@ -941,14 +935,6 @@ BatchedTransfers assemble_runtime_args_commands(
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
                                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                                    log_debug(
-                                        tt::LogMetal,
-                                        "Kernel runtime args: kernel={} logical_core={} physical_core={} "
-                                        "unique_rt_args={}",
-                                        kernel->kernel_source().path_,
-                                        core_coord.str(),
-                                        device->virtual_core_from_logical_core(core_coord, core_type).str(),
-                                        runtime_args_data);
                                     unique_rt_args_data.back().emplace_back(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                     TT_ASSERT(runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[idx]);
@@ -1025,13 +1011,6 @@ BatchedTransfers assemble_runtime_args_commands(
                     if (common_rt_args.empty()) {
                         continue;
                     }
-
-                    log_trace(
-                        tt::LogMetal,
-                        "Kernel runtime args: kernel={} num_cores={} common_rt_args={}",
-                        kernel->name(),
-                        kernel->logical_cores().size(),
-                        common_rt_args);
 
                     uint32_t crta_offset = kg->crta_offsets[idx];
                     uint32_t common_size = kg->crta_sizes[idx];

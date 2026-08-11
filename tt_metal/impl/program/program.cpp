@@ -2385,23 +2385,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
-        {
-            std::string named_ct_args_str;
-            for (const auto& [k, v] : kernel->named_compile_time_args()) {
-                named_ct_args_str += fmt::format("{}={} ", k, v);
-            }
-            log_trace(
-                tt::LogMetal,
-                "Kernel compile args: program={}, kernel={}, hash={}, logical_cores={}, compile_time_args={}, "
-                "named_compile_time_args=[{}]",
-                this->get_id(),
-                kernel->kernel_source().path_,
-                kernel_hash,
-                kernel->core_range_set().str(),
-                kernel->compile_time_args(),
-                named_ct_args_str);
-        }
-
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
         build_options.set_name(kernel_path_suffix);

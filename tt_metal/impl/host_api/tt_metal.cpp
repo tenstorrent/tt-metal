@@ -995,12 +995,6 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                         tt::llrt::send_reset_go_signal(device->id(), physical_core);
                     }
 
-                    log_trace(tt::LogMetal, "launching {} kernels on core {}", kg->kernel_ids.size(), physical_core);
-                    for (const auto& id : kg->kernel_ids) {
-                        const auto& kernel = program.impl().get_kernel(id);
-                        log_trace(tt::LogMetal, "launch kernel {} {}", kernel->name(), kernel->kernel_source().path_);
-                    }
-
                     tt::llrt::write_launch_msg_to_core(
                         device->id(),
                         physical_core,
@@ -1221,15 +1215,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     rt_args_addr,
                                     rt_args);
-                                log_trace(
-                                    tt::LogMetal,
-                                    "Kernel runtime args: kernel={} logical_core={} physical_core={} addr=0x{:x} "
-                                    "unique_rt_args={}",
-                                    kernel->kernel_source().path_,
-                                    logical_core.str(),
-                                    physical_core.str(),
-                                    rt_args_addr,
-                                    rt_args);
                                 MetalContext::instance().get_cluster().write_core(
                                     device_id, physical_core, rt_args, rt_args_addr);
                             }
@@ -1243,15 +1228,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     "{}",
                                     __FUNCTION__,
                                     common_rt_args.size(),
-                                    logical_core.str(),
-                                    physical_core.str(),
-                                    common_rt_args_addr,
-                                    common_rt_args);
-                                log_trace(
-                                    tt::LogMetal,
-                                    "Kernel runtime args: kernel={} logical_core={} physical_core={} addr=0x{:x} "
-                                    "common_rt_args={}",
-                                    kernel->kernel_source().path_,
                                     logical_core.str(),
                                     physical_core.str(),
                                     common_rt_args_addr,

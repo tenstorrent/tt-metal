@@ -686,14 +686,36 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters",
     [
-        ([16, 8, 8, 64], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
-        ([16, 8, 8, 32], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
-        ([16, 8, 8, 16], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
-        ([16, 8, 8, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
-        # first fails on size 32
-        ([16, 8, 8, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
-        # v FAIL TARGET
-        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # Scatter on dim 0
+        ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
+        # Scatter on dim 1
+        ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),  # perf
+        # Scatter on dim 2
+        ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
+        # Scatter on dim 3
+        ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
+        ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+    ],
+    ids=[
+        "tt_training_test_one-check",
+        "tt_training_test_two-perf",
+        "tt_training_test_three-check",
+        "tt_training_test_four-perf",
+        "tt_training_test_five-check",
+        "tt_training_test_six-perf",
+        "tt_training_test_seven-check",
+        "tt_training_test_eight-perf",
+        "tt_training_test_nine-check",
+        "tt_training_test_ten-perf",
+        "tt_training_test_eleven-check",
+        "tt_training_test_twelve-perf",
     ],
 )
 @pytest.mark.parametrize(
@@ -735,9 +757,7 @@ def test_reduce_scatter_async_training_shapes(
     mem_config_rs,
     ones_tensor,
     rs_topology,
-    request,
 ):
-    logger.info(f"start run {request.node.nodeid}")
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
