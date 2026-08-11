@@ -111,9 +111,13 @@ ttnn::Tensor sample(
     auto* device = &ttml::autograd::ctx().get_device();
 
     ttnn::Tensor out = t;
+    // `out` starts out aliasing the caller's logits, so the in-place steps below (and the final
+    // deallocate) are gated on this flag: they are only legal once `out` is a tensor we produced.
+    bool out_is_owned = false;
 
     if (temperature > 0.0F) {
         namespace distributed = tt::tt_metal::distributed;
+        using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
 
         // NOTE on seed==0: we deliberately pass it through to ttnn::rand verbatim to honor that
         // op's documented contract (seed==0 => host time-based entropy, non-reproducible). The
@@ -229,23 +233,55 @@ ttnn::Tensor sample(
 
         // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
         // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
-        rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        //
+        // Run the four steps as ONE fused SFPU chain, in place on `rand`. Spelled as nested ttnn
+        // calls, each step allocates its own tensor and, since they are all temporaries of a single
+        // full-expression, none of them can be freed until the statement ends -- five live
+        // [B, 1, tokens, padded_V] FP32 tensors at peak, which OOMs on long prefills.
+        //
+        // 0.0F matches ttnn::log's default fast_and_approximate_mode=false.
+        const std::vector<EltwiseUnary> gumbel_chain{
+            EltwiseUnary{ttnn::operations::unary::UnaryOpType::LOG, 0.0F},
+            EltwiseUnary{ttnn::operations::unary::UnaryOpType::NEG},
+            EltwiseUnary{ttnn::operations::unary::UnaryOpType::LOG, 0.0F},
+            EltwiseUnary{ttnn::operations::unary::UnaryOpType::NEG},
+        };
+        rand = ttnn::operations::unary::detail::unary_impl(
+            rand, gumbel_chain, /* memory_config */ std::nullopt, /* optional_output_tensor */ rand);
+
         if (rand.dtype() != out.dtype()) {
             rand = ttnn::typecast(rand, out.dtype());
         }
         if (rand.layout() != out.layout()) {
             rand = ttnn::to_layout(rand, out.layout());
         }
-        out = ttnn::mul_sfpu(out, 1.0F / temperature);
-        out = ttnn::add(out, rand);
+
+        // logits / temperature + noise, as a single in-place add onto the noise buffer: the
+        // scaling rides along as an activation on the logits operand, so the scaled logits are
+        // never materialized and the sum reuses the noise allocation.
+        const EltwiseUnary scale_logits{ttnn::operations::unary::UnaryOpType::MUL_UNARY_SFPU, 1.0F / temperature};
+        const ttsl::Span<const EltwiseUnary> rhs_activations(&scale_logits, 1);
+        out = ttnn::add_(rand, out, /* post_activations */ {}, /* lhs_activations */ {}, rhs_activations);
+        out_is_owned = true;
     }
 
     if (logits_padding_mask.has_value()) {
         // subtract a large number from the logits where the padding mask is set
-        out = ttnn::subtract(out, logits_padding_mask.value());
+        if (out_is_owned) {
+            out = ttnn::subtract_(out, logits_padding_mask.value());
+        } else {
+            out = ttnn::subtract(out, logits_padding_mask.value());
+            out_is_owned = true;
+        }
     }
 
-    return ttnn::argmax(ttnn::untilize(out), 3, true);
+    // Untilize needs a second full-size tensor, so release the tiled one as soon as the
+    // row-major copy exists rather than holding both across argmax.
+    auto out_row_major = ttnn::untilize(out);
+    if (out_is_owned) {
+        out.deallocate();
+    }
+    return ttnn::argmax(out_row_major, 3, true);
 }
 
 ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t) {
