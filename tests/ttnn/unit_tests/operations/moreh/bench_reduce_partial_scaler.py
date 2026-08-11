@@ -158,16 +158,18 @@ def build_cases(device):
         cases.append((f"C.moreh_mean_h.{label}", lambda x=x: ttnn.operations.moreh.mean(x, dim=2, keepdim=True)))
 
     # D: bias grad over H - step 10. Ragged H spanning three tiles is the configuration that changed.
+    # Only the bias grad is requested, so the measurement isolates the kernel this work touched.
     for label, h in [("aligned_96", 96), ("ragged", 95)]:
         inp = _mk(device, [h, 512])
         wt = _mk(device, [1024, 512])
         out_grad = _mk(device, [h, 1024])
         bias = _mk(device, [1, 1024])
+        bias_grad = _mk(device, [1, 1024])
         cases.append(
             (
                 f"D.bias_backward_h.{label}",
-                lambda o=out_grad, i=inp, w=wt, b=bias: ttnn.operations.moreh.linear_backward(
-                    o, i, w, are_required_outputs=[False, False, True], bias=b
+                lambda o=out_grad, i=inp, w=wt, b=bias, bg=bias_grad: ttnn.operations.moreh.linear_backward(
+                    o, i, w, are_required_outputs=(False, False, True), bias=b, bias_grad=bg
                 ),
             )
         )
@@ -199,18 +201,31 @@ def build_cases(device):
     return cases
 
 
-def main(out_path):
+def main(out_path, exclude=None):
+    """exclude: regex; matching cases are skipped.
+
+    Needed to measure a baseline that predates the step 7b fix: there, the shared softmax reader emits
+    two max-scaler tiles unconditionally while the ttnn general *small* factories size that CB at one
+    tile, so every B1/B3 case deadlocks the device (and needs tt-smi -r to clear). Exclude them rather
+    than lose the rest of the sweep -- and report them as "baseline hangs", which is the honest delta.
+    """
+    import re
+
+    skip_re = re.compile(exclude) if exclude else None
     device = ttnn.open_device(device_id=0)
     results = {}
     try:
         for name, fn in build_cases(device):
+            if skip_re is not None and skip_re.search(name):
+                print(f"{name:46s} EXCLUDED by filter", flush=True)
+                continue
             try:
                 secs = _bench(fn, device)
             except Exception as exc:  # one unrunnable case should not lose the whole sweep
-                print(f"{name:46s} SKIPPED ({type(exc).__name__}: {str(exc)[:70]})")
+                print(f"{name:46s} SKIPPED ({type(exc).__name__}: {str(exc)[:70]})", flush=True)
                 continue
             results[name] = secs * 1e6  # microseconds per op
-            print(f"{name:46s} {results[name]:10.2f} us")
+            print(f"{name:46s} {results[name]:10.2f} us", flush=True)
     finally:
         ttnn.close_device(device)
 
@@ -220,4 +235,7 @@ def main(out_path):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "bench.json")
+    main(
+        sys.argv[1] if len(sys.argv) > 1 else "bench.json",
+        exclude=sys.argv[2] if len(sys.argv) > 2 else None,
+    )
