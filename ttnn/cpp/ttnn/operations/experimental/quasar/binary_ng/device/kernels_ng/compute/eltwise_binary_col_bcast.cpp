@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -38,15 +39,17 @@ ALWI void process_tile(
 #define EXP_CB_POST_BCAST exp_cb_post_lhs
 #define EXP_CB_POST_OTHER exp_cb_post_rhs
 #endif
-    CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
-    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_bcast(cb_bcast);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
+    DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
+    DataflowBuffer exp_cb_out(cb_out);
 
     exp_cb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
-    unary_bcast_init<BroadcastType::COL>(cb_bcast, cb_llk_post);
+    reconfig_data_format(cb_bcast, cb_bcast);
+    pack_reconfig_data_format(cb_llk_post);
+    unary_bcast_init<BroadcastType::COL>(cb_bcast);
     exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::COL>(cb_bcast, 0, 0);
@@ -63,9 +66,9 @@ ALWI void process_tile(
 
     PREPROCESS(
         BCAST_OP,
-        CircularBuffer(CB_PRE_BCAST),
-        CircularBuffer(CB_POST_BCAST),
-        CircularBuffer(cb_out),
+        DataflowBuffer(CB_PRE_BCAST),
+        DataflowBuffer(CB_POST_BCAST),
+        DataflowBuffer(cb_out),
         num_tiles_per_cycle);
     EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
@@ -76,9 +79,9 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         PREPROCESS(
             OTHER_OP,
-            CircularBuffer(CB_PRE_OTHER),
-            CircularBuffer(CB_POST_OTHER),
-            CircularBuffer(cb_out),
+            DataflowBuffer(CB_PRE_OTHER),
+            DataflowBuffer(CB_POST_OTHER),
+            DataflowBuffer(cb_out),
             num_tiles_per_cycle);
         EXP_CB_POST_OTHER.wait_front(num_tiles_per_cycle);
 
@@ -133,7 +136,7 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

@@ -941,7 +941,9 @@ class FalconModel(FalconPreTrainedModel):
 # transformers 5.x: PreTrainedModel no longer inherits GenerationMixin, so models
 # that call .generate() must inherit it explicitly (harmless/redundant on <5.x).
 class FalconForCausalLM(FalconPreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    # transformers 5.x requires the dict form ({tied_key: source_key}); the legacy list form
+    # raises `'list' object has no attribute 'keys'` during post_init/tie_weights (#47924).
+    _tied_weights_keys = {"lm_head.weight": "transformer.word_embeddings.weight"}
 
     def __init__(self, config: FalconConfig):
         super().__init__(config)

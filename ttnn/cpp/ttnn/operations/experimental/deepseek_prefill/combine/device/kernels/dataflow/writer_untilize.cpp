@@ -25,6 +25,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 // Sentinel used by compute to tell this kernel to exit its send loop.
@@ -47,22 +50,18 @@ void kernel_main() {
     uint32_t rt_args_idx = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
+    Noc noc;
+
 #if INIT_ZEROS
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // The semaphore was created on all worker cores (including this one),
-    // so get_semaphore gives the correct L1 offset for any core with this ID.
-    uint32_t output_init_done_sem_l1_offset = get_semaphore(output_init_done_semaphore_id);
-
-    // Read sender core NOC coordinates for semaphore signaling
-    uint64_t sender_sem_noc_addrs[num_sender_cores];
-    for (uint32_t c = 0; c < num_sender_cores; c++) {
-        uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_done_sem_l1_offset);
-    }
+    // The semaphore is created on all worker cores (including this one) at a uniform L1
+    // offset, so Semaphore<>::up() resolves the correct remote address on any target core.
+    // The per-sender NOC coordinates are the last INIT_ZEROS runtime args; they are read
+    // below in the signaling loop.
+    Semaphore<> output_init_done_sem(output_init_done_semaphore_id);
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
@@ -70,12 +69,16 @@ void kernel_main() {
 #if INIT_ZEROS
     zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
-    // Signal all sender/reader cores that output-zeroing is complete
+    // Signal all sender/reader cores that output-zeroing is complete. Each core's NOC
+    // coordinates are read here (the last INIT_ZEROS runtime args) and passed to
+    // Semaphore<>::up().
     for (uint32_t c = 0; c < num_sender_cores; c++) {
-        noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
+        uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+        output_init_done_sem.up(noc, noc_x, noc_y, 1);
     }
 
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 #endif
 
     // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
@@ -104,14 +107,17 @@ void kernel_main() {
     //                                              used for cb_wait_front on the multicasted CB
     //  +14: SLOTS_PER_UNTILIZER                    - per-untilizer ring depth on the sender's receive_buf
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_experts_tok_counter_id =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    CircularBuffer cb_experts_tok_counter(cb_experts_tok_counter_id);
     constexpr uint32_t experts_tok_counter_pages =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t aligned_experts_tok_counter_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
+    CircularBuffer cb_metadata_batch(cb_metadata_batch_id);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
     constexpr uint32_t aligned_dispatched_metadata_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 7);
@@ -130,7 +136,7 @@ void kernel_main() {
     constexpr uint32_t tile_height = read_batch_size;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
 
-    // Runtime args appended after the sender_sem_noc_addrs loop above:
+    // Runtime args appended after the INIT_ZEROS sender NOC-coordinate args above:
     //   counter_ready_semaphore_id   - sem the sender increments once after its counter multicast
     //   sender_noc_x / sender_noc_y  - NOC coords of the owning sender core
     //   data_ready_semaphore_id      - sender-side sem dedicated to THIS untilizer core (one per
@@ -144,23 +150,28 @@ void kernel_main() {
     //                                  back, atomically suck the value, and dec(-N).
     //   core_id                      - this untilizer's local index (0..k_s-1) inside the sender's
     //                                  group; used to pick our k_s-way slice of receive_buf.
-    //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group (for round-robin)
-    //   expert_start_idx / expert_end_idx - expert range owned by the sender (drives batch iteration)
+    //   expert_start_idx / expert_end_idx - expert range (now [0, experts_per_chip); every group does all experts)
+    //   untilizer_global_pos              - this core's position in the global interleaved untilizer
+    //                                       ordering; its batches are global_pos, +G, +2G, … per expert
+    //   total_untilizers                  - G, total untilizer cores across all senders (global stride)
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
+
+    Semaphore<> credits_sem(credits_semaphore_id);
+    Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
     uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
     volatile tt_l1_ptr uint32_t* credits_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credits_sem_l1);
-    uint64_t self_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], credits_sem_l1);
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
@@ -171,8 +182,8 @@ void kernel_main() {
     // for the next invocation.
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
-    uint32_t counter_cb_base = get_read_ptr(cb_experts_tok_counter_id);
+    cb_experts_tok_counter.wait_front(cb_counter_total_pages);
+    uint32_t counter_cb_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
     uint32_t sender_receive_buf_l1_offset = trailer[0];
@@ -227,7 +238,11 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_untilizer_cores) {
+        // Global round-robin: this core handles batches untilizer_global_pos, +G, +2G, … of every
+        // expert (G = total_untilizers across all senders).  Must match reader_untilize / compute
+        // exactly so the c_2 / c_9 producer-consumer protocol and the per-row routing stay in
+        // lockstep.
+        for (uint32_t batch_idx = untilizer_global_pos; batch_idx < actual_batches; batch_idx += total_untilizers) {
             uint32_t batch_token_start = batch_idx * read_batch_size;
             uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)
                                        ? read_batch_size
@@ -237,11 +252,11 @@ void kernel_main() {
             // the corresponding metadata pages.  cb_metadata_batch_id is pushed/popped in
             // fixed read_batch_size chunks (only the first batch_count entries are valid),
             // so its fifo pointers wrap cleanly even when batch_count < read_batch_size.
-            cb_wait_front(cb_untilize_id, read_batch_size);
-            cb_wait_front(cb_metadata_batch_id, read_batch_size);
+            cb_untilize.wait_front(read_batch_size);
+            cb_metadata_batch.wait_front(read_batch_size);
 
-            uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
-            uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
+            uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
+            uint32_t metadata_read_ptr = cb_metadata_batch.get_read_ptr();
 
             for (uint32_t t = 0; t < batch_count; t++) {
                 const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
@@ -254,14 +269,21 @@ void kernel_main() {
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                    noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
+                    noc.async_write(
+                        cb_untilize,
+                        output_addr_gen,
+                        aligned_output_page_size,
+                        {.offset_bytes = t * aligned_output_page_size},
+                        {.page_id = output_page_idx});
 
                 } else {
                     if (local_credits == 0) {
-                        noc_semaphore_wait_min(credits_sem_ptr, 1);
+                        credits_sem.wait_min(1);
                         uint32_t n = *credits_sem_ptr;
-                        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
-                        noc_async_atomic_barrier();
+                        // Atomic credit return: up() with a wrapped -n. Semaphore<>::down() is a
+                        // local, non-atomic decrement that would race the sender's credit increments.
+                        credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
+                        noc.async_atomic_barrier();
                         local_credits += n;
                     }
                     // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
@@ -284,7 +306,13 @@ void kernel_main() {
                                 untilize_row_addr + off, dst_addr + off, chunk, TRID_NON_LOCAL_WRITE);
                             off += chunk;
                         }
-                        noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);  // zone measures only row-data landing
+                        // The tagged barrier drains this row's remote metadata and
+                        // data writes without waiting for local DRAM writes.
+                        noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                        // A transaction ID is retained by the command buffer after
+                        // its barrier. Clear it before the next row so a later local
+                        // noc.async_write remains untagged.
+                        noc_async_write_set_trid(0);
                     }
 
                     noc_semaphore_inc<true>(sender_data_ready_noc_addr, 1);
@@ -296,10 +324,10 @@ void kernel_main() {
             // Make sure any local writes that hit only the writes-flushed path complete before
             // we release the CBs (sender's per-row handshake already barriered the non-local
             // writes).
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
-            cb_pop_front(cb_metadata_batch_id, read_batch_size);
-            cb_pop_front(cb_untilize_id, read_batch_size);
+            cb_metadata_batch.pop_front(read_batch_size);
+            cb_untilize.pop_front(read_batch_size);
         }
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
@@ -307,16 +335,24 @@ void kernel_main() {
     // All batches processed — send job-done sentinel to sender so it knows this untilizer
     // core has finished completely.  Uses one ring slot (credit consumed, data_ready++).
 
-    noc_semaphore_wait_min(credits_sem_ptr, SLOTS_PER_UNTILIZER - local_credits);
+    credits_sem.wait_min(SLOTS_PER_UNTILIZER - local_credits);
     uint32_t n = *credits_sem_ptr;
-    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
-    noc_semaphore_set(counter_ready_sem_ptr, 0);
-    noc_async_atomic_barrier();
+    // Atomic credit return (see note above): up() with a wrapped -n.
+    credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
+    counter_ready_sem.set(0);
+    noc.async_atomic_barrier();
 
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
-    noc_async_write_barrier();
-    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-    noc_async_atomic_barrier();
-    cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
+    noc.async_write_barrier();
+    Semaphore<> sender_data_ready_sem(data_ready_semaphore_id);
+    sender_data_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+    noc.async_atomic_barrier();
+
+    // The per-row remote path resets the transaction ID after every tagged
+    // barrier. Repeat it at exit so the firmware's dynamic-NoC handoff check
+    // sees an idle command buffer on every path.
+    noc_async_write_set_trid(0);
+
+    cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }

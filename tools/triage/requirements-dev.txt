@@ -2,7 +2,7 @@
 -r requirements.txt
 
 # Development / type-checking dependencies for tt-triage.
-mypy==2.0.0
+mypy==2.1.0
 basedpyright==1.39.6
 
 # Type stubs

@@ -230,7 +230,9 @@ TEST(CanonicalKeyTest, DistinguishesVectorBool) {
     // For each length 1..10, an all-true vector and an all-false vector (opposite at every index)
     // must encode differently.
     std::vector<bool> mixed_left;
+    mixed_left.reserve(10);
     std::vector<bool> mixed_right;
+    mixed_right.reserve(10);
     for (std::size_t len = 1; len <= 10; ++len) {
         const std::vector<bool> all_true(len, true);
         const std::vector<bool> all_false(len, false);
@@ -240,6 +242,28 @@ TEST(CanonicalKeyTest, DistinguishesVectorBool) {
         mixed_right.push_back(!vb);
         EXPECT_NE(canonical_key(mixed_left), canonical_key(mixed_right)) << "mixed opposite booleans. length=" << len;
     }
+}
+
+TEST(CanonicalKeyTest, ToHashTakesPrecedenceOverReflection) {
+    struct ReflectableWithToHash {
+        uint32_t reflected_value;
+        uint32_t hash_key;
+
+        hash_t to_hash() const { return hash_objects_with_default_seed(hash_key); }
+    };
+
+    static_assert(ttsl::concepts::Reflectable<ReflectableWithToHash>);
+    static_assert(ttsl::reflection::detail::supports_to_hash_v<ReflectableWithToHash>);
+
+    const ReflectableWithToHash same_hash_left{.reflected_value = 1, .hash_key = 7};
+    const ReflectableWithToHash same_hash_right{.reflected_value = 2, .hash_key = 7};
+    const ReflectableWithToHash different_hash{.reflected_value = 1, .hash_key = 8};
+
+    EXPECT_EQ(hash_objects_with_default_seed(same_hash_left), hash_objects_with_default_seed(same_hash_right));
+    EXPECT_EQ(canonical_key(same_hash_left), canonical_key(same_hash_right));
+
+    EXPECT_NE(hash_objects_with_default_seed(same_hash_left), hash_objects_with_default_seed(different_hash));
+    EXPECT_NE(canonical_key(same_hash_left), canonical_key(different_hash));
 }
 
 // Coverage over the same adversarial set used for the hash: the exact key must be injective here

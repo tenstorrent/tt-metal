@@ -15,9 +15,7 @@ inline void smoothstep_tile_face(float edge0, [[maybe_unused]] float edge1, floa
     for (size_t i = 0; i < vectors_per_face; i++) {
         sfpi::vFloat x = sfpi::dst_reg[i];
         sfpi::vFloat t = (x - edge0) * inv_delta;
-        v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
-        v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
-        v_endif;
+        t = sfpi::clamp(t, 0.0f, 1.0f);
         sfpi::vFloat result = t * t * (3.0f - 2.0f * t);
         sfpi::dst_reg[i] = result;
     }

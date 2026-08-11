@@ -15,6 +15,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/div_int32_sfpu.h"
 #include "api/compute/div_int32_floor.h"
+#include "api/compute/binary_remainder.h"
 #include "api/compute/quantization.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"

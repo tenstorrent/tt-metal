@@ -54,7 +54,7 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
     } else {
         exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+    sfpi::vFloat denominator = 1.0f + exp_neg_x;
     if constexpr (is_fp32_dest_acc_en) {
         return sfpu_reciprocal_iter<2>(denominator);
     } else {
@@ -87,7 +87,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
         v_endif;
 
         // up = up + 1
-        up = up + sfpi::vConst1;
+        up = up + 1.0f;
 
         // sigmoid(alpha * gate)
         sfpi::vFloat alpha_gate = gate * alpha;

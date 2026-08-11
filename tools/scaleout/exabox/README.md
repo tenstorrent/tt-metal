@@ -1,5 +1,7 @@
 # BH Galaxy Exabox Validation
 
+> **Important — for the latest recommendations and step-by-step guides, use Confluence: [Exabox DCAMP Bringup](https://tenstorrent.atlassian.net/wiki/spaces/Exabox/pages/2509373472).** Those pages are the source of truth and are kept current for the full workflow — preflight, validation, fabric tests, dispatch tests, `recover.sh`, and troubleshooting/escalation. This README is a summary and may lag.
+
 Scripts for validating Blackhole Galaxy Exabox clusters before running workloads.
 
 ## Quick Reference
@@ -124,6 +126,7 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 - `10` - ARC timeout
 - `11` - AICLK timeout
 - `12` - Network errors (MPI/SSH)
+- `13` - Device init error (PCIe hang / ARC firmware startup failure)
 - `50` - Inconclusive (manual review required)
 - `66` - Input error (file/directory not found)
 
@@ -203,6 +206,25 @@ The script returns specific exit codes for automated workflows:
 
 For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
 
+**Automatic Ring Order from Descriptors:**
+
+Instead of manually figuring out the ring order, use `resolve_host_ring_order.py` to derive it from cabling + deployment descriptors (or an FSD):
+
+```bash
+# From cabling + deployment descriptors (same files used by physical validation):
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --cabling /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+    --deployment /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+
+# Or from an FSD:
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts host1,host2,host3,host4 \
+    --fsd /data/scaleout_configs/merged_fsd.textproto
+```
+
+The tool outputs JSON with `ordered_hosts` — the hosts reordered so consecutive entries are physically connected. `run_fabric_tests.sh` can also call this automatically when `--cabling-descriptor-path` and `--deployment-descriptor-path` are provided.
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**
@@ -211,33 +233,63 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 ## Quick Health Check (For Developers)
 
-For day-to-day use when you just need to verify a cluster is working.
+For day-to-day use when you just need to verify a cluster is working. `recover.sh` runs a distributed `tt-smi` reset, then cluster validation, then (on unrecoverable failure) auto-regenerates a degraded descriptor set — ~2 minutes end to end. Latest guidance: [Reference — Recover.sh](https://tenstorrent.atlassian.net/wiki/spaces/Exabox/pages/2509373523/Reference+Recover.sh+Quick+Reset+Validate) on Confluence.
 
-**Important: These scripts require a local build!**
+**Before you run (prerequisites):**
 
-Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
+- **Preflight must pass first** — chips visible (`tt-smi -l` shows 32 per host) and links up. Don't run `recover.sh` on a cluster that hasn't cleared preflight.
+- **Passwordless SSH to every host** via agent forwarding (see [SSH Setup](#ssh-setup)).
+- **MPI must reach all hosts.** Seed host keys and confirm reachability before running — this is the #1 cause of `recover.sh` hanging:
+  ```bash
+  export HOSTS=<comma-separated-hosts>
+  echo "$HOSTS" | tr ',' '\n' | xargs -I{} sh -c 'ssh-keyscan -H {} >> ~/.ssh/known_hosts 2>/dev/null'
+  mpirun --host "$HOSTS" hostname   # prints each hostname; if it hangs or prompts, fix SSH first
+  ```
 
-| Script Type | Requires Build? | Uses Docker? |
-|-------------|----------------|--------------|
-| `recover_*.sh` | **Yes** | No |
-| `run_validation.sh` | No | Yes |
-| `run_fabric_tests.sh` | No | Yes |
+**On Exabox, always run from the vetted pre-built path — no image, nothing to compile:**
+```bash
+cd /data/local-syseng-manual/tt-metal-recover
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --mpi-if ens5f0np0
+# or for 8x16 configuration:
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16 --mpi-if ens5f0np0
+```
 
-**Build first:**
+This is the path everyone should use for a quick health check — it's already built and kept current, so you don't need to clone or build anything. (On another site the NIC name differs, so drop `--mpi-if` to auto-detect, or pin the right interface.)
+
+Look for `All Detected Links are healthy` in the output. No banner means it isn't done.
+
+**Rules — do / don't:**
+
+DO:
+- **Always run from the vetted path** `/data/local-syseng-manual/tt-metal-recover` — pre-built, no image needed.
+- **Pin the MPI interface** with `--mpi-if ens5f0np0` on Exabox (other sites: check `ip link`, or omit `--mpi-if` to auto-detect).
+- **If a run fails, power-cycle the affected hosts via `#bmc-bots` and re-run** before escalating — this clears most transient stalls and hangs.
+- **Confirm `All Detected Links are healthy`** before calling it done.
+
+DON'T:
+- **Don't run from your own checkout** (`/data/<user>/tt-metal`) unless you specifically need to test a local change — use the vetted path.
+- **Don't reach for image-based or hand-built runs** unless the vetted path can't do what you need.
+- **Don't flash or update firmware** on cluster machines — ever. They run debug FW (see [Do NOT Update Firmware on Cluster Machines](./TROUBLESHOOTING.md#do-not-update-firmware-on-cluster-machines)).
+- **Don't power-cycle on your own** — go through `#bmc-bots` (coordinate with the infra/cloud cluster managers).
+- **Don't combine `--skip-reset` with `--skip-validation`** — `recover.sh` fails fast with `Error: cannot use both --skip-reset and --skip-validation` (you must keep at least one of reset or validation).
+- **Don't declare success without the healthy-links banner.**
+
+**These scripts run a local build, not Docker.** Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host, so a build has to exist somewhere. The vetted path above already provides one; only build tt-metal yourself if you're running from your own checkout (e.g. to test a local change) or on a site without the vetted path.
+
+| Script Type | Uses Docker? | Where the build comes from |
+|-------------|--------------|----------------------------|
+| `recover_*.sh` | No | Vetted pre-built path (Exabox), or your own `build_metal.sh` |
+| `run_validation.sh` | Yes | Docker image |
+| `run_fabric_tests.sh` | Yes | Docker image |
+
+**Building your own (only if not using the vetted path):**
 ```bash
 ./create_venv.sh
 source python_env/bin/activate
 ./build_metal.sh --build-metal-tests
 ```
 
-**Then run:**
-```bash
-./tools/scaleout/exabox/recover.sh --hosts <hosts>
-# or for 8x16 configuration:
-./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16
-```
-
-Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
+If you see `could not access or execute an executable`, the build is missing — use the vetted path or build first. See [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
 
 **Tolerating missing cables:** by default, recovery fails if any expected cable is missing — either with `Encountered unrecoverable state` after 5 retrain attempts, or by early-exiting after a successful retrain without sending traffic. To validate the rest of the cluster when one or more cables are down, forward `--min-connections N` (relaxed mode, ASIC pair passes if it has at least N connections) via `--validation-args` and/or pass `--rerun-on-retrain` (rerun validation after a successful retrain so traffic actually runs).
 

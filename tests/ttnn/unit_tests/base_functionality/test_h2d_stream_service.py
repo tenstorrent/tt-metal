@@ -96,7 +96,7 @@ def _verify_readback(service: ttnn.H2DStreamService, expected_host: ttnn.Tensor)
 
 # Replicated sweep: mapper=None exercises the C++ replicate-on-every-mesh-dim default.
 @pytest.mark.parametrize(
-    "shape_list, scratch_cb_pages, fifo_pages",
+    "shape_list, max_coalesce_pages, fifo_pages",
     [
         # Single chunk, big innermost dim.
         ([1, 1, 1, 65536], 1, 1),
@@ -114,7 +114,7 @@ def _verify_readback(service: ttnn.H2DStreamService, expected_host: ttnn.Tensor)
 def test_h2d_stream_service_replicated_sweep(
     mesh_device,
     shape_list,
-    scratch_cb_pages,
+    max_coalesce_pages,
     fifo_pages,
     input_path,
 ):
@@ -130,7 +130,7 @@ def test_h2d_stream_service_replicated_sweep(
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=fifo_pages * per_row_bytes,
-        scratch_cb_size_bytes=scratch_cb_pages * per_row_bytes,
+        max_socket_page_size_bytes=max_coalesce_pages * per_row_bytes,
         # mapper omitted -> C++ replicate-on-every-mesh-dim default.
     )
 
@@ -151,7 +151,7 @@ def _global_shape_for_placements(per_device_shape, placements, mesh_device):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("input_path", ["tensor", "bytes"])
 @pytest.mark.parametrize(
-    "placements, per_device_shape, cb_pages, fifo_pages",
+    "placements, per_device_shape, max_coalesce_pages, fifo_pages",
     [
         # Shard innermost (dim 3) across long mesh edge (8), replicate short (4).
         pytest.param(
@@ -196,7 +196,9 @@ def _global_shape_for_placements(per_device_shape, placements, mesh_device):
         ),
     ],
 )
-def test_h2d_stream_service_sharded_sweep(mesh_device, placements, per_device_shape, cb_pages, fifo_pages, input_path):
+def test_h2d_stream_service_sharded_sweep(
+    mesh_device, placements, per_device_shape, max_coalesce_pages, fifo_pages, input_path
+):
     shape_list = _global_shape_for_placements(per_device_shape, placements, mesh_device)
     shape = ttnn.Shape(shape_list)
     global_spec = _make_global_spec(shape)
@@ -211,8 +213,32 @@ def test_h2d_stream_service_sharded_sweep(mesh_device, placements, per_device_sh
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=fifo_pages * per_row_bytes,
-        scratch_cb_size_bytes=cb_pages * per_row_bytes,
+        max_socket_page_size_bytes=max_coalesce_pages * per_row_bytes,
         mapper=service_mapper,  # ownership transferred; handle now invalidated.
+    )
+
+    _run_io_loop(service, iter_mapper, global_spec, shape_list, input_path)
+
+
+# Host-side feeder parallelism: with more than one socket, each forward fans its per-socket host
+# writes across a persistent worker-thread pool (one thread per socket). Replicate on the full mesh
+# so every device is its own socket, exercising the pool, then verify the output is still byte-exact.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("input_path", ["tensor", "bytes"])
+def test_h2d_stream_service_parallel_host_push(mesh_device, input_path):
+    shape_list = [1, 1, 16, 640]  # 16 tensor pages per device
+    shape = ttnn.Shape(shape_list)
+    global_spec = _make_global_spec(shape)
+
+    # mapper omitted -> C++ replicate-on-every-mesh-dim default: one socket per device, so the
+    # feeder pool actually fans out. iter_mapper mirrors that default for the readback comparison.
+    placements = [ttnn.PlacementReplicate() for _ in range(mesh_device.shape.dims())]
+    iter_mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(placements=placements))
+
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        parallel_host_push=True,  # one feeder thread per socket
     )
 
     _run_io_loop(service, iter_mapper, global_spec, shape_list, input_path)
@@ -231,7 +257,7 @@ def _make_minimal_service(mesh_device, **kwargs):
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=per_row_bytes,
-        scratch_cb_size_bytes=per_row_bytes,
+        max_socket_page_size_bytes=per_row_bytes,
         **kwargs,
     )
 
@@ -273,59 +299,59 @@ def test_metadata_getter_address_is_nonzero(mesh_device):
     assert service.get_metadata_addr() != 0
 
 
-def test_worker_sync_getters_raise_when_disabled(mesh_device):
+def test_worker_sync_getters_raise_when_disabled(mesh_device, expect_error):
     """worker_cores unset -> the three worker-sync getters all raise."""
     service = _make_minimal_service(mesh_device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "worker-sync was not configured"):
         service.get_data_ready_sem_addr()
     # Per-coord getters need a coord; pick coord 0.
     coord = _mesh_coords(mesh_device)[0]
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "no consumed-counter at coord"):
         service.get_consumed_counter_addr(coord)
 
 
-def test_metadata_getter_raises_when_disabled(mesh_device):
+def test_metadata_getter_raises_when_disabled(mesh_device, expect_error):
     """worker_cores set but metadata_size_bytes=0 -> get_metadata_addr raises."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     service = _make_minimal_service(mesh_device, worker_cores=worker_cores)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "metadata multicast was not configured"):
         service.get_metadata_addr()
 
 
-def test_ctor_rejects_metadata_without_worker_cores(mesh_device):
+def test_ctor_rejects_metadata_without_worker_cores(mesh_device, expect_error):
     """metadata_size_bytes > 0 requires worker_cores; ctor rejects otherwise."""
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "requires Config::worker_cores to be set"):
         _make_minimal_service(mesh_device, metadata_size_bytes=16)
 
 
-def test_ctor_rejects_metadata_larger_than_socket_page(mesh_device):
+def test_ctor_rejects_metadata_larger_than_socket_page(mesh_device, expect_error):
     """metadata_size_bytes larger than the socket page size is rejected at construction."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "exceeds derived socket_page_size"):
         _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=1 << 20)
 
 
-def test_forward_bytes_rejects_wrong_metadata_size(mesh_device):
+def test_forward_bytes_rejects_wrong_metadata_size(mesh_device, expect_error):
     """Service expects 16 B of metadata, caller passes 8 B."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     service = _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=16)
     data = _dummy_source_bytes([1, 1, 1, 640])
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "metadata span size"):
         service.forward_to_tensor_bytes(data, metadata=b"x" * 8)
 
 
-def test_forward_bytes_rejects_metadata_when_disabled(mesh_device):
+def test_forward_bytes_rejects_metadata_when_disabled(mesh_device, expect_error):
     """metadata_size_bytes=0 at construction, caller still passes bytes."""
     service = _make_minimal_service(mesh_device)
     data = _dummy_source_bytes([1, 1, 1, 640])
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "metadata span size"):
         service.forward_to_tensor_bytes(data, metadata=b"x" * 16)
 
 
-def test_forward_bytes_rejects_missing_metadata_when_required(mesh_device):
+def test_forward_bytes_rejects_missing_metadata_when_required(mesh_device, expect_error):
     """Service expects 16 B of metadata, caller passes none (default b'')."""
     worker_cores = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     service = _make_minimal_service(mesh_device, worker_cores=worker_cores, metadata_size_bytes=16)
     data = _dummy_source_bytes([1, 1, 1, 640])
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "metadata span size"):
         service.forward_to_tensor_bytes(data)

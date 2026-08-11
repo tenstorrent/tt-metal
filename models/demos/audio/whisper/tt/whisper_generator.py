@@ -1018,7 +1018,7 @@ class WhisperGenerator:
             input_ids = self._pad_input_32(input_ids, self.config.pad_token_id).to(torch.long)
             decoder_start_values = self.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
-        MAX_GEN_LEN = self.config.max_length
+        MAX_GEN_LEN = self.generation_config.max_length
         # Collect token IDs (not per-token decoded strings) for every non-timestamp run, both
         # streaming and non-streaming. The full ID sequence is decoded once at the end so that
         # multi-byte UTF-8 characters (e.g. CJK) split across BPE tokens are reassembled correctly.

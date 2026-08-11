@@ -66,6 +66,7 @@ jobs:
             --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake \
             --disable-pch \
             --disable-unity-builds \
+            --disable-profiler \
             --build-all \
             --configure-only
 

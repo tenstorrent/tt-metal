@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <random>
+#include <thread>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -75,6 +76,68 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
 
     EXPECT_NEAR(parallel_mean, 0.0, 0.01);
     EXPECT_NEAR(sequential_mean, 0.0, 0.01);
+}
+
+TEST_F(RandomGenerationTests, ParallelUniformThreadAgnostic) {
+    // Ensure that parlallel RNG gives same results regardless of number of threads.
+    // Here, we compare outputs with 7 threads and all threads against sequential RNG.
+    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+
+    std::vector<float> sequential_vec(size);
+    std::vector<float> parallel_vec(size);
+    std::vector<float> parallel_all_threads_vec(size);
+
+    const uint32_t num_threads = std::min<uint32_t>(7u, std::thread::hardware_concurrency());
+    const uint32_t all_threads = std::thread::hardware_concurrency();
+
+    ttml::core::legacy::parallel_generate(
+        std::span{sequential_vec.data(), sequential_vec.size()},
+        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+        42,
+        1);
+    ttml::core::legacy::parallel_generate(
+        std::span{parallel_vec.data(), parallel_vec.size()},
+        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+        42,
+        num_threads);
+    ttml::core::legacy::parallel_generate(
+        std::span{parallel_all_threads_vec.data(), parallel_all_threads_vec.size()},
+        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+        42,
+        all_threads);
+
+    EXPECT_EQ(sequential_vec, parallel_vec);
+    EXPECT_EQ(sequential_vec, parallel_all_threads_vec);
+}
+
+TEST_F(RandomGenerationTests, ParallelNormalThreadAgnostic) {
+    // Same thread-agnostic property as above, for the normal distribution.
+    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+
+    std::vector<float> sequential_vec(size);
+    std::vector<float> parallel_vec(size);
+    std::vector<float> parallel_all_threads_vec(size);
+
+    const uint32_t num_threads = std::min<uint32_t>(7u, std::thread::hardware_concurrency());
+    const uint32_t all_threads = std::thread::hardware_concurrency();
+    ttml::core::legacy::parallel_generate(
+        std::span{sequential_vec.data(), sequential_vec.size()},
+        []() { return std::normal_distribution<float>(0.0f, 1.0f); },
+        42,
+        1);
+    ttml::core::legacy::parallel_generate(
+        std::span{parallel_vec.data(), parallel_vec.size()},
+        []() { return std::normal_distribution<float>(0.0f, 1.0f); },
+        42,
+        num_threads);
+    ttml::core::legacy::parallel_generate(
+        std::span{parallel_all_threads_vec.data(), parallel_all_threads_vec.size()},
+        []() { return std::normal_distribution<float>(0.0f, 1.0f); },
+        42,
+        all_threads);
+
+    EXPECT_EQ(sequential_vec, parallel_vec);
+    EXPECT_EQ(sequential_vec, parallel_all_threads_vec);
 }
 
 TEST_F(RandomGenerationTests, ParallelUniformInitDeterminismSSE) {

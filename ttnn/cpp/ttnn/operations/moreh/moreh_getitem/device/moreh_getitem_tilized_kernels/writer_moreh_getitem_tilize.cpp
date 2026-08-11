@@ -5,42 +5,37 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    // buffers
-    uint32_t dst_addr = get_arg_val<uint32_t>(i++);
-
     // output
-    uint32_t output_size_c_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_d_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_h_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_size_w_without_padding = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_n = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_c = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_d = get_arg_val<uint32_t>(i++);
-    uint32_t output_noc_id_stride_h = get_arg_val<uint32_t>(i++);
-    uint32_t output_num_stick_width = get_arg_val<uint32_t>(i++);
+    uint32_t output_size_c_without_padding = get_arg(args::output_size_c_without_padding);
+    uint32_t output_size_d_without_padding = get_arg(args::output_size_d_without_padding);
+    uint32_t output_size_h_without_padding = get_arg(args::output_size_h_without_padding);
+    uint32_t output_size_w_without_padding = get_arg(args::output_size_w_without_padding);
+    uint32_t output_noc_id_stride_n = get_arg(args::output_noc_id_stride_n);
+    uint32_t output_noc_id_stride_c = get_arg(args::output_noc_id_stride_c);
+    uint32_t output_noc_id_stride_d = get_arg(args::output_noc_id_stride_d);
+    uint32_t output_noc_id_stride_h = get_arg(args::output_noc_id_stride_h);
+    uint32_t output_num_stick_width = get_arg(args::output_num_stick_width);
 
     // etc
-    uint32_t start_id = get_arg_val<uint32_t>(i++);
-    uint32_t num_sticks = get_arg_val<uint32_t>(i++);
-    uint32_t stick_size = get_arg_val<uint32_t>(i++);
-    uint32_t element_size = get_arg_val<uint32_t>(i++);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_sticks = get_arg(args::num_sticks);
+    uint32_t stick_size = get_arg(args::stick_size);
+    uint32_t element_size = get_arg(args::element_size);
 
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_0;
-
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::s0);
 
     Noc noc;
-    CircularBuffer cb_out_obj(cb_id_out);
+    // The output stick is drained straight out of the buffer the reader staged it in.
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out_obj.wait_front(1);
+        dfb_out_obj.wait_front(1);
 
         uint32_t stick_idx = i;
 
@@ -59,8 +54,8 @@ void kernel_main() {
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
         noc.async_write(
-            cb_out_obj, s0, stick_size, {.offset_bytes = 0}, {.page_id = noc_id, .offset_bytes = noc_offset});
+            dfb_out_obj, s0, stick_size, {.offset_bytes = 0}, {.page_id = noc_id, .offset_bytes = noc_offset});
         noc.async_write_barrier();
-        cb_out_obj.pop_front(1);
+        dfb_out_obj.pop_front(1);
     }
 }

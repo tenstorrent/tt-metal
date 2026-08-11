@@ -40,7 +40,7 @@ def test_demo_sample(mesh_device, batch_size, input_loc, imagenet_label_dict, mo
 )
 @pytest.mark.parametrize(
     "batch_size, iterations, act_dtype, weight_dtype",
-    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+    ((16, 100, ttnn.bfloat16, ttnn.bfloat16),),
 )
 def test_demo_trace_with_imagenet(
     mesh_device,

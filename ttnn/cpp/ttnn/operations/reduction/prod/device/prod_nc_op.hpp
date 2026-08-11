@@ -14,10 +14,10 @@ namespace tt::operations::primary {
 
 using namespace tt_metal;
 
-Tensor prod_nc(
-    const Tensor& input,
-    const Tensor& output,
-    ttnn::SmallVector<int64_t>& dims,
+ttnn::Tensor prod_nc(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& output,
+    ttsl::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt::operations::primary

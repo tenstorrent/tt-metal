@@ -196,7 +196,7 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
         operation_attributes.dtype,
         input_tensor.tensor_spec().page_config(),
         operation_attributes.all_reduce_mem_config);
-    auto all_reduce_tensor_spec = TensorSpec(input_shape, output_tensor_layout);
+    auto all_reduce_tensor_spec = tt::tt_metal::TensorSpec(input_shape, output_tensor_layout);
 
     auto batch = input_shape[2];
     if (operation_attributes.slice_size.has_value()) {
@@ -254,15 +254,15 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
 
     return {
         .all_reduce = all_reduce_tensor_spec,
-        .q = TensorSpec(
+        .q = tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        .k = TensorSpec(
+        .k = tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        .v = TensorSpec(
+        .v = tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
@@ -279,26 +279,6 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
         .q = create_device_tensor(output_specs.q, device),
         .k = create_device_tensor(output_specs.k, device),
         .v = create_device_tensor(output_specs.v, device)};
-}
-
-ttsl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    // Hash individual fields to avoid hashing non-hashable types like GlobalSemaphore
-    return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeadsDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.all_reduce_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
 }
 
 }  // namespace ttnn::experimental::prim

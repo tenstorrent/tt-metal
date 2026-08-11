@@ -1994,7 +1994,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         }
                     }
                     // support for multi-tensor output
-                    const ttnn::TensorSpec tensor_spec(
+                    const tt::tt_metal::TensorSpec tensor_spec(
                         output_shape,
                         tt::tt_metal::TensorLayout(
                             attributes.output_dtype.value(),
@@ -2002,7 +2002,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                                     : tt::tt_metal::PageConfig(output_layout, output_tile),
                             mem_config));
 
-                    std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
+                    std::vector<tt::tt_metal::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
@@ -2043,7 +2043,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2064,7 +2064,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     // Use the user-provided shard spec directly
                     auto mem_config = attributes.output_mem_config;
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2113,7 +2113,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2157,7 +2157,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2184,7 +2184,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             chosen_program_config);
     }
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             attributes.output_dtype.value(),
@@ -2216,31 +2216,6 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
     return output_tensors;
-}
-
-ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& args) {
-    const auto& input_tensors = args.input_tensors;
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-
-    auto factory = select_program_factory(attributes, args);
-
-    auto hash = tt::tt_metal::operation::hash_operation<MatmulDeviceOperation>(
-        attributes, factory.index(), input_tensor_a, input_tensor_b);
-
-    for (const auto& optional_input_tensor : args.optional_input_tensors) {
-        if (optional_input_tensor.has_value()) {
-            hash = ttsl::hash::hash_objects(hash, optional_input_tensor.value());
-        }
-    }
-
-    for (const auto& optional_output_tensor : args.optional_output_tensors) {
-        if (optional_output_tensor.has_value()) {
-            hash = ttsl::hash::hash_objects(hash, optional_output_tensor.value());
-        }
-    }
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<MatmulDeviceOperation::tensor_return_value_t>

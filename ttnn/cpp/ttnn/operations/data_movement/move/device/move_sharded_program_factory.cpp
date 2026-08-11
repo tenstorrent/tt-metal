@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "move_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
@@ -97,22 +98,101 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
-    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
-    // therefore must be recomputed every call.  We deliberately emit them as plain
-    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
-    // empty and the slow cache-hit path runs create_descriptor() again — which
-    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
-    // from the freshly-allocated buffer addresses.  CB addresses are still patched
-    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
+    // Reader args derive from the address arithmetic (output_addr - input_addr) and are recomputed
+    // every dispatch by override_runtime_arguments re-running create_descriptor (#48928). CB
+    // addresses are re-patched via desc.cbs[*].buffer in apply_descriptor_runtime_args().
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(
-            core, {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes});
+            core,
+            {total_size_bytes,
+             num_chunks,
+             move_chunk_size_bytes,  // re-applied on cache hit via override_runtime_arguments (#48928)
+             remainder_chunk_size_bytes});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+// move has no custom compute_program_hash, so the shapes and therefore every work-split arg are keyed:
+// only the buffer addresses, and the chunk arithmetic derived from them, move between cache hits.
+void MoveDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    Buffer* src_buffer = tensor_args.input_tensor.buffer();
+    Buffer* dst_buffer = tensor_return_value.buffer();
+    const uint32_t src_addr = src_buffer->address();
+    const uint32_t dst_addr = dst_buffer->address();
+
+    switch (operation_attributes.move_op_parallelization_strategy) {
+        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: {
+            // Same derivation as create_descriptor: the copy is expressed as chunks of the
+            // dst-minus-src address delta, so all four reader args follow the addresses.
+            const uint32_t total_size_bytes = src_buffer->aligned_size_per_bank();
+            const uint32_t move_chunk_size_bytes = dst_addr - src_addr;
+            TT_FATAL(
+                move_chunk_size_bytes % src_buffer->alignment() == 0,
+                "Expected chunk size bytes to move to be {} byte aligned.",
+                src_buffer->alignment());
+            const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
+            const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
+            for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
+                for (auto& a : col) {
+                    if (a.size() < 4) {
+                        continue;
+                    }
+                    a[0] = total_size_bytes;
+                    a[1] = num_chunks;
+                    a[2] = move_chunk_size_bytes;
+                    a[3] = remainder_chunk_size_bytes;
+                }
+            }
+            // Both CBs are tensor-backed; create_descriptor pushes src then dst.
+            tt::tt_metal::ProgramDescriptor cb_addr_only;
+            cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = src_buffer});
+            cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = dst_buffer});
+            tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+            break;
+        }
+        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: {
+            // Single reader kernel, src/dst declared at slots 0/1.
+            for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
+                for (auto& a : col) {
+                    if (a.size() < 2) {
+                        continue;
+                    }
+                    a[0] = src_addr;
+                    a[1] = dst_addr;
+                }
+            }
+            break;
+        }
+        case MoveOpParallelizationStrategy::MULTI_CORE: {
+            // Delegates to CopyDeviceOperation::SameMemoryConfig, whose reader/writer take their
+            // buffer at slot 0; the sharding tail args are shape-derived and therefore keyed.
+            for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
+                for (auto& a : col) {
+                    if (a.size() > 0) {
+                        a[0] = src_addr;
+                    }
+                }
+            }
+            for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 1)) {
+                for (auto& a : col) {
+                    if (a.size() > 0) {
+                        a[0] = dst_addr;
+                    }
+                }
+            }
+            break;
+        }
+        default: TT_THROW("Invalid move operation parallelization strategy");
+    }
 }
 
 }  // namespace ttnn::prim

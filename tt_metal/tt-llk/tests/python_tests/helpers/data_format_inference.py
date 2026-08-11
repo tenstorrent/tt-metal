@@ -205,6 +205,8 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        if input_format in (DataFormat.Float16, DataFormat.Float16_b):
+            return DataFormat.Tf32
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
@@ -258,7 +260,11 @@ def infer_pack_in(
             if (
                 unpack_out == DataFormat.Int16
                 and is_fp32_dest_acc_en == DestAccumulation.Yes
+                and not unpacking_to_dest
             ):
+                # Int16 cannot reach a 32-bit Dest through the FPU datacopy:
+                # the 16-bit datum never lands in the 32-bit Dest. But unpack-to-Dest path can --
+                # UNPACR_DEST writes the 16-bit datum straight into the 32-bit Dest
                 raise ValueError(
                     f"If the input format is Int16, 32-bit dest is not supported and the packer input format must be Int16"
                 )

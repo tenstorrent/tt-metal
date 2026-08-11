@@ -741,6 +741,49 @@ def test_binary_bitwise_right_shift(device):
 
 
 @pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 7, 0xFF, 0xABCD, 0xFFFF])
+def test_bitwise_scalar_uint16(device, ttnn_function, scalar):
+    x_torch = torch.tensor([[0, 1, 65535, 3, 32768, 0, 65533, 12345, 255, 256, 4096, 1]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar) & 0xFFFF
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32) & 0xFFFF
+
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 15])
+def test_bitwise_shift_scalar_uint16(device, ttnn_function, shift):
+    x_torch = torch.tensor([[0, 1, 2, 255, 4096, 32768, 65535, 65534, 12345, 256, 16384, 1]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift) & 0xFFFF
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32) & 0xFFFF
+
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
     "shape",
     [
         (torch.Size([1, 1, 64, 128])),

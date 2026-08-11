@@ -1,0 +1,432 @@
+version: 1
+description: Centralized trace region sizes (bytes) for models CI.
+sizes:
+  llama3.1-8b:
+    aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
+    skus:
+      wh_n150:
+        # 0 = dynamic runtime allocation. The fixed 25000000 was sized for the
+        # greedy performance-ci-eval-32 path but is too small for the traced
+        # performance-batch-32 demo (full sampling op captured). See #48636.
+        trace_region_size: 0
+      wh_n300:
+        trace_region_size: 38000000
+      wh_llmbox_perf:
+        trace_region_size: 50000000
+      wh_galaxy_perf:
+        trace_region_size: 50000000
+      bh_p150:
+        trace_region_size: 52000000
+      bh_p300:
+        trace_region_size: 52000000
+      p300x2:
+        trace_region_size: 52000000
+
+  llama3.1-70b:
+    aliases: ["Llama-3.1-70B", "meta-llama/Llama-3.1-70B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 90000000
+      wh_galaxy_perf:
+        trace_region_size: 90000000
+      bh_p150:
+        trace_region_size: 90000000
+      bh_p300:
+        trace_region_size: 90000000
+      p300x2:
+        trace_region_size: 90000000
+      bh_loudbox:
+        trace_region_size: 90000000
+
+  llama3.3-70b:
+    aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 90000000
+      wh_galaxy_perf:
+        trace_region_size: 80000000
+      bh_p150:
+        trace_region_size: 80000000
+      bh_p300:
+        trace_region_size: 80000000
+      p300x2:
+        trace_region_size: 96000000
+      bh_loudbox:
+        trace_region_size: 84000000
+
+  llama3.2-1b:
+    aliases: ["Llama-3.2-1B", "meta-llama/Llama-3.2-1B-Instruct"]
+    skus:
+      wh_n150:
+        trace_region_size: 10000000
+
+  llama3.2-3b:
+    aliases: ["Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+    skus:
+      wh_n150:
+        trace_region_size: 10000000
+
+  llama3.2-90b-vision:
+    aliases:
+      - "Llama-3.2-90B"
+      - "llama3.2-90b-vision"
+      - "Llama-3.2-90B-Vision"
+      - "meta-llama/Llama-3.2-90B-Vision-Instruct"
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 20000000
+
+  llama3.2-11b-vision:
+    aliases:
+      - "Llama-3.2-11B"
+      - "Llama-3.2-11B-Vision"
+      - "meta-llama/Llama-3.2-11B-Vision-Instruct"
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 17400000
+
+  qwen3-32b:
+    aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 90000000
+      wh_galaxy_perf:
+        trace_region_size: 200000000
+      bh_p150:
+        trace_region_size: 90000000
+      bh_p300:
+        trace_region_size: 90000000
+      p300x2:
+        trace_region_size: 90000000
+      bh_loudbox:
+        trace_region_size: 90000000
+
+  gpt-oss-20b:
+    aliases: ["GPT-OSS-20B", "gpt-oss-20b", "openai/gpt-oss-20b", "models/demos/gpt_oss/configs/gpt-oss-20b"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 30000000
+      wh_galaxy_perf:
+        trace_region_size: 30000000
+      wh_n150:
+        trace_region_size: 30000000
+      bh_p150:
+        trace_region_size: 30000000
+      p300x2:
+        trace_region_size: 30000000
+
+  gpt-oss-120b:
+    aliases: ["GPT-OSS-120B", "gpt-oss-120b", "openai/gpt-oss-120b", "models/demos/gpt_oss/configs/gpt-oss-120b"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 50000000
+      wh_galaxy_perf:
+        trace_region_size: 50000000
+      bh_galaxy_perf:
+        trace_region_size: 50000000
+      bh_p150:
+        trace_region_size: 100000000
+      bh_loudbox:
+        trace_region_size: 100000000
+      wh_n150:
+        trace_region_size: 100000000
+      p300x2:
+        trace_region_size: 100000000
+
+  informer:
+    aliases: ["informer"]
+    skus:
+      wh_n150:
+        trace_region_size: 134217728
+
+  unet-3d:
+    aliases: ["unet-3d", "shallow-unet"]
+    skus:
+      wh_n150:
+        trace_region_size: 679936
+
+  deepseek-v3:
+    aliases: ["deepseek-v3", "DeepSeek-V3"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 0
+      wh_galaxy_perf:
+        trace_region_size: 0
+      p300x2:
+        trace_region_size: 0
+
+  qwen2.5-72b:
+    aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 70000000
+      wh_galaxy_perf:
+        trace_region_size: 70000000
+      bh_p150:
+        trace_region_size: 100000000
+      bh_p300:
+        trace_region_size: 100000000
+      p300x2:
+        trace_region_size: 100000000
+      bh_loudbox:
+        trace_region_size: 100000000
+      bh_galaxy_perf:
+        trace_region_size: 100000000
+
+  qwen2.5-32b:
+    aliases: ["Qwen2.5-32B", "Qwen/Qwen2.5-32B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 100000000
+      bh_p150:
+        trace_region_size: 100000000
+      bh_p300:
+        trace_region_size: 100000000
+      p300x2:
+        trace_region_size: 100000000
+      bh_loudbox:
+        trace_region_size: 100000000
+      bh_galaxy_perf:
+        trace_region_size: 100000000
+
+  qwen2.5-vl-7b:
+    aliases: ["Qwen2.5-VL-7B", "Qwen/Qwen2.5-VL-7B-Instruct"]
+    skus:
+      wh_n300:
+        trace_region_size: 10000000
+
+  qwen2.5-vl-32b:
+    aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 28467200
+      p300x2:
+        trace_region_size: 36000000
+
+  qwen2.5-vl-72b:
+    aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 28467200
+      p300x2:
+        trace_region_size: 36000000
+
+  qwen2.5-7b:
+    aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
+    skus:
+      wh_n300:
+        trace_region_size: 10000000
+
+  qwen2.5-coder-32b:
+    aliases: ["Qwen2.5-Coder-32B", "Qwen/Qwen2.5-Coder-32B-Instruct"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 100000000
+
+  qwq-32b:
+    aliases: ["QwQ-32B", "Qwen/QwQ-32B"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 90000000
+
+  qwen3-vl:
+    aliases: ["Qwen3-VL", "Qwen/Qwen3-VL"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 28467200
+
+  mistral-7b:
+    aliases: ["Mistral-7B", "mistralai/Mistral-7B-Instruct-v0.3"]
+    skus:
+      wh_n150:
+        trace_region_size: 25000000
+
+  phi-3-mini:
+    aliases: ["Phi-3-mini", "microsoft/Phi-3-mini-128k-instruct"]
+    skus:
+      wh_n150:
+        trace_region_size: 10000000
+
+  llama3.1-70b-legacy:
+    aliases: ["Llama-3.1-70B-legacy", "Llama-2-70B-legacy"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 14227456
+
+  llama3.3-70b-galaxy:
+    aliases: ["llama3.3-70b-galaxy"]
+    skus:
+      wh_galaxy_perf:
+        trace_region_size: 216580672
+
+  llama3.3-70b-galaxy-decode:
+    aliases: ["llama3.3-70b-galaxy-decode"]
+    skus:
+      wh_galaxy_perf:
+        trace_region_size: 23887872
+
+  llama3.3-70b-galaxy-qwen:
+    aliases: ["llama3.3-70b-galaxy-qwen"]
+    skus:
+      wh_galaxy_perf:
+        trace_region_size: 184915840
+
+  qwen3-32b-galaxy:
+    aliases: ["qwen3-32b-galaxy"]
+    skus:
+      wh_galaxy_perf:
+        trace_region_size: 102000000
+
+  qwen3-32b-galaxy-decode:
+    aliases: ["qwen3-32b-galaxy-decode"]
+    skus:
+      wh_galaxy_perf:
+        trace_region_size: 12726272
+
+  gemma-3-4b:
+    aliases: ["gemma-3-4b", "google/gemma-3-4b-it"]
+    skus:
+      wh_n150:
+        trace_region_size: 30000000
+      bh_p150:
+        trace_region_size: 70000000
+
+  gemma-3-27b-vision:
+    aliases: ["gemma-3-27b-vision-demo"]
+    skus:
+      wh_n150:
+        trace_region_size: 21448704
+      wh_llmbox_perf:
+        trace_region_size: 21448704
+      bh_p150:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
+  gemma-4-e2b:
+    aliases:
+      - "gemma-4-e2b"
+      - "gemma-4-E2B"
+      - "gemma-4-E2B-it"
+      - "google/gemma-4-E2B-it"
+      - "models/demos/gemma4/configs/gemma-4-E2B-it"
+    skus:
+      wh_n150:
+        trace_region_size: 30000000
+      bh_p150:
+        trace_region_size: 70000000
+
+  gemma-4-e4b:
+    aliases:
+      - "gemma-4-e4b"
+      - "gemma-4-E4B"
+      - "gemma-4-E4B-it"
+      - "google/gemma-4-E4B-it"
+      - "models/demos/gemma4/configs/gemma-4-E4B-it"
+    skus:
+      bh_p150:
+        trace_region_size: 70000000
+      bh_p300:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
+  gemma-4-12b:
+    aliases:
+      - "gemma-4-12b"
+      - "gemma-4-12B"
+      - "gemma-4-12B-it"
+      - "google/gemma-4-12B-it"
+      - "models/demos/gemma4/configs/gemma-4-12B-it"
+    skus:
+      wh_n150:
+        trace_region_size: 70000000
+      wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
+        trace_region_size: 70000000
+      bh_p300:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
+  gemma-4-26b-a4b:
+    aliases:
+      - "gemma-4-26b-a4b"
+      - "gemma-4-26B"
+      - "gemma-4-26B-A4B"
+      - "gemma-4-26B-A4B-it"
+      - "google/gemma-4-26B-A4B-it"
+      - "models/demos/gemma4/configs/gemma-4-26B-A4B-it"
+    skus:
+      wh_n150:
+        trace_region_size: 70000000
+      wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
+  gemma-4-31b:
+    aliases:
+      - "gemma-4-31b"
+      - "gemma-4-31B"
+      - "gemma-4-31B-it"
+      - "google/gemma-4-31B-it"
+      - "models/demos/gemma4/configs/gemma-4-31B-it"
+    skus:
+      wh_n150:
+        trace_region_size: 70000000
+      wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
+  gemma-3-27b:
+    aliases: ["gemma-3-27b", "google/gemma-3-27b-it"]
+    skus:
+      wh_n150:
+        trace_region_size: 30000000
+      wh_n300:
+        trace_region_size: 30000000
+      wh_llmbox_perf:
+        trace_region_size: 30100000
+      wh_galaxy_perf:
+        trace_region_size: 30000000
+      bh_p150:
+        trace_region_size: 70000000
+      bh_p300:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+      bh_loudbox:
+        trace_region_size: 70000000
+
+  deepseek-r1-distill-llama-70b:
+    aliases: ["DeepSeek-R1-Distill-Llama-70B"]
+    skus:
+      p300x2:
+        trace_region_size: 90000000
+
+  mixtral-8x7b:
+    aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1", "mistralai/Mixtral-8x7B-v0.1"]
+    skus:
+      wh_llmbox_perf:
+        trace_region_size: 250000000
+
+  mistral-small-3.1-24b:
+    aliases:
+      - "Mistral-Small-3.1-24B"
+      - "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+    skus:
+      wh_n150:
+        trace_region_size: 30000000
+      wh_n300:
+        trace_region_size: 30000000
+      wh_llmbox_perf:
+        trace_region_size: 30000000
+      wh_galaxy_perf:
+        trace_region_size: 30000000

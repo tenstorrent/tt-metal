@@ -1,17 +1,16 @@
 # Hang-report triage test matrix (L2 nightly and manual dispatch with test-category unit).
 #
-# Core merge-gate triage tests live in triage_smoke_merge_gate_tests.yaml (triage.smoke budget).
+# Core merge-gate triage tests live in triage_merge_gate_tests.yaml (triage.merge_gate budget).
 # This file uses team triage with test-category unit (triage.unit budget).
 #
 # Each entry: name, cmd, skus, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml
+# Logical SKUs only; do not list merge-queue *_prio SKUs here.
 
 - name: triage_hang_report
   cmd: pytest -v -s ./tools/tests/triage/test_hang_report.py
   skus:
     wh_n150_civ2:
-      timeout: 5
-    bh_p150b_civ2_viommu_prio:
       timeout: 5
     bh_p150b_civ2_viommu:
       timeout: 5

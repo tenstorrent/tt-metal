@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "pool_multi_core_program_factory.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -138,7 +139,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
@@ -157,7 +158,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
-        auto output_spec_ind = TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
+        auto output_spec_ind = tt::tt_metal::TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};
@@ -165,23 +166,17 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
-ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto input_mem_config = tensor.input_tensor_.memory_config();
-    auto in_dtype = tensor.input_tensor_.dtype();
-    auto out_dtype = op_attr.output_dtype_;
-    return tt::tt_metal::operation::hash_operation<Pool2D>(
-        op_attr.sliding_window_config_.get_hash(),
-        op_attr.pool_type_,
-        op_attr.output_layout_,
-        op_attr.memory_config_,
-        op_attr.compute_kernel_config_,
-        op_attr.divisor_override_,
-        op_attr.count_include_pad_,
-        op_attr.return_indices_,
-        op_attr.config_tensor_in_dram,
-        input_mem_config,
-        in_dtype,
-        out_dtype);
+// Custom compute_program_hash deleted as part of the Metal 2.0 port: the default
+// reflection-based hash (op type + attributes + tensor specs) is correct-by-construction
+// and is what the MetalV2FactoryConcept caching path uses.
+
+Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+    return MultiCore{};
+}
+
+ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artifacts(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    return pool2d_create_program_artifacts(op_attr, tensor_args, output_tensors);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(

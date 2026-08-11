@@ -18,6 +18,7 @@
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalContext;
 class MetalEnvImpl;
 using DeviceAddr = uint64_t;
 }  // namespace tt::tt_metal
@@ -34,9 +35,10 @@ namespace tt::tt_metal::internal {
 // 3. If a core already has a service launched on it
 class ServiceCoreManagerImpl {
 public:
-    // Stores a reference to the MetalEnvImpl that owns the cluster, rtoptions and hal we query
-    // (mirrors dispatch_core_manager). The env outlives the MetalContext that owns us.
-    explicit ServiceCoreManagerImpl(MetalEnvImpl& env);
+    // Stores MetalEnvImpl (cluster/rtoptions/hal) and the owning MetalContext (for sibling
+    // accessors such as get_dispatch_core_manager). Env-level queries go through env_;
+    // context-level through ctx_.
+    ServiceCoreManagerImpl(MetalEnvImpl& env, MetalContext& ctx);
 
     // ── User-facing surface (forwarded by ServiceCoreManager) ──────────────────────────────────
     std::vector<CoreCoord> get_claimable_cores(IDevice* device) const;
@@ -45,6 +47,9 @@ public:
     void wait_done(IDevice* device, CoreCoord core) const;
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) so a later allocate_l1() won't overlap externally-owned L1 at the top
+    // of this core. Must be called before any allocate_l1() on the core. See the facade declaration.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 
@@ -91,6 +96,7 @@ private:
     };
 
     MetalEnvImpl& env_;
+    MetalContext& ctx_;
     std::unordered_map<ChipId, DeviceServiceState> devices_;
 };
 

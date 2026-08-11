@@ -11,6 +11,7 @@ namespace ttnn::operations::matmul {
 enum class KernelActivation : uint32_t {
     NONE,
     GELU,
+    GELU_TANH,
     TANH,
     SILU,
     RELU6,

@@ -41,7 +41,7 @@ std::pair<DeviceAddr, DeviceAddr> l1_service_range(const Hal& hal) {
 
 // ServiceCoreManagerImpl
 
-ServiceCoreManagerImpl::ServiceCoreManagerImpl(MetalEnvImpl& env) : env_(env) {}
+ServiceCoreManagerImpl::ServiceCoreManagerImpl(MetalEnvImpl& env, MetalContext& ctx) : env_(env), ctx_(ctx) {}
 
 void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>& cores) {
     const auto& cluster = env_.get_cluster();
@@ -123,7 +123,7 @@ std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* devi
         env_.get_rtoptions().get_fast_dispatch(),
         "get_claimable_cores() requires Fast Dispatch to be active. "
         "Call initialize_fast_dispatch() first.");
-    auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    auto available = ctx_.get_dispatch_core_manager().get_available_dispatch_cores(device->id());
     // Filter out cores already claimed in this session so consecutive calls reflect current state.
     const auto claimed = claimed_cores(device->id());
     std::erase_if(available, [&claimed](const CoreCoord& c) { return claimed.contains(c); });
@@ -180,6 +180,40 @@ DeviceAddr ServiceCoreManagerImpl::allocate_l1(IDevice* device, CoreCoord core, 
     return *addr;
 }
 
+void ServiceCoreManagerImpl::reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr) {
+    auto dit = devices_.find(device->id());
+    TT_FATAL(
+        dit != devices_.end() && dit->second.cores.contains(core),
+        "internal::ServiceCoreManager::reserve_l1_to_top called on unclaimed core {}",
+        core);
+    // Carve out [addr, L1_top) so subsequent allocate_l1() calls don't hand out an address that
+    // overlaps externally-owned L1 sitting at the top of this core (e.g. MeshSocket config buffer
+    // / data FIFO that the device allocator placed there). The device allocator and this per-core
+    // allocator both grow top-down from L1_END with no mutual awareness, so without this
+    // reservation they collide. Reserving to the top (rather than each buffer's exact size) covers
+    // the whole socket region in one allocation regardless of individual buffer footprints, and
+    // must be called before any allocate_l1() on this core so the top range is still free.
+    auto& alloc = dit->second.cores.at(core).alloc;
+    DeviceAddr top = addr;
+    for (const auto& [start, end] : alloc->available_addresses(0)) {
+        top = std::max(top, end);
+    }
+    TT_FATAL(
+        top > addr,
+        "internal::ServiceCoreManager::reserve_l1_to_top: addr {:#x} is at/above L1 range top {:#x} on core {}",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+    auto reserved = alloc->allocate_at_address(addr, top - addr);
+    TT_FATAL(
+        reserved.has_value(),
+        "internal::ServiceCoreManager::reserve_l1_to_top: could not reserve [{:#x}, {:#x}) on core {} "
+        "(out of range or already allocated)",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+}
+
 void ServiceCoreManagerImpl::deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr) {
     auto dit = devices_.find(device->id());
     TT_FATAL(
@@ -218,7 +252,8 @@ std::optional<DeviceAddr> ServiceCoreManagerImpl::lowest_allocated_address(ChipI
 
 // ServiceCoreManager Public interface
 
-ServiceCoreManager::ServiceCoreManager(MetalEnvImpl& env) : pimpl_(std::make_unique<ServiceCoreManagerImpl>(env)) {}
+ServiceCoreManager::ServiceCoreManager(MetalEnvImpl& env, MetalContext& ctx) :
+    pimpl_(std::make_unique<ServiceCoreManagerImpl>(env, ctx)) {}
 ServiceCoreManager::~ServiceCoreManager() = default;
 
 std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) const {
@@ -239,6 +274,9 @@ void ServiceCoreManager::deallocate_l1(IDevice* device, CoreCoord core, DeviceAd
 }
 size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) const {
     return pimpl_->bytes_available(device, core);
+}
+void ServiceCoreManager::reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr) {
+    pimpl_->reserve_l1_to_top(device, core, addr);
 }
 
 void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimpl_->wait_done(device, core); }

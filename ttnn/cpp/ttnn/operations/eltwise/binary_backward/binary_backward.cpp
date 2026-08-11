@@ -52,6 +52,7 @@ std::vector<Tensor> _min_or_max_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(2);
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5f, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
@@ -70,12 +71,12 @@ std::vector<Tensor> _min_or_max_bw(
 
     if (min_or_max) {
         // MAX
-        grad_tensor.emplace_back(grad_other);
-        grad_tensor.emplace_back(grad_input);
+        grad_tensor.emplace_back(std::move(grad_other));
+        grad_tensor.emplace_back(std::move(grad_input));
     } else {
         // MIN
-        grad_tensor.emplace_back(grad_input);
-        grad_tensor.emplace_back(grad_other);
+        grad_tensor.emplace_back(std::move(grad_input));
+        grad_tensor.emplace_back(std::move(grad_other));
     }
     return grad_tensor;
 }
@@ -525,19 +526,19 @@ std::vector<std::optional<Tensor>> concat_bw(
         input_grad, other_grad, input_tensor_a_arg, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs[0]) {
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {
             input_tensor_a_arg.logical_shape()[0],
             input_tensor_a_arg.logical_shape()[1],
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
     if (are_required_outputs[1]) {
-        ttnn::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
             start_index_2 = {input_tensor_a_arg.logical_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
@@ -547,12 +548,12 @@ std::vector<std::optional<Tensor>> concat_bw(
         } else if (dim == 3) {
             start_index_2 = {0, 0, 0, input_tensor_a_arg.logical_shape()[3]};
         }
-        ttnn::SmallVector<uint32_t> end_index_2 = {
+        ttsl::SmallVector<uint32_t> end_index_2 = {
             grad_tensor_arg.logical_shape()[0],
             grad_tensor_arg.logical_shape()[1],
             grad_tensor_arg.logical_shape()[2],
             grad_tensor_arg.logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }

@@ -1023,7 +1023,7 @@ def test_conv3d_prepare_default_blocking(device, input_shape, out_channels, kern
 
 def test_conv3d_preprepared_weight_no_config(device):
     """Pre-prepared (rank-2) weight + no config: conv3d's fallback C_in_block must match
-    prepare's default (0 = full), since it does not re-block the weight (issue #47316). C_in=64."""
+    prepare's default, since it does not re-block the weight (issue #47316). C_in=64."""
     input_shape, out_channels, kernel_size, stride, padding = (1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1)
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape, out_channels, kernel_size, stride, 1, padding, "zeros", device
@@ -1065,4 +1065,59 @@ def test_conv3d_preprepared_weight_no_config(device):
     assert tt_output.shape == gt_output.shape
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d (pre-prepared weight, no config) torch vs ttnn: {pcc_message}")
+    assert pcc_passed, pcc_message
+
+
+def test_conv3d_preprepared_large_kernel_no_config(device):
+    """Pre-prepared (rank-2) weight + no config for the Qwen2.5-VL patch-embed shape
+    (C_in=3, kernel=stride=(2,14,14), out=1280). A full-channel default block put the
+    whole K reduction in one matmul block and overflowed L1; the minimal-block default
+    (shared by prepare and conv3d) both fits L1 and matches the prepared weight (#42146)."""
+    input_shape, out_channels, kernel_size, stride, padding = (
+        (8, 3, 2, 14, 14),
+        1280,
+        (2, 14, 14),
+        (2, 14, 14),
+        (0, 0, 0),
+    )
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, "zeros", device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    # Prepare with default blocking -> rank-2 weight.
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, alignment=ALIGNMENT, device=device
+    )
+    assert len(tt_weight.shape) == 2
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    # No config -> default minimal block; must fit L1 and match the prepared weight.
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode="zeros",
+        groups=1,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d (pre-prepared large kernel, no config) torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message

@@ -34,6 +34,9 @@ struct ReduceParams {
     // may be set at a time (validated in validate_on_program_cache_miss).
     bool row_major_w_dense_path{false};
     bool row_major_h_dense_path{false};
+    // Accurate fp32 mean: route Float32 SUM through the SFPU (full fp32); set from
+    // ttnn.mean(fast_and_approximate_mode=False).
+    bool use_sfpu_reduce{false};
 };
 
 }  // namespace ttnn::prim

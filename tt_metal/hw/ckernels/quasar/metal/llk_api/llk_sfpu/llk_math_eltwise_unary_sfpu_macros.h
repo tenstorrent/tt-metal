@@ -10,18 +10,18 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 
-// Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
-// unused until Quasar has an equivalent of get_dest_max_tiles<...>.
+// Quasar keeps the same macro surface as BH/WH.
 
 namespace ckernel {
 
-template <DstSync /*DST_SYNC*/, bool /*DST_ACCUM*/>
-inline __attribute__((always_inline)) void _sfpu_check_(
-    [[maybe_unused]] std::uint32_t dst_index, VectorMode vector_mode) {
+template <DstSync DST_SYNC, bool DST_ACCUM, trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index, VectorMode vector_mode) {
+    LLK_ASSERT(
+        (dst_index < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, TILE_SHAPE>()), "dst_index exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar SFPU supports vector modes R, C, RC, None");
+            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
+        "Quasar SFPU supports vector modes R, C, RC, None, RC_custom");
 }
 
 }  // namespace ckernel
@@ -37,6 +37,12 @@ inline __attribute__((always_inline)) void _sfpu_check_(
      _llk_math_eltwise_unary_sfpu_params_(                                             \
          ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
+// Templated functor in `ckernel::sfpu` operating on a non-default Dest tile shape.
+#define SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, DST_ACCUM, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(DST_IDX, VECTOR_MODE),                         \
+     _llk_math_eltwise_unary_sfpu_params_<TILE_SHAPE>(                                                       \
+         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+
 // Non-templated functor in `ckernel::sfpu`.
 #define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),                     \
@@ -44,9 +50,15 @@ inline __attribute__((always_inline)) void _sfpu_check_(
 
 // Init macros take OP first, then the optional init callback and template args.
 
-// Bare init: no callback.
-//   SFPU_UNARY_INIT(abs);
-#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
+// Init with an optional non-templated init function.
+//   SFPU_UNARY_INIT(abs);                                       // no init function
+//   SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp);  // non-templated init function
+#define SFPU_UNARY_INIT_1(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
+#define SFPU_UNARY_INIT_2(OP, INIT_FN) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
+#define SFPU_UNARY_INIT_PICK(_1, _2, NAME, ...) NAME
+#define SFPU_UNARY_INIT(...) \
+    SFPU_UNARY_INIT_PICK(    \
+        __VA_ARGS__, SFPU_UNARY_INIT_2, SFPU_UNARY_INIT_1, _ignore /* at least one argument */)(__VA_ARGS__)
 
 // Init with a templated callback.
 //   SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (APPROXIMATE));

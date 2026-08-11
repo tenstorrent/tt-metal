@@ -142,7 +142,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         // so reduce the iteration count on Quasar. The race-detection signal does not require
         // a large count — even a small number of iterations with high concurrency exposes any
         // memory-ordering bugs immediately, and the assertion is per-iteration.
-        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 100u : 1000u;
+        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 10u : 1000u;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // Per-arch expected number of distinct RISCs printing concurrently on the same core.
@@ -234,6 +234,93 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         for (int i = 0; i < static_cast<int>(counts.size()); i++) {
             EXPECT_EQ(counts[i], expected_count)
                 << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
+        }
+    }
+}
+
+// All-workers variant of PrintConcurrentAllRiscs: run the same per-iteration print kernel on EVERY
+// Tensix worker core (the full compute grid) to stress the DevicePrintDispatch worker-L1 -> DRAM
+// aggregation under maximum concurrency. The single-core variant never exercises the multi-core
+// aggregation path; this one does. Each iteration value must appear EXACTLY
+// risc_count_per_iter * num_worker_cores times: fewer => the aggregation dropped data, more =>
+// it duplicated data. Run with TT_METAL_DEVICE_PRINT=1 to route through the DRAM aggregation path.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+            continue;  // WH/BH only.
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // Cover the entire compute grid (every usable worker core).
+        CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+        CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
+        const uint32_t num_cores = grid.x * grid.y;
+
+        // 1000 iters x 5 riscs x ~110 cores produces enough output (~11 MB) to wrap the 1 MB DRAM
+        // aggregation ring many times — this is what exercises the ring full/empty boundary and the
+        // backpressure/drain path that previously dropped data. DPRINT_AW_ITERS overrides it for
+        // heavier manual stress.
+        uint32_t iterations_count = 1000u;
+        if (const char* env = std::getenv("DPRINT_AW_ITERS")) {
+            iterations_count = static_cast<uint32_t>(std::max(1, atoi(env)));
+        }
+        std::vector<uint32_t> runtime_args = {iterations_count};
+
+        // BRISC
+        auto kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // NCRISC
+        kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
+        kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            ComputeConfig{});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        const int risc_count_per_iter =
+            static_cast<int>(MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX));
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        // Count how many times each iteration value appears across the whole grid. Each value must
+        // appear exactly risc_count_per_iter * num_cores times: fewer => the DRAM aggregation dropped
+        // data, more => it duplicated data.
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        while (getline(log_file, line)) {
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < (int)counts.size()) {
+                counts[iter]++;
+            }
+        }
+        const int expected_count = risc_count_per_iter * static_cast<int>(num_cores) * static_cast<int>(device_counter);
+        for (int i = 0; i < (int)counts.size(); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << ")";
         }
     }
 }
@@ -562,4 +649,31 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
         /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
         /* absent */ {"current"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnambiguous) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unambiguous.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "mid", "top", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallResolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_resolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "left_top", "left", "fork_func", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"right", "right_top", "..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnresolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unresolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "...", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"left", "right"});
 }

@@ -36,7 +36,7 @@ std::vector<ttnn::Tensor> reduce_to_root(
         .at(1);
 }
 
-std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
+std::vector<tt::tt_metal::TensorSpec> reduce_to_root_tensor_spec(
     const ttnn::Tensor& input_tensor_l,
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,

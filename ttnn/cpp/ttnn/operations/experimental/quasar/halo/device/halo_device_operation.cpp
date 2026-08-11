@@ -18,6 +18,11 @@ thread_local std::unordered_map<std::size_t, std::uint32_t>
 
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 
+HaloDeviceOperation::program_factory_t HaloDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return UntilizeWithHaloProgramFactory{};
+}
+
 void HaloDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
@@ -84,7 +89,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));

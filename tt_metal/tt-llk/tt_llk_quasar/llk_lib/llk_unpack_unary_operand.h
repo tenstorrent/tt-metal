@@ -8,6 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_sync.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 
@@ -295,6 +296,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
  * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
@@ -304,17 +306,42 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  *       fills with MOVD2A/B from dest).
  * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
  */
-template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <
+    std::uint32_t UNP_SEL,
+    bool TRANSPOSE_EN,
+    bool IS_32b_DEST_EN,
+    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest                   = false>
 inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 
+    if constexpr (unpack_to_dest)
+    {
+        static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
+
+        // Unpack owns the DEST section base in the unpack-to-dest path: it is the DEST
+        // producer (UNP_DEST), so it programs the per-TRISC section base itself rather than
+        // letting the math middleman set it on its behalf
+        // Establish the initial bank-0 base here; the per-tile call flips
+        // it in SyncHalf. TriscID::Unpack selects the same SEC slot the UNP_DEST client reads.
+        ckernel::trisc::_reset_dest_register_offset_();
+        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
+
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
+        _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+        return;
+    }
+
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
     }
 
@@ -351,13 +378,45 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: When true, runs the UNPACK_MATH/MATH_PACK semaphore handshake for unpack-to-DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam DEST_SYNC_MODE: In the unpack-to-DEST path, SyncHalf flips the DEST section base to the other bank after each tile, values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  */
-template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <
+    std::uint32_t UNP_SEL,
+    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest                   = false,
+    ckernel::DstSync DEST_SYNC_MODE       = ckernel::DstSync::SyncFull>
 inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {
+    if constexpr (unpack_to_dest)
+    {
+        static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
+
+        // The math thread is the middleman with two single-counting semaphores (max=N each).
+        // Without an extra wait on MATH_PACK, unpack could race 2N iterations ahead of pack
+        // and overwrite a bank that pack has not read yet. Waiting on both keeps unpack
+        // within N iterations of pack.
+        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+
+        // UNP_DEST is driven off the UNP_A bank's counters.
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+
+        // Drain UNPACK0 before posting "filled" so the post does not race the writes math reads.
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+
+        // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
+        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
+        {
+            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+        }
+        return;
+    }
+
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
     // be programmable with users input offset idx

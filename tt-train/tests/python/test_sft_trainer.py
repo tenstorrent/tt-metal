@@ -42,9 +42,7 @@ class _FakeTensor:
 @pytest.fixture(autouse=True)
 def patch_tensor(monkeypatch):
     """Replace Tensor.from_numpy with a device-free stub for every test."""
-    monkeypatch.setattr(
-        ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy)
-    )
+    monkeypatch.setattr(ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy))
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +62,8 @@ def test_batch_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_ttml_dataloader_is_abstract():
-    with pytest.raises(TypeError):
+def test_ttml_dataloader_is_abstract(expect_error):
+    with expect_error(TypeError, "abstract class TTMLDataloader"):
         TTMLDataloader(dataset=[], collate_fn=lambda x: x, batch_size=1)
 
 
@@ -137,14 +135,21 @@ def test_sft_collate_fn_prompt_zeroed_completion_nonzero():
 
 
 def _sft_examples(n):
-    return [
-        {"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]}
-        for i in range(n)
-    ]
+    return [{"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]} for i in range(n)]
 
 
 def _collate(examples):
     return sft_collate_fn(examples, max_seq_len=8, pad_token_id=0)
+
+
+def _lead_token(batch):
+    """First token of a batch's lead example — a per-batch identifier (assumes the identity `lambda x: x` collate)."""
+    return batch[0]["input_ids"][0]
+
+
+def _batch_order(loader):
+    """Sequence of per-batch lead tokens — a fingerprint of the loader's iteration order."""
+    return [_lead_token(batch) for batch in loader]
 
 
 def test_in_memory_dataloader_len():
@@ -161,16 +166,50 @@ def test_in_memory_dataloader_yields_batch_objects():
 
 
 def test_in_memory_dataloader_shuffle_changes_order():
+    """Order is a pure function of the loader's seed — independent of the global np.random."""
     data = _sft_examples(20)
 
-    np.random.seed(0)
-    loader = InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True)
-    order_a = [b[0]["input_ids"][0] for b in loader]
+    order_a = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=0))
+    order_b = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=99))
+    order_a_again = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=0))
 
-    np.random.seed(99)
-    order_b = [b[0]["input_ids"][0] for b in loader]
+    assert order_a != order_b  # different seed -> different order
+    assert order_a == order_a_again  # same seed -> reproducible epoch-0 order
 
-    assert order_a != order_b
+
+def test_in_memory_dataloader_resume_matches_uninterrupted():
+    """Saving (epoch, position) mid-epoch and restoring into a fresh loader reproduces the exact
+    remaining batch sequence — first_k + resumed_remainder == one uninterrupted epoch."""
+    data = _sft_examples(20)
+
+    uninterrupted = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=7))
+
+    k = 3
+    partial_loader = InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=7)
+    it = iter(partial_loader)
+    first = [_lead_token(next(it)) for _ in range(k)]
+    state = partial_loader.get_state_dict()
+
+    # Built with a deliberately wrong seed: set_state_dict must restore seed=7 from the state, or the
+    # resumed order wouldn't line up with the uninterrupted run.
+    resumed = InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=999)
+    resumed.set_state_dict(state)
+    remainder = _batch_order(resumed)
+
+    assert first + remainder == uninterrupted
+
+
+def test_dataloader_state_dict_roundtrip():
+    """get_state_dict -> set_state_dict carries (seed, epoch, position) onto a fresh loader."""
+    loader = InMemoryDataloader(_sft_examples(8), lambda x: x, batch_size=2, shuffle=True, seed=5)
+    it = iter(loader)
+    next(it)
+    state = loader.get_state_dict()
+    assert state == {"seed": 5, "epoch": 0, "position": 1}
+
+    restored = InMemoryDataloader(_sft_examples(8), lambda x: x, batch_size=2, seed=0)
+    restored.set_state_dict(state)
+    assert restored.get_state_dict() == state
 
 
 # ---------------------------------------------------------------------------

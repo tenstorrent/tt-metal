@@ -7,36 +7,36 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t N = get_named_compile_time_arg_val("N");
-    constexpr uint32_t input_cb_page_size = get_named_compile_time_arg_val("page_size");
-    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
-    constexpr uint32_t x_dim = get_named_compile_time_arg_val("x_dim");
-    constexpr uint32_t num_blocks_total = get_named_compile_time_arg_val("num_blocks_total");
-    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
-    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
-    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
-    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
-    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t input_cb_page_size = get_arg(args::page_size);
+    constexpr uint32_t num_rows = get_arg(args::num_rows);
+    constexpr uint32_t x_dim = get_arg(args::x_dim);
+    constexpr uint32_t num_blocks_total = get_arg(args::num_blocks_total);
+    constexpr uint32_t x_blocks = get_arg(args::x_blocks);
+    constexpr uint32_t w_blocks = get_arg(args::w_blocks);
+    constexpr uint32_t x_block_size = get_arg(args::x_block_size);
+    constexpr uint32_t w_block_size = get_arg(args::w_block_size);
+    constexpr uint32_t element_size = get_arg(args::element_size);
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
     constexpr uint32_t w_block_size_bytes = w_block_size * element_size;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_block = get_arg_val<uint32_t>(1);
-    uint32_t end_block = get_arg_val<uint32_t>(2);
+    uint32_t start_block = get_arg(args::start_block);
+    uint32_t end_block = get_arg(args::end_block);
 
-    // Input shape and strides (excluding W dimension and measured in rows, not bytes)
-    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    // Input shape and strides (excluding W dimension and measured in rows, not bytes).
+    // Rank-length arrays (count = N, a CTA) delivered as runtime varargs:
+    // input_shape in varargs [0, N), src_strides in [N, 2N).
     uint32_t input_shape[N], src_strides[N];
-    for (uint32_t i = 3; i < N + 3; i++) {
-        input_shape[i - 3] = get_arg_val<uint32_t>(i);
-        src_strides[i - 3] = get_arg_val<uint32_t>(i + N);
+    for (uint32_t i = 0; i < N; i++) {
+        input_shape[i] = get_vararg(i);
+        src_strides[i] = get_vararg(i + N);
     }
 
     /**
@@ -54,7 +54,7 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::input);
     Noc noc;
 
     uint32_t idxs[N];
@@ -105,9 +105,9 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        CircularBuffer cb(tt::CBIndex::c_0);
-        cb.reserve_back(x_block_size);
-        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
+        DataflowBuffer dfb(dfb::cb_in);
+        dfb.reserve_back(x_block_size);
+        uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
         // We read in 'x_block_len' chunks along the X dimension
         uint32_t page_offset = 0;
@@ -123,6 +123,6 @@ void kernel_main() {
         // Wait for all async reads to complete before proceeding
         noc.async_read_barrier();
         // Push the filled block into the circular buffer
-        cb.push_back(x_block_size);
+        dfb.push_back(x_block_size);
     }
 }

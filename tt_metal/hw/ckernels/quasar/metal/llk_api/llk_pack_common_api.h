@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
+#include "llk_sync.h"
+#include "llk_defs.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -15,8 +18,10 @@
 /**
  * @brief Programs packer0 L1 information & math destination register format
  *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit Destination register mode
  * @param pack_output The output DataFlow Buffer identifier
  */
+template <bool EN_32BIT_DEST>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
@@ -37,21 +42,19 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
             continue;
         }
 
-        // TODO: with multiple TCs are there multiple descriptors?
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
-        bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
-        bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-        bd_val.f.y_dim = pack_tile_face_r_dim[i];
-        bd_val.f.z_dim = pack_tile_num_faces[i];
+        const tdma_descriptor_t td = ckernel::trisc::construct_tdma_desc(
+            get_output_tensor_shape(i),
+            get_local_dfb_interface(i).tc_slots[0].base_addr,
+            pack_dst_format[i],
+            i,
+            pack_src_format[i]);
 
-        ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
+        ckernel::trisc::_configure_buf_desc_table_(i, td.buf_desc);
     }
 
     tdma_descriptor_t td_val;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
-
-    _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
+    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(td_val, ckernel::ReluConfig::none());
 }
 
 inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
@@ -84,6 +87,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  *
  * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
  * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
+ *
+ * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  **/
 template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
 inline void llk_pack_dest_dvalid_section_done() {
@@ -101,6 +108,10 @@ inline void llk_pack_dest_dvalid_section_done() {
 /**
  * @brief Waits until math has finished producing data for the current Destination Register section.
  * Blocks on the math–pack semaphore so the packer does not read dest before math has written it.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
 
@@ -108,15 +119,30 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * @brief Signals that the packer has finished consuming the current Destination Register section.
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
- * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
-template <bool is_fp32_dest_acc_en>
+template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+        }
+    } else {
+        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
+    }
 }
 
 /**
  * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
 

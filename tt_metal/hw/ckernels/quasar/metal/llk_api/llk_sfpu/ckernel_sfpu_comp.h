@@ -99,8 +99,8 @@ struct zero_comp_traits {
  * to 1 and writes 0 here (see @ref _zero_comp_writes_zero_).
  *
  * @note Do NOT use @c abs(vInt) for the magnitude — that is two's-complement abs and leaves
- *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). @c setsgn(v,0) is the
- *       correct, format-agnostic primitive.
+ *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
+ *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
@@ -113,7 +113,10 @@ inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v)
             COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
         "_zero_comp_pred_: COMP_MODE must be one of the six comparison-to-zero SfpuType modes "
         "(equal_zero/not_equal_zero/less_than_zero/greater_than_zero/less_than_equal_zero/greater_than_equal_zero)");
-    const sfpi::vInt mag = sfpi::setsgn(v, 0);  // sign bit cleared -> magnitude (±0 -> 0)
+    // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
+    // reinterprets are free (no instruction).
+    const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
+
     if constexpr (COMP_MODE == SfpuType::equal_zero) {
         return mag == 0;  // ±0
     } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
@@ -147,19 +150,19 @@ inline constexpr bool _zero_comp_writes_zero_() {
  * @brief Program the dest-increment addr mod shared by every comparison-to-zero instantiation.
  *
  * @c ADDR_MOD_6 (dest.incr=2) lets the body's SFPSTORE advance the dest counter, so
- * @ref _calculate_zero_comp_ needs no dst_reg++. It is HW state shared across every COMP_MODE/FMT
- * instantiation, so programming it once here (rather than per @ref _calculate_zero_comp_ call) keeps
+ * @ref calculate_zero_comp needs no dst_reg++. It is HW state shared across every COMP_MODE/FMT
+ * instantiation, so programming it once here (rather than per @ref calculate_zero_comp call) keeps
  * it out of the per-tile loop body.
  *
- * @note Call once after @ref _llk_math_eltwise_sfpu_init_ and before @ref _calculate_zero_comp_.
+ * @note Call once after @ref _llk_math_eltwise_sfpu_init_ and before @ref calculate_zero_comp.
  */
-inline void _init_zero_comp_() {
+inline void init_zero_comp() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
@@ -168,7 +171,7 @@ inline void _init_zero_comp_() {
  * Defaults each result lane and writes the opposite into the lanes matching COMP_MODE (eqz/nez/ltz/gtz
  * default 0 and write 1; gtez/ltez default 1 and write 0 — see @ref _zero_comp_writes_zero_), in FMT's
  * native encoding (see @ref zero_comp_traits). The body's SFPSTORE rides @c ADDR_MOD_6 (dest.incr=2,
- * programmed in @ref _init_zero_comp_) to advance the dest counter, so the loop needs no dst_reg++.
+ * programmed in @ref init_zero_comp) to advance the dest counter, so the loop needs no dst_reg++.
  *
  * @tparam APPROXIMATION_MODE: Unused (no approx path); retained for dispatcher signature symmetry.
  * @tparam FMT: SFPU DataFormat (sfpu_math): Int32/Int16/Int8/UInt16/UInt8, or Float32 for any float
@@ -176,17 +179,17 @@ inline void _init_zero_comp_() {
  *         resolves the actual width from the dest format config. Anything else is a compile error.
  * @tparam COMP_MODE: Comparison-to-zero mode.
  * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32×16 face).
- * @note Requires @ref _init_zero_comp_ to have programmed @c ADDR_MOD_6.
+ * @note Requires @ref init_zero_comp to have programmed @c ADDR_MOD_6.
  */
 template <bool APPROXIMATION_MODE, DataFormat FMT, SfpuType COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void _calculate_zero_comp_() {
+inline void calculate_zero_comp() {
     constexpr bool is_int_fmt = FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 ||
                                 FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8;
     constexpr bool is_float_fmt =
         FMT == DataFormat::Float32 || FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b;
     static_assert(
         is_int_fmt || is_float_fmt,
-        "_calculate_zero_comp_: unsupported FMT (expected an integer format or an IEEE float width)");
+        "calculate_zero_comp: unsupported FMT (expected an integer format or an IEEE float width)");
 
     using traits = zero_comp_traits<FMT>;
 

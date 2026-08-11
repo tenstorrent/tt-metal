@@ -13,6 +13,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#endif
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -44,6 +47,27 @@ namespace {
 // `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
 constexpr uint32_t k_x86_clflush_line_bytes = 64;
 
+// Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
+// clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
+void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
+    if (mesh_device == nullptr) {
+        return;
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+#ifdef TT_METAL_USE_EMULE
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        tt::tt_metal::emule::pump_device();
+        return;
+    }
+#endif
+    if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
+        return;
+    }
+
+    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+}
+
 }  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
@@ -62,17 +86,30 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     connector_state_offset_ = align(total_buffer_size_bytes, alignof(HDSocketConnectorState));
     size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
 
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
-    void* aligned_ptr = shm_->ptr();
+    void* aligned_ptr = nullptr;
+    if (process_scope_ == ProcessScope::InProcess) {
+        void* p = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        TT_FATAL(
+            p != MAP_FAILED,
+            "Anonymous mmap failed for D2H socket buffer ({} B): {}",
+            alloc_size,
+            std::strerror(errno));
+        aligned_ptr = p;
+        host_buffer_ = std::shared_ptr<uint32_t[]>(
+            static_cast<uint32_t*>(p), [alloc_size](uint32_t* ptr) { munmap(ptr, alloc_size); });
+    } else {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+        aligned_ptr = shm_->ptr();
+        // NamedShm::create zero-initializes the region; no explicit memset needed.
+        host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
+    }
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
-    // NamedShm::create zero-initializes the region; no explicit memset needed.
-    host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
@@ -201,13 +238,21 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
+    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they skip the
+    // static-TLB fetch below (guarded by !is_mock_or_emulated()) and fall through to the
+    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
+    // MockChip never invokes pcie_writer_ at runtime (only socket construction / JIT), so the
+    // installed writer is harmless there.
+
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        sender_core_tlb_ = cluster.get_driver()
-                               ->get_chip(sender_device_id)
-                               ->get_tlb_manager()
-                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_tlb_ = cluster.get_driver()
+                                   ->get_chip(sender_device_id)
+                                   ->get_tlb_manager()
+                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        }
     } else {
         sender_device_id = device_id.value();
         sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -215,7 +260,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -237,12 +282,10 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
+    bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -258,13 +301,15 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         // Map the persistent connector-state struct living past the pinned region.
         // NamedShm::create zero-initialized the page; we stamp the version and set
         // clean_shutdown=1 so the first connect() sees "no prior crash" (the owner
-        // side has nothing to recover from). Hugepage fallback does not create an
-        // SHM region and cannot be exported, so connector_state_ stays null in
-        // that path.
-        connector_state_ =
-            reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
-        connector_state_->version = kHDSocketConnectorStateVersion;
-        connector_state_->clean_shutdown = 1;
+        // side has nothing to recover from). Paths without a named SHM region
+        // (anonymous backing, hugepage fallback) cannot be exported, so
+        // connector_state_ stays null there.
+        if (shm_) {
+            connector_state_ =
+                reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
+            connector_state_->version = kHDSocketConnectorStateVersion;
+            connector_state_->clean_shutdown = 1;
+        }
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
@@ -287,10 +332,14 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 }
 
 D2HSocket::D2HSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    process_scope_(scope),
     mesh_device_(mesh_device.get()) {
     init_config_buffer(mesh_device);
     init_common(mesh_device);
@@ -300,10 +349,12 @@ D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& sender_core,
     uint32_t fifo_size,
-    ExternalConfigBuffer external_config) :
+    ExternalConfigBuffer external_config,
+    ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    process_scope_(scope),
     mesh_device_(mesh_device.get()) {
     TT_FATAL(external_config.address != 0, "External config buffer address must be non-zero.");
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -400,9 +451,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
@@ -419,6 +470,7 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
             _mm_lfence();
@@ -467,19 +519,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     if (pages == 0) {
         return 0;
     }
-    // Rebase: ack everything currently visible without touching the data region; advance
-    // read_ptr_ as a real read() would so subsequent reads stay consistent.
     uint32_t bytes_to_discard = pages * page_size_;
-    uint32_t cursor = read_ptr_ + bytes_to_discard;
-    if (fifo_curr_size_ > 0) {
-        cursor %= fifo_curr_size_;
-    }
-    read_ptr_ = cursor;
-    bytes_acked_ += bytes_to_discard;
-    if (connector_state_) {
-        connector_state_->bytes_acked = bytes_acked_;
-        connector_state_->read_ptr = read_ptr_;
-    }
+    this->pop_bytes(bytes_to_discard);
     notify_sender();
     return pages;
 }
@@ -541,15 +582,28 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     this->wait_for_bytes(num_bytes);
-    uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
-                                    : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
+
+    uint32_t head_bytes = num_bytes;
+    if (read_ptr_ + num_bytes > fifo_curr_size_) {
+        head_bytes = fifo_curr_size_ - read_ptr_;
+    }
+    uint32_t tail_bytes = num_bytes - head_bytes;
+
+    uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
+    uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < num_bytes; i += k_x86_clflush_line_bytes) {
+        for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
             _mm_clflush(reinterpret_cast<char*>(src) + i);
+        }
+        for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
+            _mm_clflush(reinterpret_cast<char*>(base) + i);
         }
         _mm_lfence();
     }
-    std::memcpy(data, src, num_bytes);
+    std::memcpy(data, src, head_bytes);
+    if (tail_bytes > 0) {
+        std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
+    }
     this->pop_bytes(num_bytes);
 
     if (notify_sender) {

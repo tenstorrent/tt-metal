@@ -8,6 +8,17 @@ num_routed_experts: 160
 num_shared_experts: 1
 has_bias: false
 
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# GLM-4.7 is deepseek-arch but n_group=1 / topk_group=1 → the grouped path is a NO-OP (select 1 of 1 group
+# = all experts), i.e. UNGROUPED top-8 with sigmoid(logit)+score_correction_bias for selection, linear
+# renormalization, scaled by 2.5. Same gate as GLM-5 but 160 experts → padded to the op's 256-face
+# (phantom experts get a large-negative logit+bias so they rank last in the sigmoid selection).
+n_group: 1
+score_func: sigmoid
+routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only.
+score_correction_bias: true
+
 compute:
   intermediate_size: 1536
   activation_type: SILU

@@ -118,7 +118,7 @@ class SD35TransformerBlock(Module):
         self.ff = ParallelFeedForward(
             dim=dim,
             dim_out=dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
@@ -140,7 +140,7 @@ class SD35TransformerBlock(Module):
             self.ff_context = ParallelFeedForward(
                 dim=dim,
                 dim_out=dim,
-                activation_fn="gelu",
+                activation_fn="gelu_tanh",
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
@@ -571,5 +571,6 @@ class SD35Checkpoint:
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
+            mesh_device=device,
         )
         return model

@@ -11,8 +11,8 @@ namespace ttnn {
 
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_padded_shape,
-    tt::tt_metal::PadValue pad_value,
+    const ttsl::SmallVector<uint32_t>& output_padded_shape,
+    ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
@@ -21,7 +21,7 @@ ttnn::Tensor tilize_with_val_padding(
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    tt::tt_metal::PadValue pad_value,
+    ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,

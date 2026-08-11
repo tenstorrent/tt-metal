@@ -79,7 +79,7 @@ AllReduceAsyncDeviceOperation::spec_return_value_t AllReduceAsyncDeviceOperation
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(args.dtype, input_tensor.tensor_spec().page_config(), args.output_mem_config);
 
-    return TensorSpec(shape, output_tensor_layout);
+    return tt::tt_metal::TensorSpec(shape, output_tensor_layout);
 }
 
 AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperation::create_output_tensors(
@@ -100,27 +100,6 @@ AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOpera
 
     return {tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
-}
-
-ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
-        args.num_links,
-        args.ring_size,
-        args.dtype,
-        args.output_mem_config,
-        args.topology,
-        args.use_noc1_only,
-        args.use_optimal_ccl_for_llama,
-        args.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
@@ -285,7 +264,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    bool fp32_dest_acc) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -303,7 +283,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         use_noc1_only,
         use_optimal_ccl_for_llama,
         cluster_axis,
-        &mesh_device);
+        &mesh_device,
+        fp32_dest_acc);
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

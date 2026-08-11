@@ -36,9 +36,7 @@ on:
         default: "all"
         options:
           - all
-          - galaxy-llama-nd-hang-stress
           - galaxy-fabric-stability-stress
-          - galaxy-llama-long-stress
       extra-tag:
         required: false
         type: string
@@ -57,7 +55,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 

@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 op-local reader for transpose's HC tiled (interleaved partitioned) factory. The
+// device-side NoC + TensorAccessor logic is unchanged from the legacy reader; only the resource
+// bindings move to the Metal 2.0 namespaces (dfb::/tensor::/args::).
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 using uint32_t = std::uint32_t;
 
@@ -16,41 +22,44 @@ inline uint32_t TADDR_FLOAT32(uint32_t ti) { return ti << 12; }
 inline uint32_t TADDR_BFLOAT16(uint32_t ti) { return ti << 11; }
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t WT = get_arg_val<uint32_t>(1);
-    uint32_t H = get_arg_val<uint32_t>(2);
-    uint32_t CT = get_arg_val<uint32_t>(3);
-    uint32_t HW_bytes = get_arg_val<uint32_t>(4);
-    uint32_t CHW_bytes = get_arg_val<uint32_t>(5);
-    uint32_t start_id = get_arg_val<uint32_t>(6);
-    uint32_t num_tiles = get_arg_val<uint32_t>(7);
-    uint32_t batch_addr = get_arg_val<uint32_t>(8);
-    uint32_t h = get_arg_val<uint32_t>(9);
-    uint32_t htWT = get_arg_val<uint32_t>(10);
-    uint32_t ct = get_arg_val<uint32_t>(11);
-    uint32_t ctoffs = get_arg_val<uint32_t>(12);
-    uint32_t wt = get_arg_val<uint32_t>(13);
+    uint32_t WT = get_arg(args::WT);
+    uint32_t H = get_arg(args::H);
+    uint32_t CT = get_arg(args::CT);
+    uint32_t HW_bytes = get_arg(args::HW_bytes);
+    uint32_t CHW_bytes = get_arg(args::CHW_bytes);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t batch_addr = get_arg(args::batch_addr);
+    uint32_t h = get_arg(args::h);
+    uint32_t htWT = get_arg(args::htWT);
+    uint32_t ct = get_arg(args::ct);
+    uint32_t ctoffs = get_arg(args::ctoffs);
+    uint32_t wt = get_arg(args::wt);
 
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(0);
-    constexpr uint32_t FLOAT32_DTYPE = get_compile_time_arg_val(1);
-    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_arg(args::SUBTILE_LINE_BYTES);
+    constexpr uint32_t FLOAT32_DTYPE = get_arg(args::FLOAT32_DTYPE);
+    constexpr uint32_t ALIGNMENT = get_arg(args::ALIGNMENT);
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
 
-    const auto s0 = TensorAccessor(src_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::input);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
-    CircularBuffer cb_scratch(1);
+    DataflowBuffer cb(dfb::in0);
+#ifdef MISALIGNED_SCRATCH
+    DataflowBuffer cb_scratch(dfb::scratch);
+#endif
 
-    uint32_t intermed_l1_scratch = MISALIGNED ? cb_scratch.get_write_ptr() : 0;
+#ifdef MISALIGNED_SCRATCH
+    uint32_t intermed_l1_scratch = cb_scratch.get_write_ptr();
+#else
+    uint32_t intermed_l1_scratch = 0;
+#endif
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++) {
         auto h32 = (h & 31);

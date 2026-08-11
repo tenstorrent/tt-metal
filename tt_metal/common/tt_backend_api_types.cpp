@@ -14,6 +14,7 @@ std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "WORMHOLE_B0"; break;
         case tt::ARCH::BLACKHOLE: return "BLACKHOLE"; break;
+        case tt::ARCH::QUASAR: return "QUASAR"; break;
         case tt::ARCH::Invalid:
         default: return "Invalid"; break;
     }
@@ -23,6 +24,7 @@ std::string tt::get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
+        case tt::ARCH::QUASAR: return "quasar"; break;
         case tt::ARCH::Invalid:
         default: return "invalid"; break;
     }
@@ -32,6 +34,7 @@ std::string tt::get_alias(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
+        case tt::ARCH::QUASAR: return "quasar"; break;
         default: return "invalid"; break;
     }
 }

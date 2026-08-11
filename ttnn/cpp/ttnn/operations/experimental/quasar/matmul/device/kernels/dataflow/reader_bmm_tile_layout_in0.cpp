@@ -8,40 +8,42 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
+// Metal 2.0 port of reader_bmm_tile_layout_in0.cpp.
+// Reads the in0 (activation) operand tiles into the in0 dataflow buffer. The legacy tensor address
+// RTA and TensorAccessorArgs<11> plumbing are replaced by the tensor::in0 typed binding; the legacy
+// named CB index CTA ("cb_in0") is replaced by the dfb::in0 token. All other compile-time and
+// runtime arguments are carried as named args (args::...).
 void kernel_main() {
     // RUNTIME ARGS
-    uint32_t rt_args_idx = 0;
-    // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg(args::batch);
 
     // COMPILE TIME ARGS
     // in0 tensor args
-    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_tensor_next_block_stride = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_tensor_stride_w = get_arg(args::in0_tensor_stride_w);
+    constexpr uint32_t in0_tensor_stride_h = get_arg(args::in0_tensor_stride_h);
+    constexpr uint32_t in0_tensor_next_block_stride = get_arg(args::in0_tensor_next_block_stride);
     // in0 block args
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(6);
-    constexpr uint32_t last_ktile_h = get_compile_time_arg_val(7);
+    constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);
+    constexpr uint32_t in0_block_h = get_arg(args::in0_block_h);
+    constexpr uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
+    constexpr uint32_t last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr uint32_t last_ktile_h = get_arg(args::in0_last_ktile_h);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(9);
-    constexpr uint32_t MtKt = get_compile_time_arg_val(10);
+    constexpr uint32_t bcast_B = get_arg(args::bcast_B);
+    constexpr uint32_t MtKt = get_arg(args::MtKt);
 
-    constexpr auto in0_args = TensorAccessorArgs<11>();
-
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_id_in0 = dfb::in0;
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in0);
 
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;
@@ -58,7 +60,7 @@ void kernel_main() {
     constexpr uint32_t in0_aligned_tile_size_bytes =
         (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
 
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(tensor::in0);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

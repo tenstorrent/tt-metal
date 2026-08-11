@@ -2,45 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port of pad's tiled multicore reader (private to PadTileMulticoreProgramFactory).
+// Device-side NoC + TensorAccessor logic is unchanged; resource access moves to the Metal 2.0 named
+// handles (dfb::/tensor::/args::). The four per-dim arrays (input/output page shape, input/output
+// id_per_dim) are read in loops with a runtime dim index gated on the CTA-bound rank, which is the
+// canonical RTA-vararg case; they are seeded from uniform per-rank varargs into local scratch (the
+// id_per_dim arrays are also mutated as the kernel iterates, so they must be local & mutable).
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(2);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
+    constexpr uint32_t page_size = get_arg(args::page_size);
 
-    uint32_t rt_ind = 0;
-    const uint32_t input_addr = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t num_pages_to_write = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t start_offset = get_arg_val<uint32_t>(rt_ind++);
-    volatile tt_l1_ptr uint32_t* input_page_shape = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_ind));
-    volatile tt_l1_ptr uint32_t* output_page_shape = input_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
+    const uint32_t num_pages_to_write = get_arg(args::num_pages_to_write);
+    const uint32_t start_offset = get_arg(args::start_offset);
 
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    // Vararg layout (per core): [input_page_shape | output_page_shape | input_id_per_dim | output_id_per_dim],
+    // each `num_dims` long.
+    uint32_t input_page_shape[MAX_NUM_DIMS];
+    uint32_t output_page_shape[MAX_NUM_DIMS];
+    uint32_t input_id_per_dim[MAX_NUM_DIMS];
+    uint32_t output_id_per_dim[MAX_NUM_DIMS];
+    for (uint32_t d = 0; d < num_dims; ++d) {
+        input_page_shape[d] = get_vararg(d);
+        output_page_shape[d] = get_vararg(num_dims + d);
+        input_id_per_dim[d] = get_vararg(2 * num_dims + d);
+        output_id_per_dim[d] = get_vararg(3 * num_dims + d);
+    }
 
-    const auto s0 = TensorAccessor(dst_args, input_addr);
+    const auto s0 = TensorAccessor(tensor::src);
     Noc noc;
-    CircularBuffer cb_input(input_cb_id);
+    DataflowBuffer cb_input(dfb::cb_input);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;
 
     // This kernel keeps track of which page (tile) we are on from a logical tensor perspective
-    // and reads from the input tensor only when we are within the input region
-    // The writer will be waiting for the correct page to be available in the input circular buffer
-    // For example, if we are padding (2, 2, 32, 32) -> (4, 4, 64, 64), then we condense the inner dims to tiles:
-    // (2, 2, 1, 1) -> (4, 4, 2, 2) and as incrementing through writing the output, [0:2, 0:2, 0:1, 0:1] will be
-    // tiles read from input, and the rest will be padding. So for this reader kernel, we will only read when
-    // [0:2, 0:2, 0:1, 0:1] is reached, and skip reads otherwise.
-
+    // and reads from the input tensor only when we are within the input region. The writer waits
+    // for the correct page in cb_input.
     for (uint32_t out_pages_written = 0; out_pages_written < num_pages_to_write; out_pages_written++) {
         within_input_region = true;
         for (uint32_t d = 0; d < num_dims; d++) {

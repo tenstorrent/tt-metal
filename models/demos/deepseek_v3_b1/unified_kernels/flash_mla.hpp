@@ -743,7 +743,7 @@ struct FlashMLADecode {
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            reconfig_data_format<false, true>(cb_k_in, cb_q_in);
+            reconfig_data_format<SrcOrder::Regular, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             PACK(SFPU_UNARY_INIT_FN(
@@ -863,7 +863,7 @@ struct FlashMLADecode {
             constexpr uint32_t block_size = vDHt / num_blocks;
 
             if (do_reduce && num_cores_to_wait > 0) {
-                reconfig_data_format_srca<false, true>(cb_ms_in);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_ms_in);
                 exp_tile_init<exp_approx_mode, scale_fp32>();
                 for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                     sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(

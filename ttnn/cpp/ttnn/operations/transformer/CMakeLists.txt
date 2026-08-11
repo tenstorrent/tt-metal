@@ -15,9 +15,10 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    sdpa/device/kernels/*
-    sdpa_decode/device/kernels/*
-    sdpa_windowed/device/kernels/*
+    sdpa/device/kernels/*.hpp
+    sdpa_decode/device/kernels/*.hpp
+    gated_delta_attn/device/kernels/*.cpp
+    chunk_gated_delta_rule/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer
@@ -30,8 +31,9 @@ target_sources(
             attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
+            sdpa/sparse_sdpa.hpp
+            sdpa/sparse_sdpa_msa.hpp
             sdpa_decode/sdpa_decode.hpp
-            sdpa_windowed/sdpa_windowed.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -55,3 +57,19 @@ install(
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)
 install(TARGETS ttnn_op_transformer FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_TRANSFORMER_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_TRANSFORMER_NANOBIND_SRCS})
+endif()

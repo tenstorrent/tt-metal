@@ -11,7 +11,7 @@
 
 namespace ttml::ops {
 
-tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, float eps, float a, float b, float c) {
+ttnn::Tensor newtonschulz(const ttnn::Tensor& G, int steps, float eps, float a, float b, float c) {
     ttnn::Tensor X = G;
 
     ttnn::Tensor squares = ttnn::square(X);
@@ -39,6 +39,7 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
     // Preallocate buffers: square shape [batch..., m_eff, m_eff] and X shape [batch..., m_eff, n_eff]
     const auto rank = shape.rank();
     std::vector<uint32_t> mm_dims;
+    mm_dims.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         mm_dims.push_back(shape[i]);
     }
@@ -73,7 +74,7 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
     return X;
 }
 
-tt::tt_metal::Tensor newtonschulz5(const tt::tt_metal::Tensor& G, int steps, float eps) {
+ttnn::Tensor newtonschulz5(const ttnn::Tensor& G, int steps, float eps) {
     return newtonschulz(G, steps, eps, 3.4445f, -4.7750f, 2.0315f);
 }
 

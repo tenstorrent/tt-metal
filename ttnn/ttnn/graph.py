@@ -51,6 +51,25 @@ _python_io_data: list = []
 _python_io_recording_enabled: bool = False
 _python_stack_traces_enabled: bool = False
 _python_stack_traces_auto_for_session: bool = False
+_comparison_records_data: dict = {}
+
+COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
+
+
+def _new_comparison_records_data() -> dict:
+    return {
+        "version": 1,
+        "local_tensor_comparison_records": [],
+        "global_tensor_comparison_records": [],
+        "tensors": [],
+    }
+
+
+def reset_comparison_records_data():
+    """Clear accumulated comparison-mode sidecar data (call at test boundaries)."""
+    global _comparison_records_data
+    _comparison_records_data = _new_comparison_records_data()
+
 
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
@@ -147,16 +166,20 @@ def _capture_python_stack_trace() -> list[str]:
     """
     frames = traceback.extract_stack()
     result = []
+
     for frame in frames:
-        path = pathlib.Path(frame.filename).resolve()
-        # Match against path relative to root so globs like **/_pytest/** work on absolute paths
         try:
-            path_for_match = path.relative_to(path.anchor)
-        except ValueError:
-            path_for_match = path
-        if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+            filename = str(frame.filename)
+            path = pathlib.PurePath(filename)
+
+            # Match without filesystem resolution to avoid fragile behavior during capture
+            if any(path.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+                continue
+
+            result.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
+        except Exception:
+            # Never let stack-trace capture break graph capture
             continue
-        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
 
     return result[::-1]
 
@@ -183,7 +206,7 @@ def _collect_tensor_ids(value) -> list:
     return ids
 
 
-def begin_graph_capture(run_mode=None):
+def begin_graph_capture(run_mode=None, *, _internal=False):
     """Wrapper that clears Python I/O state before starting C++ capture.
 
     Automatically enables Python I/O recording so that
@@ -209,11 +232,24 @@ def begin_graph_capture(run_mode=None):
     this wrapper is bypassed and Python I/O recording stays disabled,
     avoiding the associated overhead.
     """
-    global _python_io_data, _python_io_recording_enabled, _python_stack_traces_auto_for_session
+    global _python_io_data
+    global _python_io_recording_enabled
+    global _python_stack_traces_auto_for_session
+    global _comparison_records_data
     if not is_graph_capture_active():
         import ttnn
 
         _python_io_data = []
+        # A user-initiated (non-internal) outermost capture starts a fresh comparison
+        # sidecar scope: any records left over from earlier comparison-mode activity
+        # in this process must not leak into this capture's sidecar. The per-op
+        # auto-capture inside the operation wrapper passes _internal=True so that
+        # comparison records still accumulate across per-op sessions (comparison mode
+        # without enable_graph_report, later drained by flush_comparison_records_to_db).
+        if not _internal:
+            _comparison_records_data = _new_comparison_records_data()
+        elif not _comparison_records_data:
+            _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
         _configure_python_stack_traces_for_outer_graph_capture(ttnn)
 
@@ -252,6 +288,9 @@ def end_graph_capture_to_file(report_path):
     result_str = _cpp_end_graph_capture_to_file(report_path)
     if _python_io_data:
         _write_python_io_sidecar(report_path)
+    if has_comparison_records():
+        _write_comparison_records_sidecar(report_path)
+        reset_comparison_records_data()
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
         if _python_stack_traces_auto_for_session:
@@ -339,7 +378,10 @@ def record_python_operation(name, function_args, function_kwargs):
     }
 
     if _python_stack_traces_enabled:
-        record["python_stack_trace"] = _capture_python_stack_trace()
+        try:
+            record["python_stack_trace"] = _capture_python_stack_trace()
+        except Exception:
+            record["python_stack_trace"] = []
 
     _python_io_data.append(record)
 
@@ -364,6 +406,41 @@ def store_captured_graph(captured_graph_json):
         _python_io_data[-1]["captured_graph"] = captured_graph_json
 
 
+def record_tensor_comparison_data(
+    *,
+    local_tensor_comparison_records=None,
+    global_tensor_comparison_records=None,
+    tensors=None,
+):
+    """Record comparison-mode sidecar data for offline graph_report import."""
+    global _comparison_records_data
+    if not _comparison_records_data:
+        _comparison_records_data = _new_comparison_records_data()
+
+    if local_tensor_comparison_records:
+        _comparison_records_data["local_tensor_comparison_records"].extend(local_tensor_comparison_records)
+    if global_tensor_comparison_records:
+        _comparison_records_data["global_tensor_comparison_records"].extend(global_tensor_comparison_records)
+    if tensors:
+        existing_tensor_ids = {tensor["tensor_id"] for tensor in _comparison_records_data["tensors"]}
+        for tensor in tensors:
+            if tensor["tensor_id"] in existing_tensor_ids:
+                continue
+            _comparison_records_data["tensors"].append(tensor)
+            existing_tensor_ids.add(tensor["tensor_id"])
+
+
+def has_comparison_records():
+    return bool(
+        _comparison_records_data
+        and (
+            _comparison_records_data["local_tensor_comparison_records"]
+            or _comparison_records_data["global_tensor_comparison_records"]
+            or _comparison_records_data["tensors"]
+        )
+    )
+
+
 def _write_python_io_sidecar(report_path):
     """Write python_io data as a sidecar JSON file next to the main report.
 
@@ -375,6 +452,63 @@ def _write_python_io_sidecar(report_path):
     sidecar_path = report_path.with_suffix(".python_io.json")
     with open(sidecar_path, "w") as f:
         json.dump(_python_io_data, f)
+
+
+def _write_comparison_records_sidecar(report_path):
+    """Write comparison-mode data next to the main graph capture report."""
+    report_path = pathlib.Path(report_path)
+    sidecar_path = report_path.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+    with open(sidecar_path, "w") as f:
+        json.dump(_comparison_records_data, f)
+
+
+def flush_comparison_records_to_db(report_dir):
+    """Write accumulated comparison-mode records into report_dir/db.sqlite.
+
+    Used when enable_comparison_mode is on without a full graph report import
+    (enable_graph_report=false). PCC still runs during the model; this persists
+    local/global_tensor_comparison_records for the visualizer.
+    """
+    global _comparison_records_data
+
+    if not has_comparison_records():
+        return
+
+    import sqlite3
+
+    from ttnn.graph_report import (
+        COMPARISON_RECORDS_FALLBACK_NAME,
+        create_database_schema,
+        import_tensor_comparison_records,
+        save_database_schema_version,
+    )
+
+    report_dir = pathlib.Path(report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    sidecar_path = report_dir / COMPARISON_RECORDS_FALLBACK_NAME
+    with open(sidecar_path, "w") as f:
+        json.dump(_comparison_records_data, f)
+
+    rank = 0
+    try:
+        from ttnn._ttnn.multi_device import get_rank, is_initialized
+
+        if is_initialized():
+            rank = int(get_rank())
+    except (ImportError, OSError):
+        pass
+
+    conn = sqlite3.connect(report_dir / "db.sqlite")
+    cursor = conn.cursor()
+    try:
+        create_database_schema(cursor)
+        save_database_schema_version(cursor)
+        import_tensor_comparison_records(cursor, _comparison_records_data, rank=rank)
+        conn.commit()
+    finally:
+        conn.close()
+        reset_comparison_records_data()
 
 
 @contextlib.contextmanager

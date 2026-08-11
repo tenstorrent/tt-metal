@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/fill.h"
@@ -17,11 +18,11 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    CircularBuffer cb_in0(tt::CBIndex::c_0);
-    CircularBuffer cb_in1(tt::CBIndex::c_1);
-    CircularBuffer cb_out(tt::CBIndex::c_2);
+    DataflowBuffer cb_in0(tt::CBIndex::c_0);
+    DataflowBuffer cb_in1(tt::CBIndex::c_1);
+    DataflowBuffer cb_out(tt::CBIndex::c_2);
 
-    unary_op_init_common(cb_in0.get_cb_id(), cb_out.get_cb_id());
+    unary_op_init_common(cb_in0.get_id(), cb_out.get_id());
 
     BINARY_SFPU_INIT
 
@@ -33,15 +34,15 @@ void kernel_main() {
         cb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_in0.get_cb_id());
+        copy_tile_to_dst_init_short(cb_in0.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_in0.get_cb_id(), i, i * 3);
+            copy_tile(cb_in0.get_id(), i, i * 3);
         }
-        copy_tile_to_dst_init_short(cb_in1.get_cb_id());
+        copy_tile_to_dst_init_short(cb_in1.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
-            copy_tile(cb_in1.get_cb_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            copy_tile(cb_in1.get_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
             fill_tile_init();
             // TTS: scalar is false value, goes to dst_reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
@@ -54,7 +55,7 @@ void kernel_main() {
 
 // TST: tensor is false value, goes to dst_reg 2
 #if WHERE_TST
-            copy_tile(cb_in1.get_cb_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
+            copy_tile(cb_in1.get_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
             fill_tile_init();
             // TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
@@ -71,7 +72,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 3, cb_out.get_cb_id());
+            pack_tile(i * 3, cb_out.get_id());
         }
         tile_regs_release();
 

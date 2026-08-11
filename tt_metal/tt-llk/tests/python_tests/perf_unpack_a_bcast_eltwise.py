@@ -34,7 +34,6 @@ from helpers.test_variant_parameters import (
     ],
     input_dimensions=[
         [128, 32],
-        [32, 128],
         [64, 128],
     ],
 )

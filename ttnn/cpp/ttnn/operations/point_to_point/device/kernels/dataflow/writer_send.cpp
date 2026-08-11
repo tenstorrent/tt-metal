@@ -33,6 +33,8 @@ void kernel_main() {
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
+    Noc noc;
+
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 9;
 
@@ -82,12 +84,15 @@ void kernel_main() {
 
             // copy page to packet buffer with offset
             const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
-            tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
+            tt_memmove<false, false, false, 0>(noc, packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
-                perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
+                // blocking+flush: drain the payload out of packet_base_addr before the next tt_memmove
+                // reuses the single-slot packet_cb (the default overload leaves the source read in flight).
+                perform_payload_send<true, true>(
+                    connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
                 // reset counters
                 packet_page_idx = 0;

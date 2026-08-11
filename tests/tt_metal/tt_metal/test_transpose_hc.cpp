@@ -102,7 +102,7 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
     auto unary_writer_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,

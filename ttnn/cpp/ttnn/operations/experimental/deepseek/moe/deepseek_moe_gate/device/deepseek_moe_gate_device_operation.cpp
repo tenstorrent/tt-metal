@@ -27,15 +27,13 @@ void DeepseekMoeGateDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& output_indices_tensor = tensor_args.output_indices_tensor;
 
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "input_tensor must be on device");
-    TT_FATAL(bias_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "bias_tensor must be on device");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "input_tensor must be on device");
+    TT_FATAL(bias_tensor.storage_type() == ttnn::StorageType::DEVICE, "bias_tensor must be on device");
     TT_FATAL(
-        input_indices_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "input_indices_tensor must be on device");
-    TT_FATAL(output_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "output_tensor must be on device");
+        input_indices_tensor.storage_type() == ttnn::StorageType::DEVICE, "input_indices_tensor must be on device");
+    TT_FATAL(output_tensor.storage_type() == ttnn::StorageType::DEVICE, "output_tensor must be on device");
     TT_FATAL(
-        output_indices_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "output_indices_tensor must be on device");
+        output_indices_tensor.storage_type() == ttnn::StorageType::DEVICE, "output_indices_tensor must be on device");
 
     TT_FATAL(input_tensor.device() == bias_tensor.device(), "All tensors must be on the same device");
     TT_FATAL(input_tensor.device() == input_indices_tensor.device(), "All tensors must be on the same device");
@@ -114,12 +112,6 @@ DeepseekMoeGateDeviceOperation::spec_return_value_t DeepseekMoeGateDeviceOperati
 DeepseekMoeGateDeviceOperation::tensor_return_value_t DeepseekMoeGateDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return {tensor_args.output_tensor, tensor_args.output_indices_tensor};
-}
-
-std::uint64_t DeepseekMoeGateDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto program_descriptor = build_moe_gate_program_descriptor(tensor_args, attrs);
-    return hash_moe_gate_program_structure(program_descriptor);
 }
 
 std::tuple<DeepseekMoeGateDeviceOperation::operation_attributes_t, DeepseekMoeGateDeviceOperation::tensor_args_t>

@@ -8,6 +8,20 @@ num_routed_experts: 128
 num_shared_experts: 0
 has_bias: true
 
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# GPT-OSS router (GptOssTopKRouter): logits = Wx + b → top-4 (by Wx+b) → softmax over the selected (Wx+b).
+# TTMoEGate's score_func=softmax is exactly that (rank by logit, then exp-over-selected), scale 1.0, and the
+# router LINEAR bias b is supplied as the gate projection bias (gate_proj_bias below → torch_gate_proj_bias),
+# so logits = Wx + b and b flows into BOTH selection and the softmax weights (matches the reference).
+# 128 experts → padded to the op's 256-face.
+n_group: 1
+score_func: softmax
+routed_scaling_factor: 1.0
+# router LINEAR bias: GPT-OSS's GptOssTopKRouter does F.linear(x, W, b). TTMoEGate adds b via ttnn.linear's
+# bias (torch_gate_proj_bias) — distinct from the deepseek score-correction bias (which is selection-only).
+# (has_bias=true above is the separate EXPERT-MLP bias.)
+gate_proj_bias: true
+
 compute:
   intermediate_size: 2880
   activation_type: SWIGLU

@@ -652,6 +652,33 @@ def test_conv_features_multi_device(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_packer_l1_acc_untilize_activation_without_bias(device, torch_tensor_map):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        2,
+        128,
+        128,
+        32,
+        32,
+        3,
+        3,
+        1,
+        1,
+        (1, 1),
+        None,
+        shard_layout=BS,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        has_bias=False,
+        packer_l1_acc=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [2])
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize(
@@ -828,6 +855,14 @@ def test_conv_dram(
 
     if input_channels > 1024 and input_dtype == ttnn.bfloat8_b:
         pytest.skip("Skipping tests with large accumulation due to bfloat8 accuracy issues.")
+
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip(
+            "Row-major DRAM auto-slicing underestimates peak L1 for simultaneous interleaved-to-row-major "
+            "untilize staging buffers and can select an oversized slice; tiled DRAM-slicing coverage remains "
+            "enabled. See https://github.com/tenstorrent/tt-metal/issues/51672"
+        )
+
     batch_size = 1
     config = {}
     config["act_block_h"] = act_block_h_override
@@ -3594,6 +3629,58 @@ def test_conv2d_ws_program_cache(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_program_cache_keys_full_inner_dim(device, torch_tensor_map):
+    """full_inner_dim must distinguish programs, while an identical configuration must hit the cache."""
+
+    def run_with_full_inner_dim(full_inner_dim):
+        run_conv(
+            device=device,
+            torch_tensor_map=torch_tensor_map,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            output_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat16,
+            batch_size=2,
+            output_channels=128,
+            input_channels=128,
+            input_height=32,
+            input_width=32,
+            filter_height=3,
+            filter_width=3,
+            stride_h=2,
+            stride_w=2,
+            padding=1,
+            config_override=None,
+            fp32_accum=True,
+            output_layout=ttnn.TILE_LAYOUT,
+            has_bias=True,
+            shard_layout=BS,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            bs_full_inner_dim=full_inner_dim,
+        )
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        run_with_full_inner_dim(False)
+        entries_after_false = device.num_program_cache_entries()
+        assert entries_after_false > 0
+
+        run_with_full_inner_dim(True)
+        entries_after_true = device.num_program_cache_entries()
+        assert entries_after_true > entries_after_false, (
+            "full_inner_dim=False and full_inner_dim=True must produce distinct cache entries"
+        )
+
+        run_with_full_inner_dim(False)
+        assert device.num_program_cache_entries() == entries_after_true, (
+            "Repeating full_inner_dim=False must reuse the cached program"
+        )
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_sharded_non_tile(device):
     batch = 1
     input_channels = 32
@@ -5774,3 +5861,53 @@ def test_conv2d_fp32_input_no_fp16_saturation(device):
     )
     passed, msg = check_with_pcc_without_tensor_printout(ref, out_nchw, pcc=0.99)
     assert passed, msg
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "shard_layout, output_channels, input_channels, input_height, input_width, config",
+    (
+        # Unaligned input channels (not a multiple of 32) -> create_device_tensor alignment path.
+        (WS, 384, 353, 8, 8, None),
+        (BS, 128, 129, 32, 32, None),
+        # Aligned VGG-like block-sharded shapes -> pad-after-shard path.
+        (BS, 256, 256, 56, 56, None),
+        (BS, 512, 512, 28, 28, None),
+        # Height-sharded row-major host input needing H/W padding -> pad-before-shard path.
+        (HS, 64, 64, 224, 224, {"act_block_h": 32}),
+    ),
+)
+def test_conv2d_row_major_host_sharding_alignment_regression(
+    device,
+    torch_tensor_map,
+    shard_layout,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    config,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1, 1, 1),
+        config_override=config,
+        shard_layout=shard_layout,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        has_bias=True,
+    )

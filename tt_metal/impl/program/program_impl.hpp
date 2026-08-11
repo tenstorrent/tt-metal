@@ -18,6 +18,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -50,6 +51,7 @@ class EnqueueProgramCommand;
 class Kernel;
 
 namespace distributed {
+class MeshDevice;
 class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
@@ -63,7 +65,7 @@ namespace program_dispatch {
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache);
 }
@@ -220,11 +222,15 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -244,7 +250,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
@@ -271,7 +277,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -283,6 +289,8 @@ public:
 
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+
+    uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
 
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
@@ -339,21 +347,23 @@ public:
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
 
-    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    // Metal 2.0: Mark this Program as created from ProgramSpec
+    // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
+    void mark_created_from_spec() { created_from_spec_ = true; }
+    bool created_from_spec() const { return created_from_spec_; }
+
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    bool has_metal2_registry() const { return metal2_registry_.has_value(); }
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name,
-        const TensorSpec& spec,
-        bool dynamic_tensor_shape,
-        bool match_padded_shape_only,
-        bool enqueue_invariant);
+        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
@@ -361,15 +371,9 @@ public:
     uint32_t get_semaphore_handle(const std::string& name) const;
     // Returns nullptr if name is not registered (caller validates).
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
-    // Returns false if the parameter was not registered with dynamic_tensor_shape=true,
-    // or if the name is unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const;
-    // Returns false if the parameter was not registered with match_padded_shape_only=true,
-    // or if the name is unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
-    // Returns false if the parameter was not registered enqueue-invariant, or if the name is
-    // unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_enqueue_invariant(const std::string& name) const;
+    // Returns the relaxations the parameter was registered with (default-constructed / strict if the
+    // name is unknown; the caller validates known-ness separately).
+    experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -403,13 +407,6 @@ public:
         // broadcast count.
         std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
         size_t num_common_runtime_varargs = 0;
-
-        // Names (each a subset of runtime_arg_names / common_runtime_arg_names) declared
-        // enqueue-loop invariant via KernelAdvancedOptions. These named args may be omitted
-        // from a partial UpdateProgramRunArgs call, in which case the value installed by the
-        // most recent SetProgramRunArgs is retained. (Varargs cannot be marked invariant.)
-        std::unordered_set<std::string> enqueue_invariant_runtime_arg_names;
-        std::unordered_set<std::string> enqueue_invariant_common_runtime_arg_names;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
@@ -418,6 +415,13 @@ public:
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
+
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -430,6 +434,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -505,11 +510,7 @@ private:
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
-            bool dynamic_tensor_shape = false;
-            bool match_padded_shape_only = false;
-            // Declared enqueue-loop invariant: the TensorArgument may be omitted from a partial
-            // UpdateProgramRunArgs call (the previously-bound MeshTensor is retained).
-            bool enqueue_invariant = false;
+            experimental::TensorSpecRelaxations relaxations;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -518,12 +519,24 @@ private:
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
+    // True only for Programs minted by BuildProgramFromSpec (the sole legitimate source of
+    // Metal 2.0 kernels). Metal 2.0 named bindings require the ProgramSpec path; add_kernel
+    // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
+    // ProgramDescriptor ctor path or a legacy CreateKernel program).
+    bool created_from_spec_ = false;
+
     // Semaphores
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -570,7 +583,7 @@ private:
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         bool use_prefetcher_cache);
 

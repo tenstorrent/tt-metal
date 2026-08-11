@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 #include "ttnn/core.hpp"
@@ -23,6 +25,7 @@ struct RingJointSDPAParams {
     bool is_balanced = false;
     bool is_cross = false;
     std::size_t logical_n = 0;
+    std::size_t logical_l = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
@@ -33,6 +36,9 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt;
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
     uint32_t latent_v_head_dim = 0;
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
+    std::optional<uint32_t> sliding_window_size = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -42,6 +48,7 @@ struct RingJointSDPAParams {
         bool is_balanced,
         bool is_cross,
         std::size_t logical_n,
+        std::size_t logical_l,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
@@ -51,13 +58,17 @@ struct RingJointSDPAParams {
         CoreCoord ccl_core_grid_offset,
         std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt,
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
-        uint32_t latent_v_head_dim = 0) :
+        uint32_t latent_v_head_dim = 0,
+        uint32_t kv_cache_num_layers = 1,
+        uint32_t kv_cache_layer_idx = 0,
+        std::optional<uint32_t> sliding_window_size = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
         is_balanced(is_balanced),
         is_cross(is_cross),
         logical_n(logical_n),
+        logical_l(logical_l),
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
@@ -67,35 +78,10 @@ struct RingJointSDPAParams {
         ccl_core_grid_offset(ccl_core_grid_offset),
         kv_cache_batch_idx(kv_cache_batch_idx),
         kv_actual_isl(kv_actual_isl),
-        latent_v_head_dim(latent_v_head_dim) {}
-
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("joint_strategy", joint_strategy);
-        attrs.emplace_back("is_causal", is_causal);
-        attrs.emplace_back("is_balanced", is_balanced);
-        attrs.emplace_back("is_cross", is_cross);
-        attrs.emplace_back("logical_n", logical_n);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_memory_config", output_memory_config);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
-        if (kv_cache_batch_idx.has_value()) {
-            attrs.emplace_back("kv_cache_batch_idx", kv_cache_batch_idx.value());
-        }
-        if (kv_actual_isl.has_value()) {
-            attrs.emplace_back("kv_actual_isl", kv_actual_isl.value());
-        }
-        attrs.emplace_back("latent_v_head_dim", latent_v_head_dim);
-        if (scale.has_value()) {
-            attrs.emplace_back("scale", scale);
-        }
-        if (program_config.has_value()) {
-            attrs.emplace_back("program_config", program_config);
-        }
-        return attrs;
-    }
+        latent_v_head_dim(latent_v_head_dim),
+        kv_cache_num_layers(kv_cache_num_layers),
+        kv_cache_layer_idx(kv_cache_layer_idx),
+        sliding_window_size(sliding_window_size) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -104,6 +90,47 @@ struct RingJointSDPAParams {
     bool has_indexed_kv_cache() const { return kv_cache_batch_idx.has_value(); }
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
+
+    bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "joint_strategy",
+        "scale",
+        "is_causal",
+        "is_balanced",
+        "is_cross",
+        "cache_key_logical_n",
+        "logical_l",
+        "ring_size",
+        "compute_kernel_config",
+        "program_config",
+        "ccl_core_grid_offset",
+        "has_kv_cache_batch_idx",
+        "kv_pad_rotation_enabled",
+        "latent_v_head_dim",
+        "sliding_window_size",
+        "all_gather_operation_attributes",
+        "all_gather_tensor_args");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(joint_strategy),
+            std::cref(scale),
+            std::cref(is_causal),
+            std::cref(is_balanced),
+            std::cref(is_cross),
+            has_kv_pad_rotation() ? std::size_t{0} : logical_n,
+            std::cref(logical_l),
+            std::cref(ring_size),
+            std::cref(compute_kernel_config),
+            std::cref(program_config),
+            std::cref(ccl_core_grid_offset),
+            kv_cache_batch_idx.has_value(),
+            has_kv_pad_rotation(),
+            std::cref(latent_v_head_dim),
+            std::cref(sliding_window_size),
+            std::cref(all_gather_operation_attributes),
+            std::cref(all_gather_tensor_args));
+    }
 };
 
 struct RingJointSDPAInputs {
@@ -115,6 +142,24 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
+    std::optional<Tensor> attention_sink;
+
+    // Populated on the sharded-joint path only; nullopt on the replicated path.
+    // Invariant: joint_is_sharded() <=> gathered_joint_k.has_value()
+    std::optional<Tensor> gathered_joint_k;
+    std::optional<Tensor> gathered_joint_v;
+
+    // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
+    // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
+    // cache-user slot (was metadata[0]); kv_actual_isl holds the prior valid global KV length (was
+    // metadata[1]). When present (both together), the readers/writer compute
+    // kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx and derive
+    // logical_nt / q-mapping / ring masks on-device from kv_actual_isl, so one captured program
+    // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
+    std::optional<Tensor> slot_id;
+    std::optional<Tensor> kv_actual_isl;
+
+    bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
@@ -134,6 +179,10 @@ struct RingJointSDPAInputs {
     uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
     }
+
+    // True iff the joint/prompt set is sequence-sharded (L/P per device).
+    // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
+    bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
 
 // Index constants for RingJointSDPAResult vector
@@ -145,6 +194,6 @@ constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
 using RingJointSDPAResult = Tensors;
 
 // RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
-using RingJointSDPAResultSpec = std::vector<TensorSpec>;
+using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

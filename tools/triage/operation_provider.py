@@ -14,7 +14,7 @@ Options:
 Description:
     Data provider for the running-ops view chain. Builds two things:
 
-      1. An `OperationRuntimeMap` — Inspector runtime_id → OperationInfo
+      1. An `OperationRuntimeMap` - Inspector runtime_id → OperationInfo
          (name, parameters, trace_id). The mailbox holds the raw runtime_id
          for both fast and slow dispatch (see tt_metal/impl/program/dispatch.cpp
          and tt_metal/impl/host_api/tt_metal.cpp).
@@ -61,7 +61,7 @@ script_config = ScriptConfig(
 )
 
 
-# Core filtering — matches the historical block list from dump_running_operations.
+# Core filtering - matches the historical block list from dump_running_operations.
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
 # Matches the sentinel in rpc.capnp (kNoTraceId). Capnp has no null for primitives.

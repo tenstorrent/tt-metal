@@ -438,4 +438,72 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     MetalContext::instance().get_service_core_manager().release(device, claimable);
 }
 
+// Launch-once contract (service_core_manager.hpp): a claimed service core accepts one service enqueue;
+// a second TT_FATALs until the core is released and re-claimed, after which a fresh enqueue succeeds.
+TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
+    auto& mesh_device = this->devices_[0];
+    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    ASSERT_GE(claimable.size(), 1u) << "Need at least one claimable service core for this test.";
+    const CoreCoord svc_core = claimable[0];
+
+    auto build_service_workload = [&]() {
+        Program prog;
+        CreateKernel(
+            prog,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            CoreRangeSet(CoreRange(svc_core)),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        auto workload = std::make_shared<MeshWorkload>();
+        workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(prog));
+        return workload;
+    };
+
+    MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
+
+    auto workload = build_service_workload();
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+
+    // Re-enqueue without releasing: launch-once TT_FATALs.
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false), std::exception);
+
+    // Release and re-claim, then enqueue a fresh workload: now allowed (the core's launched flag was
+    // cleared by release, and a new workload classifies from scratch).
+    MetalContext::instance().get_service_core_manager().release(device, {svc_core});
+    MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
+    auto workload2 = build_service_workload();
+    EXPECT_NO_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload2, false));
+
+    MetalContext::instance().get_service_core_manager().release(device, {svc_core});
+}
+
+// No-mixing contract (service_core_manager.hpp): a single program must target only claimed service
+// cores or only worker-grid cores, never both. EnqueueMeshWorkload TT_FATALs on a program that spans
+// a claimed service core and an unclaimed worker core.
+TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
+    auto& mesh_device = this->devices_[0];
+    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    ASSERT_GE(claimable.size(), 1u) << "Need at least one claimable service core for this test.";
+    const CoreCoord svc_core = claimable[0];
+    const CoreCoord worker_core{0, 0};  // worker-grid core, never a dispatch-column service core
+    ASSERT_NE(svc_core, worker_core);
+    MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
+
+    // One program spanning the claimed service core and an unclaimed worker core -> mixed -> TT_FATAL.
+    Program prog;
+    CreateKernel(
+        prog,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        CoreRangeSet(std::vector<CoreCoord>{svc_core, worker_core}),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    auto workload = std::make_shared<MeshWorkload>();
+    workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(prog));
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false), std::exception);
+
+    MetalContext::instance().get_service_core_manager().release(device, {svc_core});
+}
+
 }  // namespace tt::tt_metal::distributed::test

@@ -126,8 +126,7 @@ void kernel_main() {
         half_buffer_bytes,
         {.addr = dst_A},
         {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_A},
-        NOC_UNICAST_WRITE_VC,
-        trid_A);
+        NocOptVals{.trid = trid_A});
 
     // Final B: drain the remaining outstanding read.
     experimental::dma_async_read_wait_n(tx_stream, 0);                        // B[last] ready
@@ -138,8 +137,7 @@ void kernel_main() {
         half_buffer_bytes,
         {.addr = dst_B},
         {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_B},
-        NOC_UNICAST_WRITE_VC,
-        trid_B);
+        NocOptVals{.trid = trid_B});
 
     // Drain: wait for the final two NOC writes to be acked.
     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_A});

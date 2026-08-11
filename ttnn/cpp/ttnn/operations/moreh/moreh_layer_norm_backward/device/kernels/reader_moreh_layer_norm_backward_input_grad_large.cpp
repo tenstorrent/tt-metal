@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -23,13 +23,13 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
-    cb.reserve_back(onetile);
+    dfb.reserve_back(onetile);
 
-    uint32_t l1_write_addr = cb.get_write_ptr();
+    uint32_t l1_write_addr = dfb.get_write_ptr();
     CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
@@ -51,7 +51,7 @@ void read_mean_rstd(
 
             noc.async_read(
                 addrg,
-                cb,
+                dfb,
                 cb_dtype_bytes * FACE_HEIGHT,
                 {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
                 {.offset_bytes = src_idx * cb_dtype_bytes});
@@ -81,7 +81,7 @@ void read_mean_rstd(
 
         noc.async_read(
             addrg,
-            cb,
+            dfb,
             cb_dtype_bytes,
             {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
             {.offset_bytes = tilized_idx * cb_dtype_bytes});
@@ -92,7 +92,7 @@ void read_mean_rstd(
         }
     }
 
-    cb.push_back(onetile);
+    dfb.push_back(onetile);
 }
 
 void kernel_main() {
@@ -144,12 +144,15 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_scaler, scaler.u);
-    fill_cb_with_value(cb_id_n_recip_n, n);
-    fill_cb_with_value(cb_id_n_recip_n, recip_n);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_n_recip_n(cb_id_n_recip_n);
+    fill_cb_with_value(dfb_scaler, scaler.u);
+    fill_cb_with_value(dfb_n_recip_n, n);
+    fill_cb_with_value(dfb_n_recip_n, recip_n);
 
     if (do_mask_h || do_mask_w) {
-        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
+        DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);
+        generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
     }
 
     uint32_t offs = 0;
@@ -159,9 +162,9 @@ void kernel_main() {
     auto mean_rstd_Wt = (mean_rstd_width + TILE_WIDTH - 1) / TILE_WIDTH;
 
     Noc noc;
-    CircularBuffer cb_output_grad(cb_id_output_grad);
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer dfb_output_grad(cb_id_output_grad);
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_gamma(cb_id_gamma);
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
     const auto gamma_tile_bytes = get_tile_size(cb_id_gamma);
@@ -198,67 +201,67 @@ void kernel_main() {
         // For Sum[dy] and Sum[y * dy]
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             // input (N, C, H, W)
-            cb_input.reserve_back(onetile);
+            dfb_input.reserve_back(onetile);
             noc.async_read(
                 input_addrg,
-                cb_input,
+                dfb_input,
                 input_tile_bytes,
                 {.page_id = offs + inner_idx + tile_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_input.push_back(onetile);
+            dfb_input.push_back(onetile);
 
             // output_grad (N, C, H, W)
-            cb_output_grad.reserve_back(onetile);
+            dfb_output_grad.reserve_back(onetile);
             noc.async_read(
                 output_grad_addrg,
-                cb_output_grad,
+                dfb_output_grad,
                 output_grad_tile_bytes,
                 {.page_id = offs + inner_idx + tile_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_output_grad.push_back(onetile);
+            dfb_output_grad.push_back(onetile);
 
             if (gamma_has_value) {
                 // gamma (1, 1, 1, W)
-                cb_gamma.reserve_back(onetile);
-                noc.async_read(gamma_addrg, cb_gamma, gamma_tile_bytes, {.page_id = inner_idx}, {.offset_bytes = 0});
+                dfb_gamma.reserve_back(onetile);
+                noc.async_read(gamma_addrg, dfb_gamma, gamma_tile_bytes, {.page_id = inner_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_gamma.push_back(onetile);
+                dfb_gamma.push_back(onetile);
             }  // gamma_has_value
         }  // num_inner loop
 
         // For ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             // output_grad (N, C, H, W)
-            cb_output_grad.reserve_back(onetile);
+            dfb_output_grad.reserve_back(onetile);
             noc.async_read(
                 output_grad_addrg,
-                cb_output_grad,
+                dfb_output_grad,
                 output_grad_tile_bytes,
                 {.page_id = offs + inner_idx + tile_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_output_grad.push_back(onetile);
+            dfb_output_grad.push_back(onetile);
 
             if (gamma_has_value) {
                 // gamma (1, 1, 1, W)
-                cb_gamma.reserve_back(onetile);
-                noc.async_read(gamma_addrg, cb_gamma, gamma_tile_bytes, {.page_id = inner_idx}, {.offset_bytes = 0});
+                dfb_gamma.reserve_back(onetile);
+                noc.async_read(gamma_addrg, dfb_gamma, gamma_tile_bytes, {.page_id = inner_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_gamma.push_back(onetile);
+                dfb_gamma.push_back(onetile);
             }  // gamma_has_value
 
             // input (N, C, H, W)
-            cb_input.reserve_back(onetile);
+            dfb_input.reserve_back(onetile);
             noc.async_read(
                 input_addrg,
-                cb_input,
+                dfb_input,
                 input_tile_bytes,
                 {.page_id = offs + inner_idx + tile_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_input.push_back(onetile);
+            dfb_input.push_back(onetile);
         }  // num_inner loop
 
         offs += num_inner;

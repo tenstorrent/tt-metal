@@ -22,19 +22,21 @@ Workflow:
 
 This replaces the invasive approach where decorators.py inserted into SQLite during execution.
 
-Note: Comparison mode (golden tensor validation) is Python-specific and still writes
-directly to SQLite during execution. The importer is aware of this and uses
-CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
+Note: Comparison mode (golden tensor validation) is Python-specific and is
+captured in a sidecar JSON file. The importer consumes that sidecar offline and
+populates the visualizer comparison tables.
 """
 
 import json
 import math
 import re
 import sqlite3
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Union
+from typing import Generator, Union
+from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
 
@@ -62,10 +64,178 @@ else:
     )
 
 SUPPORTED_REPORT_VERSION = 1
-# String so we can follow semver-like bumps (was int on an older branch). Bump when the
-# visualizer schema changes; stale DBs are deleted on import (no migration path).
+
+
+def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
+    """Pytest fixture for automatic graph capture and report generation.
+
+    This fixture is used to automatically generate the graph report when the
+    `enable_graph_report` or `enable_comparison_mode` configuration options are set.
+
+    This function defines the body of the pytest fixture, but it is not a pytest fixture
+    itself. To be used, it must be returned from a pytest fixture definition that is decorated
+    with `@pytest.fixture`.
+    """
+    import ttnn
+
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
+    enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
+    report_path = Path(report_path)
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
+
+    if enable_graph_report:
+        if enable_detailed_buffer_report:
+            ttnn.graph.enable_detailed_buffer_tracing()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    try:
+        yield
+    finally:
+        report_path.mkdir(parents=True, exist_ok=True)
+
+        if enable_graph_report:
+            if not ttnn.graph.is_graph_capture_active():
+                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+            else:
+                if ttnn.distributed_context_is_initialized():
+                    rank = int(ttnn.distributed_context_get_rank())
+                    world_size = int(ttnn.distributed_context_get_size())
+                else:
+                    rank, world_size = 0, 1
+                if world_size > 1:
+                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+                else:
+                    json_path = report_path / "graph_capture.json"
+                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
+                    import_report(report_path, report_path)
+                    (report_path / "graph_capture.json").unlink(missing_ok=True)
+                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                        p.unlink(missing_ok=True)
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+
+            if enable_detailed_buffer_report:
+                ttnn.graph.disable_detailed_buffer_tracing()
+        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+            ttnn.graph.flush_comparison_records_to_db(report_path)
+
+        if ttnn.distributed_context_is_initialized():
+            rank = int(ttnn.distributed_context_get_rank())
+            world_size = int(ttnn.distributed_context_get_size())
+        else:
+            rank, world_size = 0, 1
+        if world_size > 1:
+            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+        else:
+            config_path = report_path / "config.json"
+        ttnn.save_config_to_json_file(config_path)
+
+
+def sanitize_git_remote_url(url: str) -> str:
+    """Return a remote URL safe to persist in shared artifacts (no credentials or query parts).
+
+    Strips userinfo and query/fragment for ``http``, ``https``, ``ssh``, and ``git`` URLs. For
+    SCP-style remotes (``git@host:path``), drops the ``user@`` prefix so tokens cannot appear
+    there. Unrecognized forms are returned unchanged.
+    """
+    s = (url or "").strip()
+    if not s:
+        return ""
+    # SCP-style: no scheme, exactly one '@' before the path delimiter ':' (e.g. git@host:repo).
+    if "://" not in s and s.count("@") == 1 and ":" in s.split("@", 1)[1]:
+        _user, hostpath = s.split("@", 1)
+        return hostpath
+    parsed = urlparse(s)
+    if parsed.scheme not in ("http", "https", "ssh", "git"):
+        return s
+    host = parsed.hostname
+    if host is None:
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+    try:
+        port = parsed.port
+    except ValueError:
+        # Non-numeric port token (e.g. ssh://git@github.com:org/repo.git); strip userinfo
+        # from the raw netloc without relying on .port.
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+    if ":" in host and not host.startswith("["):
+        host_bracketed = f"[{host}]"
+    else:
+        host_bracketed = host
+    netloc = f"{host_bracketed}:{port}" if port is not None else host_bracketed
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+
+
+def get_tt_metal_git_report_metadata() -> dict[str, str]:
+    """Return ``git_url`` and ``git_sha`` for the tt-metal tree that contains this module.
+
+    Values are empty strings when git is unavailable (e.g. unpacked release). Used to populate
+    ``report_metadata`` in the visualizer database. ``git_url`` is sanitized so embedded
+    credentials are not stored.
+    """
+    root = Path(__file__).resolve().parents[2]
+    out: dict[str, str] = {"git_url": "", "git_sha": ""}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out["git_sha"] = proc.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning(f"Unable to determine git SHA for report metadata; leaving empty. Reason: {e}")
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out["git_url"] = sanitize_git_remote_url(proc.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning(f"Unable to determine git remote URL for report metadata; leaving empty. Reason: {e}")
+    return out
+
+
+# String so we can follow semver-like bumps (was int on an older branch).
+# Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
-DATABASE_SCHEMA_VERSION = "3.1"
+# 3.2 - git hash and remote URL in report_metadata (#43830)
+# 3.3 - rank on local/global_tensor_comparison_records (#45448)
+DATABASE_SCHEMA_VERSION = "3.3"
+PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
+COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
+COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -131,7 +301,12 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         return sorted(main_captures, key=_capture_sort_key)
     skip = {"config.json"}
     return sorted(
-        p for p in report_path.glob("*.json") if p.name not in skip and not p.name.endswith(".python_io.json")
+        p
+        for p in report_path.glob("*.json")
+        if p.name not in skip
+        and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
+        and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        and p.name != COMPARISON_RECORDS_FALLBACK_NAME
     )
 
 
@@ -541,9 +716,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Comparison mode tables (populated by Python runtime, not importer)
-    # These are created here for schema completeness but data comes from
-    # ttnn.database when comparison mode is enabled during execution
+    # Comparison mode tables (populated from Python runtime sidecar data).
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS local_tensor_comparison_records (
@@ -551,7 +724,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -563,7 +738,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -1597,6 +1774,83 @@ def import_graph(
     }
 
 
+def _is_sidecar_path(path: Path) -> bool:
+    name = path.name
+    return (
+        name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
+        or name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        or name == COMPARISON_RECORDS_FALLBACK_NAME
+    )
+
+
+def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
+    return (
+        int(record["tensor_id"]),
+        int(record["golden_tensor_id"]),
+        int(bool(record["matches"])),
+        float(record["desired_pcc"]),
+        float(record["actual_pcc"]),
+        int(record.get("rank", rank)),
+    )
+
+
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
+    return (
+        int(tensor["tensor_id"]),
+        tensor.get("shape"),
+        tensor.get("dtype"),
+        tensor.get("layout"),
+        tensor.get("memory_config"),
+        tensor.get("device_id"),
+        tensor.get("address"),
+        tensor.get("buffer_type"),
+        rank,
+    )
+
+
+def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
+    """Import comparison-mode sidecar records into the visualizer schema."""
+    if not comparison_data:
+        return {"local_tensor_comparison_records": 0, "global_tensor_comparison_records": 0, "tensors": 0}
+
+    tensors_batch = [_tensor_record_to_row(tensor, rank) for tensor in comparison_data.get("tensors", [])]
+    local_records_batch = [
+        _comparison_record_to_row(record, rank) for record in comparison_data.get("local_tensor_comparison_records", [])
+    ]
+    global_records_batch = [
+        _comparison_record_to_row(record, rank)
+        for record in comparison_data.get("global_tensor_comparison_records", [])
+    ]
+
+    if tensors_batch:
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+    if local_records_batch:
+        cursor.executemany(
+            """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
+        )
+    if global_records_batch:
+        cursor.executemany(
+            """INSERT INTO global_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", global_records_batch
+        )
+
+    return {
+        "local_tensor_comparison_records": len(local_records_batch),
+        "global_tensor_comparison_records": len(global_records_batch),
+        "tensors": len(tensors_batch),
+    }
+
+
+def _load_comparison_records_sidecar(report_file: Path) -> dict | None:
+    for sidecar_path in (
+        report_file.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX),
+        report_file.parent / COMPARISON_RECORDS_FALLBACK_NAME,
+    ):
+        if sidecar_path.exists():
+            with open(sidecar_path, "r") as f:
+                return json.load(f)
+    return None
+
+
 def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:
     """Import report metadata using batch insert."""
     if not metadata:
@@ -1703,11 +1957,14 @@ def import_report(
             "devices": 0,
             "errors": 0,
             "stack_traces": 0,
+            "comparison_records": 0,
             "svgs": 0,
             "tensor_lifetime_records": 0,
             "tensor_consumer_rows": 0,
             "tensor_producer_rows": 0,
         }
+
+        git_meta = get_tt_metal_git_report_metadata()
 
         # First JSON file per rank uses operation ids 1..N; each additional file for the same rank
         # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
@@ -1720,6 +1977,10 @@ def import_report(
 
             stats = {}
             rank = _report_rank(report, rpath)
+
+            meta = report.setdefault("metadata", {})
+            for key, value in git_meta.items():
+                meta.setdefault(key, value)
 
             version = report.get("version", 0)
             if version != SUPPORTED_REPORT_VERSION:
@@ -1772,7 +2033,7 @@ def import_report(
 
                 python_io = report.get("python_io")
                 if python_io is None:
-                    sidecar_path = rpath.with_suffix(".python_io.json")
+                    sidecar_path = rpath.with_suffix(PYTHON_IO_SIDECAR_SUFFIX)
                     if sidecar_path.exists():
                         with open(sidecar_path, "r") as pio:
                             python_io = json.load(pio)
@@ -1816,6 +2077,17 @@ def import_report(
                     svg_path = graphs_dir / f"{rpath.stem}.svg"
                     if generate_svg(report["graph"], svg_path):
                         total_stats["svgs"] += 1
+
+            comparison_data = report.get("comparison_records")
+            if comparison_data is None:
+                comparison_data = _load_comparison_records_sidecar(rpath)
+            if comparison_data:
+                comparison_stats = import_tensor_comparison_records(cursor, comparison_data, rank=rank)
+                total_stats["comparison_records"] += (
+                    comparison_stats["local_tensor_comparison_records"]
+                    + comparison_stats["global_tensor_comparison_records"]
+                )
+                total_stats["tensors"] += comparison_stats["tensors"]
 
             if "metadata" in report:
                 import_metadata(cursor, report["metadata"])
@@ -1979,6 +2251,8 @@ def import_report(
             summary.append(f"  - {total_stats['errors']} errors captured")
         if total_stats["stack_traces"] > 0:
             summary.append(f"  - {total_stats['stack_traces']} stack traces captured")
+        if total_stats["comparison_records"] > 0:
+            summary.append(f"  - {total_stats['comparison_records']} tensor comparison records")
         if total_stats.get("tensor_lifetime_records", 0) > 0:
             summary.append(
                 f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in {output_dir}/*.tensor_lifetime.json)"

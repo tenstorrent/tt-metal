@@ -61,7 +61,7 @@ void reduce_sum_pows_to_inv_rms_triplet() {
     constexpr uint32_t reg_a2 = 2U;  // sum(x^6) → inv_rms(x^3)
 
     // Row-reduce the three power sums into reg_a0/reg_a1/reg_a2.
-    reconfig_data_format(cb_sum_pows, cb_scaler);
+    reconfig_data_format(cb_scaler, cb_sum_pows);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, cb_inv_rms);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/0U, 0U, reg_a0);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/1U, 0U, reg_a1);
@@ -198,7 +198,9 @@ void emit_output_for_row() {
             tile_regs_acquire();
 
             // Seed the accumulator with coeff2 (cubic branch) and load x once.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
             copy_tile_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
@@ -209,7 +211,9 @@ void emit_output_for_row() {
 
             // Horner step 2: acc = coeff1 + x·coeff2; then acc *= x.
             // Re-init bcast because the preceding copy_tile_init changed srcA to cb_input_pass_2.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
@@ -217,7 +221,9 @@ void emit_output_for_row() {
             mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Horner step 3: acc = coeff0 + x·(coeff1 + x·coeff2); then acc *= x.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
@@ -255,7 +261,8 @@ void kernel_main() {
     cb_wait_front(cb_bias, onetile);
 
     init_sfpu(cb_input_pass_1, cb_output);
-    binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

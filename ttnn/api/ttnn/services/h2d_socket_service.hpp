@@ -6,8 +6,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -30,7 +35,12 @@
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 class MeshBuffer;
+class NamedShm;
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+class PinnedMemory;
+}  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal {
 
@@ -39,6 +49,9 @@ namespace tt::tt_metal {
 // bytes into per-coord socket FIFOs (no per-call dispatch).
 class H2DStreamService {
 public:
+    // Tuned auto worker count used when parallel_host_push is enabled and host_push_thread_count == 0.
+    static constexpr uint32_t kAutoHostPushThreadCount = 8;
+
     struct Config {
         // Logical shape & layout of the un-sharded source tensor.
         TensorSpec global_spec;
@@ -49,11 +62,19 @@ public:
         // supply one (build via ttnn::distributed::create_mesh_mapper).
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
 
-        // Socket / scratch CB sizing. All required.
+        // Buffer type backing the socket FIFO. The service is DEVICE_PULL-only: the data FIFO lives in
+        // host pinned memory and the reader pulls each socket page over PCIe (the persistent reader has
+        // no local-L1 / HOST_PUSH read path), so the socket mode is not configurable here.
         BufferType socket_buffer_type = BufferType::L1;
+        // Host FIFO size in bytes. 0 = auto: the service sizes it to a few socket pages of host
+        // headroom (denominated in socket pages, not tensor pages). An explicit value must be >= the
+        // derived socket page size.
         uint32_t fifo_size_bytes = 0;
-        uint32_t scratch_cb_size_bytes = 0;
-        distributed::H2DMode socket_mode = distributed::H2DMode::DEVICE_PULL;
+        // Optional upper bound on the socket page size (read-coalescing granularity), in bytes. 0 =
+        // auto (burst-derived default). NOT a total scratch-CB size -- the data-CB slot depth is
+        // auto-sized to fill the service-core L1 regardless. The effective page may be smaller (capped
+        // by L1 and by divisibility of the tensor page count).
+        uint32_t max_socket_page_size_bytes = 0;
 
         // Optional worker-core sync handshake. When set, after each transfer the
         // kernel multicasts a data-ready inc to a GlobalSemaphore on these cores
@@ -70,6 +91,16 @@ public:
         // Optional host-side hook applied in place to a copy of `bytes` before the
         // mapper runs (raw-bytes overload only). Must be length-preserving.
         std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor;
+
+        // Experimental host-side feeder parallelism. When enabled (and there is more than one
+        // socket), the service runs a persistent pool of host worker threads; each forward_to_tensor
+        // call fans the per-socket writes out to that pool and blocks until all workers finish.
+        // Disabled by default.
+        bool parallel_host_push = false;
+        // Optional explicit host worker count. Only used when parallel_host_push is enabled. 0 = auto:
+        // start the service's tuned default worker count, clamped by num_sockets. 1 forces serial.
+        // N > 1 starts up to N grouped workers, each writing a contiguous socket range page-major.
+        uint32_t host_push_thread_count = 0;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -91,13 +122,17 @@ public:
     // `tensor_spec() == get_per_shard_spec()` and a populated shard at every
     // covered coord. Streams the per-coord shards through the sockets verbatim;
     // `metadata` follows the same per-call contract as the bytes overload.
-    void forward_to_tensor(const Tensor& host_tensor, ttsl::Span<const std::byte> metadata = {});
+    void forward_to_tensor(const ttnn::Tensor& host_tensor, ttsl::Span<const std::byte> metadata = {});
 
-    // Block until every in-flight host->socket write has been ACKed by the
-    // device-side kernel.
+    // Block until every in-flight transfer has fully landed in the backing tensor.
+    // The reader acks each socket page as soon as it is staged in L1 (recycling the
+    // host FIFO slot early), so the socket ack no longer implies the DRAM write is
+    // done; barrier() therefore also waits on the per-coord writer DRAM-completion
+    // counters (pushed to shared host pinned memory) before returning. Safe to read
+    // the backing tensor afterward from the owner.
     void barrier();
 
-    const Tensor& get_backing_tensor() const;
+    const ttnn::Tensor& get_backing_tensor() const;
 
     // The per-shard TensorSpec produced by the mapper; same as
     // `get_backing_tensor().tensor_spec()`.
@@ -114,6 +149,9 @@ public:
     // metadata path is disabled and the single-arg `forward_to_tensor(bytes)`
     // overload must be used.
     std::size_t metadata_size_bytes() const;
+
+    // Data-CB depth (full socket-page slots) the service derived from service-core L1.
+    uint32_t get_slot_count() const;
 
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
@@ -153,10 +191,16 @@ public:
     // @param timeout_ms Max wait time for the descriptor file (default 10s).
     // @param preprocessor Optional process-local hook; same contract as
     //     `Config::preprocessor`.
+    // @param parallel_host_push Process-local feeder choice (same as
+    //     `Config::parallel_host_push`); not carried by the descriptor.
+    // @param host_push_thread_count Process-local explicit worker count (same as
+    //     `Config::host_push_thread_count`); not carried by the descriptor.
     static std::unique_ptr<H2DStreamService> connect(
         const std::string& service_id,
         std::optional<uint32_t> timeout_ms = std::nullopt,
-        std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
+        std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor = nullptr,
+        bool parallel_host_push = false,
+        uint32_t host_push_thread_count = 0);
 
 private:
     // Connector-mode ctor used by connect(): `mesh_device_` stays null; arity
@@ -165,11 +209,47 @@ private:
         Config cfg,
         std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
         uint32_t socket_page_size,
-        uint32_t num_socket_pages);
+        uint32_t num_socket_pages,
+        const std::string& completion_shm_name,
+        uint64_t completion_shm_size,
+        uint32_t completion_issued_offset,
+        uint32_t completion_completed_offset,
+        uint32_t completion_completed_stride);
 
     // Flip the termination signal 0 -> 1 so each persistent receiver kernel exits
     // on its next poll. Idempotent.
     void signal_termination();
+
+    // Block until the reader has ACKed every in-flight socket write (data staged in
+    // L1). This is the socket-only half of barrier(); the destructor uses it rather
+    // than the full barrier() because wait_done() -- not the writer DRAM-completion
+    // counters -- is what guarantees the DRAM scatter finished at teardown, and
+    // waiting on those counters during teardown would hang if a worker-sync wait is
+    // still outstanding.
+    void drain_socket_acks();
+
+    enum class HostPushJobKind { None, Payload, Metadata, Stop };
+
+    struct alignas(64) HostPushWorkerState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        HostPushJobKind job = HostPushJobKind::None;
+        const std::vector<std::byte*>* payload_bases = nullptr;
+        size_t socket_begin = 0;
+        size_t socket_end = 0;
+        bool done = true;
+        std::exception_ptr error;
+    };
+
+    size_t effective_host_push_worker_count() const;
+    void start_host_push_workers();
+    void stop_host_push_workers();
+    void write_payload_with_host_push_workers(const std::vector<std::byte*>& bases);
+    void write_metadata_with_host_push_workers();
+    void submit_host_push_job(
+        size_t worker_index, HostPushJobKind job, const std::vector<std::byte*>* payload_bases = nullptr);
+    void wait_host_push_jobs();
+    void host_push_worker_loop(size_t worker_index);
 
     // True for owner services (own all device-side resources), false for
     // connector services. The dtor branches on it.
@@ -179,7 +259,7 @@ private:
     Config cfg_;
 
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;
-    Tensor device_tensor_;
+    ttnn::Tensor device_tensor_;
 
     // Per-shard tensor spec produced by the mapper. Cached so owner and
     // connector run the same Tensor-overload validation.
@@ -222,5 +302,35 @@ private:
     // the service's lifetime.
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
+    uint32_t slot_count_ = 0;  // data-CB depth derived from service-core L1 (owner only)
+
+    // Writer DRAM-completion tracking. The owner creates one shared completion
+    // region and maps it to every participating coord; connectors map the same
+    // SHM through the exported descriptor. Every slot is padded to host PCIe
+    // alignment (device PCIe writes have stricter target alignment than host
+    // reads), so the layout is:
+    //
+    //   offset 0                 -> issued:       uint32, incremented once per logical forward_to_tensor
+    //   offset PCIe_align*(i+1)   -> completed[i]: uint32, pushed by writer i after its DRAM commit
+    //
+    // i.e. both completed_offset and completed_stride are the PCIe alignment, NOT
+    // sizeof(uint32_t). uint32_t modulo equality is intentional: barrier correctness
+    // requires fewer than 2^32 uncompleted logical transfers outstanding.
+    std::unique_ptr<distributed::NamedShm> completion_shm_;
+    std::shared_ptr<uint32_t[]> completion_host_mem_;
+    std::shared_ptr<experimental::PinnedMemory> completion_pinned_;
+    volatile uint32_t* completion_issued_ = nullptr;
+    std::vector<volatile uint32_t*> completion_counters_;
+    uint64_t completion_shm_size_ = 0;
+    // Assigned at construction (owner: make_completion_layout; connector: from the descriptor) to the
+    // PCIe alignment; these in-class values are placeholders, not the runtime layout.
+    uint32_t completion_issued_offset_ = 0;
+    uint32_t completion_completed_offset_ = 0;
+    uint32_t completion_completed_stride_ = 0;
+    // Per-coord L1 scratch word the writer stages the count in before pushing it.
+    std::map<distributed::MeshCoordinate, DeviceAddr> completion_src_addrs_;
+
+    std::vector<std::unique_ptr<HostPushWorkerState>> host_push_worker_states_;
+    std::vector<std::thread> host_push_workers_;
 };
 }  // namespace tt::tt_metal

@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
@@ -22,28 +23,28 @@ namespace sfpu {
 // Computes the square root or reciprocal square root of a positive floating point value x.
 template <bool APPROXIMATE = false, bool RECIPROCAL = false, bool FAST_APPROX = false>
 sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
-    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i);
+    sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i);
 
     if constexpr (APPROXIMATE) {
         // Algorithm SQRT_10-bits, with modifications for reciprocal.
         sfpi::vFloat c = x * y;
         sfpi::vFloat negative_y = -y;
         sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
-        sfpi::vInt infinity_bits = sfpi::reinterpret<sfpi::vInt>(infinity);
+        sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
         sfpi::vFloat t = sfpi::vConstFloatPrgm1 + negative_y * c;
         if constexpr (RECIPROCAL) {
-            sfpi::vInt x_bits = sfpi::reinterpret<sfpi::vInt>(x);
+            sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
             v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = y * t; }
             // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
-            v_else { y = sfpi::reinterpret<sfpi::vFloat>(infinity_minus_x_bits); }
+            v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
         } else {
             y = c;
             // If x != inf.  Otherwise, y = inf, since c = inf.
-            v_if(sfpi::reinterpret<sfpi::vInt>(x) != infinity_bits) { y = y * t; }
+            v_if(sfpi::as<sfpi::vInt>(x) != infinity_bits) { y = y * t; }
             v_endif;
         }
     } else {
@@ -52,25 +53,25 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         sfpi::vFloat negative_y = -y;
         sfpi::vFloat c = negative_y * xy;
         sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
-        sfpi::vInt infinity_bits = sfpi::reinterpret<sfpi::vInt>(infinity);
+        sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
         y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
         xy = x * y;
         negative_y = -y;
-        sfpi::vFloat one_minus_xyy = sfpi::vConst1 + (negative_y * xy);
+        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
 
         if constexpr (RECIPROCAL) {
             sfpi::vFloat half_y = sfpi::addexp(y, -1);
-            sfpi::vInt x_bits = sfpi::reinterpret<sfpi::vInt>(x);
+            sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
             v_if(infinity_minus_x_bits != 0 && x_bits != 0) { y = one_minus_xyy * half_y + y; }
             // Otherwise, if x = 0, then y = inf; if x = inf, then y = 0.
-            v_else { y = sfpi::reinterpret<sfpi::vFloat>(infinity_minus_x_bits); }
+            v_else { y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits); }
             v_endif;
         } else {
             sfpi::vFloat half_xy = 0.5f * xy;
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
-            v_if(sfpi::reinterpret<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
+            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
             v_endif;
         }
     }
@@ -112,6 +113,7 @@ inline void calculate_sqrt() {
 
 template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 void sqrt_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
         if constexpr (APPROXIMATION_MODE) {
             sfpi::vConstIntPrgm0 = 0x5f0b3892;

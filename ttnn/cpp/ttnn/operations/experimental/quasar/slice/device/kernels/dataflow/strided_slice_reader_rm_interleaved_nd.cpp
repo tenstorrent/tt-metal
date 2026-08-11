@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -42,10 +43,10 @@ void kernel_main() {
 
     Noc noc;
     // Create CircularBuffers for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_out0(cb_id_out0);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_out0(cb_id_out0);
 
-    uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+    uint32_t src_buffer_l1_addr = cb_in0.get_read_ptr();
     volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);
 
     uint32_t index[dims];  // To hold current index in each of the first dims-1 dimensions

@@ -140,7 +140,8 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
             divide_by_shards
                 ? dspec.core_groups_tuple()
                 : (use_sub_core_grids
-                       ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
+                       ? tt::tt_metal::split_work_to_cores(
+                             *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
                        : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
@@ -292,6 +293,7 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
     std::vector<CoreCoord> ordered_cores;
+    ordered_cores.reserve(use_sub_core_grids ? all_cores.num_cores() : num_cores_to_be_used);
     if (use_sub_core_grids) {
         for (const auto& range : all_cores.ranges()) {
             for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
