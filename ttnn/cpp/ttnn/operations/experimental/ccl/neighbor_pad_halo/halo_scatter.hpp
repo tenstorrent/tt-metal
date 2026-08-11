@@ -6,8 +6,6 @@
 #include <cstdint>
 #include <optional>
 
-#include "ttnn/types.hpp"
-
 namespace ttnn::experimental {
 
 // Local (no-fabric) repack for the persistent-padded activation pipeline

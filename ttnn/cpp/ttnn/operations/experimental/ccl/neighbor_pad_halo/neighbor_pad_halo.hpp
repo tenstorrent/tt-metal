@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-#include "ttnn/tensor/tensor.hpp"
+// #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_halo/device/neighbor_pad_halo_device_operation_types.hpp"
