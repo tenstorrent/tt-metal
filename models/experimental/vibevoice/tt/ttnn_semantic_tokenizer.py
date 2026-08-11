@@ -88,15 +88,13 @@ _FFN_DOWN_PROGCFG = {
 # ``ttnn.to_layout(x, ROW_MAJOR)`` on a TILE [1, 1, T, C] lowers to UntilizeWithUnpadding, whose
 # INTERLEAVED program factory parallelises over TILE ROWS ONLY:
 #   num_blocks = padded_H / 32   (untilize_with_unpadding_device_operation.cpp, select_program_factory)
-# The POST tensors here are short and wide, so that count is tiny and the op runs nearly serial —
-# measured on the deployed frame: [1,1,8,1024] on 1 core (17.2 us), [1,1,40,512] on 2 (16.8 us),
-# [1,1,200,256] on 7 (13.2 us), 570 us/frame over 36 calls.  The wide-row (block-interleaved) path
-# that would spread these needs num_tiles_per_row > 32 and 1024/32 == 32 misses it by one tile, so
-# it is unreachable from the model.
+# The POST tensors here are short and wide, so that count is tiny and the op runs nearly serial.  The
+# wide-row (block-interleaved) path that would spread them needs num_tiles_per_row > 32, and
+# 1024/32 == 32 misses it by one tile, so it is unreachable from the model.
 #
-# A SHARDED input takes a different factory entirely, one that parallelises over SHARDS, so
-# sharding first buys the core count the interleaved path cannot: 32 / 16 / 56 cores for the three
-# shapes above.  Untilize is pure data movement, so this is byte-identical by construction.
+# A SHARDED input takes a different factory entirely, one that parallelises over SHARDS, so sharding
+# first buys the core count the interleaved path cannot.  Untilize is pure data movement, so this is
+# byte-identical by construction.
 _UNPAD_SHARD = os.environ.get("VV_POST_UNPAD_SHARD", "1") == "1"
 
 
