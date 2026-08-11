@@ -648,11 +648,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
         auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
-        // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs
-        // an explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for
-        // the sums, add_tiles for the cross-core merge), and the FPU reads its operands out of
-        // SrcA/SrcB, so SrcA/B is the mode for all of them. The intermediates and the merge buffers are
-        // Float16_b whatever the Dest width, so only the inputs can qualify.
+        // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
+        // The reduce scaler and the FPU merge's zero tile are always consumed through SrcA/SrcB.
         if (compute_gen1.enable_32_bit_dest) {
             auto unpack_operand = [&](const m2::DFBSpecName& dfb) {
                 if (unpack_fp32_active) {
@@ -672,8 +669,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 if (fuse_pre_add) {
                     unpack_operand(PRE2D_FUSED);
                 }
-                // The cross-core merge sums partials with add_tiles, an FPU op.
-                unpack_via_src(compute_gen1, PRE2D_X2_MERGE);
+                // The merge sums the column's partials on the SFPU when accurate, add_tiles
+                // otherwise; dfb::zero is only the FPU path's operand.
+                unpack_operand(PRE2D_X2_MERGE);
                 unpack_via_src(compute_gen1, PRE2D_ZERO);
             }
             if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {

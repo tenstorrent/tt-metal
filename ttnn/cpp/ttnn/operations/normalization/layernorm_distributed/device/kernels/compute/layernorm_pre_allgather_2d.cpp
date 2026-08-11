@@ -12,6 +12,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
@@ -142,12 +143,26 @@ void kernel_main() {
         compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
         reconfig_data_format(dfb::x2_merge, dfb::zero);
         pack_reconfig_data_format(dfb::out_final);
-        add_init(dfb::x2_merge, dfb::zero, true);
+        // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
+        // add_tiles would pull each through SrcA/SrcB and round it to TF32.
+        if constexpr (unpack_fp32_active) {
+            copy_tile_to_dst_init_short(dfb::x2_merge);
+            add_binary_tile_init();
+        } else {
+            add_init(dfb::x2_merge, dfb::zero, true);
+        }
 
         tile_regs_acquire();
-        // Add all the column's partials together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+        if constexpr (unpack_fp32_active) {
+            copy_tile(dfb::x2_merge, 0, dst0);
+            for (uint32_t i = 1; i < num_cores_y; i++) {
+                copy_tile(dfb::x2_merge, i, dst0 + 1);
+                add_binary_tile(dst0, dst0 + 1, dst0);
+            }
+        } else {
+            for (uint32_t i = 0; i < num_cores_y; i++) {
+                add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+            }
         }
         tile_regs_commit();
 
