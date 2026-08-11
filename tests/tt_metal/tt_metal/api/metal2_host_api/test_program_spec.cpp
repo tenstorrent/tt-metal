@@ -4153,23 +4153,8 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
-// std::array::operator== is not constexpr until C++20; walk elements instead.
-constexpr bool compile_time_varargs_match_expected() {
-    constexpr auto varargs = get_compile_time_varargs();
-    constexpr std::array<uint32_t, 3> expected = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
-    if (varargs.size() != expected.size()) {
-        return false;
-    }
-    for (uint32_t i = 0; i < varargs.size(); ++i) {
-        if (varargs[i] != expected[i]) {
-            return false;
-        }
-    }
-    return true;
-}
 void kernel_main() {
     static_assert(get_num_compile_time_varargs() == 3u);
-    static_assert(compile_time_varargs_match_expected());
     static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
     static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
     static_assert(get_compile_time_vararg<2>() == 0x11112222u);
@@ -4197,7 +4182,6 @@ TEST_F(ProgramSpecTestGen1, EmptyCompileTimeVarargsReadableFromKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     static_assert(get_num_compile_time_varargs() == 0u);
-    static_assert(get_compile_time_varargs().size() == 0u);
 }
 )"};
     // Default / empty compile_time_varargs — accessors must still be emitted and compile.
@@ -4245,15 +4229,11 @@ TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 constexpr bool compile_time_varargs_are_iota() {
-    constexpr auto varargs = get_compile_time_varargs();
     if (get_num_compile_time_varargs() != 1024u) {
         return false;
     }
-    if (varargs.size() != 1024u) {
-        return false;
-    }
-    for (uint32_t i = 0; i < varargs.size(); ++i) {
-        if (varargs[i] != i) {
+    for (uint32_t i = 0; i < get_num_compile_time_varargs(); ++i) {
+        if (get_compile_time_vararg(i) != i) {
             return false;
         }
     }

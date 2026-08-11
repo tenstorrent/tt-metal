@@ -333,22 +333,14 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << crta_layout.vararg_section_offset << " + idx); }\n";
 
     // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
-    // Four accessors:
+    // Three accessors:
     //   1. get_num_compile_time_varargs() — baked prefix length
-    //   2. get_compile_time_varargs() — std::array by value (copy of the prefix)
-    //   3. get_compile_time_vararg<idx>() — template index (with bounds check)
-    //   4. get_compile_time_vararg(idx) — function-parameter index
+    //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
     content << fmt::format(
         R"(
 FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
     return {0}u;
-}}
-FORCE_INLINE constexpr std::array<uint32_t, {0}u> get_compile_time_varargs() {{
-    std::array<uint32_t, {0}u> out{{}};
-    for (uint32_t i = 0; i < get_num_compile_time_varargs(); ++i) {{
-        out[i] = kernel_compile_time_args[i];
-    }}
-    return out;
 }}
 template <uint32_t idx>
 FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
