@@ -849,6 +849,54 @@ constexpr uint32_t SYNC_DBG_TAG_DOORBELL = 0xC1;
 constexpr uint32_t STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET = (297u - 270u) * 4u;
 constexpr uint32_t STREAM_FREE_SLOTS_MASK = (1u << 17) - 1u;  // MEM_WORD_ADDR_WIDTH, same mask get_ptr_val uses
 
+// [ROUTER PROBE AT THE WEDGE] Read the ROUTER's debug slot from the worker, over NoC, while the
+// barrier is actually stuck.
+//
+// Every router-side number in this investigation so far (the send gate, min-free-since-TX, the polled
+// stream id) comes from the host's SLOT dump, which the hang handler prints minutes BEFORE the round-1
+// barrier develops. So we have precise worker-side data at the moment of failure and only pre-failure
+// snapshots of the router. This closes that gap without needing a separate host tool: the worker is
+// already doing a remote NoC read into its scratch region, so point it at the router's debug slot too.
+//
+// Three questions, answered from the same 104-byte read:
+//   NOCXY   -- which core is this connection actually pointed at, and is a router even running there
+//              (word[0] carries the 0x5E5E.... resume-phase signature; 0 means no router on that core)
+//   RFREE   -- what free-slot value does the ROUTER see (word[25]), vs the 31 the worker sees
+//   RGATE   -- the send gate (word[16]): receiver_has_space_for_packet / can_send / has_unsent
+//
+// If RFREE reads 32 while the worker reads 31, the two sides genuinely disagree about one register.
+// If RFREE reads 31, the router sees the packet and the blocker is the gate -> read RGATE.
+// If word[0] is 0, nothing is running on the core we are writing to.
+constexpr uint32_t SYNC_DBG_TAG_NOCXY = 0xC2;
+constexpr uint32_t SYNC_DBG_TAG_RFREE = 0xC3;
+constexpr uint32_t SYNC_DBG_TAG_RGATE = 0xC4;
+
+// MUST track MEM_AERISC_RESUME_PHASE_BASE in dev_mem_map.h. The region grows DOWNWARD from
+// MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so enlarging MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
+// The host-side SLOT dump hardcodes the same value with the same warning (test_tt_fabric.cpp).
+constexpr uint32_t ERISC_DBG_SLOT_BASE = 0x6F1F8;
+constexpr uint32_t ERISC_DBG_SLOT_BYTES = 104;  // MEM_AERISC_RESUME_PHASE_SIZE
+constexpr uint32_t ERISC_DBG_WORD_PHASE = 0;
+constexpr uint32_t ERISC_DBG_WORD_GATE = 16;
+constexpr uint32_t ERISC_DBG_WORD_FREE = 25;
+
+// NOC ALIGNMENT. 0x6F1F8 is only 8-byte aligned and 104 is not a multiple of the NOC alignment, so
+// reading [base, base+104) directly is rejected:
+//   "tried to unicast read 104 bytes ... L1[addr=0x0006f1f8] (invalid address alignment)"
+// which aborted the whole run. So read an aligned superset instead: start at the 32-byte boundary at
+// or below the slot, and read a 32-byte multiple that covers all 104 bytes. Source and destination
+// must share the same alignment, so the destination is bumped up to a 32-byte boundary too.
+constexpr uint32_t ERISC_DBG_NOC_ALIGN = 32;
+constexpr uint32_t ERISC_DBG_READ_BASE = ERISC_DBG_SLOT_BASE & ~(ERISC_DBG_NOC_ALIGN - 1);
+constexpr uint32_t ERISC_DBG_READ_SKEW = ERISC_DBG_SLOT_BASE - ERISC_DBG_READ_BASE;  // bytes to skip
+constexpr uint32_t ERISC_DBG_READ_BYTES =
+    ((ERISC_DBG_READ_SKEW + ERISC_DBG_SLOT_BYTES + ERISC_DBG_NOC_ALIGN - 1) / ERISC_DBG_NOC_ALIGN) *
+    ERISC_DBG_NOC_ALIGN;
+static_assert(ERISC_DBG_READ_BASE % ERISC_DBG_NOC_ALIGN == 0, "read base must be NOC aligned");
+static_assert(ERISC_DBG_READ_BYTES % ERISC_DBG_NOC_ALIGN == 0, "read size must be NOC aligned");
+static_assert(ERISC_DBG_READ_SKEW % 4 == 0, "slot must stay word aligned within the read");
+static_assert(ERISC_DBG_READ_BYTES <= 256, "must fit the debug_scratch region carved by the host");
+
 FORCE_INLINE void sync_dbg_push_addr([[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t addr) {
     WATCHER_RING_BUFFER_PUSH((tag << 24) | (addr & 0xFFFFFF));
 }
@@ -1016,10 +1064,60 @@ struct LineSyncConfig {
         }
     }
 
-    void global_sync_finish(uint8_t sync_iter) {
+    // [ROUTER PROBE AT THE WEDGE] Pull the router's debug slot over NoC and push the three words that
+    // matter. See SYNC_DBG_TAG_NOCXY above. Costs 3 ring entries per call, so callers must bound it.
+    void probe_router(uint8_t sync_iter, uint32_t debug_scratch_addr) {
+        const uint8_t noc = get_fabric_worker_noc();
+        auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
+        // Aligned superset read; see ERISC_DBG_NOC_ALIGN above. The destination is bumped to the same
+        // alignment as the source, and the slot itself starts ERISC_DBG_READ_SKEW bytes into it.
+        const uint32_t dst = (debug_scratch_addr + ERISC_DBG_NOC_ALIGN - 1) & ~(ERISC_DBG_NOC_ALIGN - 1);
+        const uint64_t slot_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, ERISC_DBG_READ_BASE, noc);
+        noc_async_read(slot_noc_addr, dst, ERISC_DBG_READ_BYTES, noc);
+        noc_async_read_barrier(noc);
+        invalidate_l1_cache();
+        auto* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + ERISC_DBG_READ_SKEW);
+
+        // Which core, and is a router alive on it? word[0] is 0x5E5E00xx when one is running, 0 if not.
+        const uint32_t phase = w[ERISC_DBG_WORD_PHASE];
+        sync_dbg_push(
+            SYNC_DBG_TAG_NOCXY,
+            sync_iter,
+            (static_cast<uint32_t>(conn->edm_noc_x) << 12) | (static_cast<uint32_t>(conn->edm_noc_y) << 8) |
+                (phase & 0xFF));
+        sync_dbg_push(SYNC_DBG_TAG_RFREE, sync_iter, w[ERISC_DBG_WORD_FREE]);
+        sync_dbg_push(SYNC_DBG_TAG_RGATE, sync_iter, w[ERISC_DBG_WORD_GATE]);
+    }
+
+    void global_sync_finish(uint8_t sync_iter, uint32_t debug_scratch_addr = 0) {
+        // [ROUTER PROBE AT THE WEDGE] Sample the router twice while this barrier is stuck, before
+        // handing off to the blocking wait. The delays are large and growing so both samples land well
+        // inside the wedge rather than during normal completion; in a healthy round the barrier is
+        // already satisfied and we skip out without spending ring entries.
+        const uint32_t target = line_sync_val * (sync_iter + 1);
+        if (debug_scratch_addr != 0) {
+            uint32_t delay = 1u << 24;
+            for (uint32_t p = 0; p < 2; p++) {
+                uint32_t spins = 0;
+                while (spins < delay) {
+                    invalidate_l1_cache();
+                    if (*line_sync_ptr >= target) {
+                        break;
+                    }
+                    spins++;
+                }
+                invalidate_l1_cache();
+                if (*line_sync_ptr >= target) {
+                    break;
+                }
+                probe_router(sync_iter, debug_scratch_addr);
+                delay <<= 4;
+            }
+        }
+
         // sync wait
         // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait_min().
-        sync_dbg_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1), SYNC_DBG_TAG_GLOBAL_ENTER, sync_iter);
+        sync_dbg_wait_min(line_sync_ptr, target, SYNC_DBG_TAG_GLOBAL_ENTER, sync_iter);
     }
 
 private:
@@ -2486,7 +2584,7 @@ struct SyncKernelConfig {
         }
 
         // Wait for acks (only need one config to check)
-        line_sync_configs()[0].global_sync_finish(sync_iter);
+        line_sync_configs()[0].global_sync_finish(sync_iter, memory_map.get_debug_scratch_address());
 
         // Close all sync connections
         sync_connections.close_all();

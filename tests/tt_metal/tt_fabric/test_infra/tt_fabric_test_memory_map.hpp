@@ -294,7 +294,9 @@ struct SenderMemoryMap {
         // [DEBUG SCRATCH] one alignment unit, carved before payload_buffers so it does not disturb
         // any existing region's address (payload_buffers is sized from whatever is left).
         uint32_t debug_scratch_base = current_addr;
-        uint32_t debug_scratch_size = l1_alignment;
+        // Big enough for the whole 104-byte ERISC debug slot (MEM_AERISC_RESUME_PHASE_SIZE), which the
+        // sync core reads over NoC to sample router-side state at the wedge; rounded up for alignment.
+        uint32_t debug_scratch_size = 256;
         current_addr += debug_scratch_size;
         debug_scratch = BaseMemoryRegion(debug_scratch_base, debug_scratch_size);
 
