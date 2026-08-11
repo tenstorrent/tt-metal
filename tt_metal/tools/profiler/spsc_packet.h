@@ -42,7 +42,7 @@
  * prog_id(payload32) in one packet. Emitted by the throwaway producer_common.h stand-in. The REAL
  * kernel_profiler path does NOT use this -- it splits identity into three separate stickies below
  * (PROG / TIMER produced at different stages, SRC injected by the reader). Kept so the untouched
- * profstream/the synthetic drain benchmark synthetic benchmark keeps decoding. */
+ * synthetic drain benchmark keeps decoding. */
 #define PP_STICKY_META 6u
 /* STICKY_SRC: (core,risc) identity, injected by the READER into the LINEARIZED stream whenever it
  * switches to a new source ring. Everything after it (until the next STICKY_SRC) belongs to this lane.

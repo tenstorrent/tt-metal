@@ -14,7 +14,8 @@
 //   4 MiB each, multi-window)  ->  N continuous drain threads (pages -> spsc_decode -> WorkerZonePacket)
 //   ->  RealtimeProfilerTracyHandler.
 // Shares the marker wire format with the drain kernel through spsc_marker_decode.hpp, so host and device
-// can never drift. Booted once at MeshDevice bring-up (resident); P_STOP at teardown.
+// can never drift. Booted once at MeshDevice bring-up (resident); at teardown the host writes 1 to the
+// drainer's stop word to quiesce it, then 2 to release its NIU (no reset).
 #pragma once
 
 #include <atomic>
@@ -67,7 +68,8 @@ struct PerfDebugRec {
 };
 
 // One PerfDebugProfiler per MeshDevice. Constructing it boots the drainer drainer on every eligible local
-// Blackhole device and starts the drain threads; destroying it (or calling stop()) signals P_STOP, joins
+// Blackhole device and starts the drain threads; destroying it (or calling stop()) writes the quiesce
+// value to each drainer's stop word, joins
 // the threads, and leaves the resident idle FW alone (no reset).
 class PerfDebugProfiler {
 public:
@@ -77,7 +79,7 @@ public:
     PerfDebugProfiler(const PerfDebugProfiler&) = delete;
     PerfDebugProfiler& operator=(const PerfDebugProfiler&) = delete;
 
-    // Stop draining: set P_STOP on every device, wait for the drainers to quiesce, join the host threads.
+    // Stop draining: write 1 to every drainer's stop word, wait for them to quiesce, join the host threads.
     // Idempotent. The idle FW stays resident (no reset).
     void stop();
 
@@ -221,7 +223,6 @@ private:
     struct DeviceCtx {
         uint32_t chip_id = 0;
         std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];
-        uint64_t params_addr = 0;  // profzone MBOX_PARAMS (P_STOP at teardown)
         uint32_t nl = 0;           // lanes = num_cores * NRISC
         // ---- DRISC drainer ----
         // The program stays alive for the life of the profiler: its kernel is still running. It was

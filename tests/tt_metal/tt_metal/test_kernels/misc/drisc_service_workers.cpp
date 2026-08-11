@@ -12,7 +12,7 @@
 //   DRAIN for each core with work, one 10,240 B whole-core read of the five rings
 //   HEAD  publish the five advanced heads in ONE 20 B write -- this is what unblocks the producer
 //
-// Ordering follows X280: poll the control vector, then read the rings. profzone.c does the same --
+// Ordering follows X280: poll the control vector, then read the rings. X280 profzone FW does the same --
 // five tails in one 20 B vector load, then a bulk read of the rings only.
 //
 // This is NOT because a fused read of the whole 10,496 B span would tear. It would not: the control

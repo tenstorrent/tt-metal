@@ -961,7 +961,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_->shutdown();
         realtime_profiler_.reset();
     }
-    // Perf-debug (drainer) profiler: its dtor sets P_STOP + joins the drain threads (no reset).
+    // Perf-debug (drainer) profiler: its dtor quiesces each drainer + joins the drain threads (no reset).
     if (perf_debug_profiler_) {
         perf_debug_profiler_.reset();
     }

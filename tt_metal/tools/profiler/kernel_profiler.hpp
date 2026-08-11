@@ -321,7 +321,7 @@ inline __attribute__((always_inline)) void publish_tail() {
         // is write-through, but the marker-word stores and this TAIL store can still reach L1 SRAM out
         // of order, so a remote reader could observe the bumped TAIL before the words land and read a
         // stale/empty slot. Order the marker stores BEFORE the TAIL publish so TAIL is a true commit
-        // point (paired with the consumer's wait-for-valid in profzone.c -- neither is sufficient
+        // point (paired with the drain kernel's wait-for-valid -- neither is sufficient
         // alone: this fence prevents stale-but-valid reads, the consumer wait covers not-yet-visible).
         asm volatile("fence" ::: "memory");
         profiler_control_buffer[TAIL_INDEX] = wIndex;

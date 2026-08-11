@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr uint32_t kReadsInFlight = get_compile_time_arg_val(1);
     constexpr uint32_t kRingBase = get_compile_time_arg_val(2);
     constexpr uint32_t kResultsAddr = get_compile_time_arg_val(3);
-    // Poll mode: after each barrier, examine the landed control vectors the way profstream.c's adaptive
+    // Poll mode: after each barrier, examine the landed control vectors the way X280 profstream FW's adaptive
     // switch does -- sum (tail - head) across the 5 RISC tails per core. Mirrors
     //   read_tails(cbase + 5u*4, tails); for (r) full += tails[r] - heads[c*NRISC + r];
     // so the measured per-core cost includes the CPU work a real poll pays, not just the NoC read.
@@ -47,7 +47,7 @@ void kernel_main() {
     // it measures the transport honestly, isolating "how deep can the NIU usefully go" from "how much
     // buffer do we have". Only ever use kRingSlots < kReadsInFlight for bandwidth measurement.
     constexpr uint32_t kRingSlots = get_compile_time_arg_val(5);
-    constexpr uint32_t kTailWordOffset = 5;  // profstream.c: tails live at word 5 of the control vector
+    constexpr uint32_t kTailWordOffset = 5;  // = kernel_profiler::SPSC_RING_TAIL_0, the first of the 5 per-RISC tails in the control vector
     constexpr uint32_t kNumRisc = 5;
     static_assert(kRingSlots >= 1, "need at least one landing slot");
     static_assert(!kPollExamine || kRingSlots >= kReadsInFlight, "poll-examine needs one slot per read");

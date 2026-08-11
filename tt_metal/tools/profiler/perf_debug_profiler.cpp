@@ -2225,7 +2225,7 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
     bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
     auto backoff = std::chrono::microseconds(writer_backoff_us());
-    // Drain-to-empty on stop: stop() sets P_STOP first, so the drainer stops producing; keep reading until every
+    // Drain-to-empty on stop: stop() writes the quiesce value first, so the drainer stops producing; keep reading until every
     // socket has been empty for a sustained window, else the tail of the run is lost. Deadline backstops it.
     constexpr uint32_t kQuiesceEmpties = 200;
     std::chrono::steady_clock::time_point drain_deadline{};

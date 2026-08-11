@@ -1010,7 +1010,7 @@ protected:
     }
 
     // Round-robin control-vector poll: how long one DRISC takes to sweep every core's 64-word
-    // (256 B) control vector -- the "is there anything to drain" scan that precedes profstream.c's
+    // (256 B) control vector -- the "is there anything to drain" scan that precedes X280 profstream FW's
     // adaptive bulk decision. Reports the per-core cost and the full-grid sweep period, both from
     // the DRISC's own wall clock, plus the measured DRISC clock so those numbers stand on a
     // device-side measurement rather than on the host's aiclk reading.
@@ -1060,7 +1060,7 @@ protected:
 
 // Round-robin poll of every core's 64-word (256 B) profiler control vector -- the scan that decides
 // whether to bulk-drain. Two variants per depth: read-only, and read + the adaptive switch's tail-delta
-// arithmetic (profstream.c: full += tails[r] - heads[c*NRISC+r] over 5 RISCs), so the difference isolates
+// arithmetic (X280 profstream FW: full += tails[r] - heads[c*NRISC+r] over 5 RISCs), so the difference isolates
 // what the CPU-side poll work costs on top of the NoC read.
 //
 // All timings come from the DRISC's own wall clock (RISCV_DEBUG_REG_WALL_CLOCK). The kernel also times
@@ -1699,7 +1699,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCTwoTierDrainToHost) {
     set_niu_mode(0);
 }
 
-// The complete drainer: monitor the 64-word control vector on every core, run profstream.c's adaptive
+// The complete drainer: monitor the 64-word control vector on every core, run X280 profstream FW's adaptive
 // threshold, whole-core-read only the cores that trip it, and push those to the host.
 //
 // The host sets each core's tails so a chosen number trip ADAPT_THRESH. Hot counts are multiples of
@@ -2773,7 +2773,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCWholeCoreDepthBeyondBuffer) {
 }
 
 // The 8 us kernel-train question, measured on the DRISC: a full adaptive sweep (poll every core,
-// run profstream.c's threshold decision, whole-core bulk read for each core that trips it) against
+// run X280 profstream FW's threshold decision, whole-core bulk read for each core that trips it) against
 // the 8 us budget the X280 sustained.
 //
 // The host sets each core's control-vector tails so a chosen number of cores trip ADAPT_THRESH.

@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared host-side decoder for the drainer `profzone` 2-word + split-sticky stream.
+// Shared host-side decoder for the DRISC drainer's 2-word + split-sticky stream
+// (producer: tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp).
 //
 // This is the SINGLE SOURCE OF TRUTH for the host-side wire decode, so the standalone benchmark
 // (the standalone drain harness) and the production RealtimeProfilerManager can never drift apart on the marker
-// format (the drift -- manager decoding a stale 4-word layout while profzone emits the 2-word linearized
-// stream -- is exactly what this module exists to prevent).
+// format (the drift -- manager decoding a stale 4-word layout while the drainer emits the 2-word
+// linearized stream -- is exactly what this module exists to prevent).
 //
 // The wire is a self-framed variable-length stream of packets (prof_packet.h):
 //   STICKY_SRC   (1 word): sets the CURRENT lane (reader-injected on each source switch)
@@ -38,7 +39,8 @@ static_assert(
 namespace tt::tt_metal::profiler {
 
 // Worker per-RISC SPSC ring depth (words) and RISC count -- MUST match the producer (kernel_profiler.hpp
-// RING_CAPACITY / profstream.c) so the BULKCORE sub-ring walk indexes correctly.
+// RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so the BULKCORE sub-ring walk indexes
+// correctly.
 inline constexpr uint32_t kSpscRingCap = 512;
 inline constexpr uint32_t kSpscNRiscDecode = 5;
 
@@ -78,10 +80,6 @@ struct SpscDecodeState {
 // device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
 // No-op default for the optional drainer hart-zone sink (see the PP_drainer_ZONE branch below).
-struct ProfzoneIgnoredrainer {
-    void operator()(uint32_t /*hart*/, uint32_t /*meta*/, uint64_t /*rdcycle*/) const {}
-};
-
 // No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
 // unchanged. `type` is the wire type: PP_DATA ids are compile-time tags and can be name-resolved, PP_EVENT
 // ids are runtime values and must NOT be.
