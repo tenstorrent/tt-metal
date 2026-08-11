@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 import pytest
@@ -16,6 +16,7 @@ from helpers.golden_generators import (
     BinarySFPUGolden,
     BroadcastGolden,
     get_golden_generator,
+    quantize_input_to_unpack_format,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
@@ -23,6 +24,12 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+)
+from helpers.sfpu_domains import (
+    _OP_DOMAIN_REGISTRY,
+    _SFPU_BINARY_OPS,
+    exclude_undefined_pair,
+    for_op,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -37,6 +44,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
@@ -66,75 +74,260 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
 # =============================================================================
 # Shared crafted-stimuli helpers
 #
-# Several predicate/paired ops (mask, isclose, eq/ne) need operand tiles filled
-# from *different* per-position data, which the default random sweep can't
-# express. These builders produce those StimuliSpecs. (logsigmoid also lives
+# Several predicate/paired ops (mask, isclose, eq/ne, lt/gt/le/ge) need operand
+# tiles filled from *different* per-position data, which the default random sweep
+# can't express. These builders produce those StimuliSpecs. (logsigmoid also lives
 # here, but it is a plain single-distribution spec that never reads in1.)
 # =============================================================================
 
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
+_ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
-def _paired_two_tile_spec(a_face, b_face):
-    """Fill operand tile0 (in0) and tile1 (in1) from *different* per-position data.
+def _pair_operand_specs(spec_A, spec_B, input_dimensions):
+    """Interleave two per-operand specs across *every* tile pair in the buffer.
 
-    The harness applies one per-face distribution to every face, so a plain callable makes
-    in0 == in1. Keep `a_face` for the tile0 faces (0..3) and override the tile1 faces (4..7)
-    with `b_face`, so position p pairs as (a_face[p], b_face[p]); tilize preserves it.
+    The kernel reads operand 0 from the even tile of each pair and operand 1 from the odd
+    one, so per-operand stimuli have to alternate every 4 faces for the whole buffer.
+    The list must cover the real tile count: `face_specs` is applied positionally and is
+    not cycled, so a short list leaves later pairs with operand 0's distribution on both
+    sides. Entries for operand 0's faces stay None to fall through to the base spec.
     """
-    return StimuliSpec(
-        distribution=a_face,
-        seed=0,
-        face_specs=[None] * _FACES_PER_TILE
-        + [StimuliSpec(distribution=b_face, seed=0)] * _FACES_PER_TILE,
+    tiles = (input_dimensions[0] * input_dimensions[1]) // _ELEMENTS_PER_TILE
+    if tiles % 2:
+        raise ValueError(
+            f"SFPU binary needs a whole number of tile pairs, got {tiles} tiles "
+            f"from input_dimensions={input_dimensions}"
+        )
+    face_specs = ([None] * _FACES_PER_TILE + [spec_B] * _FACES_PER_TILE) * (tiles // 2)
+    return replace(spec_A, face_specs=face_specs)
+
+
+def _face_spec(dist):
+    """A per-face callable distribution as a StimuliSpec, with a fixed seed."""
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+def _positions_and_ramp(size):
+    """The (positions, 1..8 ramp) pair every paired builder below is built from.
+
+    `size` is whatever the generator passes per face (256 for a 16x16 face), so the
+    builders never assume a face size. The ramp repeats 1..8: non-zero everywhere, so
+    mask's passthrough is detectable, and of order 1, so the +/-1.0 and +2.0 offsets the
+    other operand adds are unambiguous against any rounding.
+    """
+    positions = torch.arange(size, dtype=torch.float32)
+    return positions, 1.0 + (positions % 8)
+
+
+# =============================================================================
+# Which ops take their domain from _OP_DOMAIN_REGISTRY
+#
+# Float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run through
+# test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse to
+# {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
+# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
+#
+# Everything else this suite drives is declared too -- in _UNREGISTERED_BINARY_OPS if it
+# has no registry entry, or _INT_ONLY_REGISTERED_OPS if it has one that integer stimuli
+# never consult -- so every op's domain decision is written down rather than defaulted to.
+# =============================================================================
+
+_REGISTRY_DOMAIN_OPS = frozenset(
+    {
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
+    }
+)
+
+# Ops this suite drives that have no _OP_DOMAIN_REGISTRY entry at all, and so keep the
+# format default. Not a TODO list — several are int-only or carry crafted stimuli — but it
+# is checked below so that registering a domain for one of them shows up here as a diff
+# rather than silently changing what that op is fed.
+_UNREGISTERED_BINARY_OPS = frozenset(
+    {
+        MathOperation.SfpuAtan2,
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,
+        MathOperation.SfpuBinaryRemainder,
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuBitwiseOr,
+        MathOperation.SfpuBitwiseXor,
+        MathOperation.SfpuDivInt32,
+        MathOperation.SfpuDivInt32Floor,
+        MathOperation.SfpuElwEq,
+        MathOperation.SfpuElwGe,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwNe,
+        MathOperation.SfpuEqInt,
+        MathOperation.SfpuFmodInt32,
+        MathOperation.SfpuGcd,
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuLcm,
+        MathOperation.SfpuLogsigmoid,
+        MathOperation.SfpuMask,
+        MathOperation.SfpuMaxInt32,
+        MathOperation.SfpuMaxUint32,
+        MathOperation.SfpuMinInt32,
+        MathOperation.SfpuMinUint32,
+        MathOperation.SfpuMulInt32,
+        MathOperation.SfpuNeInt,
+        MathOperation.SfpuRemainderInt32,
+        MathOperation.SfpuRemainderUint32,
+        MathOperation.SfpuRsubInt32,
+    }
+)
+
+# Registered ops this suite only ever drives under an integer format, where sfpu_binary's
+# `not is_integer()` conjunct blocks registry routing regardless of membership (a float
+# domain like uniform(-1, 1) would collapse to {-1, 0, 1} under Int32). They belong in
+# neither set above: not rerouted, but not unregistered either. Declared so the
+# completeness check below can account for every op the file drives.
+_INT_ONLY_REGISTERED_OPS = frozenset(
+    {
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    }
+)
+
+_DECLARED_BINARY_OPS = (
+    _REGISTRY_DOMAIN_OPS | _UNREGISTERED_BINARY_OPS | _INT_ONLY_REGISTERED_OPS
+)
+
+
+def _assert_domain_sets_consistent():
+    """The rerouted ops must be registered, the fallback ops must not be, and every
+    binary SFPU op must sit in exactly one of the three sets.
+
+    All three halves fail quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no
+    registry entry raises deep inside the driver mid-sweep; an op that gains a domain
+    while sitting in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default;
+    and an op in none of the sets is the same silent default with nothing even claiming
+    responsibility for it -- which is how the shift ops went 39-declared-against-42-driven
+    until this check existed.
+    """
+    missing = sorted(
+        op.name
+        for op in _REGISTRY_DOMAIN_OPS | _INT_ONLY_REGISTERED_OPS
+        if op not in _OP_DOMAIN_REGISTRY
+    )
+    assert not missing, (
+        "these ops are declared as registered but have no entry in "
+        f"sfpu_domains._OP_DOMAIN_REGISTRY: {missing}"
+    )
+    now_registered = sorted(
+        op.name for op in _UNREGISTERED_BINARY_OPS if op in _OP_DOMAIN_REGISTRY
+    )
+    assert not now_registered, (
+        "these ops now have a domain in _OP_DOMAIN_REGISTRY but are still on the "
+        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops), "
+        "_INT_ONLY_REGISTERED_OPS (integer-only ops), or drop them from "
+        f"_UNREGISTERED_BINARY_OPS: {now_registered}"
+    )
+    for left, right in (
+        ("_REGISTRY_DOMAIN_OPS", "_UNREGISTERED_BINARY_OPS"),
+        ("_REGISTRY_DOMAIN_OPS", "_INT_ONLY_REGISTERED_OPS"),
+        ("_UNREGISTERED_BINARY_OPS", "_INT_ONLY_REGISTERED_OPS"),
+    ):
+        overlap = globals()[left] & globals()[right]
+        assert not overlap, (
+            f"{left} and {right} must be disjoint, but share: "
+            f"{sorted(op.name for op in overlap)}"
+        )
+    # SfpuAddTopRow is the one member of the binary family that never reaches
+    # sfpu_binary (test_sfpu_binary_add_top_row builds its own stimuli), so it has no
+    # domain decision to declare.
+    undeclared = sorted(
+        op.name
+        for op in _SFPU_BINARY_OPS
+        - {MathOperation.SfpuAddTopRow}
+        - _DECLARED_BINARY_OPS
+    )
+    assert not undeclared, (
+        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this "
+        "suite's three domain sets, so nothing states what they are fed: "
+        f"{undeclared}"
     )
 
 
-def _mask_stimuli_spec():
+_assert_domain_sets_consistent()
+
+
+def _mask_stimuli_specs():
     # mask zeroes data (in0) where mask (in1) is 0. Data and mask are separate tiles: keep
     # data strictly non-zero (1..8) and zero ~1/3 of the mask, so a passthrough kernel fails.
     def data_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8, always non-zero
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8, always non-zero
 
     def mask_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
+        j, _ = _positions_and_ramp(size)
         return torch.where(j % 3 == 0, 0.0, 1.0).to(dtype)  # ~1/3 exact zeros
 
-    return _paired_two_tile_spec(data_face, mask_face)
+    return _face_spec(data_face), _face_spec(mask_face)
 
 
-def _isclose_stimuli_spec():
+def _isclose_stimuli_specs():
     # isclose is a predicate on paired operands (a = tile0, b = tile1). Fill the two tiles
     # from different data so even p -> identical (isclose 1), odd p -> differ by 2.0
     # (isclose 0); the 2.0 gap dwarfs the tolerance so the decision is unambiguous.
     def a_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8, strictly positive
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8, strictly positive
 
     def b_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        base = 1.0 + (j % 8)
-        return (base + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
+        j, ramp = _positions_and_ramp(size)
+        return (ramp + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
 
-    return _paired_two_tile_spec(a_face, b_face)
+    return _face_spec(a_face), _face_spec(b_face)
 
 
-def _eq_ne_stimuli_spec():
+def _eq_ne_stimuli_specs():
     # Eq/Ne compare paired operands (a = tile0, b = tile1). Fill the two tiles so even p ->
     # identical (Eq 1), odd p -> differ by 1.0 (Eq 0), a clean ~50/50 mix.
     def a_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8
 
     def b_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        base = 1.0 + (j % 8)
-        return (base + torch.where(j % 2 == 0, 0.0, 1.0)).to(dtype)
+        j, ramp = _positions_and_ramp(size)
+        return (ramp + torch.where(j % 2 == 0, 0.0, 1.0)).to(dtype)
 
-    return _paired_two_tile_spec(a_face, b_face)
+    return _face_spec(a_face), _face_spec(b_face)
+
+
+def _comparison_stimuli_specs():
+    """Three-way paired stimuli for lt/gt/le/ge: a < b, a == b, a > b in equal thirds.
+
+    Independent random draws land arbitrarily close together, and a near-tie the kernel
+    and the total-order golden round differently reads as a failure. The gaps here are
+    +/-1.0 against operands of order 1, far wider than any rounding, so every element's
+    verdict is unambiguous. The exact-equality third is the point: it is the only input
+    where lt/gt and le/ge disagree, and a random sweep essentially never produces it.
+    """
+
+    def a_face(size, dtype, generator):
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8
+
+    def b_face(size, dtype, generator):
+        j, ramp = _positions_and_ramp(size)
+        # j % 3 == 0 -> equal, 1 -> b greater (a < b), 2 -> b smaller (a > b)
+        delta = torch.where(j % 3 == 0, 0.0, torch.where(j % 3 == 1, 1.0, -1.0))
+        return (ramp + delta).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
 
 
 def _logsigmoid_stimuli_spec():
@@ -163,12 +356,55 @@ def sfpu_binary(
     broadcast_type=None,
     src_A_override=None,
     spec_A=None,
+    spec_B=None,
     twos_complement=False,
+    input_dimensions=None,
 ):
+
+    # Every op driven through here must have declared what it is fed. The collection-time
+    # check above covers the registered ops; this covers the rest, so a new op added to a
+    # `mathop` list and to neither set fails loudly instead of silently inheriting
+    # generate_stimuli's positive-only uniform(0.1, 1.1).
+    assert mathop in _DECLARED_BINARY_OPS, (
+        f"{mathop.name} is driven through sfpu_binary but appears in none of "
+        "_REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / _INT_ONLY_REGISTERED_OPS; "
+        "add it to the set that describes the domain it should get"
+    )
+
+    # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
+    # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
+    # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
+    torch.manual_seed(0)
 
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
-    input_dimensions = [128, 128] if formats.input_format.is_32_bit() else [256, 128]
+    if input_dimensions is None:
+        input_dimensions = (
+            [128, 128] if formats.input_format.is_32_bit() else [256, 128]
+        )
+
+    # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
+    # so there is no spec_B knob in generate_stimuli — the two specs are interleaved into one
+    # spec's face_specs here, where the tile count is known.
+    #
+    # Ops in _REGISTRY_DOMAIN_OPS take their domain from _OP_DOMAIN_REGISTRY, which is what
+    # makes the registered undefined-range holes (SfpuElwdiv divisor, SfpuXlogy B,
+    # SfpuElwpow A) reachable. Unlike the unary sweep, most ops here are not registered; a
+    # missing entry falls back to generate_stimuli's format default rather than raising.
+    if (
+        spec_A is None
+        and mathop in _REGISTRY_DOMAIN_OPS
+        and not formats.input_format.is_integer()
+    ):
+        specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
+        spec_A, spec_B = specs.spec_A, specs.spec_B
+
+    if spec_B is not None:
+        if spec_A is None:
+            raise ValueError(
+                "spec_B requires spec_A (it fills the odd tile of each pair)"
+            )
+        spec_A = _pair_operand_specs(spec_A, spec_B, input_dimensions)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -188,12 +424,23 @@ def sfpu_binary(
             )
         src_A = override.repeat(src_A.numel() // override.numel())
 
+    # generate_stimuli round-trips Bfp4_b and Bfp2_b stimuli through their pack/unpack
+    # quantization but not Bfp8_b: the Bfp8_b format default only ever draws values that
+    # are already representable (integer 0..2 plus k/16), so nothing needed it. A registry
+    # domain -- or an src_A_override -- draws arbitrary values, and then the device sees
+    # Bfp8_b-quantized operands while the golden still sees the unrounded bf16 originals.
+    # That is the same golden/hardware split Phase 0 fixed inside UnarySFPUGolden. Quantize
+    # the golden's copy only, before broadcast: src_A keeps the unrounded values because
+    # the packer applies exactly this rounding when it writes the buffer to L1.
     golden_src = src_A
+    if formats.input_format == DataFormat.Bfp8_b:
+        golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_src = generate_broadcast_golden(
             broadcast_type,
-            src_A,
+            golden_src,
             (
                 formats.input_format
                 if formats.input_format != DataFormat.Bfp8_b
@@ -308,18 +555,11 @@ def sfpu_binary(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        # Eq/Ne moved to test_sfpu_binary_eq_ne: independent random draws are never
-        # equal here, so the golden collapses to a constant — they need crafted paired
-        # stimuli to exercise the equal branch.
-        # Lt/Gt/Le/Ge intentionally excluded from this random-stimuli sweep: the generated
-        # operands produce near-ties that diverge from the total-order golden (and inflate
-        # the Blackhole smoke runtime past its budget). The sfpi comparison kernels
-        # (calculate_binary_comp_fp32_*) are validated at the ttnn level; see
-        # ckernel_sfpu_binary_comp.h.
-        # MathOperation.SfpuElwLt,
-        # MathOperation.SfpuElwGt,
-        # MathOperation.SfpuElwLe,
-        # MathOperation.SfpuElwGe,
+        # Eq/Ne and Lt/Gt/Le/Ge are excluded from this *random* sweep: independent draws
+        # are never equal (the Eq/Ne golden collapses to a constant) and near-ties that
+        # the kernel and the total-order golden round differently read as failures. They
+        # are covered with crafted paired stimuli by test_sfpu_binary_eq_ne and
+        # test_sfpu_binary_float_comparison below.
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
@@ -432,12 +672,22 @@ def test_sfpu_binary_mask(formats, dest_acc, mathop):
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
+    # One tile pair only, unlike every other op here. calculate_mask hard-codes its
+    # operands -- data at dst_reg[0], mask at dst_reg[32], result in place -- and ignores
+    # the forwarded dst indices, so only the in0=0/in1=1/out=0 placement computes anything
+    # (see calculate_mask_binary in helpers/include/sfpu_test_helpers.h). On a larger
+    # buffer the kernel's `tile += 2` loop would mask tile 0 of each block repeatedly and
+    # pack tiles 2/4/6 out unmasked, against a golden that masks every pair. [64, 32] is
+    # 2 tiles = 1 block = 1 pair, so the only pair driven is the one the adapter supports.
+    spec_A, spec_B = _mask_stimuli_specs()
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         broadcast_type=LlkBroadcastType.None_,
-        spec_A=_mask_stimuli_spec(),
+        spec_A=spec_A,
+        spec_B=spec_B,
+        input_dimensions=[64, 32],
     )
 
 
@@ -460,7 +710,9 @@ def test_sfpu_binary_atan2(formats, dest_acc, mathop):
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=input_output_formats(
+        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+    ),
     mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
@@ -468,13 +720,34 @@ def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=_eq_ne_stimuli_spec(),
-    )
+    spec_A, spec_B = _eq_ne_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+    ),
+    mathop=[
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_float_comparison(formats, dest_acc, mathop):
+    # lt/gt/le/ge(a, b) with a = tile0, b = tile1. Crafted so a third of the elements are
+    # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
+    # comparisons from the non-strict ones, and the wide gaps keep every other element's
+    # verdict independent of rounding. See _comparison_stimuli_specs.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    spec_A, spec_B = _comparison_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 @parametrize(
@@ -487,12 +760,8 @@ def test_sfpu_binary_isclose(formats, dest_acc, mathop):
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=_isclose_stimuli_spec(),
-    )
+    spec_A, spec_B = _isclose_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 @parametrize(
@@ -633,7 +902,8 @@ def test_sfpu_binary_eq_ne_int(formats, dest_acc, mathop):
     # int32 eq/ne via calculate_binary_eq_int (exact 0/1 over the raw INT32 dest bits).
     # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
     # a plain random int sweep would essentially never hit.
-    sfpu_binary(formats, dest_acc, mathop, spec_A=_eq_ne_stimuli_spec())
+    spec_A, spec_B = _eq_ne_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 # =============================================================================
