@@ -6,13 +6,13 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -24,19 +24,19 @@
 
 using namespace ttml;
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+namespace {
 
-class N300UtilsTest : public ::testing::Test {
+const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
+
+}  // namespace
+
+class Mesh1x2UtilsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
 
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+        ttml::autograd::ctx().open_device(kMeshShape);
         ttml::autograd::ctx().set_seed(42);
     }
 
@@ -45,7 +45,7 @@ protected:
     }
 };
 
-TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorReplicateInt32) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<int32_t> test_data = {30, 20, 2};
@@ -59,7 +59,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorReplicateUInt32) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<uint32_t> test_data = {30U, 20U, 2U};
@@ -72,7 +72,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorReplicate) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorReplicate) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<float> test_data = {30.F, 20.F, 2.F};
@@ -85,7 +85,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicate) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorShardAxis3) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorShardAxis3) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -104,7 +104,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3) {
     EXPECT_TRUE(xt::allclose(chunk1, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorShardAxis2) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -123,7 +123,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
     EXPECT_TRUE(xt::allclose(chunk1, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorReplicateAllReduce) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -150,7 +150,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
-TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -174,7 +174,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
-TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorShardAxis2AddScalar) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     float scalar = 10.F;
@@ -193,7 +193,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     EXPECT_TRUE(xt::allclose(chunk1 + scalar, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
+TEST_F(Mesh1x2UtilsTest, TestXTensorShardAxis3Matmul) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -232,7 +232,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
-TEST_F(N300UtilsTest, DropoutDifferentSeed) {
+TEST_F(Mesh1x2UtilsTest, DropoutDifferentSeed) {
     uint32_t dropout_seed1 = 42;
     float scale = 2.0F;
     float prob = 0.5F;
@@ -250,7 +250,7 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
     }
 }
 
-TEST_F(N300UtilsTest, MorehClipGradNorm) {
+TEST_F(Mesh1x2UtilsTest, MorehClipGradNorm) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
@@ -270,7 +270,7 @@ TEST_F(N300UtilsTest, MorehClipGradNorm) {
             ttml::core::ComputeKernelConfig::precise());
     };
     // ensure that moreh clip grad norm works without throwing a
-    // bad_variant_access on n300.
+    // bad_variant_access on a 1x2 mesh.
     EXPECT_NO_THROW(do_it());
     xt::xarray<float> expected_res = xt::full_like(xtensor, 0.05F);
 

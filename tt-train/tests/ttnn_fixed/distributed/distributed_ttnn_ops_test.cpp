@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <memory>
-#include <umd/device/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -13,23 +12,21 @@
 #include "core/device.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace {
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 class TrivialTnnFixedDistributedTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
+
+        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+        ttml::autograd::ctx().open_device(kMeshShape);
     }
 
     void TearDown() override {
