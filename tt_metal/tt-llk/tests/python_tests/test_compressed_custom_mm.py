@@ -40,7 +40,6 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
 from helpers.compressed_utils import FMT_CODE, pack_bfp_tile, unpack_bfp_tile
 from helpers.custom_mm_utils import (
     dense_result_rowmajor,
-    matmul_acc_atol,
     matmul_grid,
     matmul_lofi_golden,
     pack_in0_faces,
@@ -58,7 +57,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import matmul_acc_atol, passed_test
 
 # in0 (SrcB) is bf16; in1 (SrcA) is the BFP-compressed operand. Sweep the three BFP widths the LLK's exponent-section
 # MOP config supports.

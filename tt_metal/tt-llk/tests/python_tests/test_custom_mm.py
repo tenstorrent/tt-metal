@@ -33,7 +33,6 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
 )
 from helpers.custom_mm_utils import (
     dense_result_rowmajor,
-    matmul_acc_atol,
     matmul_grid,
     matmul_lofi_golden,
     pack_in0_faces,
@@ -52,7 +51,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import matmul_acc_atol, passed_test
 
 # LoFi-only, bf16-natural path. Bfp8_b input is also allowed by the LLK; keep the grid small for the advance test.
 CUSTOM_MM_FORMATS = input_output_formats([DataFormat.Float16_b])

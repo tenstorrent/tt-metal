@@ -33,7 +33,6 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
 from helpers.custom_mm_utils import (
     IN0_ROWS_SDPA,
     KT_DIMS,
-    matmul_acc_atol,
     pack_sdpa_dest_tile,
     sdpa_dest_tile_golden,
 )
@@ -53,7 +52,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import matmul_acc_atol, passed_test
 
 # LoFi-only, bf16-natural path.
 SDPA_REUSE_FORMATS = input_output_formats([DataFormat.Float16_b])
