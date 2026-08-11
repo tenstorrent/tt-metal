@@ -23,19 +23,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_model import (
     NUM_AUDIO_TOKENS,
     NUM_TEXT_TOKENS,
     reference_gpt_model,
 )
 from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    """Load the real XTTS-v2 checkpoint state dict once for the whole module."""
-    return load_xtts_state_dict()
 
 
 @pytest.mark.parametrize(

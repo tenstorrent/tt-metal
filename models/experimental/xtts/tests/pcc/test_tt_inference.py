@@ -31,7 +31,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_conditioning import (
     GPT_COND_CHUNK_SEC,
@@ -78,11 +77,6 @@ EVAL_REP_PENALTY = 5.0
 def _stft_mag(wav):
     """Magnitude STFT of a ``[1, 1, T]`` waveform — the perceptual comparison domain."""
     return torch.stft(wav.reshape(1, -1), 1024, 256, window=torch.hann_window(1024), return_complex=True).abs()
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    return load_xtts_state_dict()
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

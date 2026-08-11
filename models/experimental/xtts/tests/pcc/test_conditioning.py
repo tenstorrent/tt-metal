@@ -27,19 +27,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_conditioning import (
     load_reference_audio,
     reference_conditioning,
     wav_to_mel,
 )
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    """Load the real XTTS-v2 checkpoint state dict once for the whole module."""
-    return load_xtts_state_dict()
 
 
 @pytest.mark.parametrize("sample", ["en_sample.wav", "es_sample.wav"])

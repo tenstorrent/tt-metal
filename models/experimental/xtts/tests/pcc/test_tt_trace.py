@@ -38,7 +38,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE, XttsHifiDecoderFull
 from models.experimental.xtts.reference.xtts_mel import SAMPLE_RATE as SPK_SR
@@ -63,11 +62,6 @@ TRACE_MAX_SEQ = 384  # fixed KV-cache length (>= prompt_len ~128 + TRACE_MAX_TOK
 def _stft_mag(wav):
     """Magnitude STFT of a ``[1, 1, T]`` waveform — the perceptual comparison domain."""
     return torch.stft(wav.reshape(1, -1), 1024, 256, window=torch.hann_window(1024), return_complex=True).abs()
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    return load_xtts_state_dict()
 
 
 @pytest.mark.timeout(1800)

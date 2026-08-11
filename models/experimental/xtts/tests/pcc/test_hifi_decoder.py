@@ -21,14 +21,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_hifi_decoder import XttsHifiDecoderReference
 from models.experimental.xtts.tt.xtts_hifi_decoder import TtHifiDecoder
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    return load_xtts_state_dict()
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

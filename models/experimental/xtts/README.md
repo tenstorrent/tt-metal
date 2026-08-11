@@ -67,6 +67,44 @@ released one at a time (`TtXttsTracedSession`, which the demo uses for chunked t
 chunk replays one capture rather than recompiling the model). No other device has been tried — Wormhole and multi-chip Blackhole boards are untested,
 with no measured numbers and untuned L1/trace budgets.
 
+## Context length support
+
+XTTS has **no single context axis**. The GPT runs two streams with two separate learned position
+tables, and the checkpoint's own tensor shapes are the hard ceiling:
+
+| Limit | Value | Where it comes from |
+|-------|------:|---------------------|
+| Text stream | **404** positions | `gpt.text_pos_embedding.emb.weight` is `(404, 1024)` — indexing past it is out of bounds |
+| Mel stream | **608** positions (605 codes) | `gpt.mel_pos_embedding.emb.weight` is `(608, 1024)` |
+| Both together | **1012** | `GPT2Config n_positions` = 404 + 608 |
+
+The two ceilings cannot be taken at once: 32 conditioning latents + 404 text + 605 codes needs a
+1056-long cache, over the 1012 budget. The supported region is the **triangle `text + codes ≤ 980`**,
+not a line to 1012 — so "max context" is a 2-D envelope, and a 1-D ISL sweep to 1012 would be
+measuring a configuration the model cannot reach.
+
+Three progressively tighter limits apply, and they are validated to different depths:
+
+| Envelope | Text | Codes | Status |
+|----------|-----:|------:|--------|
+| Architectural (checkpoint) | 404 | 605 | The hard ceiling; `text + codes ≤ 980` |
+| **PCC-validated** | **384** | — | [`test_gpt_isl_sweep.py`](tests/pcc/test_gpt_isl_sweep.py) sweeps 8 points to 384 (largest tile multiple under 404). Accuracy is **flat**: decode latent 0.9959–0.9986, cache medians ≥ 0.9988 |
+| **End-to-end validated** | **352** | **205** | [`test_e2e_isl_sweep_perf.py`](tests/perf/test_e2e_isl_sweep_perf.py) + the demo's `MAX_TEXT_IDS` / `MAX_SINGLE_PASS_CODES` |
+
+**Why end-to-end stops at 352/205 and not at the architectural ceiling.** The fp32 HiFi-GAN vocoder
+hits an L1 circular-buffer allocation collision ("Statically allocated circular buffers … clash with
+L1 buffers") above roughly 205 codes in a pass. This is an **allocation collision, not a clean size
+limit**: per the demo's measured notes the headroom *shrinks* as generations accumulate in one
+process (a chunk estimated at ~204 codes failed as the 5th pass while 207 passed as the 1st), and the
+ISL sweep reproduces the same positional behaviour — ISL 64 runs fine alone but throws when it
+follows ISL 32, while larger ISLs in the same sweep succeed. The demo works around it by opening a
+**fresh device per pass** and splitting long text at sentence boundaries
+(`MAX_CHUNK_CODES` 165 per chunk once splitting).
+
+Longer text is therefore supported by **chunking**, not by a longer single pass: text over ~205
+codes' worth is split at sentence boundaries and stitched with a ~120 ms gap. A single sentence is
+never split, so one sentence longer than the single-pass budget is a hard failure.
+
 ## Architecture
 
 ```
@@ -170,11 +208,17 @@ models/experimental/xtts/
 │   └── xtts_text_embedding.py      # BPE tokenizer + text/position embedding
 ├── tests/
 │   ├── __init__.py
-│   ├── pcc/                        # one PCC test per major block, plus end-to-end (eager + traced)
-│   │   └── ... (7 files, see Test cases)
+│   ├── pcc/                        # one PCC test per major block, the GPT prefill/decode
+│   │   └── ...                     #   matrix, and end-to-end (eager + traced) — 11 files,
+│   │                               #   see Test cases
 │   └── perf/
 │       ├── __init__.py
-│       └── test_e2e_perf.py        # e2e performance regression test (models_performance_bare_metal)
+│       ├── test_e2e_perf.py        # e2e performance regression test (models_performance_bare_metal)
+│       ├── test_e2e_isl_sweep_perf.py               # TTFT / codes-s / ms-code / RTF vs ISL
+│       ├── test_device_perf_single_step_prefill.py   # outer Tracy driver -> device_perf_*.csv
+│       ├── test_profile_single_step_prefill.py       #   inner signposted prefill workload
+│       ├── test_device_perf_single_step_decode.py    # outer Tracy driver -> device_perf_*.csv
+│       └── test_profile_single_step_decode.py        #   inner signposted decode workload
 └── tt/                              # TTNN implementation
     ├── __init__.py
     ├── xtts_conditioning.py
@@ -195,6 +239,41 @@ models/experimental/xtts/
 
 Everything is imported by its full path from the tt-metal root, e.g.
 `from models.experimental.xtts.tt.xtts_inference import TtXtts`.
+
+### Where the model configuration lives
+
+There is **no `config.json` and no config module**, deliberately. coqui ships XTTS-v2's architecture
+as constructor defaults rather than a config file, so there is nothing to parse — any config module
+here would be a *transcription* of the published architecture, i.e. a second place the same numbers
+live and a second thing to keep in sync.
+
+Instead every dimension, count, rate and checkpoint pin is defined **exactly once**, in the
+`reference/` module for the block it describes, next to the comment explaining where it came from —
+and `tt/` imports those same names rather than restating them. There are no hardcoded dimensions or
+shapes in the TTNN implementation.
+
+| Configuration | Defined in |
+|---------------|------------|
+| Checkpoint pins (`HF_REPO_ID`, `HF_REVISION`, `CHECKPOINT_FILE`), GPT dims, context limits | [reference/xtts_gpt_block.py](reference/xtts_gpt_block.py) |
+| Vocab sizes | [reference/xtts_gpt_model.py](reference/xtts_gpt_model.py) |
+| Token sentinels, `MAX_AUDIO_TOKENS` | [reference/xtts_gpt_generate.py](reference/xtts_gpt_generate.py) |
+| Conditioning encoder + Perceiver, conditioning mel (80-mel/22.05 kHz), reference-audio windowing | [reference/xtts_conditioning.py](reference/xtts_conditioning.py) |
+| Speaker encoder (SE-ResNet-34) | [reference/xtts_speaker_encoder.py](reference/xtts_speaker_encoder.py) |
+| Speaker mel frontend (64-mel/16 kHz) | [reference/xtts_mel.py](reference/xtts_mel.py) |
+| Latent upsample ratios, sample rates | [reference/xtts_hifi_decoder.py](reference/xtts_hifi_decoder.py) |
+| HiFi-GAN generator (rates, kernels, dilations, channels) | [reference/xtts_hifigan.py](reference/xtts_hifigan.py) |
+| Tokenizer vocab file | [reference/xtts_text_embedding.py](reference/xtts_text_embedding.py) |
+
+The values that *can* be checked against the checkpoint are checked by the PCC suite, which loads
+the real weights: `gpt.text_embedding.weight` is `[6681, 1024]`, `gpt.mel_embedding.weight` is
+`[1026, 1024]`, `gpt.text_pos_embedding.emb.weight` is `[404, 1024]` and
+`gpt.mel_pos_embedding.emb.weight` is `[608, 1024]` — a wrong constant would fail to load or fail a
+gate rather than silently drift.
+
+One consequence to be aware of: `tt/` therefore depends on `reference/` for its constants (and on
+`chunk_wav` from `reference/xtts_conditioning.py`), so the TTNN port is not shippable without the
+reference package. That is a deliberate trade for single-definition config; splitting them would
+mean maintaining the same numbers twice.
 
 Weights are **not** vendored. On first run, the demo and PCC tests download the
 [`coqui/XTTS-v2`](https://huggingface.co/coqui/XTTS-v2) checkpoint (`model.pth`, ~1.9 GB,
@@ -218,6 +297,70 @@ pytest models/experimental/xtts/tests/pcc/ -v
 # 2. Demo -- writes generated/xtts_demo/xtts_demo.wav
 python models/experimental/xtts/demo/xtts_demo.py
 ```
+
+## Example input
+
+The demo takes **plain text** (`--text`) plus a **reference voice** (`--ref-audio`). Both have
+working defaults, so `python models/experimental/xtts/demo/xtts_demo.py` with no arguments runs the
+example below on a fresh checkout.
+
+**Text** — the bundled default, two sentences, 96 wrapped BPE tokens:
+
+```
+Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey how are you doing?.
+```
+
+(The wording is deliberate: "can already" rather than "can now" — `/n/#/n/` is a nasal collision the
+vocoder merges into "cannow/cannot", while "already" starts with a vowel and transcribes cleanly.)
+
+**Reference voice** — the default is four single-speaker coqui-ai/TTS LJSpeech clips
+(`LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav`, 9.66 + 9.67 + 5.14 + 8.11 = 32.6 s),
+joined and clipped to `gpt_cond_len` 30 s = **8 conditioning windows**. They download on first use
+and cache under `torch.hub`, so nothing local is required. A single HF sample (`en_sample.wav`) is
+only ~3 s = **one** window, which exercises far less of the conditioning encoder.
+
+Your own input:
+
+```bash
+python models/experimental/xtts/demo/xtts_demo.py \
+    --text "Hello from Tenstorrent." --ref-audio /path/to/voice.wav
+```
+
+Text longer than one pass (~205 codes) is split at sentence boundaries automatically — see
+[Context length support](#context-length-support).
+
+## Expected output
+
+A single **24 kHz mono WAV**, written to a fixed path (hardcoded in `main()`, not a CLI flag):
+
+```
+generated/xtts_demo/xtts_demo.wav
+```
+
+The absolute path is logged on completion (`wrote device audio -> …`). For the default text and
+voice above, expect roughly:
+
+| Property | Value |
+|----------|-------|
+| File | `generated/xtts_demo/xtts_demo.wav` — 24 kHz, mono, PCM |
+| Codes generated | ~150–211 (sampled, so it varies run to run; capped at 240) |
+| Duration | ≈ `codes × 46.4 ms` — about **7–10 s** of speech |
+| Content | The input text, spoken in the cloned reference voice |
+| Replay time | ~1.8 s, RTF ≈ 0.18 (see [Performance](#performance)) |
+
+The run also prints a Coqui/HF-style perf summary (wall time, RTF, time-to-first-chunk, end-to-end).
+
+**Sanity checks on a good render:** the audio is finite and non-silent, its duration matches
+`codes × 46.4 ms`, the words are intelligible under Whisper, and the voice is recognisably the
+reference speaker. Those last two are exactly what `test_tt_eval` scores (CER 0.016 and SECS 0.68 on
+a self-terminating single sentence — see [PCC results](#pcc-results)); note both metrics are sampled
+and **not reproducible run to run**, so treat them as ballpark.
+
+**Comparing against the PyTorch reference:** set `args.write_torch_ref = True` in `main()` and the
+demo additionally writes `generated/xtts_demo/xtts_demo_reference.wav` — the CPU torch reference
+decoded from **the same codes** (teacher-forced), so the two files are the same utterance and differ
+only by the device vocoder. That is a direct A/B of the port; an independent reference run would
+diverge on sampling alone and tell you nothing.
 
 ## Running the demo
 
@@ -263,11 +406,20 @@ The demo logs a Coqui/HF-style perf summary per take (wall time, RTF, time-to-fi
 
 ## Test cases
 
-Trimmed to **one PCC test per major block, plus the full end-to-end pipeline** (eager and
-traced) — component-level tests (single GPT block/stack, mel frontend alone, text embedding
-alone, KV-cache internals, conv primitives), the profiling-only harnesses, and an
-integration test that duplicated end-to-end coverage were removed. All device tests use the
-repo-root `device` fixture (single Blackhole P150, no `mesh_device` abstraction).
+One PCC test per major block, plus the full end-to-end pipeline (eager and traced), plus a
+**GPT prefill/decode matrix** covering each phase at both single-layer and full-30-layer depth
+(see below). All device tests use the repo-root `device` fixture (single Blackhole P150, no
+`mesh_device` abstraction).
+
+The GPT decoder is the model's autoregressive core and where it spends essentially all of its
+time, so it carries deeper coverage than the other blocks: both of its forwards
+(`forward_prefill` / `forward_decode`) are gated at **both** depths, and the prefill pair runs at
+the checkpoint's **full context lengths** (404 / 608 / 1012), not a tile-sized sample.
+
+| | Single layer (`num_layers=1`) | All 30 layers |
+|---|---|---|
+| **Prefill** | `test_gpt_block.py`, `test_tt_gpt_prefill.py` | `test_gpt_stack.py` |
+| **Decode** | `test_gpt_decode_layer.py` | `test_tt_gpt_generate.py` |
 
 ### PCC / correctness — `tests/pcc/`
 
@@ -276,8 +428,14 @@ repo-root `device` fixture (single Blackhole P150, no `mesh_device` abstraction)
 | `test_conditioning.py` | `test_xtts_conditioning` | Audio conditioning | Conditioning path (mel → `ConditioningEncoder` → `PerceiverResampler`) vs torch, real weights + real ref audio (English + Spanish samples) |
 | `test_speaker_encoder.py` | `test_tt_speaker_encoder` | Speaker encoder | SE-ResNet-34 + attentive-stats-pooling speaker encoder vs torch, real weights |
 | | `test_tt_speaker_encoder_shape_reuse` | Speaker encoder | Regression test: conv2d weight-cache correctness when one `TtResNetSpeakerEncoder` instance is reused across two different mel lengths |
+| `test_gpt_block.py` | `test_xtts_gpt_block` | GPT decoder — prefill, 1 layer | One repeating GPT-2 block's `forward_prefill` (full causal attention) vs torch, at the **full** context lengths: 404 (max text), 608 (max mel), 1012 (`MAX_GPT_SEQ_LEN`) |
+| `test_gpt_stack.py` | `test_xtts_gpt_stack` | GPT decoder — prefill, 30 layers | The whole 30-block stack + `ln_f` vs torch, at the same three full context lengths — the full-depth prefill hidden-state gate |
+| `test_tt_gpt_prefill.py` | `test_tt_gpt_prefill` | GPT decoder — prefill, 1 layer | The real `TtXttsGptModel.prefill` main at `num_layers=1` (embeddings → concat `[cond\|text]` → causal block → `fill_cache`), gated on the **KV cache it seeds**: cached K and cached V at the prompt positions vs the fp32 reference projection. Real conditioning latents from real reference audio |
+| `test_gpt_decode_layer.py` | `test_tt_gpt_decode_layer` | GPT decoder — decode, 1 layer | `forward_decode` on one block over a fixed-size KV cache, walked from empty across cache depths 0–9. **Open loop** — each step is fed a fresh random hidden and the reference recomputes the whole causal prefix, so an error cannot cascade. Gated on the **minimum** per-step PCC. Covers the low-cache-depth regime (mask mostly −inf) that the end-to-end tests never isolate |
+| `test_gpt_isl_sweep.py` | `test_tt_gpt_prefill_isl_sweep` | GPT decoder — prefill, ISL sweep | Full 30-layer prefill at 8 text lengths from 32 to 384 (the ceiling imposed by the checkpoint's 404-row text position table, tile-aligned). Gated on the decode latent, the per-layer KV cache median, and the cache's **conditioning rows on their own** — the last being the regression test for the `ttnn.fill_cache` odd-tile bug |
+| | `test_tt_gpt_decode_max_seq_sweep` | GPT decoder — decode, cache-depth sweep | One decode step at a fixed 128-position fill level over cache sizes 160/384/608/992. Decode attends over the *whole* fixed cache, so this proves the mask ignores the unfilled tail: the result must be PCC-clean **and** bit-identical across `max_seq` |
 | `test_gpt_model.py` | `test_xtts_gpt_model` | GPT decoder | Full GPT front-to-back (embeddings → 30 blocks + `ln_f` → heads) vs torch, single forward pass, swept over `(text_len, mel_len)` ∈ {(64,96), (96,128)} |
-| `test_tt_gpt_generate.py` | `test_tt_gpt_generate` | GPT decoder | The actual autoregressive KV-cache decode loop (what the model runs in production) vs the torch reference loop: free-run exact-code-match prefix + teacher-forced latent PCC |
+| `test_tt_gpt_generate.py` | `test_tt_gpt_generate` | GPT decoder — decode, 30 layers | The actual autoregressive KV-cache decode loop (what the model runs in production) vs the torch reference loop: free-run exact-code-match prefix + teacher-forced latent PCC |
 | `test_hifi_decoder.py` | `test_tt_hifi_decoder` | HiFi-GAN vocoder | On-device latent linear-upsample chained into the HiFi-GAN generator vs torch, at `latent_len` 32 |
 | `test_tt_inference.py` | `test_tt_inference` | End-to-end | Full pipeline (conditioning → GPT decode → HiFi-GAN), teacher-forced on reference codes, gated on spectrogram-magnitude PCC |
 | | `test_tt_cond_latents_long_reference` | Audio conditioning | Reference audio longer than one window (10 s of coqui LJSpeech clips → 3 windows): every window's 80-mel computed on device and the style embeddings averaged, vs torch windowing the *audio* the same way — also the only test forcing the device mel frontend's multi-chunk reshape framing |
@@ -289,7 +447,11 @@ repo-root `device` fixture (single Blackhole P150, no `mesh_device` abstraction)
 ### Test gates
 
 Every numeric PCC assertion in this suite uses the same bar: **≥ 0.99** (`comp_pcc`, wherever a
-threshold exists). `test_tt_inference`/`test_tt_full_trace` gate on **spectrogram-magnitude** PCC
+threshold exists). Two GPT tests apply that bar to something other than a single output tensor:
+`test_tt_gpt_prefill` gates on the seeded **KV cache** (cached K and cached V at the prompt
+positions — prefill's actual product), and `test_gpt_decode_layer` gates on the **minimum**
+per-step PCC across cache depths 0–9, since a mean would let one bad step hide.
+`test_tt_inference`/`test_tt_full_trace` gate on **spectrogram-magnitude** PCC
 rather than raw waveform PCC — a GAN vocoder maps tiny bf16-latent differences to small
 phase/sample shifts that tank sample-wise correlation without changing what is heard, so raw
 waveform PCC is logged as informational only. `test_tt_eval`/`test_tt_eval_traced` have no PCC
@@ -298,11 +460,24 @@ failing the test).
 
 ### Performance — `tests/perf/`
 
-| File | Test | What it checks |
-|------|------|-----------------|
+| File | Test / entry point | What it measures |
+|------|--------------------|------------------|
 | `test_e2e_perf.py` | `test_xtts_e2e_perf` | Times `TtXtts.inference_fully_traced()` on the demo's default text + voice; hard-asserts setup replay, decode (ms/code), vocoder (ms/code), and RTF each stay within 40% of the measured Blackhole P150 baseline (see [Performance](#performance)) |
+| `test_e2e_isl_sweep_perf.py` | `test_xtts_e2e_isl_sweep_perf` | Wall-clock sweep over 8 text lengths (32→352, the end-to-end envelope) on the traced path: TTFT, codes/s, ms/code, RTF and the per-leg replay split. Records rather than fails on the L1 allocation collision. No perf gate — the gate is `test_e2e_perf.py` |
+| `test_device_perf_single_step_prefill.py` | `main()` | Outer Tracy driver for a single GPT **prefill** op dump — writes `device_perf_*.csv` + a partial benchmark JSON via `prep_device_perf_report`. No perf assertion |
+| `test_profile_single_step_prefill.py` | `test_profile_single_step_prefill` | The inner workload: one warm `prefill_on_device` (128-position prompt, 30 layers) inside `start`/`stop` signposts |
+| `test_device_perf_single_step_decode.py` | `main()` | Outer Tracy driver for a single GPT **decode step** op dump — same outputs, no assertion. This is the report to read when the ~8 ms/code rate moves |
+| `test_profile_single_step_decode.py` | `test_profile_single_step_decode` | The inner workload: untimed prefill, then one `decode_on_device` inside signposts, using the **traced** one-hot cache write (what production replays) |
 
-This is the only test in the repo carrying `@pytest.mark.models_performance_bare_metal` for a
+The four profiling files follow the outer-driver / inner-workload split the Voxtral and VibeVoice
+ports use: the outer script spawns the inner pytest under Tracy and never imports `ttnn` itself
+(so it does not contend for the UMD device lock with its own child); the inner workload warms
+outside the measured region, calls `ttnn.ReadDeviceProfiler` to drain load/warmup markers, then
+brackets exactly one call with `start`/`stop` signposts. Shapes match the demo's real
+configuration — 96 wrapped text tokens + 32 conditioning latents = 128 prompt positions, and
+`max_seq` 384 for the 240-code budget.
+
+`test_e2e_perf.py` is the only test in the repo carrying `@pytest.mark.models_performance_bare_metal` for a
 TTS/audio model — there was no existing XTTS/VibeVoice/Whisper example to follow, so it
 establishes the convention fresh here, modeled on `models/demos/wormhole/bert_tiny/tests/test_performance.py`
 and `models/demos/wormhole/mamba/tests/test_mamba_perf.py` (the two closest existing examples
@@ -329,7 +504,14 @@ pytest models/experimental/xtts/tests/pcc/test_conditioning.py \
        models/experimental/xtts/tests/pcc/test_gpt_model.py \
        models/experimental/xtts/tests/pcc/test_hifi_decoder.py -v -s
 
-# The autoregressive decode loop (GPT block, production code path)
+# The GPT prefill/decode matrix — both phases, single-layer and full-30-layer depth.
+# The two prefill tests run the full 404 / 608 / 1012 context lengths; ~36 s for all 8 cases.
+pytest models/experimental/xtts/tests/pcc/test_gpt_block.py \
+       models/experimental/xtts/tests/pcc/test_gpt_stack.py \
+       models/experimental/xtts/tests/pcc/test_tt_gpt_prefill.py \
+       models/experimental/xtts/tests/pcc/test_gpt_decode_layer.py -v -s
+
+# The autoregressive decode loop (full 30-layer stack, production code path)
 pytest models/experimental/xtts/tests/pcc/test_tt_gpt_generate.py -v -s
 
 # Full pipeline, eager + traced + objective eval (downloads whisper-large-v3 / SpeechMOS / ECAPA2 on first use)
@@ -344,12 +526,49 @@ override.
 ## Commands — Performance
 
 ```bash
+# The gated e2e baseline
 pytest models/experimental/xtts/tests/perf/test_e2e_perf.py -v -s
+
+# The ISL sweep (8 lengths, ~1 min warm; ungated, prints the table in Performance below)
+pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s
+
+# Shorten it for a smoke run
+XTTS_ISL_SWEEP=32,96 pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s
 ```
 
 Runs in well under a minute (the fully-traced path recompiles kernels only if the JIT build cache
 is cold) and needs no extra downloads beyond the checkpoint. See
 [Performance](#performance) for what it measures and gates.
+
+## Commands — device profiling (Tracy)
+
+Each outer driver spawns its inner workload under Tracy and writes a per-op CSV. Run them
+**one at a time** — they need the single device, and see the clobbering warning below.
+
+```bash
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) ARCH_NAME=blackhole
+
+python models/experimental/xtts/tests/perf/test_device_perf_single_step_prefill.py
+python models/experimental/xtts/tests/perf/test_device_perf_single_step_decode.py
+
+# Then read the per-op breakdown (path is printed as "OPs csv generated at:")
+tt-perf-report generated/profiler/xtts_gpt_single_step_decode/reports/<ts>/ops_perf_results_<ts>.csv \
+    --start-signpost start --end-signpost stop
+```
+
+> **The second driver deletes the first one's report.** Both call
+> `clear_profiler_runtime_artifacts()` on entry, which wipes `generated/profiler/` — including the
+> other workload's `reports/` directory. Copy the CSV somewhere safe before running the other
+> driver. (Verified the hard way: a back-to-back prefill run erased the decode report.)
+
+| Parameter | Applies to | Meaning |
+|-----------|-----------|---------|
+| `XTTS_PERF_NUM_LAYERS=<int>` | both profiling workloads | GPT depth to profile. Default 30 (the full stack); set `1` to isolate a single decoder layer |
+| `--start-signpost start --end-signpost stop` | `tt-perf-report` | **Required** — without it you get warmup + measured pass summed together (roughly 2× the real number) |
+
+A raw CSV read must be signpost-filtered too: the file contains the warmup pass as well. Filtering
+the prefill CSV to its window gives 397 ops / 6.884 ms, which matches the driver's reported
+`AVG DEVICE FW DURATION` exactly; reading the whole file gives 794 ops / 13.772 ms.
 
 ## Dependency versions
 
@@ -419,8 +638,13 @@ one repo and must not drift apart.
 Measured on **Blackhole P150** against the PyTorch reference (software stack: see
 [Dependency versions](#dependency-versions)), running the whole `tests/pcc/` suite in one pass
 (`pytest models/experimental/xtts/tests/pcc/ -v -s`) at tt-metal commit `e7cf6d43d15`:
-**14/14 passed** in 289 s. There is a single column because Blackhole P150 is the only supported
-device.
+**24/24 passed** in 362 s (14/14 in 289 s before this pass added the GPT prefill/decode matrix and
+the ISL sweep). There is a single column because Blackhole P150 is the only supported device.
+
+These numbers are **provisional**: the branch has not yet been rebased onto `main`, and the rebase
+is deliberately being done last so one final run produces the published set. Four upstream commits
+in the pending range touch ops on XTTS's hot path (LayerNorm intermediate CBs, `tanh` bf16, SFPU
+range handling, and a Blackhole RM-reshape fix), so every value here should be re-measured after it.
 
 | File | Test case | PCC / metric |
 |------|-----------|--------------:|
@@ -428,8 +652,16 @@ device.
 | | Conditioning latents (es_sample.wav) | 0.992365 |
 | `test_speaker_encoder.py` | Speaker encoder (mel_len=200) | 0.999330 |
 | | Shape-reuse regression, reused instance (mel_len 200 / 512) | 0.998787 / 0.999392 |
+| `test_gpt_block.py` | Prefill, 1 layer — seq_len 404 / 608 / 1012 | 0.999874 / 0.999874 / 0.999872 |
+| `test_gpt_stack.py` | Prefill, 30 layers + `ln_f` — seq_len 404 / 608 / 1012 | 0.998786 / 0.998779 / 0.998853 |
+| `test_tt_gpt_prefill.py` | Prefill, 1 layer — seeded cache K / V (prompt_len 64) | 0.999976 / 0.999951 |
+| `test_gpt_decode_layer.py` | Decode, 1 layer — min / mean over cache depths 0–9 | 0.999586 / 0.999882 |
 | `test_gpt_model.py` | text_head / mel_head (64,96) | 0.995453 / 0.990920 |
 | | text_head / mel_head (96,128) | 0.995604 / 0.991085 |
+| `test_gpt_isl_sweep.py` | Decode latent, text_len 32→384 (8 points) | 0.9959 – 0.9986 |
+| | ↳ KV cache per-position median, worst layer, across the sweep | K ≥ 0.999212 / V ≥ 0.998817 |
+| | ↳ conditioning-row K min (the `fill_cache` regression gate) | 0.9992 at every ISL |
+| | `test_tt_gpt_decode_max_seq_sweep` — max_seq 160/384/608/992 | 0.997585, bit-identical across all four |
 | `test_tt_gpt_generate.py` | Free-run exact-match prefix / teacher-forced top-1 | 16/16 both |
 | | Teacher-forced latent PCC | 0.999569 |
 | `test_hifi_decoder.py` | latent_len 32 | 0.993287 |
@@ -501,15 +733,75 @@ from 0.9981, so its margin has gone from ~8× to ~2.4×. The HEAD commit removed
 from the conditioning encoder, which makes it the obvious suspect, but this was **not** A/B'd — if
 the conditioning path is touched again, re-measure both samples before assuming headroom.
 
-**Note on the trim:** the two removed test files that weren't kept as a block's representative
-test — `test_gpt_with_conditioning.py` and `test_waveform_decoder.py` — were, at the time of this
-pass, both **failing** (text_head PCC 0.9811 below gate; and an allocator crash at
-`latent_len=16` plus PCC 0.9860 at `latent_len=32`, respectively). They were removed for scope
-reasons (integration-test duplication and finer-grained-than-block-level), not to hide the
-failures — flagging here for the record. The retained `test_hifi_decoder.py`, which exercises
-much of the same HiFi-GAN generator code on GPT-latent-scaled synthetic inputs, currently passes,
-so this isn't necessarily evidence of a live model-correctness bug; it wasn't re-investigated as
-part of this pass.
+### Found and worked around: a `ttnn.fill_cache` first-tile corruption
+
+The GPT ISL sweep immediately turned up a real correctness bug, and it is **not in this model's
+code**. `ttnn.fill_cache` corrupts the **first tile** of the destination cache (rows 0–31) when the
+input's sequence length is an odd multiple of 32 and `num_heads` is 16. Minimal reproducer, no XTTS
+involved:
+
+```python
+k     = ttnn.from_torch(torch.randn(1, 16, 288, 64), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
+cache = ttnn.from_torch(torch.zeros(1, 16, 512, 64), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
+ttnn.fill_cache(cache, k, 0)
+# cache[:, :, :288, :] differs from k by up to 4.3 — entirely within rows 0..31
+```
+
+| Dimension | Behaviour |
+|-----------|-----------|
+| seq tile count (16 heads) | clean at 1–8, 10, 12, 14 · **corrupt at 9, 11, 13, 15, 16** |
+| `max_seq` | irrelevant — corrupt at 320 / 384 / 512 / 640 / 1024 alike |
+| dtype | both `bfloat16` **and** `float32` |
+| `num_heads` | clean at 1, 2, 4, 8 · corrupt at **16** — so it is work-distribution related |
+| blast radius | confined to rows 0–31 (`max|cache−input|` equals the first-tile delta exactly) |
+
+This lands squarely on XTTS: prefill writes `[cond | text]` into the cache, and the **conditioning
+latents occupy exactly rows 0–31** — the tensor carrying voice identity. At prompt lengths 288 / 352
+/ 416 the conditioning rows measured PCC 0.851 / 0.768 / 0.698 and the decode latent fell to
+0.960 / 0.966, below gate. The likely user-visible symptom is degraded voice cloning at particular
+text lengths, not a crash — which is why it went unnoticed.
+
+**Workaround** (in [tt/xtts_gpt_model.py](tt/xtts_gpt_model.py) `prefill_on_device`): pad K/V by one
+tile when the prompt's tile count is odd, so the write is always an even tile count. Every affected
+shape returns to 0.999969, identical to the shapes that were already correct. The pad rows land past
+`prompt_len`, where decode's additive mask ignores them until a decode step overwrites the slot, so
+they are invisible to the model — and the fully-traced path still passes, i.e. `ttnn.pad` is
+trace-safe here.
+
+This is **not a general fix**: it is only sound because XTTS's longest prompt is 32 cond + 404 text =
+436 rows = 14 tiles, so the in-range bad set is `{9, 11, 13}` and padding always lands on 10/12/14.
+Padding 15 tiles would give 16, which is also corrupt. The underlying ttnn issue has not been filed
+yet — it is deliberately held for discussion after this PR.
+
+`test_gpt_isl_sweep.py` gates the conditioning rows separately from everything else specifically so
+this cannot regress silently.
+
+### Restored: the GPT prefill/decode coverage
+
+An earlier "tests cleanup" pass removed 13 test files, on the principle of one PCC test per major
+block. That was the wrong call for the **GPT decoder**: it is the model's autoregressive core, its
+two forwards (`forward_prefill` / `forward_decode`) are separate code paths with separate failure
+modes, and single-layer isolation is what turns "the 30-layer stack drifted" into "*this* op
+drifted." Three of those files are restored unchanged (`test_gpt_block.py`, `test_gpt_stack.py`,
+`test_tt_gpt_prefill.py`) and one is new (`test_gpt_decode_layer.py`), together forming the
+prefill × decode / single-layer × all-layers matrix in [Test cases](#test-cases). All 8 cases pass
+in 36 s; the restored files needed no adaptation, so nothing in the TTNN port had drifted away
+from them in the meantime.
+
+This also closed the largest length-coverage gap in the suite. `test_gpt_block`/`test_gpt_stack`
+run at 404 / 608 / **1012** — the checkpoint's full context — where previously the deepest GPT
+coverage was `test_gpt_model`'s `(96,128)`, about 16 % of context. Both hold PCC ≈ 0.9988–0.9999
+at full length, so the 30-layer prefill chain shows no length-dependent drift.
+
+**Still removed** (9 files, tracked as follow-up work, not covered by this pass): the mel
+frontend, text embedding, conv primitives, sampler, full decoder, and waveform decoder unit
+tests, the two profiling-only harnesses, and one integration test. Two of them were **failing**
+when removed — `test_gpt_with_conditioning.py` (text_head PCC 0.9811, below gate) and
+`test_waveform_decoder.py` (allocator crash at `latent_len=16`, PCC 0.9860 at `latent_len=32`).
+They were removed for scope reasons, not to hide the failures — flagging here for the record. The
+retained `test_hifi_decoder.py` exercises much of the same HiFi-GAN generator code on
+GPT-latent-scaled synthetic inputs and currently passes, so this isn't necessarily evidence of a
+live model-correctness bug; it wasn't re-investigated as part of this pass.
 
 ## Performance
 
@@ -536,7 +828,52 @@ one-time leg either way — under 3% of total replay.
 The ≈8.1 ms/code decode rate matches the per-step device-time note in
 [tt/xtts_generator.py](tt/xtts_generator.py): each captured decode step is measured at ~8 ms of
 device work, with the per-step blocking fence and token readback hidden inside it (alternatives —
-non-blocking execute, polling less often — were all worse or equal; see the source comment).
+non-blocking execute, polling less often — were all worse or equal; see the source comment). The
+Tracy dump below now confirms this independently: **7.578 ms** of pure device FW time in one
+signposted decode step, with the remaining ~0.5 ms being the fence and readback.
+
+### GPT single-step device profiles (Tracy)
+
+From the two profiling drivers in [Commands — device profiling](#commands--device-profiling-tracy),
+on Blackhole P150, at the demo's shapes (128-position prompt, `max_seq` 384, 30 layers). These are
+signpost-windowed totals — one prefill, one decode step:
+
+| Workload | Device FW | Ops | Notes |
+|----------|----------:|----:|-------|
+| GPT prefill (128 prompt positions, 30 layers) | 6.884 ms | 397 | One-time per generation; part of the 42 ms setup leg |
+| GPT decode, one code (30 layers, traced cache write) | 7.578 ms | 557 | Paid **per audio code** — this is the model's dominant cost |
+
+Per-op breakdown of the decode step (the report to read when the code rate moves):
+
+| Op | Count | Total | % of step | Per op |
+|----|------:|------:|----------:|-------:|
+| `TernaryDeviceOperation` (traced KV-cache write) | 60 | 2378 µs | **31.4%** | 39.6 µs |
+| `MatmulDeviceOperation` | 121 | 2373 µs | 31.3% | 19.6 µs |
+| `NlpCreateHeadsDeviceOperation` | 30 | 882 µs | 11.6% | 29.4 µs |
+| `SDPAOperation` | 30 | 691 µs | 9.1% | 23.0 µs |
+| `LayerNormDeviceOperation` | 62 | 540 µs | 7.1% | 8.7 µs |
+| `NLPConcatHeadsDeviceOperation` | 30 | 313 µs | 4.1% | 10.4 µs |
+| everything else (7 op types) | 224 | 401 µs | 5.3% | — |
+
+**The largest single cost in decode is the trace-safety workaround, not the model.** Those 60
+ternary ops are the two `ttnn.where(onehot, k, k_cache, output_tensor=k_cache)` cache writes per
+layer × 30 layers — the data-driven one-hot select
+([tt/xtts_gpt_block.py](tt/xtts_gpt_block.py)) that a captured trace requires because it cannot
+take an eager Python `write_idx`. They cost **more than all 121 matmuls combined**. The eager path
+does the same job with `ttnn.update_cache`, which the prefill profile measures at **2.6 µs** per
+call against 39.6 µs here — a ~15× gap, because `where` rewrites the entire
+`[1, 16, 384, 64]` cache while `update_cache` touches one row.
+
+Two consequences worth knowing before optimizing anything else here:
+
+- **~2.2 ms of every 7.6 ms decode step is this write** (≈29%). Over the demo's 211 codes that is
+  ~0.47 s of the 1.71 s decode replay.
+- **It scales with `max_seq`, not with position.** A larger `max_new_tokens` makes *every* step
+  slower, since the whole cache is rewritten each time regardless of how far in you are. Raising
+  the code budget is therefore not free the way it would be with an O(1) row write.
+
+This was surfaced by the profiling harness on its first run and has **not** been acted on — it is
+recorded here as the top optimization lead for the decode path, not as a fixed issue.
 
 This baseline is now protected by [`tests/perf/test_e2e_perf.py`](tests/perf/test_e2e_perf.py)
 (see [Test cases](#test-cases)), which hard-asserts on it with a 40% margin. The test drives the
@@ -546,6 +883,54 @@ single-window clip, which gated under a third of that. A confirmation run (diffe
 count — 205 vs. 211, since the test fixes `torch`'s seed differently than an uncontrolled demo run
 — but the same text/voice/settings) landed almost exactly on the rate-based numbers: 41.64 ms
 setup, 8.058 ms/code decode, 0.1017 ms/code vocoder, RTF 0.180.
+
+### End-to-end ISL sweep (Blackhole P150)
+
+[`tests/perf/test_e2e_isl_sweep_perf.py`](tests/perf/test_e2e_isl_sweep_perf.py) on the production
+`inference_fully_traced` path, default 30 s reference voice, demo sampling recipe
+(temp 0.65 / top-k 50 / top-p 0.85 / rep 5.0), `max_new_tokens` 205. Text lengths are tile-aligned
+and stop at 352 — the demo's `MAX_TEXT_IDS`, i.e. the **end-to-end** envelope, which is lower than
+the PCC sweep's architectural 384 (see [Context length](#context-length-support)).
+
+| ISL | prompt | max_seq | codes | audio (s) | TTFT (ms) | codes/s | ms/code | setup (ms) | vocoder (ms) | replay (s) | RTF |
+|----:|-------:|--------:|------:|----------:|----------:|--------:|--------:|-----------:|-------------:|-----------:|----:|
+| 32 | 64 | 288 | 87 | 4.03 | 49.0 | 133.1 | 7.511 | 41.4 | 8.53 | 0.703 | 0.174 |
+| 64 | 96 | 320 | 131 | 6.08 | 49.6 | 128.7 | 7.767 | — | — | 1.072 | 0.176 |
+| 96 | 128 | 352 | 204 | 9.47 | 49.6 | 125.8 | 7.948 | 41.7 | 20.99 | 1.684 | 0.178 |
+| 128 | 160 | 384 | 204 | 9.47 | 50.1 | 123.9 | 8.071 | 42.1 | 21.02 | 1.709 | 0.180 |
+| 192 | 224 | 448 | 204 | 9.47 | 51.0 | 114.9 | 8.703 | 42.3 | 21.00 | 1.839 | 0.194 |
+| 256 | 288 | 512 | 204 | 9.47 | 51.4 | 112.7 | 8.872 | 42.6 | 21.01 | 1.873 | 0.198 |
+| 320 | 352 | 576 | 204 | 9.47 | 53.0 | 107.5 | 9.301 | 43.7 | 21.06 | 1.962 | 0.207 |
+| 352 | 384 | 608 | 204 | 9.47 | 52.6 | 106.6 | 9.379 | 43.2 | 21.00 | 1.977 | 0.209 |
+
+Metric definitions — XTTS is **non-streaming**, one call emits the whole clip:
+
+- **TTFT** — time to first *code*: setup replay + one decode step (derived as `setup + decode/n`,
+  not separately instrumented). The LLM-analogous number.
+- **TTFA** — time to first *audio*: the full `replay (s)` column, since no audio exists until the
+  vocoder has run over every latent. This is what a listener actually waits for.
+- **codes/s** — decode throughput, the TPS analogue. One code is 46.4 ms of audio.
+- **RTF** — replay ÷ generated audio duration. Below 1.0 is faster than real time.
+
+Three things this sweep establishes:
+
+- **Decode cost scales with `max_seq`, not with position**: 7.511 → 9.379 ms/code (**+24.9%**) as
+  the cache grows 288 → 608, while every row generates the same 204 codes. This is the direct
+  consequence of the traced one-hot cache write rewriting the *whole* cache each step (~31% of a
+  decode step — see [the per-op breakdown](#gpt-single-step-device-profiles-tracy)). Raising
+  `max_new_tokens` is therefore **not free**: it slows every step of every generation, not just the
+  extra ones.
+- **TTFT is essentially flat** — 49.0 → 53.0 ms across an 11× range of text length. Setup is
+  dominated by the 8 conditioning windows, not by the prompt, so prefill length barely registers.
+- **RTF stays ~5× faster than real time** everywhere (0.174 → 0.209), degrading only as the decode
+  rate does.
+
+**The ISL 64 row is measured standalone.** In the sweep it threw the L1 circular-buffer allocation
+collision, *reproducibly and positionally*: it runs fine on its own and fine as the only entry, but
+throws when it immediately follows ISL 32 in the same process — while every **larger** ISL in that
+same sweep succeeds. So it is not a length limit; it is the allocation collision that makes
+`demo/xtts_demo.py` open a fresh device per chunk. The sweep records skipped rows rather than
+failing, since where that wall falls is part of the result.
 
 ### Module-level device time (standalone microbenchmarks, not this table's end-to-end number)
 
@@ -558,8 +943,9 @@ passes on one stage, not as an end-to-end figure:
 | HiFi-GAN decoder (generator-only standalone conv stack) | ~2.02 ms | 249 | Block-sharded stage-0; conditioning memoised on `g`; L1-sharded stage hand-off. First call (cold conditioning cache) is ~2.12 ms / 268 ops |
 | Speaker encoder (`mel_len=801`, ~8 s reference audio) | ~2.92 ms | 564 | Scalar-fold + reduced-core-count optimization pass |
 
-No standing perf CI or automated end-to-end sweep exists for this model (see [CI](#ci)) — these
-per-module numbers and the demo run above are the only current data points.
+No standing perf CI exists for this model (see [CI](#ci)) — the ISL sweep, the GPT single-step
+profiles, these per-module numbers and the demo run are point-in-time measurements, captured
+manually.
 
 ### Performance engineering notes
 
@@ -584,11 +970,83 @@ A few of the larger, documented wins in the source (all cited from the modules' 
   default — bf16 activations drift below 0.99 PCC over this deep a chain (~36 residual adds + MRF
   sums + tanh), while fp32 weights gave no accuracy gain over bf16.
 
+### Host operations / PyTorch fallbacks
+
+Every tensor-compute layer of the model runs on device — there is **no PyTorch fallback for any
+model op**, including both mel frontends, which are computed on device as STFT-as-matmul inside the
+traced setup. What remains on the host is I/O, tokenization and control flow, listed here in full
+by how often it runs.
+
+**1. Per decode step — runs once per audio code.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| token readback (`tok_buf`) | D2H ×1 | Read the just-sampled code to detect STOP. A captured trace cannot branch, so the AR loop has to check on the host. Skipped entirely while below the `--min-tokens` floor |
+
+That is the **only** per-step host transfer on the traced path. Sampling
+(repetition-penalty → temperature → top-k → top-p → Gumbel-max) and the token feedback into the next
+step's embedding are fully on device. The readback is not on the critical path: the captured step is
+~7.6 ms of device work and the blocking fence plus this one-int read hide inside it — measured
+alternatives (non-blocking execute, polling every 8 steps) were all equal or worse.
+
+**2. Per generation — runs once per `generate()` call.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| Gumbel noise table | hostCPU + H2D ×1 | All sampling noise for the run is pre-drawn with `torch.rand` and uploaded once as an `[N, V]` table; each captured step selects its row **on device** via a one-hot matmul. No per-step noise stream |
+| text ids | H2D ×1 | Tokenized prompt into the buffer the SETUP trace reads |
+| codes + latents readback | D2H ×2 | The accumulated codes and latents are read once after the decode loop, to find the STOP trim |
+| latents re-upload | hostCPU + H2D ×1 | The trimmed latents are zero-padded to the captured vocoder length and copied back into the vocoder's input buffer — so the decode→vocoder hand-off **does** round-trip through the host, once per generation ([tt/xtts_inference.py](tt/xtts_inference.py)) |
+| waveform readback | D2H ×1 | Final audio off device |
+
+**3. One-time / per-request setup.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| XTTS-v2 BPE tokenizer | hostCPU | Text → token ids (`tokenizers`); no device equivalent |
+| reference-audio load + resample | hostCPU | WAV read and `scipy.resample_poly` to 22.05 kHz (conditioning) and 16 kHz (speaker). The **mels themselves are on device** |
+| reference wav upload | H2D | Raw waveform placed on device before capture (writes are fatal inside a trace) |
+| fade in/out | hostCPU | Cosmetic envelope on the finished waveform so the first word does not pop |
+
+The eager `inference()` path additionally reads the argmax back per step
+([tt/xtts_generator.py](tt/xtts_generator.py)); the traced path does not.
+
+### Environment variables
+
+Beyond the standard `TT_METAL_HOME` / `PYTHONPATH` / `ARCH_NAME` (see [Quick start](#quick-start)),
+this port reads only two, both test-only:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `XTTS_ISL_SWEEP` | full 8-point sweep | Comma list of text lengths for [`test_e2e_isl_sweep_perf.py`](tests/perf/test_e2e_isl_sweep_perf.py), to shorten a smoke run (e.g. `32,96`) |
+| `XTTS_PERF_NUM_LAYERS` | `30` | GPT depth for the two Tracy profiling workloads; set `1` to isolate a single decoder layer |
+
+There is **no** checkpoint-path override — weights always resolve through the HF hub cache (see
+[Dependency versions](#dependency-versions)). Nothing else in the model reads the environment.
+
 ## Known limitations
 
-**Test coverage was intentionally trimmed** to one PCC test per major block plus the end-to-end
-pipeline (see [Test cases](#test-cases)); two of the removed files had known failures at the time
-of removal — see the note at the end of [PCC results](#pcc-results).
+**Module-level test coverage is uneven.** The GPT decoder carries a full prefill × decode /
+single-layer × all-layers matrix at the checkpoint's full context length (see
+[Test cases](#test-cases)), but the other blocks are still covered by one PCC test each, and 9
+unit tests removed by an earlier cleanup have not been restored — the mel frontend, text
+embedding, conv primitives, sampler, full decoder, and waveform decoder have no isolating test.
+Two of the removed files had known failures at the time of
+removal. See [Restored: the GPT prefill/decode coverage](#restored-the-gpt-prefilldecode-coverage).
+
+**Carrying a workaround for a `ttnn.fill_cache` bug.** The prefill pads K/V to an even tile count
+because `fill_cache` corrupts the destination's first tile at odd tile counts with 16 heads — which
+is exactly where the conditioning latents live. The workaround is verified and gated, but it is
+sound only for prompts ≤ 14 tiles and the upstream op is still broken. See
+[the write-up](#found-and-worked-around-a-ttnnfill_cache-first-tile-corruption); the ttnn issue is
+deliberately deferred until after this PR.
+
+**Back-to-back generations in one process can fail to allocate.** The fp32 vocoder hits an L1
+circular-buffer collision whose headroom shrinks as generations accumulate — reproducibly
+positional, not a size limit: in the ISL sweep, ISL 64 threw while every larger ISL in the same run
+succeeded, and it runs fine on its own. The demo avoids it by opening a **fresh device per pass**.
+Any caller reusing one device across several full generations should expect this. See
+[Context length support](#context-length-support).
 
 **Functional gaps vs. real coqui inference**
 
@@ -624,13 +1082,33 @@ of removal — see the note at the end of [PCC results](#pcc-results).
 
 ## CI
 
-**XTTS is not currently wired into any CI workflow.** A repo-wide search of
-`.github/workflows/*.yaml` and `tests/pipeline_reorg/**/*.yaml` finds no nightly, demo-test, or
-model-perf job entry for `xtts` — there is no scheduled run, no gate, and no dashboard. The
-numbers in this README are point-in-time, captured manually on Blackhole P150, not continuously
-verified. Anyone picking this model up next should treat `pytest models/experimental/xtts/tests/pcc/`
-and `pytest models/experimental/xtts/tests/perf/` as the source of truth for current status, not
-this file.
+XTTS is wired into the tiered **models** pipelines as a **tier-3** model on single Blackhole P150
+(`bh_p150b_civ2`) — the only device it supports. Two entries, matching how the other experimental
+Blackhole models (`panoptic-deeplab`, `bevformer`) are registered:
+
+| Pipeline | Entry | Command | Timeout |
+|----------|-------|---------|--------:|
+| [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | `xtts-v2 unit tests` | `pytest models/experimental/xtts/tests/pcc/ -k "not eval"` | 25 min |
+| [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | `xtts-v2 e2e tests` | `test_e2e_perf.py` (the gated perf baseline) then `demo/xtts_demo.py` | 25 min |
+
+The unit entry deselects `test_tt_eval` / `test_tt_eval_traced`: they are ungated best-effort
+metrics and would pull whisper-large-v3 (~3 GB) and ECAPA2 into CI for numbers that are
+[not reproducible run to run](#pcc-results). That leaves 22 deterministic PCC gates. The e2e entry
+covers the demo end to end plus the hard perf assertions.
+
+Timeouts allow for the first-run download of the ~1.9 GB `coqui/XTTS-v2` checkpoint; warm, the PCC
+suite is ~6 min and the e2e entry ~2 min. Both are filed under `team: shield`, which is what every
+neighbouring experimental Blackhole entry uses and which has time-budget headroom on this SKU
+(`models`/e2e is capped at 8 min for `bh_p150b_civ2` and would reject these).
+
+> **Two placeholders must be filled before merging.** `owner_id` is `UPDATE_ME` in both entries — it
+> is the Slack ID paged on failure, and inventing one would page a stranger. Confirm `team: shield`
+> at the same time; it was chosen to match neighbouring entries and to fit the budget, not from
+> knowledge of who owns this model.
+
+Nothing runs on any perf-regression cadence yet: `test_e2e_isl_sweep_perf.py` and the two Tracy
+profiling drivers are manual. The numbers in this README are point-in-time, captured on Blackhole
+P150 — treat the test suites as the source of truth for current status, not this file.
 
 ## Upstream references
 

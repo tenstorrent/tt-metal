@@ -35,6 +35,8 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
 from models.experimental.xtts.tt.xtts_gpt_block import _mm_1d_config, _to_device, _to_device_w8, sharded_decode_ln
 from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 
+TILE = 32
+
 
 def _to_device_rm(torch_tensor, device, memory_config=None):
     """torch -> ttnn bf16 ROW_MAJOR tensor on device (weight table for ttnn.embedding).
@@ -336,9 +338,32 @@ class TtXttsGptModel(LightweightModule):
         prompt_ln, kv = self.stack.forward_prefill(prefix)  # per-layer (k, v) [1, heads, prompt_len, head_dim]
         ttnn.deallocate(prompt_ln)
         prompt_len = kv[0][0].shape[2]
+        # WORKAROUND — ttnn.fill_cache corrupts the FIRST TILE of the cache (rows 0..31, which is
+        # exactly where the conditioning latents sit) when the input's seq length is an ODD multiple
+        # of 32 and num_heads is 16. Minimal repro, no XTTS involved: fill_cache of a
+        # [1, 16, 288, 64] tensor into a [1, 16, 512, 64] cache comes back differing from its input
+        # by ~4.3, entirely in rows 0..31. Independent of max_seq (320/384/512/640/1024 all corrupt)
+        # and of dtype (bf16 AND fp32); clean at 1/2/4/8 heads, so it is work-distribution related.
+        # Corrupt tile counts: 9, 11, 13, 15, 16 — clean at 1-8, 10, 12, 14.
+        #
+        # Writing an EVEN tile count avoids it. Measured conditioning-row K PCC at prompt_len
+        # 288 / 352 / 416: 0.851 / 0.768 / 0.698 -> 0.999969, i.e. identical to every shape that was
+        # already good. Left unfixed this silently degrades voice cloning at those prompt lengths.
+        #
+        # PRECONDITION: XTTS's longest prompt is 32 cond + 404 text = 436 rows = 14 tiles, so the
+        # in-range bad set is {9, 11, 13} and padding always lands on 10/12/14. This is NOT a general
+        # fix — 15 tiles would pad to 16, which is also corrupt.
+        pad_row = (prompt_len // TILE) % 2 == 1 and prompt_len + TILE <= self.max_seq
         for i, (k, v) in enumerate(kv):
-            ttnn.fill_cache(self._static_kv[i][0], k, 0)  # write prompt K into positions 0..prompt_len-1
-            ttnn.fill_cache(self._static_kv[i][1], v, 0)
+            # The pad rows land past prompt_len, where decode's additive mask ignores them until a
+            # decode step overwrites that slot, so they are invisible to the model.
+            kw = ttnn.pad(k, [(0, 0), (0, 0), (0, TILE), (0, 0)], value=0.0) if pad_row else k
+            vw = ttnn.pad(v, [(0, 0), (0, 0), (0, TILE), (0, 0)], value=0.0) if pad_row else v
+            ttnn.fill_cache(self._static_kv[i][0], kw, 0)  # write prompt K into positions 0..prompt_len-1
+            ttnn.fill_cache(self._static_kv[i][1], vw, 0)
+            if pad_row:
+                ttnn.deallocate(kw)
+                ttnn.deallocate(vw)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         return prompt_len
