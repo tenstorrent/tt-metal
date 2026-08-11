@@ -288,3 +288,56 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
     return False
+
+
+def _param_is_sharded_on_axis(param, axis_index: int, name: str) -> bool:
+    """True if ``param`` is Shard (not Replicate) on the given mesh axis.
+
+    Raises when the topology could not be read.
+    """
+    sharding = ttml.Sharding.from_tensor(param)
+    placements = sharding.placements
+    if placements is None:
+        raise RuntimeError(
+            f"{name}: could not read mesh placements; cannot tell whether it is sharded."
+        ) from sharding.read_error
+    if axis_index >= len(placements):
+        return False  # short placements == fully replicated, not unknown
+    return isinstance(placements[axis_index], ttnn.PlacementShard)
+
+
+def sync_sequence_parallel_gradients(parameters, axis_name: str = "tp"):
+    """Sum the gradients of TP-replicated parameters across the tensor-parallel axis.
+
+    Under Megatron sequence parallelism the residual stream is sharded along the
+    sequence across ``axis_name`` (the TP axis), so a parameter that is *replicated*
+    on that axis -- the RMSNorm ``gamma`` weights, and any bias added in a
+    sequence-sharded region -- only accumulates the gradient from its rank's slice of
+    the sequence. The full gradient is the SUM over ranks, so we all-reduce with **no
+    averaging** (unlike :func:`sync_gradients`, which means-reduces over the data
+    axes). TP-*sharded* parameters are skipped: each rank already holds the correct grad
+    for its shard.
+
+    Orthogonal to :func:`sync_gradients` (dp/fsdp): the reductions are over disjoint
+    axes and commute, so both may be called. No-op when ``axis_name`` has size 1.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+        axis_name: The tensor-parallel mesh axis name (default ``"tp"``).
+
+    Raises:
+        RuntimeError: if a parameter reports no placement on the axis -- neither
+            choice is safe to assume. See :func:`_param_is_sharded_on_axis`.
+    """
+    m = maybe_mesh()
+    if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
+        return
+    axis = m.axis_index(axis_name)
+
+    for name, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+        if _param_is_sharded_on_axis(param, axis, name):
+            continue
+        # SUM across TP (no division): reconstruct the full-sequence gradient.
+        param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))

@@ -21,6 +21,7 @@ from ttml.modules import (
 
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
+from ttml.parallel import TPStrategy
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -38,16 +39,16 @@ class LlamaRopeScalingConfig:
 class LlamaConfig:
     """Llama model hyper-parameters.
 
-    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
-    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
-    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
-    vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to a multiple of ``32 * tp_size``, exposed as
-    ``Llama.padded_vocab_size``.
+    When ``tp_strategy`` enables tensor parallelism the mesh must already be open and the
+    ``"tp"`` axis size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The vocab does
+    *not* need to be TP-divisible: the embedding and LM-head weights are padded internally
+    to a multiple of ``32 * tp_size``, exposed as ``Llama.padded_vocab_size``.
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
-    sharding) and is ignored when ``use_tp=False``.
+    sharding) and is ignored when tensor parallelism is disabled. ``Replicated`` is
+    incompatible with ``TPStrategy.TENSOR_SEQUENCE``.
     """
 
     hidden_size: int = 384
@@ -64,7 +65,7 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
-    use_tp: bool = False
+    tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
 
     def __post_init__(self):
@@ -98,7 +99,7 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
-        if self.use_tp:
+        if self.tp_strategy.tensor_parallel:
             if (
                 self.weight_tying == WeightTyingType.Enabled
                 and self.embedding_placement != EmbeddingPlacement.VocabParallel
@@ -129,6 +130,22 @@ class LlamaConfig:
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
 
+        if self.tp_strategy.sequence_parallel:
+            if self.embedding_placement == EmbeddingPlacement.Replicated:
+                raise ValueError(
+                    "sequence parallelism needs the embedding output sharded along the sequence, "
+                    "which the replicated embedding cannot produce. Set embedding_placement to "
+                    "VocabParallel or FeatureParallel, or use TPStrategy.TENSOR."
+                )
+            # Each TP rank owns S/tp_size sequence positions and the sequence
+            # reduce-scatter requires the per-shard tile count to divide the ring.
+            tp_size = ttml.mesh().axis_size("tp")
+            if self.max_position_embeddings % (32 * tp_size) != 0:
+                raise ValueError(
+                    "sequence_parallel requires max_position_embeddings divisible by 32*tp_size "
+                    f"(got max_position_embeddings={self.max_position_embeddings}, tp_size={tp_size})"
+                )
+
 
 class Llama(AbstractModuleBase):
     """Llama decoder-only transformer (Python implementation)."""
@@ -138,7 +155,7 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        if config.use_tp:
+        if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
@@ -149,29 +166,39 @@ class Llama(AbstractModuleBase):
             tp_size = ttml.mesh().axis_size("tp")
             align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # gather_output=False: keep the LM head output vocab-sharded
-            # ([B,1,S,padded_V/tp_size] per device) so callers can route through
-            # ttml.ops.distributed.vocab_parallel_cross_entropy_loss without an
-            # all-gather of the full vocab dimension.
+            # No gather after LM head, because vocab_parallel_cross_entropy_loss
+            # expects a vocab-sharded tensor.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
                 gather_output=False,
+                # Under SP the head input (ln_fc output) is sequence-sharded; the
+                # column-parallel gather restores the full sequence, yielding
+                # full-sequence vocab-sharded logits -- exactly what the classic-TP
+                # path produces, so vocab_parallel_cross_entropy_loss is unchanged.
+                sequence_parallel=config.tp_strategy.sequence_parallel,
                 axis_name="tp",
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
+                # Under SP the embedding output is reduce-scattered along the
+                # sequence so the first block receives a sequence-sharded residual.
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
+                    sequence_parallel=config.tp_strategy.sequence_parallel,
                     axis_name="tp",
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
+                # Under SP the gathered full-hidden embedding is additionally
+                # scattered along the sequence, so the first block receives a
+                # sequence-sharded residual.
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
+                    sequence_parallel=config.tp_strategy.sequence_parallel,
                     axis_name="tp",
                 )
             else:
@@ -224,7 +251,7 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
-                    use_tp=config.use_tp,
+                    tp_strategy=config.tp_strategy,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -245,6 +272,14 @@ class Llama(AbstractModuleBase):
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]
         padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+
+        if self.config.tp_strategy.sequence_parallel:
+            tp_size = ttml.mesh().axis_size("tp")
+            if actual_seq_len % (TILE_SIZE * tp_size) != 0:
+                raise ValueError(
+                    "sequence_parallel requires the input sequence length divisible by 32*tp_size "
+                    f"(got seq_len={actual_seq_len}, tp_size={tp_size})"
+                )
 
         input_padded = input
         if padded_seq_len != actual_seq_len:
@@ -278,11 +313,9 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # In TP mode the LM head output stays vocab-sharded; the trailing
-        # padded columns are handled by vocab_parallel_cross_entropy_loss.
-        # The non-TP path returns full-vocab logits, so we still need to drop
-        # the tile-alignment padding before handing them off to the caller.
-        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
+        # Under TP the padding is handled inside
+        # vocab_parallel_cross_entropy_loss.
+        if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
