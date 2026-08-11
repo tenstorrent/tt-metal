@@ -72,6 +72,12 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     neighbor_pad_async/neighbor_pad_async.cpp
     neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
     neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
+    neighbor_pad_halo/neighbor_pad_halo.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_device_operation.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_program_factory.cpp
+    neighbor_pad_halo/halo_scatter.cpp
+    neighbor_pad_halo/device/halo_scatter_device_operation.cpp
+    neighbor_pad_halo/device/halo_scatter_program_factory.cpp
     slice_reshard_async/slice_reshard_async.cpp
     slice_reshard_async/device/slice_reshard_async_device_operation.cpp
     slice_reshard_async/device/slice_reshard_async_program_factory.cpp
@@ -111,6 +117,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+    neighbor_pad_halo/neighbor_pad_halo.hpp
+    neighbor_pad_halo/halo_scatter.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
