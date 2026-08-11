@@ -84,3 +84,10 @@
 {"source":"tt-probe","pid":3830759,"started_at_ms":1786483667017,"wait_ms":181,"run_ms":68306,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":3833383,"started_at_ms":1786483944886,"wait_ms":157,"run_ms":62801,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":3835282,"started_at_ms":1786484099557,"wait_ms":185,"run_ms":65503,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3838979,"started_at_ms":1786484201992,"wait_ms":2,"run_ms":38066,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":32}
+{"source":"run_safe_pytest","pid":3840263,"started_at_ms":1786484246394,"wait_ms":2,"run_ms":67410,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_shapes.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":51}
+{"source":"run_safe_pytest","pid":3843450,"started_at_ms":1786484366612,"wait_ms":2,"run_ms":93464,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":51}
+{"source":"tt-probe","pid":3846805,"started_at_ms":1786484532936,"wait_ms":182,"run_ms":47786,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3847643,"started_at_ms":1786484726766,"wait_ms":157,"run_ms":58483,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3848996,"started_at_ms":1786484801906,"wait_ms":175,"run_ms":47645,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3849356,"started_at_ms":1786484859629,"wait_ms":2,"run_ms":87681,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":1,"precompile_mode":"farm","precompile_reason":"ok","precompile_s":45}

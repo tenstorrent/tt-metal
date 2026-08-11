@@ -175,7 +175,13 @@ void kernel_main() {
     constexpr bool IS_RM_GAMMA = get_compile_time_arg_val(4) != 0;
     constexpr bool HAS_ANY_TAIL = get_compile_time_arg_val(5) != 0;
     constexpr bool IS_SHARDED_IN = get_compile_time_arg_val(6) != 0;
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    // The ROW_MAJOR gamma stick is staged in cb_input_rm when the two CBs share a
+    // page format: cb_gamma_rm dies (tilized) strictly before cb_input_rm's first
+    // push, and both have the same producer (this kernel) and consumer (compute's
+    // tilize), so one buffer serves both lifetimes. Saves C tiles.
+    constexpr bool ALIAS_GAMMA_RM = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t cb_gamma_stage = ALIAS_GAMMA_RM ? cb_input_rm : cb_gamma_rm;
+    constexpr auto src_args = TensorAccessorArgs<8>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -239,7 +245,7 @@ void kernel_main() {
             // TILE gamma already has.
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr);
             if (gamma_lead_bytes == 0) {
-                read_slice_rows<cb_gamma_rm, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_read_offset);
+                read_slice_rows<cb_gamma_stage, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_read_offset);
             } else {
                 // This core's gamma slice does NOT start on a DRAM-aligned boundary
                 // (a ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1
@@ -249,9 +255,9 @@ void kernel_main() {
                 // the gamma row, then re-fetch it L1 -> L1 at the exact offset: an
                 // L1 source only needs the 16-byte L1 alignment, which every slice
                 // offset has (the RM width granule IS that alignment).
-                constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_rm) / TILE_HW_DIM) * CB_W_TILES;
-                cb_reserve_back(cb_gamma_rm, CB_W_TILES);
-                const uint32_t row = get_write_ptr(cb_gamma_rm);
+                constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_stage) / TILE_HW_DIM) * CB_W_TILES;
+                cb_reserve_back(cb_gamma_stage, CB_W_TILES);
+                const uint32_t row = get_write_ptr(cb_gamma_stage);
                 // Scratch lives in tile-rows 1.. of the same CB block, which tilize
                 // does copy into the gamma tile's rows 1..31 — harmless, because
                 // gamma_block consumes row 0 only (BroadcastDim::Row).
@@ -262,7 +268,7 @@ void kernel_main() {
                 noc_async_read(::get_noc_addr(scratch + gamma_lead_bytes), row, gamma_slice_bytes);
                 zero_l1_bytes(row + gamma_slice_bytes, block_row_bytes - gamma_slice_bytes);
                 noc_async_read_barrier();
-                cb_push_back(cb_gamma_rm, CB_W_TILES);
+                cb_push_back(cb_gamma_stage, CB_W_TILES);
             }
         } else {
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);

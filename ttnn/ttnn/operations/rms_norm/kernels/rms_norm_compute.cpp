@@ -85,6 +85,10 @@ void kernel_main() {
     constexpr uint32_t INV_W_BITS = get_compile_time_arg_val(5);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(6);
     constexpr bool IS_RM_GAMMA = get_compile_time_arg_val(7) != 0;
+    // See the reader: the ROW_MAJOR gamma stick is staged in cb_input_rm when the
+    // two CBs share a page format (disjoint lifetimes, same producer + consumer).
+    constexpr bool ALIAS_GAMMA_RM = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t cb_gamma_stage = ALIAS_GAMMA_RM ? cb_input_rm : cb_gamma_rm;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(1);
@@ -113,7 +117,7 @@ void kernel_main() {
     if constexpr (HAS_GAMMA && IS_RM_GAMMA) {
         // Converts the single stick to the row-0-valid tile form; TILE gamma
         // already arrives in that form from the reader.
-        ckl::tilize<CB_W_TILES, cb_gamma_rm, cb_gamma_tiles>(1);
+        ckl::tilize<CB_W_TILES, cb_gamma_stage, cb_gamma_tiles>(1);
     }
 
     for (uint32_t b = 0; b < num_blocks; ++b) {

@@ -76,7 +76,7 @@ SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
 # the asserts below pin them so an added arg fails loudly at program build
 # instead of silently shifting a peer's args.
 # --------------------------------------------------------------------------
-READER_ACCESSOR_CT_BASE = 7  # rms_norm_reader.cpp: TensorAccessorArgs<7>
+READER_ACCESSOR_CT_BASE = 8  # rms_norm_reader.cpp: TensorAccessorArgs<8>
 WRITER_MCAST_CT_BASE = 6  # rms_norm_writer.cpp: MCAST_CT_BASE
 WRITER_MCAST_RT_BASE = 16  # rms_norm_writer.cpp: MCAST_RT_BASE
 _READER_NUM_ARGS = 17  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..16)
@@ -324,9 +324,33 @@ def _cb_specs(
     if geo.has_gamma:
         specs.append((CB_GAMMA_TILES, C, geo.gamma_tile_bytes, geo.gamma_dtype))
         specs.append((CB_NORMED, R * C, T_in, in_dtype))
-        if geo.is_rm_gamma:
+        if geo.is_rm_gamma and not _gamma_rm_aliases_input_rm(geo):
             specs.append((CB_GAMMA_RM, C, geo.gamma_tile_bytes, geo.gamma_dtype))
     return specs
+
+
+def _gamma_rm_aliases_input_rm(geo):
+    """Can the ROW_MAJOR gamma stick be staged in `cb_input_rm` instead of its own CB?
+
+    Reuse pattern 3 (alias disjoint lifetimes, `l1-footprint-discipline.md`):
+    `cb_gamma_rm` is filled ONCE before the block loop and dies the moment
+    `load_gamma_slice` has tilized it, which is strictly before `cb_input_rm`'s first
+    push. Both CBs have the SAME producer (the reader) and the SAME consumer
+    (compute's tilize), so the single-producer/single-consumer invariant is
+    preserved, and both hold `C` tile-sized pages. Saves `C` tiles — which is what
+    lets several wide HEIGHT-sharded ROW_MAJOR geometries fit at all, since a
+    HEIGHT shard pins `C = tensor_w_tiles`.
+
+    Gated on identical page FORMAT: one CB index carries one data format, so a
+    mixed-precision gamma (bf16 activations x fp32 weights) keeps its own buffer.
+    """
+    return (
+        geo.has_gamma
+        and geo.is_rm_gamma
+        and geo.is_rm_in
+        and geo.gamma_dtype == geo.in_dtype
+        and geo.gamma_tile_bytes == geo.in_tile_bytes
+    )
 
 
 def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False):
@@ -340,7 +364,18 @@ def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=Fa
     def total(R):
         return sum(
             pages * page_size
-            for _, pages, page_size, _ in _cb_specs(geo, C, G, R, is_rm_out, has_tail, pin_in=pin_in, pin_out=pin_out)
+            for _, pages, page_size, _ in _cb_specs(
+                geo,
+                C,
+                G,
+                R,
+                is_rm_out,
+                has_tail,
+                input_cb_depth=depths[0],
+                rm_cb_depth=depths[1],
+                pin_in=pin_in,
+                pin_out=pin_out,
+            )
         )
 
     at_1, at_2 = total(1), total(2)
@@ -1053,6 +1088,7 @@ def create_program_descriptor(
         1 if geo.is_rm_gamma else 0,
         has_tail_global,
         1 if sv_in is not None else 0,
+        1 if _gamma_rm_aliases_input_rm(geo) else 0,
     ]
     # Same contract as the writer's runtime args: the reader reads its
     # TensorAccessorArgs from a hardcoded CT offset.
@@ -1095,6 +1131,7 @@ def create_program_descriptor(
         inv_w_bits,
         eps_bits,
         1 if geo.is_rm_gamma else 0,
+        1 if _gamma_rm_aliases_input_rm(geo) else 0,
     ]
 
     kernels = [
