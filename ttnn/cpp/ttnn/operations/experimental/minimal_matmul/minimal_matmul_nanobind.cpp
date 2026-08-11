@@ -45,7 +45,7 @@ void bind_minimal_matmul(nb::module_& mod) {
             Activation/input matrix A, or a 2-element [prefix, suffix] list for fused concat over K.
             - Layout: TILE (required).
             - Device: must be on device and allocated in a device buffer.
-            - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}.
+            - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B, DataType::FLOAT32}.
             - Shape: [..., M, K]. Upper (leading) dimensions are broadcast over rows (folded into M).
               With fused concat, each list element carries its own K; the contraction K is taken from
               the weight and spans both padded segments.
