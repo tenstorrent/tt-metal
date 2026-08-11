@@ -6,6 +6,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra @tenstorrent
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/deprecations.json
 .github/actions/sweep-run-analysis/ @stevendae @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/time_budget.yaml @roseli-TT @tdowdallTT @tenstorrent/codeowner-bypass
 .github/TESTOWNERS @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -105,7 +106,6 @@ tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass #
 tt_metal/sources.cmake @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass # fabric experimental APIs
-tt_metal/api/tt-metalium/experimental/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass # tensor WIP
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
@@ -286,6 +286,7 @@ ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedredu
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/**/kernels/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass # Removes the owners above from owning kernels unless specified afterwards
+ttnn/**/kernel/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass # Same, for the singular kernel/ dir the pattern above misses
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
@@ -454,6 +455,7 @@ tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @te
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT @tenstorrent/codeowner-bypass

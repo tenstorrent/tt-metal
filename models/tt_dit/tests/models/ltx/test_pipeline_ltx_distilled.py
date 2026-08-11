@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -179,7 +180,9 @@ def test_pipeline_distilled(
             "subject_consistency": 0.92,
             "background_consistency": 0.93,
             "motion_smoothness": 0.955,
-            "dynamic_degree": 1.0,
+            # Averaged over VBENCH_SEEDS clips: dynamic_degree is near-binary per clip and this content
+            # sits at ~0.8-1.0, so the floor requires ~4/5 seeds dynamic (1.0 would demand every seed).
+            "dynamic_degree": 0.8,
             "imaging_quality": 0.645,
         },
     }
@@ -197,16 +200,46 @@ def test_pipeline_distilled(
     if run_clip:
         pytest.importorskip("decord", reason="RUN_CLIP=1 but decord not installed (set RUN_CLIP=0)")
 
-    def check_output_with_vbench(prompt, number):
+    def check_output_with_vbench(prompt, number, seed=None):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
-        if int(ttnn.distributed_context_get_rank()) == 0:
-            thresholds = vbench_thresholds_by_height.get(height)
-            if thresholds is None:
-                pytest.skip(f"no VBench thresholds calibrated for height {height}")
+        if int(ttnn.distributed_context_get_rank()) != 0:
+            return
+        thresholds = vbench_thresholds_by_height.get(height)
+        if thresholds is None:
+            pytest.skip(f"no VBench thresholds calibrated for height {height}")
+
+        # Gate on the average of VBENCH_SEEDS traced replays (default 5): a single clip's VBench score
+        # is too noisy to gate on — dynamic_degree is near-binary per clip — so score the set together
+        # (VBench averages over a directory). The primary clip (`number`, `seed`) is already rendered;
+        # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
+        # filename) keeps the one-clip path.
+        num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
+        if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+            return
+
+        cwd = os.path.abspath(os.getcwd())
+
+        with tempfile.TemporaryDirectory() as vbench_dir:
+
+            def _link(idx: int, mp4_number: int) -> None:
+                # The render always lands directly in CWD; resolve the path and confirm it stays there so
+                # the number threaded into the filename can't escape it, and give the link a plain integer
+                # name so nothing dynamic reaches the destination path either.
+                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
+                if os.path.dirname(src) != cwd:
+                    raise ValueError(f"render path escaped the working dir: {src!r}")
+                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
+
+            _link(0, number)
+            for k in range(1, num_seeds):
+                run(prompt=prompt, number=1000 + k, seed=seed + k)
+                _link(k, 1000 + k)
+            logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
+            assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
@@ -262,7 +295,7 @@ def test_pipeline_distilled(
             logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
             run(prompt=prompt, number=1, seed=seed)
             check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1)
+            check_output_with_vbench(prompt, 1, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
