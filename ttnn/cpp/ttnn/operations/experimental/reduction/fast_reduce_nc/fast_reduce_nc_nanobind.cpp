@@ -21,7 +21,7 @@ namespace {
 
 ttnn::Tensor fast_reduce_nc_wrapper(
     const ttnn::Tensor& input,
-    const ttnn::SmallVector<int32_t>& dims,
+    const ttsl::SmallVector<int32_t>& dims,
     const std::optional<const ttnn::Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -40,7 +40,7 @@ void bind_fast_reduce_nc(nb::module_& mod) {
         fast_reduce_nc_wrapper,
         nb::arg("input").noconvert(),
         nb::kw_only(),
-        nb::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
+        nb::arg("dims").noconvert() = ttsl::SmallVector<int32_t>(),
         nb::arg("output").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         nb::arg("compute_kernel_config").noconvert() = nb::none());

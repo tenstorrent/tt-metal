@@ -108,10 +108,25 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     auto layout = mem_config.memory_layout();
 
     uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * num_cores_nhw);
-    uint32_t out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH / 2);
+    // When the last per-shard tile is strictly less than one full face wide (channels % 32 < 16),
+    // round up to TILE_WIDTH so the packer can always write 2 full faces without reconfiguring.
+    // When channels % 32 == FACE_WIDTH (e.g. 80, 48 …), the last tile is exactly one face wide
+    // and the old FACE_WIDTH alignment is correct — no extra padding needed.
+    // Use ceiling division so that for WIDTH/BLOCK sharding, where channels may not divide evenly,
+    // we check the maximum per-shard channel count and avoid false partial-tile detection.
+    uint32_t channels_per_shard = tt::div_up(out_c, num_cores_c);
+    uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
+    // Skip tile-padding when the only tile per core is partial and fits in one face (single
+    // partial tile, first==last). In that case the kernel packs just 1 face, so FACE_WIDTH
+    // alignment matches the kernel output. See compute_pool_2d.cpp for the matching kernel
+    // condition (single_partial_fits_in_face).
+    bool needs_tile_pad =
+        cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH && channels_per_shard > tt::constants::FACE_WIDTH;
+    uint32_t base_alignment = needs_tile_pad ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
+    uint32_t out_c_padded = tt::round_up(out_c, base_alignment);
     if (mem_config.is_sharded()) {
         if (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            out_c_padded = tt::round_up(out_c, sliding_window_config.num_cores_c * tt::constants::TILE_WIDTH / 2);
+            out_c_padded = tt::round_up(out_c, num_cores_c * base_alignment);
         }
     }
 
@@ -123,7 +138,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
@@ -142,7 +157,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
-        auto output_spec_ind = TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
+        auto output_spec_ind = tt::tt_metal::TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};

@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -9,10 +11,11 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -49,30 +52,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -88,7 +72,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept use_legacy, activations, traced_source, traced_machine_info, etc.
+    **kwargs,  # Accept activations, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -98,9 +82,7 @@ def run(
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(
-        kwargs, exclude={"use_legacy", "activations"}, output_memory_config=output_memory_config
-    )
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -176,12 +158,38 @@ def run(
     # Compute expected output (in-place add modifies the first tensor)
     torch_output_tensor = torch_input_tensor_a.clone().add_(torch_input_tensor_b)
 
+    # The model can fuse an activation onto the add (op_kwargs["activations"], e.g.
+    # SILU); the device applies it, so the golden must too or PCC diverges. Match
+    # the op's post-add activation list.
+    _acts = kwargs.get("activations")
+    if isinstance(_acts, (list, tuple)):
+        for _a in _acts:
+            _name = ""
+            if hasattr(_a, "op_type"):
+                _name = str(_a.op_type)
+            else:
+                _m = re.search(r"UnaryOpType::?\.?(\w+)", str(_a))
+                _name = _m.group(1) if _m else str(_a)
+            _name = _name.rsplit(".", 1)[-1].rsplit("::", 1)[-1].upper()
+            if _name == "SILU":
+                torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+            elif _name == "GELU":
+                torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
+            elif _name == "RELU":
+                torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+            elif _name == "SIGMOID":
+                torch_output_tensor = torch.sigmoid(torch_output_tensor)
+
     start_time = start_measuring_time()
     ttnn.add_(input_tensor_a, input_tensor_b, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

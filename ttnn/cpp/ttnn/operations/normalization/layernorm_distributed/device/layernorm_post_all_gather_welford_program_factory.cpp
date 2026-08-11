@@ -2,60 +2,66 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_post_all_gather_welford_program_factory.hpp"
+#include "layernorm_post_all_gather_device_operation.hpp"
+#include "layernorm_distributed_metal2_helpers.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <bit>
-#include <optional>
 #include <string>
-#include <variant>
 
 using uint32_t = std::uint32_t;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
 namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
+namespace m2 = tt::tt_metal::experimental;
+using namespace ttnn::prim::layernorm_distributed_metal2;
 
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
+const m2::KernelSpecName POSTWF_READER{"postwf_reader"};
+const m2::KernelSpecName POSTWF_WRITER{"postwf_writer"};
+const m2::KernelSpecName POSTWF_COMPUTE{"postwf_compute"};
 
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
+const m2::DFBSpecName POSTWF_INPUT{"postwf_input"};
+const m2::DFBSpecName POSTWF_STATS{"postwf_stats"};
+const m2::DFBSpecName POSTWF_GAMMA{"postwf_gamma"};
+const m2::DFBSpecName POSTWF_BETA{"postwf_beta"};
+const m2::DFBSpecName POSTWF_EPS{"postwf_eps"};
+const m2::DFBSpecName POSTWF_REDUCE{"postwf_reduce"};
+const m2::DFBSpecName POSTWF_STATS_REDUCED{"postwf_stats_reduced"};
+const m2::DFBSpecName POSTWF_RECIP_SQRT_VAR{"postwf_recip_sqrt_var"};
+const m2::DFBSpecName POSTWF_X_MINUS_MEAN{"postwf_x_minus_mean"};
+const m2::DFBSpecName POSTWF_X_NORMED{"postwf_x_normed"};
+const m2::DFBSpecName POSTWF_TIMES_GAMMA_OUT{"postwf_times_gamma_out"};
+const m2::DFBSpecName POSTWF_OUT{"postwf_out"};
 
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
+const m2::TensorParamName POSTWF_INPUT_T{"postwf_input_t"};
+const m2::TensorParamName POSTWF_STATS_T{"postwf_stats_t"};
+const m2::TensorParamName POSTWF_GAMMA_T{"postwf_gamma_t"};
+const m2::TensorParamName POSTWF_BETA_T{"postwf_beta_t"};
+const m2::TensorParamName POSTWF_OUTPUT_T{"postwf_output_t"};
 
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
+constexpr const char* POSTWF_READER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
+constexpr const char* POSTWF_WRITER_KERNEL =
+    "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+    "writer_unary_interleaved_start_id_blocked.cpp";
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGatherWelfordProgramFactory::create(
+ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFactory::create_program_artifacts(
     const LayerNormPostAllGatherParams& operation_attributes,
     const LayerNormPostAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
-    using tt::tt_metal::CircularBufferConfig;
-
     const auto& a = tensor_args.input;
     const auto& stats = tensor_args.stats;
     const auto& gamma = tensor_args.gamma;
@@ -69,6 +75,9 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
+    // Logical (un-padded) width is used for the normalization scaler so that
+    // non-tile-aligned widths normalise by the true N, not the tile-padded N.
+    const uint32_t logical_W = a.logical_shape()[-1];
 
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
@@ -91,6 +100,10 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
     log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
+    const auto& input_mesh = a.mesh_tensor();
+    const auto& stats_mesh = stats.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
+
     IDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -102,6 +115,7 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // Welford uses fp32 accumulation when fp32_dest_acc_en is enabled
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value()
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
@@ -126,12 +140,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
-
     uint32_t cb_length = Wt;
 
     const uint32_t available_L1 =
@@ -147,9 +155,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     const uint32_t in5_tiles = 1;  // reduce scalar
 
     const uint32_t intermed0_tiles = tile_cols_per_device;
-    const uint32_t intermed1_tiles = 1;
-    const uint32_t intermed2_tiles = 1;
-    const uint32_t intermed3_tiles = 1;
     const uint32_t intermed4_tiles = 1;
     const uint32_t intermed5_tiles = cb_length;
     const uint32_t intermed6_tiles = cb_length;
@@ -197,6 +202,17 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
         "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
         intermed7_tiles,
         block_size);
+
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDest (set below). UnpackToDest is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDest writes into. Without fp32 DEST, UnpackToDest can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "layer_norm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
@@ -258,15 +274,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
 
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
-
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
-        (std::uint32_t)stats_tiles_cols,
-    };
-
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
     uint32_t beta_is_row_major = 0;
@@ -275,8 +282,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         gamma_is_row_major = 1;
-    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     uint32_t beta_stick_size = 0;
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
@@ -284,178 +289,264 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
         bool beta_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(beta_stick_size);
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
-    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
-    reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)cb_length);
-    reader_compile_time_args.push_back((std::uint32_t)Wt);
+    // Reader uses this compile-time reduction width to generate the AVG scaler tile.
+    const uint32_t reduce_factor = logical_W * num_devices;
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> compute_defines;
-    if (gamma.has_value()) {
-        reader_defines["FUSE_GAMMA"] = "1";
-    }
-    if (beta.has_value()) {
-        reader_defines["FUSE_BETA"] = "1";
-    }
-
-    auto reader_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
-
-    auto writer_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_y,
-        W,
-        block_size,
-        stats_tiles_cols,
-        gamma.has_value(),
-        beta.has_value(),
-        fp32_dest_acc_en,
-        cb_length};
-
+    // RMSNorm is rejected together with Welford before the factory runs, so only the Welford
+    // compute kernel is reachable here; the buffer set and argument schema below are its.
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
-                     "rmsnorm_post_allgather.cpp"
+                     "rmsnorm_post_allgather_metal2.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_post_allgather_welford.cpp";
-    auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
-        .compile_args = compute_args,
-        .defines = compute_defines};
-    auto compute_kernels_id = tt::tt_metal::CreateKernel(program, compute_kernel_file, all_cores, compute_config);
 
-    // Create circular buffers
-    // c_in0 -> a
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
-            .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-    // c_in1 -> stats
-    CircularBufferConfig cb_stats_config =
-        CircularBufferConfig(in1_tiles * stats_single_tile_size, {{tt::CBIndex::c_1, stats_data_format}})
-            .set_page_size(tt::CBIndex::c_1, stats_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_stats_config);
-    // c_in2 -> gamma
-    if (gamma.has_value()) {
-        CircularBufferConfig cb_gamma_config =
-            CircularBufferConfig(in2_tiles * gamma_single_tile_size, {{tt::CBIndex::c_2, gamma_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_2, gamma_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gamma_config);
-    }
-    // c_in3 -> beta
-    if (beta.has_value()) {
-        CircularBufferConfig cb_beta_config =
-            CircularBufferConfig(in3_tiles * beta_single_tile_size, {{tt::CBIndex::c_3, beta_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_3, beta_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_beta_config);
-    }
-    // c_in4 -> epsilon
-    CircularBufferConfig cb_eps_config =
-        CircularBufferConfig(in4_tiles * bfloat16_tile_size, {{tt::CBIndex::c_4, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_4, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_eps_config);
-    // c_in5 -> reduce scalar
-    CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in5_tiles * bfloat16_tile_size, {{tt::CBIndex::c_5, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_5, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
-
-    // LN and RMS shared intermediates
-    // c_intermed0 -> [mean(x**2), mean(x)]
-    CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_6, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
-    // c_intermed2 -> var = mean(x**2) - mean(x)**2
-    CircularBufferConfig cb_intermed2_config =
-        CircularBufferConfig(intermed2_tiles * single_tile_size, {{tt::CBIndex::c_8, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_8, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
-    // c_intermed3 -> var + epsilon
-    CircularBufferConfig cb_intermed3_config =
-        CircularBufferConfig(intermed3_tiles * single_tile_size, {{tt::CBIndex::c_9, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_9, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
-    // c_intermed4 -> 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed4_config =
-        CircularBufferConfig(intermed4_tiles * single_tile_size, {{tt::CBIndex::c_10, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_10, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed4_config);
-    // c_intermed6 -> (x - mean(x)) * 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed6_config =
-        CircularBufferConfig(intermed6_tiles * single_tile_size, {{tt::CBIndex::c_12, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_12, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed6_config);
-
-    // LN-specific intermediates
-    if (!is_rmsnorm) {
-        // c_intermed1 -> mean(x)**2
-        CircularBufferConfig cb_intermed1_config =
-            CircularBufferConfig(intermed1_tiles * single_tile_size, {{tt::CBIndex::c_7, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_7, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
-        // c_intermed5 -> x - mean(x)
-        CircularBufferConfig cb_intermed5_config =
-            CircularBufferConfig(intermed5_tiles * single_tile_size, {{tt::CBIndex::c_11, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_11, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed5_config);
-        if (beta.has_value()) {
-            // c_intermed7 -> (x - mean(x)) * 1/sqrt(var + epsilon) * gamma
-            CircularBufferConfig cb_intermed7_config =
-                CircularBufferConfig(intermed7_tiles * single_tile_size, {{tt::CBIndex::c_13, cb_data_format}})
-                    .set_page_size(tt::CBIndex::c_13, single_tile_size);
-            tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed7_config);
-        }
-    }
-
-    CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
-            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-    // Log all circular buffers
-    for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
-        }
-    }
-
-    uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // Set runtime arguments based on kernel layout type
+    // gamma and beta are optional, and the kernel-side handle for a buffer exists only where the host
+    // binds that buffer: the build emits `dfb::gamma` into a kernel's generated bindings only if this
+    // factory gave that kernel a gamma binding. So when gamma is absent, a kernel's source must not
+    // contain the text `dfb::gamma` at all. Gating the use with `if constexpr` does not achieve that,
+    // the gate has to be `#ifdef`, which removes the text before the compiler sees it.
+    // These two defines are what the kernels gate on.
+    m2::KernelSpec::CompilerOptions::Defines gb_defines;
+    if (gamma.has_value()) {
+        gb_defines.emplace("FUSE_GAMMA", "1");
+    }
+    if (beta.has_value()) {
+        gb_defines.emplace("FUSE_BETA", "1");
+    }
+
+    // The normalized result is staged in its own buffer only while gamma or beta still has to be
+    // applied; otherwise it is packed straight into the output.
+    const bool uses_x_normed = gamma.has_value() || beta.has_value();
+    // The gamma product needs a buffer of its own only when beta still has to be added to it.
+    const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    dfbs.push_back(make_dfb(POSTWF_INPUT, in0_tiles, in_single_tile_size, in_data_format));
+    dfbs.push_back(make_dfb(POSTWF_STATS, in1_tiles, stats_single_tile_size, stats_data_format));
+    if (gamma.has_value()) {
+        dfbs.push_back(make_dfb(POSTWF_GAMMA, in2_tiles, gamma_single_tile_size, gamma_cb_data_format));
+    }
+    if (beta.has_value()) {
+        dfbs.push_back(make_dfb(POSTWF_BETA, in3_tiles, beta_single_tile_size, beta_cb_data_format));
+    }
+    dfbs.push_back(make_dfb(POSTWF_EPS, in4_tiles, bfloat16_tile_size, tt::DataFormat::Float16_b));
+    dfbs.push_back(make_dfb(POSTWF_REDUCE, in5_tiles, single_tile_size, cb_data_format));
+    // [mean(x**2), mean(x)], recombined from the per-device Welford partials
+    dfbs.push_back(make_dfb(POSTWF_STATS_REDUCED, intermed0_tiles, single_tile_size, cb_data_format));
+    // 1/sqrt(var + epsilon)
+    dfbs.push_back(make_dfb(POSTWF_RECIP_SQRT_VAR, intermed4_tiles, single_tile_size, cb_data_format));
+    // x - mean(x)
+    dfbs.push_back(make_dfb(POSTWF_X_MINUS_MEAN, intermed5_tiles, single_tile_size, cb_data_format));
+    if (uses_x_normed) {
+        // (x - mean(x)) * 1/sqrt(var + epsilon)
+        dfbs.push_back(make_dfb(POSTWF_X_NORMED, intermed6_tiles, single_tile_size, cb_data_format));
+    }
+    if (uses_times_gamma_out) {
+        // (x - mean(x)) * 1/sqrt(var + epsilon) * gamma
+        dfbs.push_back(make_dfb(POSTWF_TIMES_GAMMA_OUT, intermed7_tiles, single_tile_size, cb_data_format));
+    }
+    dfbs.push_back(make_dfb(POSTWF_OUT, out0_tiles, out_single_tile_size, out_data_format));
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelSpec reader{
+        .unique_id = POSTWF_READER,
+        .source = POSTWF_READER_KERNEL,
+        .compiler_options = {.defines = gb_defines},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_STATS,
+                    .accessor_name = "stats",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_EPS,
+                    .accessor_name = "eps",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = POSTWF_INPUT_T, .accessor_name = "src"},
+                m2::TensorBinding{.tensor_parameter_name = POSTWF_STATS_T, .accessor_name = "stats_src"},
+            },
+        .compile_time_args =
+            {{"blk", block_size},
+             {"stats_tiles_cols", stats_tiles_cols},
+             {"gamma_is_row_major", gamma_is_row_major},
+             {"beta_is_row_major", beta_is_row_major},
+             {"dfb_length", cb_length},
+             {"Wt", Wt},
+             {"reduce_factor", reduce_factor}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
+    // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
+    // both endpoint roles.
+    bind_self_loop(reader, POSTWF_REDUCE, "reduce");
+    if (gamma.has_value()) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = POSTWF_GAMMA_T, .accessor_name = "gamma_src"});
+    }
+    if (beta.has_value()) {
+        reader.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader.tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = POSTWF_BETA_T, .accessor_name = "beta_src"});
+    }
+
+    m2::KernelSpec writer{
+        .unique_id = POSTWF_WRITER,
+        .source = POSTWF_WRITER_KERNEL,
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = POSTWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
+        .compile_time_args = {{"blk", block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // Welford preserves the math fidelity selection and FP32 dst-acc setting from compute_kernel_config.
+    m2::KernelSpec compute{
+        .unique_id = POSTWF_COMPUTE,
+        .source = compute_kernel_file,
+        .compiler_options = {.defines = gb_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_INPUT,
+                    .accessor_name = "inp",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_STATS,
+                    .accessor_name = "stats",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_EPS,
+                    .accessor_name = "eps",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            },
+        .compile_time_args =
+            {{"Wt", tiles_per_core_y},
+             {"W", W},
+             {"blk", block_size},
+             {"stats_tiles_cols", stats_tiles_cols},
+             {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
+             {"dfb_length", cb_length}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+    };
+    // Every intermediate below is private to the compute kernel: it packs into the buffer and
+    // unpacks it back, so it is that buffer's only endpoint on both sides.
+    bind_self_loop(compute, POSTWF_STATS_REDUCED, "stats_reduced");
+    bind_self_loop(compute, POSTWF_RECIP_SQRT_VAR, "recip_sqrt_var");
+    bind_self_loop(compute, POSTWF_X_MINUS_MEAN, "x_minus_mean");
+    if (uses_x_normed) {
+        bind_self_loop(compute, POSTWF_X_NORMED, "x_normed");
+    }
+    if (uses_times_gamma_out) {
+        bind_self_loop(compute, POSTWF_TIMES_GAMMA_OUT, "times_gamma_out");
+    }
+    if (gamma.has_value()) {
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+    if (beta.has_value()) {
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+    }
+
+    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    // UnpackToDest only helps for buffers whose only consumer is an op that supports the
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
+    // the mode preserves FP32 precision by bypassing SrcA. Setting it on a buffer consumed by any
+    // FPU op (mul_tiles, add_tiles, sub_tiles, *_bcast_*, reduce_tile) is unsafe: the buffer is
+    // then incompatible with unpacking to SRCA/B, and on Wormhole/Blackhole that combination
+    // produces garbage in SrcA (not silent TF32 truncation as one might assume).
+    //
+    // The input is consumed only by sub_tiles_bcast_cols (layernorm welford kernel) or by
+    //   mul_tiles_bcast_cols (rmsnorm kernel), both of which are FPU ops. Do NOT enable
+    //   UnpackToDest for it.
+    // The stats buffer:
+    //   - layernorm welford path: consumed only by copy_tile inside combine_welford_partials.
+    //     Set UnpackToDest when stats are FP32 to preserve precision into the per-row mean/M2
+    //     recombine.
+    //   - rmsnorm path: consumed by reduce_tile (FPU). Must NOT enable UnpackToDest.
+    if (!is_rmsnorm && fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
+        unpack_via_dest(compute_gen1, POSTWF_STATS);
+    }
+    // The rest of the Float32 buffers this kernel consumes take the SrcA/B path, each stated
+    // individually because a Float32 buffer has no implicit default once the 32-bit Dest register is
+    // enabled. Everything below is read by an FPU op: sub_tiles_bcast_cols for x - mean, add_tiles for
+    // var + epsilon, and the broadcast multiplies and adds of the gamma / beta chain.
+    if (fp32_dest_acc_en) {
+        // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
+        unpack_via_src(compute_gen1, POSTWF_STATS_REDUCED);
+        unpack_via_src(compute_gen1, POSTWF_RECIP_SQRT_VAR);
+        unpack_via_src(compute_gen1, POSTWF_X_MINUS_MEAN);
+        if (uses_x_normed) {
+            unpack_via_src(compute_gen1, POSTWF_X_NORMED);
+        }
+        if (uses_times_gamma_out) {
+            unpack_via_src(compute_gen1, POSTWF_TIMES_GAMMA_OUT);
+        }
+        // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b, and the
+        // reduce-scalar buffer never reaches this kernel (the reader is its only endpoint).
+        if (in_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_INPUT);
+        }
+        // A Float32 stats buffer on the layernorm path already took UnpackToDest just above.
+        if (stats_data_format == tt::DataFormat::Float32 && is_rmsnorm) {
+            unpack_via_src(compute_gen1, POSTWF_STATS);
+        }
+        if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_GAMMA);
+        }
+        if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, POSTWF_BETA);
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POSTWF_INPUT_T, .spec = input_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POSTWF_STATS_T, .spec = stats_mesh.tensor_spec()});
+    tensor_parameters.push_back(m2::TensorParameter{.unique_id = POSTWF_OUTPUT_T, .spec = output_mesh.tensor_spec()});
+    if (gamma.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = POSTWF_GAMMA_T, .spec = gamma.value().mesh_tensor().tensor_spec()});
+    }
+    if (beta.has_value()) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = POSTWF_BETA_T, .spec = beta.value().mesh_tensor().tensor_spec()});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime arguments
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelRunArgs reader_run{.kernel = POSTWF_READER};
+    m2::KernelRunArgs writer_run{.kernel = POSTWF_WRITER};
+    m2::KernelRunArgs compute_run{.kernel = POSTWF_COMPUTE};
+
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
@@ -470,27 +561,23 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
                     core.x,
                     tile_offset,
                     tiles_per_core_y);
-                tt::tt_metal::SetRuntimeArgs(
-                    program,
-                    reader_kernels_id,
+                m2::AddRuntimeArgsForNode(
+                    reader_run.runtime_arg_values,
                     core,
-                    {a_addr,
-                     tiles_per_core_x,
-                     tiles_per_core_y,
-                     tile_offset,
-                     stats_offset,
-                     packed_winv_value,
-                     eps,
-                     gamma_dram_addr,
-                     beta_dram_addr,
-                     stats_addr,
-                     y * tiles_per_core_y});
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {tiles_per_core_x});
-                tt::tt_metal::SetRuntimeArgs(
-                    program, writer_kernels_id, core, {dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
+                    {{"NCHt", tiles_per_core_x},
+                     {"tile_offset", tile_offset},
+                     {"stats_tile_offset", stats_offset},
+                     {"eps", eps},
+                     {"y_offset", y * tiles_per_core_y}});
+                m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
+                m2::AddRuntimeArgsForNode(
+                    writer_run.runtime_arg_values,
+                    core,
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
             }
         }
     } else {
+        uint32_t curr_row = 0;
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -507,71 +594,48 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
             uint32_t stats_offset = curr_row * stats_tiles_cols;
             uint32_t y_offset = 0;
 
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernels_id,
+            m2::AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
                 core,
-                {a_addr,
-                 num_tile_rows_per_core,
-                 Wt,
-                 tile_offset,
-                 stats_offset,
-                 packed_winv_value,
-                 eps,
-                 gamma_dram_addr,
-                 beta_dram_addr,
-                 stats_addr,
-                 y_offset});
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-            tt::tt_metal::SetRuntimeArgs(
-                program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+                {{"NCHt", num_tile_rows_per_core},
+                 {"tile_offset", tile_offset},
+                 {"stats_tile_offset", stats_offset},
+                 {"eps", eps},
+                 {"y_offset", y_offset}});
+            m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
+            m2::AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values,
+                core,
+                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
             curr_row += num_tile_rows_per_core;
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = cores}};
-}
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Assemble
+    ////////////////////////////////////////////////////////////////////////////
+    m2::ProgramSpec spec{
+        .name = "layernorm_post_all_gather_welford",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {POSTWF_READER, POSTWF_WRITER, POSTWF_COMPUTE}, .target_nodes = all_cores}},
+    };
 
-void LayerNormPostAllGatherWelfordProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const LayerNormPostAllGatherParams& /*operation_attributes*/,
-    const LayerNormPostAllGatherInputs& tensor_args,
-    Tensor& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto stats_addr = tensor_args.stats.buffer()->address();
-    const bool has_gamma = tensor_args.gamma.has_value();
-    const bool has_beta = tensor_args.beta.has_value();
-    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().buffer()->address() : 0;
-    const auto beta_addr = has_beta ? tensor_args.beta.value().buffer()->address() : 0;
-    const auto output_addr = output.buffer()->address();
-
-    auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-    auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-
-    for (const auto& core : shared_vars.cores) {
-        {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-
-            reader_args[0] = input_addr;
-            reader_args[9] = stats_addr;
-            if (has_gamma) {
-                reader_args[7] = gamma_addr;
-            }
-            if (has_beta) {
-                reader_args[8] = beta_addr;
-            }
-        }
-
-        {
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
-        }
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args.emplace(POSTWF_INPUT_T, input_mesh);
+    run_args.tensor_args.emplace(POSTWF_STATS_T, stats_mesh);
+    run_args.tensor_args.emplace(POSTWF_OUTPUT_T, output_mesh);
+    if (gamma.has_value()) {
+        run_args.tensor_args.emplace(POSTWF_GAMMA_T, gamma.value().mesh_tensor());
     }
+    if (beta.has_value()) {
+        run_args.tensor_args.emplace(POSTWF_BETA_T, beta.value().mesh_tensor());
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

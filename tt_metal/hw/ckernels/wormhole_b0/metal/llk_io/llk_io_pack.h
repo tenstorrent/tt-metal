@@ -10,6 +10,7 @@
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_pack_common.h"
+#include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
@@ -21,7 +22,6 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -71,13 +71,21 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     std::uint32_t output = operand;
-    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
-    get_local_cb_interface(output).fifo_wr_ptr += num_words;
-    get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
+    auto& cb = get_local_cb_interface(output);
+    std::uint32_t num_words = num_tiles * cb.fifo_page_size;
 
-    if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
-        get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;
+    LLK_ASSERT(cb.fifo_wr_ptr < cb.fifo_limit, "CB push_back: fifo_wr_ptr already at or past fifo_limit");
+
+    std::uint32_t remaining = cb.fifo_limit - cb.fifo_wr_ptr;
+
+    LLK_ASSERT(remaining >= num_words, "CB push_back: fifo_wr_ptr would exceed fifo_limit");
+
+    cb.fifo_wr_ptr += num_words;
+    cb.fifo_wr_tile_ptr = 0;
+
+    if (cb.fifo_wr_ptr >= cb.fifo_limit) {
+        cb.fifo_wr_ptr -= cb.fifo_size;
     }
 
     llk_push_to_brisc(operand, num_tiles, num_words);

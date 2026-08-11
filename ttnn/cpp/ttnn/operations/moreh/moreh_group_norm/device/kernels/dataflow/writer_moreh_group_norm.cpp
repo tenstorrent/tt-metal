@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -30,15 +34,15 @@ void kernel_main() {
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // mean
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
 
     // rstd
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     constexpr uint32_t onetile = 1;
 
@@ -47,7 +51,12 @@ void kernel_main() {
 
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
-    const auto output_l1_read_ptr = get_read_ptr(cb_id_output);
+    Noc noc;
+    DataflowBuffer dfb_output(cb_id_output);
+    DataflowBuffer dfb_mean(cb_id_mean);
+    DataflowBuffer dfb_rstd(cb_id_rstd);
+
+    const auto output_l1_read_ptr = dfb_output.get_read_ptr();
     uint32_t output_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
         // mean, rstd (1, 1, N, num_groups)
@@ -72,48 +81,55 @@ void kernel_main() {
         // mean (1, 1, N, num_groups)
         if (mean_has_value) {
             const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
-            const auto mean_l1_read_ptr = get_read_ptr(cb_id_mean);
-            cb_wait_front(cb_id_mean, onetile);
+            const auto mean_l1_read_ptr = dfb_mean.get_read_ptr();
+            dfb_mean.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                auto mean_ptr = reinterpret_cast<uint16_t*>(mean_l1_read_ptr);
+                CoreLocalMem<uint16_t> mean_ptr(mean_l1_read_ptr);
                 mean_ptr[tilized_mean_rstd_idx_in_tile] = mean_ptr[0];
             }
-            const auto mean_noc_addr = get_noc_addr(mean_rstd_tile_idx, mean_addrg);
-            noc_async_write(
-                mean_l1_read_ptr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
-                mean_noc_addr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
-                mean_dtype_bytes);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_mean, onetile);
+            noc.async_write(
+                dfb_mean,
+                mean_addrg,
+                mean_dtype_bytes,
+                {.offset_bytes = tilized_mean_rstd_idx_in_tile * mean_dtype_bytes},
+                {.page_id = mean_rstd_tile_idx, .offset_bytes = tilized_mean_rstd_idx_in_tile * mean_dtype_bytes});
+            noc.async_write_barrier();
+            dfb_mean.pop_front(onetile);
         }
 
         // rstd (1, 1, N, num_groups)
         if (rstd_has_value) {
             const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
-            const auto rstd_l1_read_ptr = get_read_ptr(cb_id_rstd);
-            cb_wait_front(cb_id_rstd, onetile);
+            const auto rstd_l1_read_ptr = dfb_rstd.get_read_ptr();
+            dfb_rstd.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
-                auto rstd_ptr = reinterpret_cast<uint16_t*>(rstd_l1_read_ptr);
+                CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_read_ptr);
                 rstd_ptr[tilized_mean_rstd_idx_in_tile] = rstd_ptr[0];
             }
-            const auto rstd_noc_addr = get_noc_addr(mean_rstd_tile_idx, rstd_addrg);
-            noc_async_write(
-                rstd_l1_read_ptr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
-                rstd_noc_addr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
-                rstd_dtype_bytes);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_rstd, onetile);
+            noc.async_write(
+                dfb_rstd,
+                rstd_addrg,
+                rstd_dtype_bytes,
+                {.offset_bytes = tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes},
+                {.page_id = mean_rstd_tile_idx, .offset_bytes = tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes});
+            noc.async_write_barrier();
+            dfb_rstd.pop_front(onetile);
         }
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
             // output (N, C, H, W)
-            cb_wait_front(cb_id_output, block_size);
+            dfb_output.wait_front(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 output_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                noc_async_write_tile(output_tile_idx, output_addrg, output_l1_read_ptr + r * output_tile_bytes);
+                noc.async_write(
+                    dfb_output,
+                    output_addrg,
+                    output_tile_bytes,
+                    {.offset_bytes = r * output_tile_bytes},
+                    {.page_id = output_tile_idx});
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_output, block_size);
+            noc.async_write_barrier();
+            dfb_output.pop_front(block_size);
         }  // inner_idx loop
     }  // outer_idx loop
 

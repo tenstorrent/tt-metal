@@ -40,9 +40,14 @@ set_arch_variables() {
             ARCH_DEFINE="ARCH_BLACKHOLE"
             CHIP_ARCH="blackhole"
             ;;
+        quasar)
+            ARCH_LLK_ROOT="tt_llk_quasar"
+            ARCH_DEFINE="ARCH_QUASAR"
+            CHIP_ARCH="quasar"
+            ;;
         *)
             echo "ERROR: Unsupported architecture: $arch" >&2
-            echo "Supported architectures: wormhole, blackhole" >&2
+            echo "Supported architectures: wormhole, blackhole, quasar" >&2
             return 1
             ;;
     esac
@@ -132,6 +137,8 @@ generate_compile_flags() {
 
 -DENABLE_LLK_ASSERT
 
+-DRUNTIME_FORMATS
+
 -isystem
 $ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv-tt-elf/15.1.0/include/
 -isystem
@@ -142,13 +149,43 @@ $ROOT_DIR/tests/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0
 $ROOT_DIR/tests/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf
 -isystem
 $ROOT_DIR/tests/sfpi/include
--I$ROOT_DIR/tests/hw_specific/$CHIP_ARCH/inc
 -I$ROOT_DIR/common
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 -I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib
 -I$ROOT_DIR/tests/helpers/include
+-I$METAL_DIR/tt_metal/hw/inc/
 EOF
+
+
+    case "$CHIP_ARCH" in
+        wormhole)
+            cat >> "$ROOT_DIR/compile_flags.txt" <<EOF
+-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole
+-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
+-I$METAL_DIR/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api
+
+-DLLK_BOOT_MODE_BRISC
+EOF
+            ;;
+        blackhole)
+            cat >> "$ROOT_DIR/compile_flags.txt" <<EOF
+-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/blackhole
+-I$METAL_DIR/tt_metal/hw/ckernels/blackhole/metal/llk_api
+
+-DLLK_BOOT_MODE_BRISC
+EOF
+            ;;
+        quasar)
+            cat >> "$ROOT_DIR/compile_flags.txt" <<EOF
+-I$METAL_DIR/tt_metal/hw/inc/internal/tt-2xx/quasar
+-I$METAL_DIR/tt_metal/hw/ckernels/quasar/metal/llk_api
+
+-DLLK_BOOT_MODE_TRISC
+-DLLK_TRISC_ISOLATE_SFPU
+EOF
+            ;;
+    esac
 
     echo "compile_flags.txt generated successfully at $ROOT_DIR/compile_flags.txt"
 }
@@ -183,6 +220,7 @@ Set up clangd configuration for TT-LLK development.
 ARCHITECTURE:
     wormhole    Configure for Wormhole architecture
     blackhole   Configure for Blackhole architecture
+    quasar      Configure for Quasar architecture
 
 If no architecture is specified, the script will attempt to auto-detect
 the architecture using tt-smi.
@@ -190,6 +228,7 @@ the architecture using tt-smi.
 Examples:
     $0 wormhole     # Set up for Wormhole
     $0 blackhole    # Set up for Blackhole
+    $0 quasar       # Set up for Quasar
     $0              # Auto-detect architecture
 EOF
 }
@@ -206,7 +245,8 @@ main() {
     fi
 
     # Get root directory
-    ROOT_DIR=$(git rev-parse --show-toplevel)
+    METAL_DIR=$(git rev-parse --show-toplevel)
+    ROOT_DIR="$METAL_DIR/tt_metal/tt-llk"
 
     # Determine architecture
     if [[ -z "$arch" ]]; then

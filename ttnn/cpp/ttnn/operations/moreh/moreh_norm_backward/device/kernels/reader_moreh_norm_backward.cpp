@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -80,41 +83,45 @@ void kernel_main() {
     const auto cb_id_decimal = cb_id++;
 
     // input
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // output
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // output_grad
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
-    fill_cb_with_value(cb_id_decimal, decimal);
+    DataflowBuffer dfb_decimal(cb_id_decimal);
+    fill_cb_with_value(dfb_decimal, decimal);
+
+    Noc noc;
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_output(cb_id_output);
+    DataflowBuffer dfb_output_grad(cb_id_output_grad);
+    const auto input_tile_bytes = get_tile_size(cb_id_input);
+    const auto output_tile_bytes = get_tile_size(cb_id_output);
+    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t input_tile_id = i;
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_reserve_back(cb_id_input, 1);
-        const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
-        noc_async_read_tile(input_tile_id, input_addrg, input_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_input, 1);
+        dfb_input.reserve_back(1);
+        noc.async_read(input_addrg, dfb_input, input_tile_bytes, {.page_id = input_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_input.push_back(1);
 
-        cb_reserve_back(cb_id_output, 1);
-        const auto output_l1_write_ptr = get_write_ptr(cb_id_output);
-        noc_async_read_tile(read_tile_id, output_addrg, output_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_output, 1);
+        dfb_output.reserve_back(1);
+        noc.async_read(output_addrg, dfb_output, output_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_output.push_back(1);
 
-        cb_reserve_back(cb_id_output_grad, 1);
-        const auto output_grad_l1_write_ptr = get_write_ptr(cb_id_output_grad);
-        noc_async_read_tile(read_tile_id, output_grad_addrg, output_grad_l1_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_output_grad, 1);
+        dfb_output_grad.reserve_back(1);
+        noc.async_read(
+            output_grad_addrg, dfb_output_grad, output_grad_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_output_grad.push_back(1);
     }
 
 }  // void kernel_main()

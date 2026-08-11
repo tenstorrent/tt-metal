@@ -58,8 +58,8 @@ uint8_t my_relative_y_ __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -212,13 +212,15 @@ int __attribute__((noinline)) main(void) {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
     risc_init();
 
 #if defined(ENABLE_2_ERISC_MODE)
-    subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
+    {
+        tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
+        subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
+    }
 
     // ERISC firmware >= 1.7.2 has already done this step. But on older firmware versions we need to do it here
     // and it will write to an "unused" region in base firmware.
@@ -232,6 +234,7 @@ int __attribute__((noinline)) main(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    noc_clear_all_packet_tags();
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
 

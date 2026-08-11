@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
@@ -12,6 +16,7 @@
 #include <cstdint>
 #include <array>
 #include <type_traits>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
@@ -57,12 +62,12 @@ public:
             fabric_connection, unicast_route_id, starts.data(), ranges.data(), nullptr, packet_size);
     }
 
-    void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
+    void send(Noc& noc, uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
         auto packet_read_addr = cb_out_page_start;
         auto dest_addr = tensor_page_addr;
         constexpr uint32_t packets_per_outpage = out_page_size / packet_size;
         for (uint32_t packet = 0; packet < packets_per_outpage; packet++) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 fabric_connection,
                 unicast_route_id,
@@ -110,7 +115,7 @@ public:
             fabric_connection, scatter_route_id, starts.data(), ranges.data(), default_scatter_header, packet_size);
     }
 
-    void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
+    void send(Noc& noc, uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
         if (scatter_header.chunk_count == 0) {
             // save the address of the first chunk in packet
             // write function will start reading here
@@ -119,7 +124,7 @@ public:
         scatter_header.noc_address[scatter_header.chunk_count++] = tensor_page_addr;
 
         if (scatter_header.chunk_count == num_out_pages_per_packet) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                 fabric_connection,
                 scatter_route_id,
@@ -162,7 +167,7 @@ void kernel_main() {
 
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, out_page_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_for_fab);
@@ -191,6 +196,9 @@ void kernel_main() {
         sem_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
+    Noc noc_obj;
+    CircularBuffer cb0(cb0_id);
+
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -201,22 +209,28 @@ void kernel_main() {
     FabricWriter writer(fabric_connection, starts, ranges, num_connections);
 
     for (uint32_t page_id = output_page_id_start; page_id < output_page_id_end;) {
-        cb_wait_front(cb0_id, 1);
-        auto l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(1);
+        auto l1_read_addr = cb0.get_read_ptr();
 
         for (uint32_t output = 0u; output < outputs_per_cb_page; output++) {
             if (page_id + output >= output_page_id_end) [[unlikely]] {
                 break;
             };
             auto out_page_start = l1_read_addr + output * out_page_size;
-            auto tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
-            writer.send(out_page_start, tensor_page_addr);
-            noc_async_write(out_page_start, tensor_page_addr, out_page_size);
+            auto fabric_tensor_page_addr =
+                tt::tt_fabric::linear::addrgen_detail::get_noc_address(tensor0_addrgen, page_id + output, 0);
+            writer.send(noc_obj, out_page_start, fabric_tensor_page_addr);
+            noc_obj.async_write(
+                CoreLocalMem<uint8_t>(out_page_start),
+                tensor0_addrgen,
+                out_page_size,
+                {},
+                {.page_id = page_id + output});
         }
         page_id += outputs_per_cb_page;
 
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, 1);
+        noc_obj.async_writes_flushed();
+        cb0.pop_front(1);
     }
 
     // 2. mcast output ready semaphore
@@ -245,5 +259,5 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

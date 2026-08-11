@@ -3,31 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto input_addr = get_arg_val<uint32_t>(i++);
-    const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto outer_stride = get_arg_val<uint32_t>(i++);
-    const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
-    const auto num_reduced_tiles_along_dim = get_arg_val<uint32_t>(i++);
+    const bool input_is_dram = get_arg(args::input_is_dram) == 1;
+    const auto num_output_tiles_per_core = get_arg(args::num_output_tiles_per_core);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto outer_stride = get_arg(args::outer_stride);
+    const auto num_inner_tiles = get_arg(args::num_inner_tiles);
+    const auto num_reduced_tiles_along_dim = get_arg(args::num_reduced_tiles_along_dim);
 
-    uint32_t cb_id{0};
-    const auto cb_id_input = cb_id++;
-    const auto cb_id_one = cb_id++;
-
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-
-    constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s = TensorAccessor(tensor::input);
 
     Scalar one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
+    DataflowBuffer dfb_one(dfb::one);
+    fill_cb_with_value(dfb_one, one.u);
 
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+    Noc noc;
+    DataflowBuffer dfb_input(dfb::input);
+    const auto input_tile_bytes = dfb_input.get_tile_size();
 
     auto start_output_tile_idx = tile_offset;
     const auto inner_stride = num_inner_tiles;
@@ -37,10 +35,10 @@ void kernel_main() {
 
         auto input_tile_idx = outer_idx * outer_stride + inner_idx;
         for (uint32_t d = 0; d < num_reduced_tiles_along_dim; ++d) {
-            cb_reserve_back(cb_id_input, 1);
-            noc_async_read_tile(input_tile_idx, s, input_l1_write_ptr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, 1);
+            dfb_input.reserve_back(1);
+            noc.async_read(s, dfb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_input.push_back(1);
             input_tile_idx += inner_stride;
         }
 

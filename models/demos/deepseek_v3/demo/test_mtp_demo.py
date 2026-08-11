@@ -9,8 +9,14 @@ import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
-MODEL_PATH = Path(os.environ["DEEPSEEK_V3_HF_MODEL"])
-CACHE_DIR = Path(os.environ["DEEPSEEK_V3_CACHE"])
+MODEL_PATH = Path(
+    os.getenv(
+        "DEEPSEEK_V3_HF_MODEL",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
+    )
+)
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 
 
 def _assert_demo_outputs_match(baseline: dict, mtp: dict) -> None:
@@ -38,6 +44,18 @@ def _artifact_name_for_current_mesh() -> str | None:
     if mesh_device == "QUAD":
         return "quad_demo_full_results_mtp"
     return None
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
 
 
 def _write_demo_artifact(prompts: list[str], results: dict, artifact_name: str) -> None:
@@ -102,13 +120,13 @@ def test_mtp_demp_compare_outputs(
         sampling_top_p=1.0,
     )
 
-    baseline = run_demo(enable_mtp=False, **common_kwargs)
+    baseline = run_demo(enable_mtp=False, sample_on_device=False, **common_kwargs)
     mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)
 
     artifact_name = _artifact_name_for_current_mesh()
-    if artifact_name is not None:
+    if artifact_name is not None and _is_primary_artifact_writer():
         _write_demo_artifact(prompts, mtp, artifact_name)
 
     # Prompt-level acceptance varies across real demo prompts. Keep this smoke test focused on

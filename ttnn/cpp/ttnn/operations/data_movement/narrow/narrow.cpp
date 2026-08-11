@@ -4,12 +4,13 @@
 
 #include "narrow.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn {
 
 ttnn::Tensor narrow(
     const ttnn::Tensor& input_tensor, const int32_t narrow_dim, const int32_t narrow_start, const uint32_t length) {
-    auto input_tensor_shape = input_tensor.padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     uint32_t dim = input_tensor_shape.get_normalized_index(narrow_dim);
     uint32_t start = operations::data_movement::wrap_index(narrow_start, input_tensor_shape[dim]);
 
@@ -75,13 +76,12 @@ ttnn::Tensor narrow(
 
     tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config =
         std::get<tt::tt_metal::distributed::ReplicatedBufferConfig>(storage.get_mesh_buffer().global_config());
-    uint32_t reduction_factor = input_tensor_shape[dim] / length;
-    replicated_config.size /= reduction_factor;
+    replicated_config.size = replicated_config.size / input_tensor_shape[dim] * length;
     tt::tt_metal::distributed::MeshBufferConfig narrowed_global_config = replicated_config;
 
     // Handle INTERLEAVED DRAM buffers
     if (input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM &&
-        input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) {
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         // For DRAM interleaved, narrowing is only supported on the first non-trivial dimension
         // (dimensions with size > 1). All preceding dimensions must be of size 1.
         bool all_preceding_dims_trivial = true;
@@ -126,15 +126,17 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
-            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        ttnn::DeviceStorage subtensor_storage(
+            storage,
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+                std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
 
@@ -252,9 +254,10 @@ ttnn::Tensor narrow(
         // Update tensor shape in pages
         auto narrowed_pages_shape = tensor_pages_shape;
         if (narrow_width) {
-            narrowed_pages_shape[1] /= reduction_factor;
+            narrowed_pages_shape[1] = length / page_shape[1];
         } else {
-            narrowed_pages_shape[0] /= reduction_factor;
+            narrowed_pages_shape[0] =
+                static_cast<uint32_t>(static_cast<uint64_t>(tensor_pages_shape[0]) * length / input_tensor_shape[dim]);
         }
 
         // Create new shard specifications
@@ -286,13 +289,15 @@ ttnn::Tensor narrow(
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
-            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        ttnn::DeviceStorage subtensor_storage(
+            storage,
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+                std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
 

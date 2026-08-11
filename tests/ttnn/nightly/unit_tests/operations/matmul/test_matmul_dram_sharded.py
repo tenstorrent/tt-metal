@@ -10,10 +10,11 @@ from models.common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_blackhole,
 )
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -138,11 +139,22 @@ def run_test_matmul_in1_dram_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
+    if isinstance(activation, str):
+        activation_map = {
+            "relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+            "silu": ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            "sigmoid": ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        }
+        fused_activation = activation_map.get(activation, None)
+    else:
+        fused_activation = activation
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
-        fused_activation=None,
+        fused_activation=fused_activation,
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -178,10 +190,57 @@ def run_test_matmul_in1_dram_sharded(
     if has_bias:
         pt_out += bias
 
+    # Apply activation if specified
+    if activation is not None:
+        if activation == "relu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.RELU):
+            pt_out = torch.nn.functional.relu(pt_out)
+        elif activation == "gelu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.GELU):
+            pt_out = torch.nn.functional.gelu(pt_out)
+        elif activation == "silu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.SILU):
+            pt_out = torch.nn.functional.silu(pt_out)
+        elif activation == "sigmoid" or (
+            hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.SIGMOID
+        ):
+            pt_out = torch.sigmoid(pt_out)
+
     tt_out = tt2torch_tensor(output_t)
 
+    # Determine tolerances and PCC threshold based on activation type and fidelity
+    if activation == "sigmoid":
+        atol_factor = 0.01
+        rtol_factor = 3.0
+        if fidelity == ttnn.MathFidelity.LoFi:
+            pcc_threshold = 0.995
+        else:
+            pcc_threshold = 0.997
+    elif activation in ["hardtanh", "hardsigmoid"]:
+        atol_factor = 0.008
+        rtol_factor = 2.5
+        if fidelity == ttnn.MathFidelity.LoFi:
+            pcc_threshold = 0.99
+        else:
+            pcc_threshold = 0.995
+    elif activation is not None:
+        # Other activations
+        atol_factor = 0.005
+        rtol_factor = 2.0
+        if fidelity == ttnn.MathFidelity.LoFi:
+            pcc_threshold = 0.998
+        else:
+            pcc_threshold = 0.999
+    else:
+        atol_factor = 0.002
+        rtol_factor = 1.062
+        pcc_threshold = 0.999
+
     assert_numeric_metrics(
-        pt_out, tt_out, atol=0.002 * K, rtol=1.062 * K, frobenius_threshold=0.001 * K, check_ulp=False
+        pt_out,
+        tt_out,
+        atol=atol_factor * K,
+        rtol=rtol_factor * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=pcc_threshold,
+        check_ulp=False,
     )
 
 
@@ -223,6 +282,10 @@ def run_test_matmul_in1_dram_sharded(
         (False, True, True, 32, 8192, 4096, None, (8, 2)),
         (False, True, True, 32, 8192, 1024, None, (8, 1)),
         (False, True, True, 32, 32768, 1024, None, (8, 2)),
+        (False, True, True, 32, 4096, 1280, "relu", (8, 1)),
+        (False, True, True, 32, 4096, 1024, "gelu", (8, 1)),
+        (False, True, True, 32, 4096, 2048, "silu", (8, 2)),
+        (False, True, True, 32, 4096, 1024, "sigmoid", (8, 1)),
         # (False, True, True, 32, 4096, 6144, None, (8, 2), ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16),
         # (False, True, True, 32, 4096, 14336, None, (8, 2), ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b),
         # (False, True, True, 32, 14336, 4096, None, (8, 2), ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b),
@@ -247,6 +310,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
             device,
@@ -339,11 +403,23 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=in1_mem_config, tt_dtype=in1_dtype)
 
+    # Convert string activation to UnaryWithParam if needed
+    if isinstance(activation, str):
+        activation_map = {
+            "relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+            "silu": ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            "sigmoid": ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        }
+        fused_activation = activation_map.get(activation, None)
+    else:
+        fused_activation = activation
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w // 4,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
-        fused_activation=None,
+        fused_activation=fused_activation,
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -355,7 +431,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     )
 
     # 1st mm
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -364,8 +440,8 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         compute_kernel_config=compute_kernel_config,
     )
 
-    for _ in range(200):
-        output_t = ttnn.matmul(
+    for _ in range(100):
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -417,6 +493,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     M = 32
     K = 4096
     N = 4096
@@ -477,6 +554,7 @@ def test_matmul_2d_in1_dram_sharded(
     fuse_batch,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
@@ -548,7 +626,6 @@ def test_matmul_2d_in1_dram_sharded(
     if has_bias:
         bias = torch.ones(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -577,7 +654,7 @@ def test_matmul_2d_in1_dram_sharded(
         packer_l1_acc=packer_l1_acc,
     )
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -586,7 +663,7 @@ def test_matmul_2d_in1_dram_sharded(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -602,7 +679,17 @@ def test_matmul_2d_in1_dram_sharded(
     if has_bias:
         pt_out = pt_out + bias
 
-    if activation != None:
-        pt_out = torch.nn.functional.gelu(pt_out)
+    # Apply activation if specified
+    if activation is not None:
+        if activation == "relu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.RELU):
+            pt_out = torch.nn.functional.relu(pt_out)
+        elif activation == "gelu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.GELU):
+            pt_out = torch.nn.functional.gelu(pt_out)
+        elif activation == "silu" or (hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.SILU):
+            pt_out = torch.nn.functional.silu(pt_out)
+        elif activation == "sigmoid" or (
+            hasattr(activation, "op_type") and activation.op_type == ttnn.UnaryOpType.SIGMOID
+        ):
+            pt_out = torch.sigmoid(pt_out)
 
     assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
 
@@ -11,17 +12,12 @@
  * LLK UNPACK AB SUB BCAST COL CUSTOM - SDPA specialized blocked sub path
  *************************************************************************/
 
-template <BroadcastType BType = BroadcastType::COL>
 inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
-
-    _llk_unpack_AB_sub_bcast_col_init_custom_<BType>(face_r_dim, num_faces, narrow_tile);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 }
 
-template <BroadcastType BType = BroadcastType::COL>
 inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -39,5 +35,8 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     const std::uint32_t address_b = base_address_b + offset_address_b;
 
-    _llk_unpack_AB_sub_bcast_col_custom_<BType>(address_a, address_b, ct_dim);
+    LLK_ASSERT(cb_access_within_bounds(operandA_id, tile_index_a, 1), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(cb_access_within_bounds(operandB_id, tile_index_b, 1), "Indexed tile read exceeds CB boundary");
+
+    _llk_unpack_AB_sub_bcast_col_custom_(address_a, address_b, ct_dim);
 }

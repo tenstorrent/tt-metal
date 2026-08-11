@@ -205,7 +205,7 @@ namespace tt::tt_metal {
 // This is meant to exercise noc_inline_dw_write API
 TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
-    const uint32_t stream_id = 0;
+    const uint32_t stream_id = 32;
     const uint32_t stream_reg = 4;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
@@ -592,6 +592,18 @@ void run_local_noc_stream_reg_inc(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/local_noc_stream_reg_inc.cpp",
             core,
             config);
+    } else if (hal_programmable_core_type == HalProgrammableCoreType::DRAM) {
+        core_type = CoreType::DRAM;
+        unreserved_base_addr =
+            MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        auto config = tt_metal::DramConfig{
+            .noc = tt_metal::NOC::NOC_0,
+        };
+        stream_reg_kernel = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/local_noc_stream_reg_inc.cpp",
+            core,
+            config);
     } else {
         core_type = CoreType::ETH;
         unreserved_base_addr =
@@ -610,12 +622,19 @@ void run_local_noc_stream_reg_inc(
     }
     tt_metal::SetRuntimeArgs(program_, stream_reg_kernel, core, {unreserved_base_addr});
 
+    uint64_t noc_addr =
+        unreserved_base_addr + MetalContext::instance().hal().get_l1_noc_offset(hal_programmable_core_type);
+    auto virtual_core = device->virtual_core_from_logical_core(core, core_type);
+    auto cxy = tt_cxy_pair(device->id(), virtual_core);
+    auto& cluster = MetalContext::instance().get_cluster();
+
     std::vector<uint32_t> l1_buffer_data(1, static_cast<uint32_t>(-1));
-    tt_metal::detail::WriteToDeviceL1(device, core, unreserved_base_addr, l1_buffer_data, core_type);
+    cluster.write_core(l1_buffer_data.data(), sizeof(uint32_t), cxy, noc_addr);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    tt_metal::detail::ReadFromDeviceL1(device, core, unreserved_base_addr, sizeof(uint32_t), l1_buffer_data, core_type);
+    cluster.l1_barrier(device->id());
+    cluster.read_core(l1_buffer_data.data(), sizeof(uint32_t), cxy, noc_addr);
     switch (l1_buffer_data[0]) {
         case 0: break;
         case 1:
@@ -670,6 +689,112 @@ TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     CoreCoord eth_core = *(device->get_inactive_ethernet_cores().begin());
 
     run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
+}
+
+// Increment and read back local DRISC Stream Registers
+TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    auto mesh_device = this->devices_[0];
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 1}, HalProgrammableCoreType::DRAM);
+}
+
+// Tensix to DRISC stream register round trip DRISC test:
+// writes a value to a DRISC stream register and read it back into Tensix L1
+// Host validates from Tensix L1
+TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    constexpr uint32_t kTestValue = 0x1234;
+    constexpr uint32_t kStreamId = 15;  // last valid DRISC stream (16 total)
+    constexpr uint32_t kStreamReg = 10;
+
+    auto mesh_device = this->devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
+
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    CoreCoord logical_core_drisc{0, 1};
+    CoreCoord logical_core_tensix{0, 0};
+    CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
+    uint32_t tensix_l1_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    Program program = CreateProgram();
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_read_from_drisc.cpp",
+        logical_core_tensix,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {tensix_l1_addr, kStreamId, drisc_virtual.x, drisc_virtual.y, kStreamReg, kTestValue},
+            .defines = {{"MODE_TENSIX_STREAM_REG_TO_DRISC", "1"}}});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        device, logical_core_tensix, tensix_l1_addr, sizeof(kTestValue), result, CoreType::WORKER);
+    EXPECT_EQ(result[0], kTestValue);
+}
+
+// DRISC writes a value to a Tensix stream register and reads it back into DRISC L1.
+// DRISC is in stream mode so it can initiate NOC transactions; host reads the
+// result from DRISC L1.
+TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    constexpr uint32_t kTestValue = 0x1234;
+    constexpr uint32_t kStreamId = 63;  // last valid Tensix stream (64 total)
+    constexpr uint32_t kStreamReg = 10;
+
+    auto mesh_device = this->devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
+
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    CoreCoord logical_core_drisc{0, 1};
+    CoreCoord logical_core_tensix{0, 0};
+    CoreCoord tensix_virtual = device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
+    CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
+    uint32_t drisc_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    Program program = CreateProgram();
+    auto kid = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",
+        logical_core_drisc,
+        DramConfig{.noc = NOC::NOC_0});
+    SetRuntimeArgs(
+        program,
+        kid,
+        logical_core_drisc,
+        {tensix_virtual.x, tensix_virtual.y, kStreamId, kStreamReg, kTestValue, drisc_l1_addr});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    uint64_t read_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    std::vector<uint32_t> result(1, 0);
+    MetalContext::instance().get_cluster().read_core(
+        result.data(), sizeof(uint32_t), tt_cxy_pair(device->id(), drisc_virtual), read_addr);
+    EXPECT_EQ(result[0], kTestValue);
 }
 
 }  // namespace tt::tt_metal

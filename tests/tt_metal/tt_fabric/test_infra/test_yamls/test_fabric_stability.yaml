@@ -1,0 +1,82 @@
+# Fabric stability suite (system-agnostic).
+#
+# Each logical test has a `_short` and a `_long` variant. `_short` vs `_long` is a CI
+# time-budget choice only, not an arch/platform split -- any system can run either (or both):
+#   - short time budget:  --filter 'name.*_short'
+#   - long time budget:   run the whole file with no filter (short + long)
+Tests:
+  - name: "FlowControlLinear_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlLinear_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 1000000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlMesh_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlMesh_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: all
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 1000000
+
+    patterns:
+      - type: all_to_all

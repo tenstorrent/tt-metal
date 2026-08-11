@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -35,8 +38,12 @@ namespace ckernel::sfpu {
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
-    constexpr int NUM_TERMS = 11;  // Exact terms (k=0..10)
+inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
+    // Exact terms (k=0..NUM_TERMS-1). The Euler-Maclaurin tail (with B2,B4,B6 corrections)
+    // is applied at z = x + NUM_TERMS. For the supported domain (x >= 0.5) this puts
+    // z >= 6.5, where the asymptotic remainder is far below bfloat16 precision, so 6 exact
+    // terms are sufficient. Reduced from 11 to save ~5 reciprocals (+power chains) per element.
+    constexpr int NUM_TERMS = 6;
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
     float n_float = Converter::as_float(n_packed);
@@ -72,11 +79,11 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
             // Compute reciprocal first, then raise to power (avoids overflow of large intermediates)
             sfpi::vFloat inv_xi;
             if constexpr (APPROXIMATION_MODE) {
-                inv_xi = _sfpu_reciprocal_<0>(xi);
+                inv_xi = sfpu_reciprocal_iter<0>(xi);
             } else if constexpr (is_fp32_dest_acc_en) {
-                inv_xi = _sfpu_reciprocal_<2>(xi);
+                inv_xi = sfpu_reciprocal_iter<2>(xi);
             } else {
-                inv_xi = _sfpu_reciprocal_<1>(xi);
+                inv_xi = sfpu_reciprocal_iter<1>(xi);
             }
 
             sfpi::vFloat inv_power = inv_xi;
@@ -94,11 +101,11 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
         sfpi::vFloat inv_z;
         if constexpr (APPROXIMATION_MODE) {
-            inv_z = _sfpu_reciprocal_<0>(z);
+            inv_z = sfpu_reciprocal_iter<0>(z);
         } else if constexpr (is_fp32_dest_acc_en) {
-            inv_z = _sfpu_reciprocal_<2>(z);
+            inv_z = sfpu_reciprocal_iter<2>(z);
         } else {
-            inv_z = _sfpu_reciprocal_<1>(z);
+            inv_z = sfpu_reciprocal_iter<1>(z);
         }
 
         sfpi::vFloat inv_z2 = inv_z * inv_z;
@@ -120,7 +127,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         sfpi::vFloat result = sum * scale;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -129,7 +136,8 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void polygamma_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 }  // namespace ckernel::sfpu

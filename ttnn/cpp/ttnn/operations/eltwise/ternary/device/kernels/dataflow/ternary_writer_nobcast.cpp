@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -25,13 +25,13 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1, 0>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    DataflowBuffer dfb_out(cb_id_out);
 
 #if !DST_SHARDED
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const uint32_t tile_bytes = dfb_out.get_entry_size();
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
@@ -61,11 +61,11 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_written < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
                              ++tw, ++num_tiles_written) {
-                            cb_out.wait_front(onetile);
+                            dfb_out.wait_front(onetile);
                             noc.async_write(
-                                cb_out, s, tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
+                                dfb_out, s, tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
                             noc.async_write_barrier();
-                            cb_out.pop_front(onetile);
+                            dfb_out.pop_front(onetile);
                         }
                         if constexpr (has_sharding) {
                             // adjust the output tile offset since we had to skip parts of the row

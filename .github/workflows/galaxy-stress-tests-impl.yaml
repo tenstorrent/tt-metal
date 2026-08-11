@@ -1,4 +1,4 @@
-name: "zzz TG Stress tests"
+name: "[internal] Galaxy stress tests impl"
 
 on:
   workflow_call:
@@ -12,88 +12,98 @@ on:
       build-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: true
+        type: string
+      test-selection:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
         default: "in-service"
-      topology-6u:
+      topology:
         required: false
-        type: boolean
-        default: true
+        type: string
+        default: "topology-6u"
 
 jobs:
-  galaxy-stress:
-    runs-on:
-      - ${{ inputs.extra-tag }}
-      - topology-6u
-      - arch-wormhole_b0
-      - pipeline-perf
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: --device /dev/tenstorrent
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_stress_tests.yaml
     steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run stress tests
-        timeout-minutes: 360
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
         run: |
-          for i in {1..5}; do
-            echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
-          done
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "stress"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Apply test selection
+        id: apply-test-selection
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          if [ "${{ inputs.test-selection }}" = "all" ]; then
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/galaxy_stress_tests.yaml and enabled-skus includes the needed SKU."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+      - name: Apply runner labels (topology / extra-tag)
+        id: apply-runner-labels
+        run: |
+          MATRIX='${{ steps.apply-test-selection.outputs.matrix }}'
+          UPDATED=$(echo "$MATRIX" | jq -c \
+            --arg tag "${{ inputs.extra-tag }}" \
+            --arg topology "${{ inputs.topology }}" \
+            'map(.runs_on |= map(
+              if . == "in-service" then $tag
+              elif startswith("topology-") then $topology
+              else . end
+            ))')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$UPDATED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-  galaxy-long-tests:
+  galaxy-stress-tests:
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          {
-            name: "Galaxy Fabric Stability Tests",
-            arch: wormhole_b0,
-            cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml,
-            timeout: 100,
-            owner_id: U08FXFFH7L0
-          }, # Abhishek Agarwal
-          {
-            name: "Llama Galaxy Long Stress Test",
-            arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
-            timeout: 140,
-            owner_id: U053W15B6JF
-          } # Djordje Ivanovic
-        ]
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - ${{ inputs.extra-tag }}
-      - topology-6u
-      - arch-wormhole_b0
-      - pipeline-perf
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -101,29 +111,33 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}

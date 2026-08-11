@@ -5,7 +5,7 @@ set -euo pipefail
 # Validates that golden bandwidth CSV files have the expected column headers
 # Automatically discovers all *bandwidth*.csv files in the golden directory
 
-GOLDEN_DIR="tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden"
+GOLDEN_DIR="tests/tt_metal/tt_fabric/test_infra/golden"
 
 # Expected header for all bandwidth CSV files (exact match required)
 EXPECTED_HEADER="test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent,max_packet_size"

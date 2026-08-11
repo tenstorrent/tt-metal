@@ -40,7 +40,14 @@ class MistralTransformer(Transformer):
         )
 
     def prepare_inputs_prefill(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, **kwargs
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        trace_enabled=False,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -108,8 +115,8 @@ class MistralTransformer(Transformer):
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ttnn.to_layout(self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
+            ttnn.to_layout(self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
         ]
 
         if hasattr(self, "rope_local_setup"):
@@ -142,14 +149,26 @@ class MistralTransformer(Transformer):
         else:
             tt_chunk_page_table = None
 
-        # Return tokens (host) if trace_enabled, else tokens_embd (device)
-        if trace_enabled:
-            return tokens, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
-        else:
-            return (
-                tokens_embd,
-                tt_rot_mats_prefill_global,
-                tt_rot_mats_prefill_local,
-                tt_page_table,
-                tt_chunk_page_table,
+        # Must match Transformer.prepare_inputs_prefill exactly: Generator's traced
+        # prefill path reads host_inputs[5] for the chunk start index, so omitting it
+        # here raised "IndexError: tuple index out of range" (#45992).
+        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
+            chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
+            tt_chunk_start_idx = ttnn.from_torch(
+                chunk_start_idx_tensor,
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+        else:
+            tt_chunk_start_idx = None
+
+        # Return tokens (host) if trace_enabled, else tokens_embd (device)
+        return (
+            tokens if trace_enabled else tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+            tt_chunk_start_idx,
+        )

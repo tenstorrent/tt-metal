@@ -20,7 +20,11 @@ constexpr uint32_t stack_usage_pattern = 0xBABABABA;
 static inline uint32_t* get_stack_base() {
 #if defined(ARCH_QUASAR)
     extern thread_local uint32_t __stack_base_lwm[];
-    return __stack_base_lwm;
+    // Legacy (lgc) kernels place their globals in the TLS region after
+    // .tbss.end; the linker exports their size as __stack_base_offset (in
+    // words) so painting starts above them. TLS-mode kernels set it to 0.
+    extern uint32_t __stack_base_offset[];
+    return __stack_base_lwm + (uintptr_t)__stack_base_offset;
 #else
     extern uint32_t __stack_base[];
     return __stack_base;

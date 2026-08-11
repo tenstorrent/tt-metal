@@ -19,7 +19,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.common.data import build_causal_mask
+from ttml.common.utils import build_causal_mask
 from ttml.models import memory_efficient_runner
 from ttml.models.nanogpt import (
     NanoGPT,
@@ -262,9 +262,9 @@ class TestMultiHeadAttention:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
-    def test_attention_head_dim_validation(self):
+    def test_attention_head_dim_validation(self, expect_error):
         """Test that attention validates head dimension."""
-        with pytest.raises(AssertionError):
+        with expect_error(AssertionError, "embedding_dim must be divisible by num_heads"):
             # embedding_dim (65) not divisible by num_heads (4)
             MultiHeadAttention(65, 4, dropout=0.0)
 
@@ -365,7 +365,7 @@ class TestGPTBlock:
 class TestMemoryEfficientRunner:
     """Tests for memory efficient runner."""
 
-    def test_no_intermediate_backward_functions(self):
+    def test_no_intermediate_backward_functions(self, expect_error):
         """Test that intermediate backward functions are not recorded."""
         input = ttml.autograd.Tensor.from_numpy(
             np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
@@ -388,10 +388,14 @@ class TestMemoryEfficientRunner:
         _ = forward_fn(input, mask)
         captured["inter"].backward(retain_graph=False)
 
-        # Memory-efficient runner
+        # Memory-efficient runner. forward_fn runs with gradients disabled inside
+        # the runner, so the intermediate it stores in captured["inter"] (which
+        # overwrites the baseline one) gets no backward graph node recorded --
+        # that's the property under test.
         _ = memory_efficient_runner(forward_fn, input, mask)
 
-        with pytest.raises(RuntimeError):
+        # Backward on that grad-less intermediate raises because it has no node.
+        with expect_error(RuntimeError, "This tensor has no associated gradient function"):
             captured["inter"].backward(retain_graph=False)
 
 

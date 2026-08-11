@@ -42,110 +42,6 @@ MeshTraceId MeshTrace::next_id() {
     return MeshTraceId(global_trace_id++);
 }
 
-void MeshTraceDescriptor::assemble_dispatch_commands(
-    MeshDevice* mesh_device, const std::vector<MeshTraceStagingMetadata>& mesh_trace_md) {
-    auto& trace_data = this->ordered_trace_data;
-    // Track the trace region size per device range
-    // The size of the allocated trace buffer will be the max
-    // across all regions
-    std::unordered_map<MeshCoordinateRange, uint32_t> trace_sizes;
-
-    for (const auto& trace_md : mesh_trace_md) {
-        const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
-        auto& sysmem_manager = mesh_device->impl().get_device(sysmem_mgr_coord)->sysmem_manager();
-        auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
-        auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
-        auto& bypass_data = sysmem_manager.get_bypass_data();
-        bool intersection_found = false;
-
-        std::vector<MeshTraceData> intermed_trace_data = {};
-        std::vector<uint32_t> program_cmds_vector(
-            std::make_move_iterator(bypass_data.begin() + trace_data_word_offset),
-            std::make_move_iterator(bypass_data.begin() + trace_data_word_offset + trace_data_size_words));
-        std::vector<MeshCoordinateRange> device_ranges_to_invalidate;
-        for (auto& program : trace_data) {
-            if (program.device_range.intersects(trace_md.device_range)) {
-                // The current program intersects with a program that was previously
-                // placed on the Mesh.
-                intersection_found = true;
-                auto intersection = *program.device_range.intersection(trace_md.device_range);
-                if (intersection == program.device_range) {
-                    // Intersection matches the originally placed program.
-                    program.data.insert(
-                        program.data.end(),
-                        std::make_move_iterator(program_cmds_vector.begin()),
-                        std::make_move_iterator(program_cmds_vector.end()));
-                    // Update size of intersection
-                    trace_sizes[intersection] += trace_md.size;
-                } else {
-                    // Intersection is a subset of the originally placed program.
-                    auto complement = subtract(program.device_range, intersection);
-                    for (const auto& complement_range : complement.ranges()) {
-                        intermed_trace_data.push_back(MeshTraceData{complement_range, program.data});
-                        // Trace region size of complement doesn't change
-                        trace_sizes[complement_range] = trace_sizes[program.device_range];
-                    }
-                    intermed_trace_data.push_back(MeshTraceData{intersection, program.data});
-                    // Update size of intersection
-                    trace_sizes[intersection] = trace_sizes[program.device_range] + trace_md.size;
-                    auto& intersection_data = intermed_trace_data.back().data;
-                    intersection_data.insert(
-                        intersection_data.end(),
-                        std::make_move_iterator(program_cmds_vector.begin()),
-                        std::make_move_iterator(program_cmds_vector.end()));
-                    device_ranges_to_invalidate.push_back(program.device_range);
-                }
-            }
-        }
-        if (!intermed_trace_data.empty()) {
-            // Invalidate programs with partial intersections with current programs.
-            for (auto& program : trace_data) {
-                if (std::find(
-                        device_ranges_to_invalidate.begin(), device_ranges_to_invalidate.end(), program.device_range) ==
-                    device_ranges_to_invalidate.end()) {
-                    intermed_trace_data.push_back(std::move(program));
-                } else {
-                    // Clear trace size of invalid range
-                    trace_sizes.erase(trace_sizes.find(program.device_range));
-                }
-            }
-            trace_data = intermed_trace_data;
-        }
-        if (not intersection_found) {
-            // Intersection not found, place program on Mesh.
-            trace_data.push_back(MeshTraceData{trace_md.device_range, std::move(program_cmds_vector)});
-            trace_sizes[trace_md.device_range] = trace_md.size;
-        }
-    }
-    uint32_t max_trace_size = 0;
-    for (const auto& size_per_range : trace_sizes) {
-        max_trace_size = std::max(size_per_range.second, max_trace_size);
-    }
-    this->total_trace_size = max_trace_size;
-    MeshCoordinateRange bcast_device_range(mesh_device->shape());
-    std::vector<uint32_t> exec_buf_end = {};
-
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
-    command_sequence.add_prefetch_exec_buf_end();
-
-    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
-    for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
-        exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
-    }
-
-    for (auto& program : trace_data) {
-        if (program.device_range.intersects(bcast_device_range)) {
-            program.data.insert(program.data.end(), exec_buf_end.begin(), exec_buf_end.end());
-        }
-    }
-    this->total_trace_size += command_sequence.size_bytes();
-
-    this->sub_device_ids.reserve(this->descriptors.size());
-    for (const auto& [id, _] : this->descriptors) {
-        this->sub_device_ids.push_back(id);
-    }
-}
-
 std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
     return std::make_shared<MeshTraceBuffer>(std::make_shared<MeshTraceDescriptor>(), nullptr);
 }
@@ -154,7 +50,8 @@ void MeshTrace::populate_mesh_buffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshTraceBuffer>& trace_buffer,
     DeviceAddr dram_allocation_high_water_mark,
-    DeviceAddr dram_deletion_high_water_mark) {
+    DeviceAddr dram_deletion_high_water_mark,
+    DeviceAddr max_live_trace_high_water_mark) {
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
@@ -173,7 +70,9 @@ void MeshTrace::populate_mesh_buffer(
         buffer_type = BufferType::DRAM;
         bottom_up = false;  // Top-down allocation
     } else {
-        // Traditional mode: use dedicated trace region
+        // Traditional mode: use dedicated trace region. trace_region_size is the TOTAL trace budget across all
+        // DRAM banks (see AllocatorImpl::init_one_bank_per_channel), matching get_trace_buffers_size(), which
+        // tracks the total interleaved size across all banks.
         TT_FATAL(
             mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
             "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
@@ -195,11 +94,13 @@ void MeshTrace::populate_mesh_buffer(
     trace_buffer->mesh_buffer =
         MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
 
-    // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
-    DeviceAddr dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
-    if (trace_region_size == 0 && dram_high_water_mark > 0) {
+    // In dynamic allocation mode, validate that the new trace buffer is outside the replay footprint of every live
+    // trace.
+    trace_buffer->dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
+    const DeviceAddr effective_high_water_mark = std::max({trace_buffer->dram_high_water_mark, max_live_trace_high_water_mark});
+    if (trace_region_size == 0 && effective_high_water_mark > 0) {
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
-        if (trace_buffer_address < dram_high_water_mark) {
+        if (trace_buffer_address < effective_high_water_mark) {
             // Determine which high water mark caused the overlap for a more specific error message
             bool allocation_overlap =
                 dram_allocation_high_water_mark > 0 && trace_buffer_address < dram_allocation_high_water_mark;
@@ -223,7 +124,7 @@ void MeshTrace::populate_mesh_buffer(
                     "Avoid deallocating DRAM buffers during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_deletion_high_water_mark);
-            } else {
+            } else if (allocation_overlap) {
                 TT_FATAL(
                     false,
                     "Trace buffer at address {} overlaps with buffers allocated during trace capture "
@@ -231,6 +132,14 @@ void MeshTrace::populate_mesh_buffer(
                     "Reduce allocations during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_allocation_high_water_mark);
+            } else {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with DRAM activity captured by another live trace "
+                    "(maximum live trace high water mark: {}). "
+                    "Release the existing trace before capturing this trace or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    max_live_trace_high_water_mark);
             }
         }
     }

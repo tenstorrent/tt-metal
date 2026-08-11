@@ -39,13 +39,13 @@ namespace {
 std::vector<float> rearrange_to_tile_blocks(const float* src, int H, int W, int tile_h, int tile_w) {
     const int tiles_r = H / tile_h;
     const int tiles_c = W / tile_w;
-    std::vector<float> tiled(static_cast<size_t>(H) * W);
-    size_t dst_idx = 0;
+    std::vector<float> tiled;
+    tiled.reserve(static_cast<size_t>(H) * W);
     for (int tr = 0; tr < tiles_r; ++tr) {
         for (int tc = 0; tc < tiles_c; ++tc) {
             for (int r = 0; r < tile_h; ++r) {
                 for (int c = 0; c < tile_w; ++c) {
-                    tiled[dst_idx++] = src[(tr * tile_h + r) * W + tc * tile_w + c];
+                    tiled.push_back(src[(tr * tile_h + r) * W + tc * tile_w + c]);
                 }
             }
         }
@@ -169,7 +169,7 @@ void py_module(nb::module_& mod) {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
-                pack_as_bfp8_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+                pack_as_bfp8_tiles<float>(ttsl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
             return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
         },
         nb::arg("data"),
@@ -184,7 +184,7 @@ void py_module(nb::module_& mod) {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
-                pack_as_bfp4_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+                pack_as_bfp4_tiles<float>(ttsl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
             return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
         },
         nb::arg("data"),

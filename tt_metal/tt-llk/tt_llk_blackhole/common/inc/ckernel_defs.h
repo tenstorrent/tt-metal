@@ -15,6 +15,33 @@
 namespace ckernel
 {
 
+/**
+ * @brief Whether the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) must be
+ *        disabled (written 1) for the given SrcA/SrcB destination formats.
+ *
+ * While the flag is clear (its reset state), MOVA2D / MOVB2D flush any SrcA/SrcB datum whose low
+ * 8 bits are zero to 0 (FlushDenormals; see MOVA2D.md `if (FlushDenormals && !(SrcAVal & 0xff))`).
+ * For the floating-point Src layout the low 8 bits are the exponent, and a zero exponent denotes a
+ * subnormal, which the HW does not support and therefore rounds to zero.
+ *
+ * UInt16 is the HW "Integer 16" format and the only 16-bit integer unpacker destination format. It
+ * shares the Src bit layout, so its low byte is the integer's low magnitude bits, NOT an exponent.
+ * A legitimate value such as 256 (0x0100) has a zero low byte and would be silently flushed to 0,
+ * destroying the high magnitude bits. Disabling the flag suppresses the flush so 16-bit integer
+ * data survives the move into Dst.
+ *
+ * @param srca_dst_format Destination data format of SrcA.
+ * @param srcb_dst_format Destination data format of SrcB.
+ * @return true when either operand is UInt16, in which case the flag must be disabled.
+ *
+ * @note ISA (paths are in the tt-isa-documentation repo): Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
+ *       SrcASrcB.md (the "Integer 16" note).
+ */
+inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    return (srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
+}
+
 enum Srcs
 {
     SrcA = 0,
@@ -125,6 +152,9 @@ constexpr auto to_underlying(T t) noexcept
 {
     return static_cast<std::underlying_type_t<T>>(t);
 }
+
+template <ThreadId thread_id>
+constexpr bool IS_TRISC_THREAD = thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId;
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
 {
@@ -237,6 +267,21 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
     };
 }
 
+// Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
+// Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
+// (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior
+// register strides need. The two agree on every other format, so they are NOT interchangeable.
+constexpr static std::uint32_t datum_size_in_bytes(const std::uint32_t format)
+{
+    return (format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// True if the format is Int8 or Int32 -- the formats that enable INT8 math (ALU_ACC_CTRL_INT8_math_enabled).
+constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
+{
+    return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
@@ -268,7 +313,51 @@ enum class BinaryOp : std::uint8_t
     RSHFT         = 7,
     LSHFT         = 8,
     LOGICAL_RSHFT = 9,
-    ADD_TOP_ROW   = 10
+    ADD_TOP_ROW   = 10,
+    LT            = 11,
+    GT            = 12,
+    LE            = 13,
+    GE            = 14,
+    EQ            = 15,
+    NE            = 16,
+    // Test-harness binary ops (functional coverage for metal llk_sfpu kernels that
+    // have no dedicated production BinaryOp). Appended at the end so existing values
+    // are unchanged.
+    MAX             = 17,
+    MIN             = 18,
+    FMOD            = 19,
+    REMAINDER       = 20,
+    BITWISE_AND     = 21,
+    BITWISE_OR      = 22,
+    BITWISE_XOR     = 23,
+    DIV_INT32       = 24,
+    DIV_INT32_FLOOR = 25,
+    GCD             = 26,
+    LCM             = 27,
+    RSUB_INT32      = 28,
+    MASK            = 29,
+    ATAN2           = 30,
+    MUL_INT32       = 31,
+    ISCLOSE         = 32,
+    LOGSIGMOID      = 33,
+    // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
+    // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
+    EQ_INT           = 34,
+    NE_INT           = 35,
+    MAX_INT32        = 36,
+    MIN_INT32        = 37,
+    MAX_UINT32       = 38,
+    MIN_UINT32       = 39,
+    REMAINDER_INT32  = 40,
+    REMAINDER_UINT32 = 41,
+    FMOD_INT32       = 42,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
 };
 
 } // namespace ckernel

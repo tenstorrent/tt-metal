@@ -25,9 +25,9 @@ void kernel_main() {
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+    const auto in0 = TensorAccessor(in0_args, in0_addr);
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
+    const auto in1 = TensorAccessor(in1_args, in1_addr);
 
     // Loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -38,8 +38,8 @@ void kernel_main() {
                                      // Deciding how large the buffer should be is a tradeoff.
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, in0, cb_in0_addr);  // read the tile into the circular buffer
-        noc_async_read_tile(i, in1, cb_in1_addr);  // We can overlap async reads and writes
+        noc_async_read_page(i, in0, cb_in0_addr);  // read the tile into the circular buffer
+        noc_async_read_page(i, in1, cb_in1_addr);  // We can overlap async reads and writes
                                                    // to reduce the data movement overhead.
 
         noc_async_read_barrier();  // Wait until tile reads are done

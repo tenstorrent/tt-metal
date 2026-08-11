@@ -269,6 +269,83 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
     }
     return pad_metadata;
 }
+
+// Rect of real (non-border-pad) input inside the padded tensor, together with the
+// full padded dimensions. All bounds are inclusive — the pixel at (real_h_end,
+// real_w_end) is the last real pixel, matching the inclusive range expected by
+// std::clamp below.
+struct RealPaddingRect {
+    uint32_t pad_top;
+    uint32_t pad_left;
+    uint32_t real_h_end;  // inclusive
+    uint32_t real_w_end;  // inclusive
+    uint32_t padded_h;
+    uint32_t padded_w;
+};
+
+static RealPaddingRect compute_real_padding_rect_normal(const SlidingWindowConfig& config) {
+    RealPaddingRect rect;
+    rect.pad_top = config.get_pad_top();
+    rect.pad_left = config.get_pad_left();
+    rect.padded_h = config.input_hw.first + config.get_pad_h() + config.get_ceil_pad_h();
+    rect.padded_w = config.input_hw.second + config.get_pad_w() + config.get_ceil_pad_w();
+    rect.real_h_end = rect.pad_top + config.input_hw.first - 1;
+    rect.real_w_end = rect.pad_left + config.input_hw.second - 1;
+    return rect;
+}
+
+static RealPaddingRect compute_real_padding_rect_transposed(const SlidingWindowConfig& config) {
+    RealPaddingRect rect;
+    auto full_input_shape = config.get_transposed_full_input_shape();
+    rect.padded_h = full_input_shape[1];
+    rect.padded_w = full_input_shape[2];
+    auto real_padding = config.get_transposed_real_padding();
+    rect.pad_top = real_padding[0].first;
+    rect.pad_left = real_padding[1].first;
+    // Strided-input rect spans (input-1)*stride + 1 positions starting at pad_top/left.
+    uint32_t strided_h = (config.input_hw.first - 1) * config.stride_hw.first + 1;
+    uint32_t strided_w = (config.input_hw.second - 1) * config.stride_hw.second + 1;
+    rect.real_h_end = rect.pad_top + strided_h - 1;
+    rect.real_w_end = rect.pad_left + strided_w - 1;
+    return rect;
+}
+
+static void apply_replicate_padding(
+    std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<bool>& pad_metadata,
+    const SlidingWindowConfig& config) {
+    TT_FATAL(!config.is_bilinear, "Replicate padding is not yet supported for bilinear upsampling");
+
+    const RealPaddingRect rect =
+        config.is_transpose ? compute_real_padding_rect_transposed(config) : compute_real_padding_rect_normal(config);
+
+    for (uint32_t b = 0; b < config.batch_size; ++b) {
+        for (uint32_t h = 0; h < rect.padded_h; ++h) {
+            for (uint32_t w = 0; w < rect.padded_w; ++w) {
+                uint32_t idx = b * rect.padded_h * rect.padded_w + h * rect.padded_w + w;
+                if (!pad_metadata[idx]) {
+                    continue;
+                }
+                // Transposed conv: stride-interleaved zeros strictly inside the strided
+                // rect must stay zero (they encode the dilation-style stride expansion).
+                // Only border pads (outside the strided rect) get replicated. Bounds inclusive.
+                if (config.is_transpose && h >= rect.pad_top && h <= rect.real_h_end && w >= rect.pad_left &&
+                    w <= rect.real_w_end) {
+                    continue;
+                }
+                // Clamp to nearest real pixel (edge replication). For transposed conv the
+                // clamped coord may land on an off-stride interior cell whose metadata is
+                // itself a pad marker; copying it preserves the edge's stride pattern along
+                // halo rows/cols, which is the intended "solid replicate halo" semantics.
+                uint32_t clamped_h = std::clamp(h, rect.pad_top, rect.real_h_end);
+                uint32_t clamped_w = std::clamp(w, rect.pad_left, rect.real_w_end);
+                uint32_t src_idx = b * rect.padded_h * rect.padded_w + clamped_h * rect.padded_w + clamped_w;
+                tensor_metadata[idx] = tensor_metadata[src_idx];
+            }
+        }
+    }
+}
+
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     if (config.is_bilinear) {
         return generate_op_trace_metadata_bilinear(config);
@@ -379,6 +456,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
     std::vector<ShardBoundary> shard_boundaries;
 
     const uint32_t num_cores = config.num_cores_nhw;
+    shard_boundaries.reserve(num_cores);
     const uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
 
     const uint32_t ceil_padding_w = config.get_ceil_pad_w();
@@ -437,7 +515,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
 }
 
 std::vector<PixelMetadata> generate_tensor_metadata(
-    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& /*config*/, uint32_t shard_height) {
+    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
     std::vector<PixelMetadata> tensor_metadata;
     tensor_metadata.reserve(pad_metadata.size());
 
@@ -456,6 +534,10 @@ std::vector<PixelMetadata> generate_tensor_metadata(
                 input_reshard_local_idx = 0;
             }
         }
+    }
+
+    if (config.padding_mode == PaddingMode::Replicate) {
+        apply_replicate_padding(tensor_metadata, pad_metadata, config);
     }
 
     return tensor_metadata;
@@ -571,6 +653,11 @@ struct DestinationTransferPair {
 
 static std::vector<DestinationTransferPair> flatten_gather_config(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all;
+    size_t total_transfers = 0;
+    for (const auto& route : input.routes) {
+        total_transfers += route.transfers.size();
+    }
+    all.reserve(total_transfers);
     for (const auto& route : input.routes) {
         for (const auto& t : route.transfers) {
             all.push_back({route.header.noc_x, route.header.noc_y, t.src_id, t.dst_id, t.size});
@@ -777,6 +864,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         const auto& config = local_config[core_id];
         const auto& [src_core_id, dst_core_id, num_copies] = config.first;
         std::vector<GatherTransfer> transfers;
+        transfers.reserve(config.second.size());
         for (const auto& transfer : config.second) {
             const uint16_t src_offset_id = std::get<0>(transfer);
             const uint16_t dst_offset_id = std::get<1>(transfer);
@@ -784,13 +872,14 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             transfers.emplace_back(src_offset_id, dst_offset_id, size);
         }
         GatherHeader header{src_core_id, dst_core_id, transfers.size()};
-        gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+        gather_configs[core_id].routes.push_back(GatherRoute{header, std::move(transfers)});
     }
 
     for (int core_id = 0; core_id < remote_config.size(); core_id++) {
         for (const auto& destination : remote_config[core_id]) {
             const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
             std::vector<GatherTransfer> transfers;
+            transfers.reserve(destination.second.size());
             for (const auto& transfer : destination.second) {
                 const uint16_t src_offset_id = std::get<0>(transfer);
                 const uint16_t dst_offset_id = std::get<1>(transfer);
@@ -798,31 +887,36 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 transfers.emplace_back(src_offset_id, dst_offset_id, size);
             }
             GatherHeader header{src_core_id, dst_core_id, transfers.size()};
-            gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+            gather_configs[core_id].routes.push_back(GatherRoute{header, std::move(transfers)});
         }
     }
 
     const bool use_blocking = is_in_tiled;
     std::vector<GatherConfig> ordered_gather_configs0;
+    ordered_gather_configs0.reserve(gather_configs.size());
     std::vector<GatherConfig> ordered_gather_configs1;
+    ordered_gather_configs1.reserve(gather_configs.size());
     std::vector<uint16_t> number_of_blocks_per_core;
+    if (use_blocking) {
+        number_of_blocks_per_core.reserve(gather_configs.size());
+    }
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
             const auto ordered = reorder_transfers_globally(quantized);
-            const auto [first, second, number_of_blocks] = divide_blocks_between_cores(ordered, block_size);
-            ordered_gather_configs0.push_back(first);
-            ordered_gather_configs1.push_back(second);
+            auto [first, second, number_of_blocks] = divide_blocks_between_cores(ordered, block_size);
+            ordered_gather_configs0.push_back(std::move(first));
+            ordered_gather_configs1.push_back(std::move(second));
             number_of_blocks_per_core.push_back(number_of_blocks);
         } else {
-            const auto [first, second] = divide_transfers_between_cores(config);
-            ordered_gather_configs0.push_back(first);
-            ordered_gather_configs1.push_back(second);
+            auto [first, second] = divide_transfers_between_cores(config);
+            ordered_gather_configs0.push_back(std::move(first));
+            ordered_gather_configs1.push_back(std::move(second));
         }
     }
 
-    const auto serialized_gather_configs0 = serialize_gather_configs(ordered_gather_configs0);
-    const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
+    auto serialized_gather_configs0 = serialize_gather_configs(ordered_gather_configs0);
+    auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
 
     // Flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -832,6 +926,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
         }
         std::vector<std::vector<uint16_t>> flattened_config;
+        flattened_config.reserve(config.size());
         for (auto& data : config) {
             std::vector<uint16_t> flat_data(max_len, 0);
             uint32_t idx = 0;
@@ -843,7 +938,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             // null plug
             flat_data.emplace_back(0);
             flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
+            flattened_config.emplace_back(std::move(flat_data));
         }
         return flattened_config;
     };
@@ -882,18 +977,18 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     align_config(flattened_pad_config1, 2);
 
     return HaloGatherKernelConfig{
-        flattened_pad_config0,
-        flattened_pad_config1,
-        serialized_gather_configs0,
-        serialized_gather_configs1,
-        number_of_blocks_per_core};
+        std::move(flattened_pad_config0),
+        std::move(flattened_pad_config1),
+        std::move(serialized_gather_configs0),
+        std::move(serialized_gather_configs1),
+        std::move(number_of_blocks_per_core)};
 }
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
-    log_info(tt::LogOp, "========================================");
-    log_info(tt::LogOp, "Total Cores: {}", config.size());
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "  Sliding Window Op Config Visualization");
+    log_debug(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Cores: {}", config.size());
 
     // Calculate statistics
     uint32_t total_elements = 0;
@@ -906,19 +1001,19 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         min_config_size = std::min(min_config_size, static_cast<uint32_t>(core_config.size()));
     }
 
-    log_info(tt::LogOp, "Total Elements: {}", total_elements);
-    log_info(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
-    log_info(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "Total Elements: {}", total_elements);
+    log_debug(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
+    log_debug(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
+    log_debug(tt::LogOp, "========================================");
 
     // Visualize each core's configuration
     for (uint32_t core_id = 0; core_id < config.size(); ++core_id) {
         const auto& core_config = config[core_id];
-        log_info(tt::LogOp, "");
-        log_info(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
+        log_trace(tt::LogOp, "");
+        log_trace(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
 
         if (core_config.empty()) {
-            log_info(tt::LogOp, "  [EMPTY]");
+            log_trace(tt::LogOp, "  [EMPTY]");
             continue;
         }
 
@@ -940,7 +1035,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 break;
             }
 
-            log_info(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
+            log_trace(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
             idx += 2;  // Skip num_segments and alignment
 
             // Display segments (pairs of start-end indices)
@@ -950,7 +1045,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
                 uint16_t end_idx = core_config[idx + 1];
                 uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
 
-                log_info(
+                log_trace(
                     tt::LogOp,
                     "    Segment {}: [{:5d} -> {:5d}] (len: {})",
                     segment_count,
@@ -964,7 +1059,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
 
             // If we didn't find all segments, something might be wrong
             if (segment_count < num_segments) {
-                log_info(
+                log_trace(
                     tt::LogOp, "    WARNING: Expected {} segments but only parsed {}", num_segments, segment_count);
                 break;
             }
@@ -975,11 +1070,11 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
         // Show remaining padding if any
         if (idx < core_config.size()) {
             uint32_t padding_count = core_config.size() - idx;
-            log_info(tt::LogOp, "  [Padding: {} elements]", padding_count);
+            log_trace(tt::LogOp, "  [Padding: {} elements]", padding_count);
         }
     }
 
-    log_info(tt::LogOp, "========================================");
+    log_debug(tt::LogOp, "========================================");
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
@@ -991,6 +1086,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     uint32_t reader1_datums,
     bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
+    sharded_input_top_left_indices.reserve(shard_boundaries.size());
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, output_shard_end] = item.output_range;
         const auto& [input_shard_start, input_shard_end] = item.input_range;
@@ -998,7 +1094,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
-            sharded_input_top_left_indices.push_back(local_top_left_indices);
+            sharded_input_top_left_indices.push_back(std::move(local_top_left_indices));
             continue;
         }
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
@@ -1044,7 +1140,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
                 use_reader0 = !use_reader0;
             }
         }
-        sharded_input_top_left_indices.push_back(local_top_left_indices);
+        sharded_input_top_left_indices.push_back(std::move(local_top_left_indices));
     }
 
     uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
@@ -1075,10 +1171,15 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes) {
     std::vector<uint16_t> flattened_vector;
-    for (auto sub_vec : input) {
+    size_t total_size = 0;
+    for (const auto& sub_vec : input) {
+        total_size += sub_vec.size() + extend_with_zeroes;
+    }
+    flattened_vector.reserve(total_size);
+    const std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
+    for (const auto& sub_vec : input) {
         flattened_vector.insert(flattened_vector.end(), sub_vec.begin(), sub_vec.end());
         if (extend_with_zeroes > 0) {
-            std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
             flattened_vector.insert(flattened_vector.end(), extend_v.begin(), extend_v.end());
         }
     }
@@ -1108,6 +1209,7 @@ uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const Parallel
 
 std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vector, int factor) {
     std::vector<uint16_t> repeat_config;
+    repeat_config.reserve(config_vector.size() * static_cast<size_t>(factor));
     for (uint32_t i = 0; i < factor; ++i) {
         repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
     }
@@ -1191,7 +1293,8 @@ std::string SlidingWindowConfig::to_string() const {
            "_scale_h=" + std::to_string(scale_h) + "_scale_w=" + std::to_string(scale_w) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") +
+           (padding_mode == PaddingMode::Replicate ? "_replicate_pad" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window

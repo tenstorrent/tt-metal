@@ -144,6 +144,6 @@ class TtTransformer2DModel(LightweightModule):
             memory_config=self.memory_config_out,
         )
 
-        hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
+        hidden_states = ttnn.add(hidden_states, input_tensor)
 
         return hidden_states

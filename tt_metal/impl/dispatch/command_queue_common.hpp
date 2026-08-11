@@ -26,7 +26,15 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
     DISPATCH_PROGRESS = 9,
-    UNRESERVED = 10,
+    // Real-time profiler control block (realtime_profiler_msgs::realtime_profiler_msg_t). Shared between the
+    // dispatch cores and the reserved RT-profiler tensix; allocated as a dispatch-core-local
+    // region rather than a per-core mailbox because no worker core touches it.
+    REALTIME_PROFILER_MSG = 10,
+    DISPATCH_TELEMETRY = 11,
+    DISPATCH_TELEMETRY_CONTROL = 12,
+    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    WORKER_COMPLETION_SEMAPHORES = 13,
+    UNRESERVED = 14,
 };
 
 // likely only used in impl
@@ -74,7 +82,9 @@ uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
-// Return the expected number of workers to be in the finished state
-uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
+/// @brief Check if the command queue address type is shared across CQs co-located on the same dispatch core
+/// @param addr_type CommandQueueDeviceAddrType address type to check
+/// @return bool true if the address type is shared, false otherwise
+bool is_cq_shared(CommandQueueDeviceAddrType addr_type);
 
 }  // namespace tt::tt_metal

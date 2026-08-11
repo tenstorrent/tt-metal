@@ -5,30 +5,28 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    int i{0};
-    const auto output_addr = get_arg_val<uint32_t>(i++);
-    const bool output_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const auto num_cols_per_core = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
+    const bool output_is_dram = get_arg(args::output_is_dram) == 1;
+    const auto num_cols_per_core = get_arg(args::num_cols_per_core);
+    const auto tile_offset = get_arg(args::tile_offset);
 
-    uint32_t cb_id{16};
-    const auto cb_id_output = cb_id++;
+    const auto s = TensorAccessor(tensor::output);
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-
-    constexpr auto output_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(output_args, output_addr, output_tile_bytes);
-
-    const auto output_l1_read_addr = get_read_ptr(cb_id_output);
+    Noc noc;
+    DataflowBuffer dfb_output(dfb::output);
+    const auto output_tile_bytes = dfb_output.get_tile_size();
 
     auto output_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_cols_per_core; ++idx) {
-        cb_wait_front(cb_id_output, 1);
-        noc_async_write_tile(output_tile_idx, s, output_l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_output, 1);
+        dfb_output.wait_front(1);
+        noc.async_write(dfb_output, s, output_tile_bytes, {.offset_bytes = 0}, {.page_id = output_tile_idx});
+        noc.async_write_barrier();
+        dfb_output.pop_front(1);
         output_tile_idx++;
     }
 

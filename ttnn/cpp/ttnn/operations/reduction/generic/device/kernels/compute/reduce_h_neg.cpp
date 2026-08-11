@@ -4,36 +4,49 @@
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
 #include "api/compute/reduce.h"
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+#ifdef REDUCE_POST_MUL
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#endif
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
-    uint32_t row_chunk = get_compile_time_arg_val(3);
+#ifdef REDUCE_POST_MUL
+    // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
+    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+#endif
 
     // Circular buffers:
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_3;
-    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
+    constexpr uint32_t dfb_input = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_scaler = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_output = tt::CBIndex::c_3;
+    constexpr uint32_t onetile = 1;
 
-    experimental::CircularBuffer cb_input_obj(cb_input);
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
-    experimental::CircularBuffer cb_output_obj(cb_output);
-    experimental::CircularBuffer cb_acc_obj(cb_acc);
-    experimental::CircularBuffer cb_ineg_obj(cb_ineg);
+    constexpr uint32_t dfb_acc = tt::CBIndex::c_4;
+    constexpr uint32_t dfb_ineg = tt::CBIndex::c_5;
 
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    DataflowBuffer dfb_input_obj(dfb_input);
+    DataflowBuffer dfb_scaler_obj(dfb_scaler);
+    DataflowBuffer dfb_output_obj(dfb_output);
+    DataflowBuffer dfb_acc_obj(dfb_acc);
+    DataflowBuffer dfb_ineg_obj(dfb_ineg);
 
-    constexpr int onetile = 1;
+    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
+
+    compute_kernel_hw_startup(dfb_input, dfb_scaler, dfb_output);
+    dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     // tiles are expected to come in the N C W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
@@ -55,87 +68,105 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                cb_input_obj.wait_front(ntiles);
+                dfb_input_obj.wait_front(ntiles);
 
-                reconfig_data_format_srca(cb_input);
-                copy_tile_init(cb_input);
+                reconfig_data_format_srca(dfb_input);
+                copy_tile_init(dfb_input);
                 negative_tile_init();
+                // Partial chunk (ntiles < row_chunk): the input CB depth matches row_chunk, but only consume ntiles
+                // tiles. Indexed reads plus a bulk pop of ntiles do not advance the CB head during reads, leaving
+                // trailing slots effectively stale; the next pass can index into those offsets and read stale L1 data.
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    copy_tile(cb_input, i, i);
+                    // Read from index 0 and pop_front(1) per tile to keep the CB head in sync and avoid stale data.
+                    copy_tile(dfb_input, 0, i);
+                    dfb_input_obj.pop_front(1);
                     negative_tile(i);
                 }
 
                 tile_regs_commit();
-                cb_input_obj.pop_front(chunk_end - wt);
-                cb_ineg_obj.reserve_back(ntiles);
+                dfb_ineg_obj.reserve_back(ntiles);
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_ineg);
+                pack_reconfig_data_format(dfb_ineg);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_ineg);
+                    pack_tile(i, dfb_ineg);
                 }
                 tile_regs_release();
-                cb_ineg_obj.push_back(ntiles);
+                dfb_ineg_obj.push_back(ntiles);
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    cb_acc_obj.wait_front(ntiles);
+                    dfb_acc_obj.wait_front(ntiles);
                 }
 
-                cb_ineg_obj.wait_front(ntiles);
+                dfb_ineg_obj.wait_front(ntiles);
 
                 if (ht > 0) {
-                    reconfig_data_format_srca(cb_acc);
-                    copy_tile_init(cb_acc);
+                    reconfig_data_format_srca(dfb_acc);
+                    copy_tile_init(dfb_acc);
                     for (uint32_t i = 0; i < ntiles; ++i) {
-                        copy_tile(cb_acc, i, i);
+                        copy_tile(dfb_acc, i, i);
                     }
                 }
-                reduce_init(cb_ineg, cb_scaler, cb_acc);
-                pack_reconfig_data_format(cb_acc);
-                for (uint32_t i = 0; i < ntiles; ++i) {
-                    reduce_tile(cb_ineg, cb_scaler, i, 0, i);
+                pack_reconfig_data_format(dfb_acc);
+                constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+                if constexpr (swap_operands) {
+                    reconfig_data_format(dfb_scaler, dfb_ineg);
                 }
-                reduce_uninit(cb_ineg);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, dfb_acc);
+                for (uint32_t i = 0; i < ntiles; ++i) {
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, i, 0, i);
+                }
+                reduce_uninit(dfb_ineg);
                 tile_regs_commit();
-                cb_ineg_obj.pop_front(ntiles);
+                dfb_ineg_obj.pop_front(ntiles);
 
                 if (ht > 0) {
-                    cb_acc_obj.pop_front(ntiles);
+                    dfb_acc_obj.pop_front(ntiles);
                 }
-                cb_acc_obj.reserve_back(ntiles);
+                dfb_acc_obj.reserve_back(ntiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_acc);
+                    pack_tile(i, dfb_acc);
                 }
                 tile_regs_release();
-                cb_acc_obj.push_back(ntiles);
+                dfb_acc_obj.push_back(ntiles);
             }
 
             tile_regs_acquire();
 
-            cb_acc_obj.wait_front(ntiles);
+            dfb_acc_obj.wait_front(ntiles);
 
-            reconfig_data_format_srca(cb_acc);
-            copy_tile_init(cb_acc);
+            reconfig_data_format_srca(dfb_acc);
+            copy_tile_init(dfb_acc);
             for (uint32_t i = 0; i < ntiles; ++i) {
-                copy_tile(cb_acc, i, i);
+                copy_tile(dfb_acc, i, i);
             }
             negative_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
                 negative_tile(i);
             }
 
-            tile_regs_commit();
-            cb_acc_obj.pop_front(ntiles);
-            cb_output_obj.reserve_back(ntiles);
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_output);
+#ifdef REDUCE_POST_MUL
+            // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
+            // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
+            // output DEST register.
+            binop_with_scalar_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
-                pack_tile(i, cb_output);
+                mul_unary_tile(i, post_mul_scaler_bits);
+            }
+#endif
+
+            tile_regs_commit();
+            dfb_acc_obj.pop_front(ntiles);
+            dfb_output_obj.reserve_back(ntiles);
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb_output);
+            for (uint32_t i = 0; i < ntiles; ++i) {
+                pack_tile(i, dfb_output);
             }
             tile_regs_release();
-            cb_output_obj.push_back(ntiles);
+            dfb_output_obj.push_back(ntiles);
         }
     }
 }

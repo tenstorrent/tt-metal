@@ -60,6 +60,70 @@ public:
     uint32_t to_packed() const { return static_cast<uint32_t>(value); }
 };
 
+// IEEE half-precision (1 sign / 5 exponent / 10 mantissa), DataFormat::Float16 (code 1).
+// Distinct from Float16_b/bfloat16 (1 sign / 8 exponent / 7 mantissa). Stores standard
+// IEEE-754 fp16 bits so pack_vector's bit_cast emits the layout the unpacker expects.
+class float16 {
+private:
+    uint16_t bits;
+
+public:
+    static constexpr size_t SIZEOF = 2;
+
+    float16(float f) : bits(float_to_fp16(f)) {}
+    float16(uint32_t b) : bits(static_cast<uint16_t>(b)) {}
+
+    float to_float() const {
+        const uint32_t sign = (bits & 0x8000u) << 16;
+        const uint32_t exp = (bits >> 10) & 0x1Fu;
+        const uint32_t mant = bits & 0x3FFu;
+        uint32_t f;
+        if (exp == 0) {
+            f = sign;  // zero / flush subnormals (unused by the increment stimulus range)
+        } else if (exp == 0x1F) {
+            f = sign | 0x7F800000u | (mant << 13);  // inf / nan
+        } else {
+            f = sign | ((exp - 15 + 127) << 23) | (mant << 13);  // normal
+        }
+        float v;
+        memcpy(&v, &f, sizeof(v));
+        return v;
+    }
+    uint32_t to_packed() const { return bits; }
+
+private:
+    // Round-to-nearest-even float -> IEEE fp16. The increment stimulus values are all
+    // exactly representable, so rounding never actually loses bits here.
+    static uint16_t float_to_fp16(float f) {
+        uint32_t x;
+        memcpy(&x, &f, sizeof(x));
+        const uint32_t sign = (x >> 16) & 0x8000u;
+        const int32_t e = static_cast<int32_t>((x >> 23) & 0xFFu);
+        const uint32_t m = x & 0x7FFFFFu;
+        if (e == 0xFF) {
+            return static_cast<uint16_t>(sign | 0x7C00u | (m ? 0x200u : 0u));  // inf / nan
+        }
+        int32_t exp = e - 127 + 15;
+        if (exp >= 0x1F) {
+            return static_cast<uint16_t>(sign | 0x7C00u);  // overflow -> inf
+        }
+        if (exp <= 0) {
+            return static_cast<uint16_t>(sign);  // underflow -> zero
+        }
+        uint32_t mant = m >> 13;
+        const uint32_t rem = m & 0x1FFFu;
+        if (rem > 0x1000u || (rem == 0x1000u && (mant & 1u))) {
+            if (++mant == 0x400u) {
+                mant = 0;
+                if (++exp >= 0x1F) {
+                    return static_cast<uint16_t>(sign | 0x7C00u);
+                }
+            }
+        }
+        return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | mant);
+    }
+};
+
 class DataFormatHandler {
 public:
     virtual ~DataFormatHandler() = default;
@@ -132,16 +196,33 @@ protected:
     }
 };
 
+class Float16Handler : public DataFormatHandler {
+public:
+    size_t get_elements_per_line() const override { return ELEMENTS_PER_LINE_FLOAT16; }
+    size_t get_elements_per_tile() const override { return ELEMENTS_PER_TILE_FLOAT16; }
+
+protected:
+    void print_datum(std::stringstream& ss, uint32_t datum) override {
+        // Two IEEE fp16 values packed low/high. Decode to float and format identically
+        // to the device path (parser make_float(5, 10) yields the exact value).
+        const float value1 = float16(datum & 0xffffu).to_float();
+        const float value2 = float16((datum >> 16) & 0xffffu).to_float();
+        ss << fmt::format("{} {} ", value1, value2);
+    }
+};
+
 // Factory function to create the appropriate handler
 static DataFormatHandler& get_handler(tt::DataFormat data_format) {
     static Float32Handler float32_handler;
     static Int32Handler int32_handler;
     static Float16bHandler float16b_handler;
+    static Float16Handler float16_handler;
 
     switch (data_format) {
         case tt::DataFormat::Float32: return float32_handler;
         case tt::DataFormat::Int32: return int32_handler;
         case tt::DataFormat::Float16_b: return float16b_handler;
+        case tt::DataFormat::Float16: return float16_handler;
         default:
             ADD_FAILURE() << "Data format (" << data_format << ") not implemented!";
             return float32_handler;  // Default case, should not be reached
@@ -229,10 +310,16 @@ using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
 // Generates the runtime arguments for the DRAM kernel
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
+    // create_dram_mesh_buffer() configures page_size = byte_size (whole-buffer
+    // single page), so page_size/aligned_page_size would over-return the
+    // stride. Derive per-tile stride from total size / num_tiles instead.
+    const uint32_t per_tile_stride =
+        num_tiles == 0 ? 0 : static_cast<uint32_t>(dram_buffer->device_local_size() / num_tiles);
     return {
         static_cast<uint32_t>(dram_buffer->address()),
         static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
+        per_tile_stride,
     };
 }
 
@@ -345,6 +432,9 @@ static std::vector<uint32_t> generate_inputs(const DevicePrintDestTestConfig& co
     switch (config.data_format) {
         case tt::DataFormat::Float16_b:
             return tt::test_utils::generate_packed_increment_vector<uint32_t, bfloat16>(
+                0.0f, config.get_num_elements(), 0.03125f, -1.1875f);
+        case tt::DataFormat::Float16:
+            return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::dp_df::float16>(
                 0.0f, config.get_num_elements(), 0.03125f, -1.1875f);
         case tt::DataFormat::Float32:
             return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::df::float32>(
@@ -478,6 +568,12 @@ const std::vector<DevicePrintTestParams> kTestParams = {
     {tt::DataFormat::Float16_b, 1, false, true, "Float16b_NoRemapSwizzle"},
     {tt::DataFormat::Float16_b, 1, true, true, "Float16b_RemapSwizzle"},
 
+    // Float16 (IEEE fp16, code 1) tests
+    {tt::DataFormat::Float16, 1, false, false, "Float16_NoRemapNoSwizzle"},
+    {tt::DataFormat::Float16, 1, true, false, "Float16_RemapNoSwizzle"},
+    {tt::DataFormat::Float16, 1, false, true, "Float16_NoRemapSwizzle"},
+    {tt::DataFormat::Float16, 1, true, true, "Float16_RemapSwizzle"},
+
     // Float32 tests
     {tt::DataFormat::Float32, 1, false, false, "Float32_NoRemapNoSwizzle"},
     {tt::DataFormat::Float32, 1, true, false, "Float32_RemapNoSwizzle"},
@@ -493,6 +589,7 @@ const std::vector<DevicePrintTestParams> kTestParams = {
     // Additional test cases with different tile counts
     {tt::DataFormat::Float32, 3, true, true, "Float32_MultiTile_RemapSwizzle"},
     {tt::DataFormat::Float16_b, 3, true, true, "Float16b_MultiTile_RemapSwizzle"},
+    {tt::DataFormat::Float16, 3, true, true, "Float16_MultiTile_RemapSwizzle"},
     {tt::DataFormat::Int32, 3, true, true, "Int32_MultiTile_RemapSwizzle"}};
 
 // Parameterized test

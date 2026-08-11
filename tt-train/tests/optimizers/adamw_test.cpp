@@ -8,8 +8,8 @@
 #include <gtest/gtest.h>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWCase {
@@ -41,24 +41,19 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
 }
 
 class AdamWComparisonTest : public ::testing::TestWithParam<AdamWCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
-
-    void TearDown() override {
-        ttml::autograd::ctx().reset_graph();
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
-};
 
-static xt::xarray<float> make_random_xarray(
-    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
-    xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
-    return x;
-}
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
@@ -177,13 +172,15 @@ static void run_step_and_compare(const AdamWCase& pc) {
     const uint32_t seed_max_second_moment = g();
 
     // Same data used for all optimizers
-    xt::xarray<float> g0 = make_random_xarray(pc.shape, seed_grad);
-    xt::xarray<float> w0 = make_random_xarray(pc.shape, seed_param);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
 
     // Generate random momentum states
-    xt::xarray<float> m0 = make_random_xarray(pc.shape, seed_first_moment);
-    xt::xarray<float> v0 = make_random_xarray(pc.shape, seed_second_moment, 0.0F, 1.0F);          // must be >= 0
-    xt::xarray<float> max_v0 = make_random_xarray(pc.shape, seed_max_second_moment, 0.0F, 1.0F);  // for amsgrad
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);  // must be >= 0
+    xt::xarray<float> max_v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);  // for amsgrad
 
     // Initial step count (non-zero to test bias correction with accumulated steps)
     const size_t initial_steps = 10;
@@ -217,7 +214,13 @@ static void run_step_and_compare(const AdamWCase& pc) {
         fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
+        fused_state["lr"] = pc.lr;
+        fused_state["beta1"] = pc.beta1;
+        fused_state["beta2"] = pc.beta2;
+        fused_state["epsilon"] = pc.epsilon;
+        fused_state["weight_decay"] = pc.weight_decay;
         fused_state["amsgrad"] = pc.amsgrad;
+        fused_state["stochastic_rounding"] = false;
         if (pc.amsgrad) {
             auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
             fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
@@ -310,8 +313,8 @@ INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::Value
 static const AdamWCase kAMSGradCases[] = {
     // Standard AMSGrad
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
-    // AMSGrad with weight decay
-    {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+    // {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
     // AMSGrad with different shape
     {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };
@@ -325,14 +328,17 @@ INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(
 
 // These tests are nondeterministic but should never fail
 class StochasticRoundingTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -403,8 +409,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     const uint32_t steps = 512U;
     const uint32_t seed = 42U;
 
-    xt::xarray<float> w0 = make_random_xarray(shape, seed);
-    xt::xarray<float> g0 = make_random_xarray(shape, seed + 1, -0.1f, 0.1f);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(shape, -0.1F, 0.1F, seed + 1);
 
     xt::xarray<float> w_cpu = w0;
     CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);

@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
@@ -16,6 +17,10 @@ from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+)
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
@@ -72,7 +77,7 @@ from tqdm import tqdm
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 102000000,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,
@@ -271,8 +276,13 @@ def test_qwen_model_acc(
         ]
     )
 
-    # Get the first input tensors
-    _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+    # Get the first input tensors. No-prefetcher (BH) decode uses the non-fused rotary op, which
+    # needs the simple get_rot_* tables (get_rm_rot_* is the fused-qk expanded layout and yields a
+    # wrong rotary at pos>0 on the non-fused op). Wormhole keeps main's fused get_rm_rot_* tables.
+    if _IS_BLACKHOLE:
+        _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    else:
+        _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -284,7 +294,10 @@ def test_qwen_model_acc(
     )
 
     def run_model():
-        rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        if _IS_BLACKHOLE:
+            rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+        else:
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -312,6 +325,8 @@ def test_qwen_model_acc(
 
     # Compile the model
     logger.info("Compiling model...")
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
     tt_out_tok, tt_out = run_model()
 
     # Capturing trace
@@ -339,7 +354,10 @@ def test_qwen_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+    if _IS_BLACKHOLE:
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    else:
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)
@@ -407,14 +425,20 @@ def test_qwen_model_acc(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
             )[0, 0, 0, : model_args.vocab_size]
 
-        tt_argmax_token = ttnn.to_torch(
-            tt_out_tok[0],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device,
-                dims=(3, 1),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )[0, 0, 0, 0]
+        if _IS_BLACKHOLE:
+            # The argmax token is replicated across the mesh, so read device 0's shard and flatten.
+            # This is rank-agnostic: the regular sampling kernel returns [1,1,1,32] while the
+            # force-argmax (Blackhole) path returns [1,1,32]; reshape(-1) handles both.
+            tt_argmax_token = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok[0])[0]).reshape(-1)[0]
+        else:
+            tt_argmax_token = ttnn.to_torch(
+                tt_out_tok[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(3, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )[0, 0, 0, 0]
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:
@@ -515,6 +539,38 @@ def test_qwen_model_acc(
     tt_model.tt_ccl.close()
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+
+    if is_ci_env:
+        profiler.end("run")
+        benchmark_data = BenchmarkData()
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "run",
+            "top1_token_accuracy",
+            total_top1_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "run",
+            "top5_token_accuracy",
+            total_top5_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_accuracy",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=prefill_len,
+            output_sequence_length=decode_len,
+        )
+
     assert (
         total_top1_acc >= min_top1_acc
     ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"

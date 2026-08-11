@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -11,7 +10,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def random_torch_tensor(dtype, shape):
@@ -41,9 +40,7 @@ def test_untilize_2D(device, in_dtype, use_multicore, H, W):
     output_tt = ttnn.untilize(ttnn_input, use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
@@ -60,9 +57,7 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
     output_tt = ttnn.tilize(ttnn_input, use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
@@ -79,9 +74,7 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, H, W):
     output_tt = ttnn.untilize_with_unpadding(ttnn_input, [H - 1, W - 1], use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
@@ -99,9 +92,7 @@ def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_v
     output_tt = ttnn.tilize_with_val_padding(ttnn_input, [64, 128], pad_value, use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
@@ -118,6 +109,4 @@ def test_tilize_with_zero_padding_2D(device, in_dtype, use_multicore, H, W):
     output_tt = ttnn.tilize_with_zero_padding(ttnn_input, use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)

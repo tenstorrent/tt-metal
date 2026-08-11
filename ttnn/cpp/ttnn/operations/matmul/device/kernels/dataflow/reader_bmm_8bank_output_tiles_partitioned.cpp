@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -30,19 +30,16 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
-    // DEVICE_PRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
-    // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    // DEVICE_PRINT("src0={} src1={}\n", src0_addr, src1_addr);
-    // DPRINT << "batch=" << batch << ENDL();
-    // DEVICE_PRINT("batch={}\n", batch);
+    // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DPRINT("src0={} src1={}\n", src0_addr, src1_addr);
+    // DPRINT("batch={}\n", batch);
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in0_tile_bytes = get_tile_size(dfb_id_in0);
+    const uint32_t in1_tile_bytes = get_tile_size(dfb_id_in1);
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -54,42 +51,41 @@ void kernel_main() {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
             {  // Read A's tile at (mt, kt)
-                cb_in0.reserve_back(onetile);
-                noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
+                dfb_in0.reserve_back(onetile);
+                noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if constexpr (in0_last_ktile_w > 0) {
                     if (kt == Kt - 1) {
-                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(cb_in0.get_write_ptr());
+                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(dfb_in0.get_write_ptr());
                     }
                 }
                 if constexpr (in0_last_ktile_h > 0) {
                     if (kt == Kt - 1) {
-                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(cb_in0.get_write_ptr());
+                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(dfb_in0.get_write_ptr());
                     }
                 }
-                cb_in0.push_back(onetile);
+                dfb_in0.push_back(onetile);
             }
 
             {  // Read B's tile at (kt, nt)
-                cb_in1.reserve_back(onetile);
-                noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
+                dfb_in1.reserve_back(onetile);
+                noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_in1.push_back(onetile);
+                dfb_in1.push_back(onetile);
             }
-            // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
-            // DEVICE_PRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
+            // DPRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

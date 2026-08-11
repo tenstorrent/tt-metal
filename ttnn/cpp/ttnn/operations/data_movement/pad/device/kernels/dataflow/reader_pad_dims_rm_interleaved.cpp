@@ -4,9 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
+template <typename PadAccessor>
 inline __attribute__((always_inline)) void fill_with_val_async(
-    const uint64_t in_noc_addr,
+    Noc& noc,
+    const PadAccessor& s_const,
     const uint32_t begin_addr,
     const uint32_t begin_addr_aligned,
     uint32_t size_nbytes,
@@ -21,11 +27,13 @@ inline __attribute__((always_inline)) void fill_with_val_async(
     uint32_t nchunks = size_nbytes / chunk_nbytes;
     uint32_t rem_nbytes = size_nbytes % chunk_nbytes;
     for (uint32_t i = 0; i < nchunks; ++i) {
-        noc_async_read(in_noc_addr, curr_addr, chunk_nbytes);
+        CoreLocalMem<uint32_t> dst(curr_addr);
+        noc.async_read(s_const, dst, chunk_nbytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
         curr_addr += chunk_nbytes;
     }
     if (rem_nbytes > 0) {
-        noc_async_read(in_noc_addr, curr_addr, rem_nbytes);
+        CoreLocalMem<uint32_t> dst(curr_addr);
+        noc.async_read(s_const, dst, rem_nbytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     }
 }
 
@@ -51,22 +59,22 @@ void kernel_main() {
     const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb(dfb_id);
+    Noc noc;
 
     // calculate the offset for alignment of padding in rows/sticks
-    uint32_t l1_addr_partial = get_write_ptr(cb_id) + unpadded_X_nbytes;
+    uint32_t l1_addr_partial = dfb.get_write_ptr() + unpadded_X_nbytes;
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
-    const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr, pad_value_const_buffer_nbytes);
-    const uint64_t const_buffer_noc_addr = get_noc_addr(0, s_const);
+    const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr);
 
     uint16_t pad_value = pad_value_packed >> 16;
 
@@ -74,24 +82,25 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                cb_reserve_back(cb_id, 1);
-                uint32_t l1_addr = get_write_ptr(cb_id);
+                dfb.reserve_back(1);
+                uint32_t l1_addr = dfb.get_write_ptr();
                 if (y >= num_local_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
                     // this is fully padding
                     fill_with_val_async(
-                        const_buffer_noc_addr,
-                        l1_addr,
-                        l1_addr,
-                        padded_X_nbytes,
-                        pad_value_const_buffer_nbytes,
-                        pad_value);
+                        noc, s_const, l1_addr, l1_addr, padded_X_nbytes, pad_value_const_buffer_nbytes, pad_value);
                 } else {
                     // this is a data row possibly with padding at end
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0, start_src_stick_offset);
-                    noc_async_read(src_noc_addr, l1_addr, unpadded_X_nbytes);
+                    CoreLocalMem<uint32_t> dst(l1_addr);
+                    noc.async_read(
+                        s0,
+                        dst,
+                        unpadded_X_nbytes,
+                        {.page_id = src_stick_id, .offset_bytes = start_src_stick_offset},
+                        {.offset_bytes = 0});
                     l1_addr_partial = l1_addr + unpadded_X_nbytes;
                     fill_with_val_async(
-                        const_buffer_noc_addr,
+                        noc,
+                        s_const,
                         l1_addr_partial,
                         l1_addr_partial + l1_addr_align_offset,
                         padded_X_diff_nbytes,
@@ -99,8 +108,8 @@ void kernel_main() {
                         pad_value);
                     ++src_stick_id;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id, 1);
+                noc.async_read_barrier();
+                dfb.push_back(1);
             }
         }
     }

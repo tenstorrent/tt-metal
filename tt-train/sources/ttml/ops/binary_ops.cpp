@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <ttnn/operations/eltwise/binary/binary_composite.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/types.hpp>
@@ -104,7 +105,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
 
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     out->set_value(
-        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none));
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));
@@ -236,6 +237,30 @@ autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr&
 
 autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
     return a * b;
+}
+
+autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::minimum(a->get_value(), b->get_value()));
+    autograd::GradFunction grad = [a, b, out]() {
+        auto res = ttnn::min_bw(out->get_grad(), a->get_value(), b->get_value());
+        a->add_grad(res[0]);
+        b->add_grad(res[1]);
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
+    return out;
+}
+
+autograd::TensorPtr max(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::maximum(a->get_value(), b->get_value()));
+    autograd::GradFunction grad = [a, b, out]() {
+        auto res = ttnn::max_bw(out->get_grad(), a->get_value(), b->get_value());
+        a->add_grad(res[0]);
+        b->add_grad(res[1]);
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
+    return out;
 }
 
 }  // namespace ttml::ops

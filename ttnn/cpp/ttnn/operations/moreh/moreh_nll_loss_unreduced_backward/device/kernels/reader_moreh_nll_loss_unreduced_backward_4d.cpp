@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -26,33 +29,34 @@ void kernel_main() {
     constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
 
     // ublocks size defined in tiles
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const DataFormat weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_output_grad);
     const DataFormat output_grad_data_format = get_dataformat(cb_output_grad);
 
     constexpr auto target_args = TensorAccessorArgs<0>();
     constexpr auto output_grad_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
     constexpr uint32_t onetile = 1;
 
+    DataflowBuffer dfb_target_obj(cb_target);
+    DataflowBuffer dfb_output_grad_obj(cb_output_grad);
+    DataflowBuffer dfb_input_grad_obj(cb_input_grad);
 #if defined(WEIGHT)
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    DataflowBuffer dfb_weight_obj(cb_weight);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    // weight: (1, C)
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
+    DataflowBuffer dfb_weight_scratch_obj(cb_weight_scratch);
+    read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, Ct);
 
-    cb_wait_front(cb_weight, Ct);
-    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+    dfb_weight_obj.wait_front(Ct);
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
 #endif
 
-    auto zero = float_to_bfloat16(0.0f);
+    auto zero = fp32_to_bf16_truncate(0.0f);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -61,39 +65,37 @@ void kernel_main() {
         uint32_t n = nc / C;
         uint32_t c = nc % C;
 
-        // target: (N, H, W)
         auto target_noc_id = n * num_inner_tile + inner;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(dfb_target_obj, addrg_target, target_noc_id);
 
-        // output_grad: (N, H, W)
         auto output_grad_noc_id = n * num_inner_tile + inner;
-        read_tile(cb_output_grad, addrg_output_grad, output_grad_noc_id);
+        read_tile(dfb_output_grad_obj, addrg_output_grad, output_grad_noc_id);
 
-        cb_reserve_back(cb_input_grad, onetile);
-        cb_wait_front(cb_target, onetile);
-        cb_wait_front(cb_output_grad, onetile);
+        dfb_input_grad_obj.reserve_back(onetile);
+        dfb_target_obj.wait_front(onetile);
+        dfb_output_grad_obj.wait_front(onetile);
 
-        auto input_grad_l1_ptr = get_write_ptr<uint16_t>(cb_input_grad);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
-        auto output_grad_l1_ptr = get_read_ptr<uint16_t>(cb_output_grad);
+        CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(dfb_input_grad_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(dfb_output_grad_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t idx = h * TILE_WIDTH + w;  // target and input_grad idx
+                uint32_t idx = h * TILE_WIDTH + w;
 
                 int32_t target_val = target_l1_ptr[idx];
 
                 uint16_t input_grad_val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[idx]);
+                    float output_grad_val = bf16_to_fp32(output_grad_l1_ptr[idx]);
 
 #if defined(WEIGHT)
-                    float weight_val = bfloat16_to_float(weight_l1_ptr[target_val]);
+                    float weight_val = bf16_to_fp32(weight_l1_ptr[target_val]);
 
-                    input_grad_val = float_to_bfloat16(-output_grad_val * weight_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val * weight_val);
 #else
-                    input_grad_val = float_to_bfloat16(-output_grad_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val);
 #endif
                 } else {
                     input_grad_val = zero;
@@ -103,9 +105,9 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(cb_input_grad, onetile);
+        dfb_input_grad_obj.push_back(onetile);
 
-        cb_pop_front(cb_target, onetile);
-        cb_pop_front(cb_output_grad, onetile);
+        dfb_target_obj.pop_front(onetile);
+        dfb_output_grad_obj.pop_front(onetile);
     }
 }

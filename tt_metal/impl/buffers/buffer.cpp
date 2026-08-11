@@ -27,9 +27,12 @@
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
+
+#include "impl/emulation/emule_live_ranges.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -52,10 +55,42 @@ const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
 
 bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
 
+// The emule sanitizers track every live L1/DRAM buffer range so the kernel-side
+// out-of-bounds checks know what is legitimately allocated. Those ranges are only
+// consumed when a program runs on an emulated device, so the registration calls in
+// this file are gated on the device's RUNTIME target type rather than on the
+// TT_METAL_USE_EMULE build flag (which previously wrapped them in #ifdef). On
+// hardware this returns false, so registration is skipped; the LiveL1Ranges /
+// LiveDramRanges symbols are always linked but never touched. Uses the device's own
+// context (matching the Tracy lookups below) so it is correct under multiple contexts.
+//
+// extract_context_id() calls MeshDevice::get_mesh_device() -> shared_from_this(), which
+// throws std::bad_weak_ptr when the MeshDevice is mid-destruction (e.g. buffers freed from
+// ~ProgramImpl during device teardown). This runs inside ~Buffer (noexcept), so an escaping
+// throw would std::terminate. Treat that case as non-emule: the range registry is being torn
+// down anyway, so skipping the removal is harmless (and hardware already returns false here).
+// Latched true the first time an emule device is seen (always via a valid device). A process is
+// emule xor hardware, so deallocate() can read this instead of dereferencing a device_ that may
+// already be dangling at teardown. See Buffer::deallocate().
+std::atomic<bool> emule_device_seen{false};
+
+inline bool is_emule_device(const IDevice* device) {
+    try {
+        bool emule = MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+                     tt::TargetDevice::Emule;
+        if (emule) {
+            emule_device_seen.store(true, std::memory_order_relaxed);
+        }
+        return emule;
+    } catch (const std::bad_weak_ptr&) {
+        return false;
+    }
+}
+
 void validate_buffer_parameters(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType& /*buffer_type*/,
+    const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
@@ -63,6 +98,26 @@ void validate_buffer_parameters(
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
+
+        // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
+        // A shard core off row 0 aliases onto an existing bank and corrupts data. Applies to both the
+        // ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
+        if (buffer_type == BufferType::DRAM) {
+            std::vector<CoreCoord> shard_cores;
+            if (buffer_distribution_spec.has_value()) {
+                shard_cores = buffer_distribution_spec->cores();
+            } else if (shard_spec.has_value()) {
+                shard_cores = corerange_to_cores(shard_spec->grid());
+            }
+            for (const auto& core : shard_cores) {
+                TT_FATAL(
+                    core.y == 0,
+                    "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
+                    "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
+                    core.x,
+                    core.y);
+            }
+        }
     } else {
         TT_FATAL(
             shard_spec == std::nullopt && buffer_distribution_spec == std::nullopt,
@@ -106,9 +161,9 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                 if (pages_per_shard > rem_pages) {
                     ret_shard_shape[i] = {rem_pages / ret_shard_shape[i][1], ret_shard_shape[i][1]};
                 }
-                ret_vec[i] = std::vector<uint32_t>(num_cols);
+                ret_vec[i].reserve(num_cols);
                 for (uint32_t j = 0; j < num_cols; j++) {
-                    ret_vec[i][j] = page_id++;
+                    ret_vec[i].push_back(page_id++);
                 }
                 rem_pages -= num_cols;
             }
@@ -364,6 +419,16 @@ std::shared_ptr<Buffer> Buffer::create(
     buffer->address_ = address;
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
 
+    // Explicit-address (non-owning) L1 buffers skip allocate_impl(), so register their
+    // per-core extent here (removed in deallocate()). Rationale: SANITIZER_CHECKS.md §4.
+    if (is_emule_device(device) && buffer->size_ != 0 &&
+        (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL)) {
+        tt::tt_metal::emule::LiveL1Ranges::add(
+            device->id(),
+            static_cast<uint32_t>(address),
+            static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
+    }
+
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
         buffer,
@@ -428,6 +493,19 @@ void Buffer::allocate_impl() {
         // Requires updating all use cases of buffer address to accept a u64 to remove
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
+        if (is_emule_device(device_)) {
+            if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+                // Per-core footprint, not the aggregate size_ (spans all banks). See SANITIZER_CHECKS.md §4.
+                tt::tt_metal::emule::LiveL1Ranges::add(
+                    device_->id(),
+                    static_cast<uint32_t>(address_),
+                    static_cast<uint32_t>(address_ + aligned_size_per_bank()));
+            } else if (buffer_type_ == BufferType::DRAM) {
+                tt::tt_metal::emule::LiveDramRanges::add(
+                    device_->id(), static_cast<uint32_t>(address_), static_cast<uint32_t>(address_ + size_));
+            }
+        }
+
 #if defined(TRACY_ENABLE)
         if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                 .rtoptions()
@@ -446,6 +524,16 @@ void Buffer::allocate_impl() {
 
 void Buffer::deallocate() {
     if (!owns_data_) {
+        // device_ may be dangling here during teardown, so read the latch instead of touching it.
+        if (emule_device_seen.load(std::memory_order_relaxed)) {
+            // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
+            // Guard on status: the explicit-call + destructor double-deallocate must remove once.
+            if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0 &&
+                (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL)) {
+                tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+            }
+            allocation_status_ = AllocationStatus::DEALLOCATED;
+        }
         return;
     }
     this->deallocate_impl();
@@ -471,6 +559,14 @@ void Buffer::deallocate_impl() {
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
+            if (is_emule_device(device_)) {
+                if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
+                } else if (buffer_type_ == BufferType::DRAM) {
+                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
+                }
+            }
             allocator_->deallocate_buffer(this);
         }
 

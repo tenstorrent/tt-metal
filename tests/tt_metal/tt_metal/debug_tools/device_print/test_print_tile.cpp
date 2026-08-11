@@ -46,7 +46,7 @@ namespace {
 
 std::vector<std::string> GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     using tt::tt_metal::test::dprint::GenerateExpectedData;
-    std::string data = GenerateExpectedData(data_format, input_tile, true);
+    std::string data = GenerateExpectedData(data_format, input_tile);
     std::vector<std::string> expected;
     expected.push_back(fmt::format("Print tile from Data0:{}", data));
     expected.push_back(fmt::format("Print tile from Data1:{}", data));

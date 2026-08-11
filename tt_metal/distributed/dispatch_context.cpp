@@ -22,8 +22,20 @@
 
 namespace tt::tt_metal::experimental {
 
+struct DispatchContext::StashedQueues {
+    std::vector<std::unique_ptr<distributed::MeshCommandQueueBase>> queues;
+};
+
 // Define the static member with custom deleter
 std::unique_ptr<DispatchContext, DispatchContext::Deleter> DispatchContext::dispatch_context_ptr_ = nullptr;
+
+DispatchContext::~DispatchContext() = default;
+
+void DispatchContext::reset() {
+    num_fd_inits_ = 0;
+    fast_dispatch_enabled_ = false;
+    stashed_sd_queues_.reset();
+}
 
 DispatchContext& DispatchContext::get() {
     if (!dispatch_context_ptr_) {
@@ -39,8 +51,18 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
 
     ContextId context_id = extract_context_id(mesh_device);
-    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     const auto& cluster = MetalContext::instance(context_id).get_cluster();
+
+    // Mock/emulated devices skip firmware/dispatch entirely, so there is no real hardware to
+    // toggle between Slow and Fast Dispatch. Treat the transition as a no-op to avoid touching
+    // dispatch cores/command queues that are never created for these targets (init_command_queue_host
+    // leaves command_queues_ empty on mock/emulated), which otherwise segfaults on teardown.
+    // See https://github.com/tenstorrent/tt-metal/issues/50634.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
+    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
@@ -68,6 +90,18 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
 
     auto& mesh_device_impl = mesh_device->impl();
+
+    // Drain pending SD work and stash the SD queues for restoration on terminate
+    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
+        cq->finish();
+    }
+    for (const auto& dev : active_devices) {
+        dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
+    }
+    stashed_sd_queues_ = std::make_unique<StashedQueues>();
+    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
+        stashed_sd_queues_->queues.push_back(std::move(cq));
+    }
     mesh_device_impl.mesh_command_queues_.clear();
     mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
 
@@ -94,34 +128,52 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         return;
     }
 
+    ContextId context_id = extract_context_id(mesh_device);
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+
+    // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on mock/emulated targets, so
+    // there is nothing to tear down. See https://github.com/tenstorrent/tt-metal/issues/50634.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
-    ContextId context_id = extract_context_id(mesh_device);
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices();
+    const auto& active_devices = device_manager->get_all_active_devices_impl();
 
-    uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
-    mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
 
-    for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
-            mesh_device,
-            cq_id,
-            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl),
-            mesh_device_impl.active_distributed_context_));
+    // Restore stashed SD queues to preserve pre-FD state (e.g. asynchronous_slow_dispatch_enabled_)
+    TT_FATAL(
+        stashed_sd_queues_ && !stashed_sd_queues_->queues.empty(),
+        "No stashed SD queues to restore; was initialize_fast_dispatch called?");
+    for (auto& cq : stashed_sd_queues_->queues) {
+        mesh_device_impl.mesh_command_queues_.push_back(std::move(cq));
     }
+    stashed_sd_queues_.reset();
+    for (const auto& dev : active_devices) {
+        dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
+    }
+
     for (const auto& dev : active_devices) {
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
-            dynamic_cast<tt::tt_metal::Device*>(dev)->command_queues_[cq_id].get()->terminate();
+            dev->command_queues_[cq_id].get()->terminate();
         }
     }
 
     for (const auto& dev : active_devices) {
         auto dispatch_cores = device_manager->get_virtual_dispatch_cores(dev->id());
         tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+    }
+
+    // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
+    // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
+    for (const auto& device : active_devices) {
+        device->command_queue_programs_.clear();
+        device->command_queues_.clear();
     }
 
     fast_dispatch_enabled_ = false;
@@ -142,11 +194,16 @@ void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice*
 
 void DispatchContext::disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
     TT_FATAL(
-        MetalContext::instance().rtoptions().get_fast_dispatch(),
-        "{} can only be called when Fast Dispatch is enabled.",
+        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is disabled.",
         __func__);
     auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     sd_mesh_cq.disable_asynchronous_slow_dispatch();
+}
+
+bool DispatchContext::is_asynchronous_slow_dispatch_enabled(distributed::MeshDevice* mesh_device) const {
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    return sd_mesh_cq.is_asynchronous_slow_dispatch_enabled();
 }
 
 }  // namespace tt::tt_metal::experimental

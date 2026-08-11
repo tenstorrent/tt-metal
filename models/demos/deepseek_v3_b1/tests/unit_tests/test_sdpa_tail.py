@@ -20,11 +20,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_tail.op import SdpaTailSingleCore
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
 @pytest.mark.parametrize(
     "width, block_size, num_blocks, dense",
     [
@@ -142,7 +141,7 @@ def test_sdpa_tail(device, width, block_size, num_blocks, dense, final_reduction
         layout=ttnn.TILE_LAYOUT if not untilize_out else ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=l_mem_config,
-        tile=tile,
+        tile=None if untilize_out else tile,
     )
     torch_ms_out = torch.zeros(ms_shape, dtype=torch.bfloat16)
     ttnn_ms_out = ttnn.from_torch(

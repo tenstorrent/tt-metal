@@ -10,11 +10,10 @@ void kernel_main() {
 
     // The circular buffer that we are going to read from and write to DRAM
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address of the output buffer
     constexpr auto out0_args = TensorAccessorArgs<0>();
-    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
+    const auto out0 = TensorAccessor(out0_args, c_addr);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -22,7 +21,7 @@ void kernel_main() {
         cb_wait_front(cb_out0, 1);
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
         // write the tile to DRAM
-        noc_async_write_tile(i, out0, cb_out0_addr);
+        noc_async_write_page(i, out0, cb_out0_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to

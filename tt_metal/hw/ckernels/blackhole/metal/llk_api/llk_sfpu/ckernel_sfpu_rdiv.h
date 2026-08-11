@@ -6,6 +6,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -18,33 +21,21 @@ inline void calculate_rdiv(const uint value) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat recip;
         if constexpr (APPROXIMATION_MODE) {
-            recip = _sfpu_reciprocal_<0>(in);
+            recip = sfpu_reciprocal_iter<0>(in);
         } else {
             if constexpr (is_fp32_dest_acc_en) {
-                recip = _sfpu_reciprocal_<2>(in);
+                recip = sfpu_reciprocal_iter<2>(in);
             } else {
-                recip = _sfpu_reciprocal_<1>(in);
-                recip = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(recip, 0));
+                recip = sfpu_reciprocal_iter<1>(in);
+                recip = sfpi::convert<sfpi::vFloat16b>(recip, sfpi::RoundMode::Nearest);
             }
         }
         sfpi::vFloat result = recip * val;
 
         if constexpr (rounding_mode == RoundingMode::Trunc) {
-            // Use hand-optimised "trunc" implementation.
-            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
-            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
-            _trunc_body_();
-            result = sfpi::l_reg[sfpi::LRegs::LReg1];
-            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+            result = _trunc_body_(result);
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
-            // Use hand-optimised "floor" implementation.
-            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
-            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
-            _floor_body_();
-            result = sfpi::l_reg[sfpi::LRegs::LReg1];
-            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+            result = _floor_body_(result);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -53,7 +44,8 @@ inline void calculate_rdiv(const uint value) {
 
 template <bool APPROXIMATION_MODE>
 void rdiv_init() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

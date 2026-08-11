@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -46,9 +49,12 @@ void kernel_main() {
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<10>();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr);
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
+
+    Noc noc_obj;
+    CircularBuffer cb(cb_id);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
@@ -61,19 +67,17 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += num_pages_per_packet) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                cb_reserve_back(cb_id, num_pages_per_packet);
-                const uint32_t l1_write_addr_base = get_write_ptr(cb_id);
-                uint32_t l1_write_addr = l1_write_addr_base;
+                cb.reserve_back(num_pages_per_packet);
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, num_pages_per_packet);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
-                    l1_write_addr += page_size;
+                    noc_obj.async_read(
+                        input_tensor_addrgen, cb, page_size, {.page_id = tile_id}, {.offset_bytes = j * page_size});
                     tile_id++;
                 }
 
-                noc_async_read_barrier();
-                cb_push_back(cb_id, num_pages_per_packet);
+                noc_obj.async_read_barrier();
+                cb.push_back(num_pages_per_packet);
             }
         }
     } else {
@@ -90,8 +94,8 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                cb_reserve_back(cb_id, num_pages_per_packet);
-                size_t l1_write_addr = get_write_ptr(cb_id);
+                cb.reserve_back(num_pages_per_packet);
+                size_t l1_write_addr = cb.get_write_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
@@ -100,25 +104,28 @@ void kernel_main() {
                 uint32_t current_chunk_id = packet_id / chunk_granularity;
                 uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
                 // Ensure that current chunk has been sent
+                // Device 2.0 migration: legacy primitive retained: global_semaphore_addr is a GlobalSemaphore address.
                 noc_semaphore_wait_min(global_semaphore_ptr, wait_chunk_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
                     uint32_t first_id = (global_id % N_DRAM_BANKS) + 2 * N_DRAM_BANKS * (global_id / N_DRAM_BANKS);
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                     uint64_t packet_addr =
-                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        intermediate_tensor_addrgen.get_noc_addr(first_id, 0 /*offset*/, 0 /*noc_id*/);
 
                     noc_async_read(packet_addr, l1_write_addr, payload_size_bytes);
                     l1_write_addr += payload_size_bytes;
                     packet_id++;
                 }
-                noc_async_read_barrier();
+                noc_obj.async_read_barrier();
 
-                cb_push_back(cb_id, num_pages_per_packet);
+                cb.push_back(num_pages_per_packet);
             }
         }
     }
 
     // Reset global semaphore
+    // Device 2.0 migration: legacy primitive retained: global_semaphore_addr is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr), 0);
 }

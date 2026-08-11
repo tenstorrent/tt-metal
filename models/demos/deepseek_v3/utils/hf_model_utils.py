@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import concurrent.futures
+import errno
 import gc
 import json
 import os
+import re
 import shutil
 from collections.abc import Mapping
 from glob import glob
@@ -18,16 +20,34 @@ from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_utils import no_init_weights
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 
 MODEL_INDEX_FILENAME = "model.safetensors.index.json"
 DEQUANTIZED_CHECKPOINT_SUFFIX = "-dequantized"
+STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX = f"{DEQUANTIZED_CHECKPOINT_SUFFIX}-stacked"
+QUAD_RING_CHECKPOINT_SUFFIX = "-quad-ring"
 DEQUANTIZED_CHECKPOINT_SCRIPT = "models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py"
 DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE = (
     "Pass a dequantized HF checkpoint. "
     f"Use `{DEQUANTIZED_CHECKPOINT_SCRIPT}` to generate one from the original HF weights."
+)
+STACKED_EXPERT_WEIGHT_PATTERN = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
+STACKED_EXPERT_ALIAS_PATTERN = STACKED_EXPERT_WEIGHT_PATTERN
+STACKED_EXPERT_TENSOR_PATTERN = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts_stacked\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
+QUAD_RING_EXPERT_TENSOR_PATTERN = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts_quad_ring\.(?P<projection>w0_w1|w2)\.weight$"
 )
 
 
@@ -57,22 +77,57 @@ def index_model_weights(model_path: str | Path) -> Mapping[str, torch.Tensor]:
     return LazyStateDict(Path(model_path))
 
 
+def _validate_no_mixed_expert_weight_layouts(weight_map: Mapping[str, str], model_path: Path) -> None:
+    has_legacy_expert_weights = any(STACKED_EXPERT_WEIGHT_PATTERN.match(key) for key in weight_map)
+    has_stacked_expert_weights = any(STACKED_EXPERT_TENSOR_PATTERN.match(key) for key in weight_map)
+    if has_legacy_expert_weights and has_stacked_expert_weights:
+        raise ValueError(
+            f"Checkpoint at {model_path} mixes legacy per-expert and stacked expert tensors. "
+            "Use either a fully legacy dequantized checkpoint or a fully stacked dequantized checkpoint, "
+            "not both."
+        )
+
+
 def materialize_model_weights(
     model_path: str | Path, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
-    safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
     weights_dict = {}
-    iterable = (
-        map(lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths)
-        if thread_pool_executor is None
-        else thread_pool_executor.map(
-            lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths
+    model_path = Path(model_path)
+    index_path = model_path / MODEL_INDEX_FILENAME
+
+    if index_path.is_file():
+        weight_map, _ = _load_model_weight_map(model_path)
+        shard_to_keys: dict[str, list[str]] = {}
+        for key, shard_name in weight_map.items():
+            shard_to_keys.setdefault(shard_name, []).append(key)
+
+        def load_indexed_shard(shard_name: str) -> None:
+            with safe_open(model_path / shard_name, framework="pt", device="cpu") as handle:
+                for key in shard_to_keys[shard_name]:
+                    weights_dict[key] = handle.get_tensor(key)
+
+        shard_names = sorted(shard_to_keys)
+        iterable = (
+            map(load_indexed_shard, shard_names)
+            if thread_pool_executor is None
+            else thread_pool_executor.map(load_indexed_shard, shard_names)
         )
-    )
+        total_shards = len(shard_names)
+    else:
+        safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
+        iterable = (
+            map(lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths)
+            if thread_pool_executor is None
+            else thread_pool_executor.map(
+                lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths
+            )
+        )
+        total_shards = len(safetensors_filepaths)
+
     list(
         tqdm(
             iterable,
-            total=len(safetensors_filepaths),
+            total=total_shards,
             desc="Loading weights",
         )
     )
@@ -86,6 +141,22 @@ def default_dequantized_model_path(model_path: str | Path) -> Path:
     if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
         return model_path
     return model_path.with_name(f"{model_path.name}{DEQUANTIZED_CHECKPOINT_SUFFIX}")
+
+
+def default_stacked_dequantized_model_path(model_path: str | Path) -> Path:
+    model_path = Path(model_path)
+    if model_path.name.endswith(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX):
+        return model_path
+    if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
+        return model_path.with_name(f"{model_path.name}-stacked")
+    return model_path.with_name(f"{model_path.name}{STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX}")
+
+
+def default_quad_ring_model_path(model_path: str | Path) -> Path:
+    model_path = Path(model_path)
+    if model_path.name.endswith(QUAD_RING_CHECKPOINT_SUFFIX):
+        return model_path
+    return model_path.with_name(f"{model_path.name}{QUAD_RING_CHECKPOINT_SUFFIX}")
 
 
 def _get_weight_block_shape_from_quant_config(quantization_config: Any) -> tuple[int, ...]:
@@ -114,6 +185,17 @@ def get_weight_block_shape_from_model_path(model_path: str | Path) -> tuple[int,
     with config_path.open("r", encoding="utf-8") as handle:
         config_obj = json.load(handle)
     return _get_weight_block_shape_from_quant_config(config_obj.get("quantization_config"))
+
+
+def _load_model_config_json(model_path: str | Path) -> dict[str, Any]:
+    config_path = Path(model_path) / "config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Could not find DeepSeek config at {config_path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        config_obj = json.load(handle)
+    if not isinstance(config_obj, dict):
+        raise ValueError(f"Expected JSON object in {config_path}, got {type(config_obj)}")
+    return config_obj
 
 
 def dequantize_weight_tensor(
@@ -191,7 +273,9 @@ def _load_model_weight_map(model_path: Path) -> tuple[dict[str, str], dict[str, 
     if index_path.is_file():
         with index_path.open("r", encoding="utf-8") as handle:
             index_obj = json.load(handle)
-        return dict(index_obj["weight_map"]), dict(index_obj.get("metadata", {}))
+        weight_map = dict(index_obj["weight_map"])
+        _validate_no_mixed_expert_weight_layouts(weight_map, model_path)
+        return weight_map, dict(index_obj.get("metadata", {}))
 
     weight_map: dict[str, str] = {}
     for shard_path in sorted(model_path.glob("*.safetensors")):
@@ -200,6 +284,7 @@ def _load_model_weight_map(model_path: Path) -> tuple[dict[str, str], dict[str, 
                 weight_map[key] = shard_path.name
     if not weight_map:
         raise FileNotFoundError(f"No `.safetensors` shards found in {model_path}")
+    _validate_no_mixed_expert_weight_layouts(weight_map, model_path)
     return weight_map, {}
 
 
@@ -212,6 +297,18 @@ def _copy_non_weight_artifacts(source_model_path: Path, output_model_path: Path)
             shutil.copytree(source_path, destination, dirs_exist_ok=True)
         else:
             shutil.copy2(source_path, destination)
+
+
+def _mirror_checkpoint_with_symlinks(source_model_path: Path, output_model_path: Path) -> None:
+    """Mirror checkpoint entries by symlink to avoid duplicating large safetensors."""
+    output_model_path.mkdir(parents=True, exist_ok=False)
+    for source_path in source_model_path.iterdir():
+        destination = output_model_path / source_path.name
+        os.symlink(
+            str(source_path.resolve()),
+            destination,
+            target_is_directory=source_path.is_dir(),
+        )
 
 
 def _load_tensor_from_shards(
@@ -235,16 +332,287 @@ def _close_shard_handles(file_handles: Mapping[str, Any]) -> None:
             close_fn()
 
 
+def _load_converted_tensor_from_shards(
+    model_path: Path,
+    weight_map: Mapping[str, str],
+    file_handles: dict[str, Any],
+    key: str,
+    block_shape: tuple[int, ...],
+    *,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    scale_key = f"{key}_scale_inv"
+    tensor = _load_tensor_from_shards(model_path, weight_map, file_handles, key)
+    if scale_key in weight_map:
+        return dequantize_weight_tensor(
+            tensor,
+            _load_tensor_from_shards(model_path, weight_map, file_handles, scale_key),
+            block_shape,
+            dtype=dtype,
+        )
+
+    if tensor.dtype == torch.float8_e4m3fn:
+        raise ValueError(f"Found float8 tensor '{key}' without matching inverse scale '{scale_key}'.")
+    return tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+
+
+def _stacked_expert_weight_name(layer_idx: int, projection: str) -> str:
+    return f"model.layers.{layer_idx}.mlp.experts_stacked.{projection}.weight"
+
+
+def _quad_ring_expert_weight_name(layer_idx: int, projection: str) -> str:
+    return f"model.layers.{layer_idx}.mlp.experts_quad_ring.{projection}.weight"
+
+
+def _default_quad_ring_shard_maps(
+    hidden_size: int,
+    intermediate_size: int,
+    *,
+    num_cores: int = 12,
+) -> tuple[list[int], list[tuple[int, int]]]:
+    from ttnn.experimental.moe_compute_utils import W2_TILES_PER_A2A_ITER_W, _shard_tiles, _w2_shard_tiles
+
+    import ttnn
+
+    hidden_tiles = hidden_size // ttnn.TILE_SIZE
+    intermediate_tiles = intermediate_size // ttnn.TILE_SIZE
+    max_w2_tiles = (hidden_tiles + num_cores - 1) // num_cores
+    groups_per_core = (max_w2_tiles + W2_TILES_PER_A2A_ITER_W - 1) // W2_TILES_PER_A2A_ITER_W
+
+    w0_w1_shard_map = []
+    w2_shard_map = []
+    for ring_pos in range(num_cores):
+        w0_w1_shard_map.append(_shard_tiles(intermediate_tiles, ring_pos, num_cores))
+
+        w2_tiles = _w2_shard_tiles(hidden_tiles, ring_pos, intermediate_tiles, num_cores)
+        last_group_tiles = w2_tiles - (groups_per_core - 1) * W2_TILES_PER_A2A_ITER_W
+        last_group_pad_tiles = groups_per_core * W2_TILES_PER_A2A_ITER_W - w2_tiles
+        w2_shard_map.append((last_group_tiles, last_group_pad_tiles))
+
+    return w0_w1_shard_map, w2_shard_map
+
+
+def _validate_quad_ring_stacked_projection_shape(
+    tensor: torch.Tensor,
+    *,
+    tensor_name: str,
+    num_routed_experts: int,
+) -> None:
+    if tensor.ndim != 3:
+        raise ValueError(f"Expected '{tensor_name}' to have rank 3, got {tensor.ndim}")
+    if tensor.shape[0] != num_routed_experts:
+        raise ValueError(
+            f"Expected '{tensor_name}' to contain {num_routed_experts} experts, got {tensor.shape[0]} experts"
+        )
+
+
+def _prepare_quad_ring_expert_tensors(
+    stacked_gate: torch.Tensor,
+    stacked_up: torch.Tensor,
+    stacked_down: torch.Tensor,
+    *,
+    num_routed_experts: int,
+    num_devices: int,
+    hidden_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    from ttnn.experimental.moe_compute_utils import (
+        prepare_w0_w1_tensor_for_moe_compute,
+        prepare_w2_tensor_for_moe_compute,
+    )
+
+    if num_routed_experts % num_devices != 0:
+        raise ValueError(
+            f"n_routed_experts ({num_routed_experts}) must be divisible by num_devices ({num_devices}) "
+            "for quad-ring expert preparation."
+        )
+    num_experts_per_device = num_routed_experts // num_devices
+
+    w0 = stacked_gate.unsqueeze(0).transpose(-1, -2)
+    w1 = stacked_up.unsqueeze(0).transpose(-1, -2)
+    w2 = stacked_down.unsqueeze(0).transpose(-1, -2)
+
+    if w0.shape[-2] != hidden_size:
+        raise ValueError(
+            f"Expected gate expert input hidden size {hidden_size}, got {w0.shape[-2]} "
+            f"(tensor shape: {tuple(w0.shape)})"
+        )
+    matmul_n = w0.shape[-1]
+    w0_w1_shard_map, w2_shard_map = _default_quad_ring_shard_maps(hidden_size, matmul_n)
+
+    prepared_w0_w1_per_device: list[torch.Tensor] = []
+    prepared_w2_per_device: list[torch.Tensor] = []
+    for expert_offset in range(0, num_routed_experts, num_experts_per_device):
+        prepared_w0_w1_per_device.append(
+            prepare_w0_w1_tensor_for_moe_compute(
+                w0[:, expert_offset : expert_offset + num_experts_per_device, :, :],
+                w1[:, expert_offset : expert_offset + num_experts_per_device, :, :],
+                1,
+                num_experts_per_device,
+                hidden_size,
+                matmul_n,
+                w0_w1_shard_map,
+            )
+        )
+        prepared_w2_per_device.append(
+            prepare_w2_tensor_for_moe_compute(
+                w2[:, expert_offset : expert_offset + num_experts_per_device, :, :],
+                1,
+                num_experts_per_device,
+                matmul_n,
+                hidden_size,
+                w2_shard_map,
+                w0_w1_shard_map,
+            )
+        )
+
+    return (
+        torch.cat(prepared_w0_w1_per_device, dim=2).contiguous(),
+        torch.cat(prepared_w2_per_device, dim=2).contiguous(),
+    )
+
+
+def _group_stacked_expert_keys(weight_map: Mapping[str, str]) -> dict[int, dict[str, list[str]]]:
+    grouped: dict[int, dict[str, list[tuple[int, str]]]] = {}
+    for key in weight_map:
+        match = STACKED_EXPERT_WEIGHT_PATTERN.match(key)
+        if match is None:
+            continue
+
+        layer_idx = int(match.group("layer"))
+        expert_idx = int(match.group("expert"))
+        projection = match.group("projection")
+        grouped.setdefault(layer_idx, {}).setdefault(projection, []).append((expert_idx, key))
+
+    normalized: dict[int, dict[str, list[str]]] = {}
+    for layer_idx, projections in grouped.items():
+        normalized[layer_idx] = {}
+        for projection, expert_entries in projections.items():
+            expert_entries.sort(key=lambda item: item[0])
+            expert_ids = [expert_idx for expert_idx, _ in expert_entries]
+            if expert_ids != list(range(len(expert_entries))):
+                raise ValueError(
+                    f"Expert weights for layer {layer_idx} projection '{projection}' are incomplete or non-contiguous: "
+                    f"{expert_ids}"
+                )
+            normalized[layer_idx][projection] = [key for _, key in expert_entries]
+    return normalized
+
+
+def _group_stacked_expert_tensor_keys(weight_map: Mapping[str, str]) -> dict[int, dict[str, str]]:
+    """Group already-stacked expert tensor keys by layer/projection."""
+    grouped: dict[int, dict[str, str]] = {}
+    for key in weight_map:
+        match = STACKED_EXPERT_TENSOR_PATTERN.match(key)
+        if match is None:
+            continue
+
+        layer_idx = int(match.group("layer"))
+        projection = match.group("projection")
+        layer_group = grouped.setdefault(layer_idx, {})
+        if projection in layer_group:
+            raise ValueError(
+                f"Found duplicate stacked expert tensor keys for layer {layer_idx} projection '{projection}': "
+                f"'{layer_group[projection]}' and '{key}'"
+            )
+        layer_group[projection] = key
+    return grouped
+
+
+def _group_quad_ring_expert_tensor_keys(weight_map: Mapping[str, str]) -> dict[int, dict[str, str]]:
+    grouped: dict[int, dict[str, str]] = {}
+    for key in weight_map:
+        match = QUAD_RING_EXPERT_TENSOR_PATTERN.match(key)
+        if match is None:
+            continue
+        layer_idx = int(match.group("layer"))
+        projection = match.group("projection")
+        grouped.setdefault(layer_idx, {})[projection] = key
+    return grouped
+
+
+def _discover_existing_quad_ring_weight_map(model_path: Path) -> dict[str, str]:
+    discovered_weight_map: dict[str, str] = {}
+    for shard_path in sorted(model_path.glob("quad-ring-experts-layer-*.safetensors")):
+        try:
+            with safe_open(shard_path, framework="pt", device="cpu") as handle:
+                for key in handle.keys():
+                    discovered_weight_map[key] = shard_path.name
+        except Exception as e:
+            logger.warning(
+                f"Skipping unreadable quad-ring shard '{shard_path}': {e}. "
+                "It was likely truncated by an earlier ENOSPC and will be regenerated."
+            )
+    return discovered_weight_map
+
+
+def _write_weight_index_file(index_path: Path, metadata: Mapping[str, Any], weight_map: Mapping[str, str]) -> None:
+    if index_path.exists() or index_path.is_symlink():
+        index_path.unlink()
+    with index_path.open("w", encoding="utf-8") as handle:
+        json.dump({"metadata": dict(metadata), "weight_map": dict(weight_map)}, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def _is_no_space_left_error(exc: BaseException) -> bool:
+    if isinstance(exc, OSError):
+        return exc.errno == errno.ENOSPC
+    return "No space left on device" in str(exc)
+
+
+def _validate_stacked_expert_groups(
+    grouped_expert_keys: Mapping[int, Mapping[str, list[str]]],
+    *,
+    expected_experts: int | None,
+    first_moe_layer: int | None = None,
+    num_hidden_layers: int | None = None,
+) -> None:
+    required_projections = ("gate_proj", "down_proj", "up_proj")
+    missing_groups: list[str] = []
+    if isinstance(first_moe_layer, int) and isinstance(num_hidden_layers, int):
+        for layer_idx in range(first_moe_layer, num_hidden_layers):
+            projections = grouped_expert_keys.get(layer_idx, {})
+            for projection in required_projections:
+                if projection not in projections:
+                    missing_groups.append(f"layer {layer_idx} projection '{projection}' is missing")
+
+    if expected_experts is None and not missing_groups:
+        return
+
+    invalid_groups: list[str] = []
+    if expected_experts is not None:
+        for layer_idx, projections in grouped_expert_keys.items():
+            for projection, source_keys in projections.items():
+                if len(source_keys) != expected_experts:
+                    invalid_groups.append(
+                        f"layer {layer_idx} projection '{projection}' has {len(source_keys)}/{expected_experts} experts"
+                    )
+
+    issues: list[str] = []
+    if missing_groups:
+        sample_missing = ", ".join(missing_groups[:3])
+        extra = "" if len(missing_groups) <= 3 else f" and {len(missing_groups) - 3} more"
+        issues.append(f"missing required expert projections: {sample_missing}{extra}")
+    if invalid_groups:
+        sample_invalid = ", ".join(invalid_groups[:3])
+        extra = "" if len(invalid_groups) <= 3 else f" and {len(invalid_groups) - 3} more"
+        issues.append(f"expert counts do not match n_routed_experts={expected_experts}: {sample_invalid}{extra}")
+    if issues:
+        raise ValueError("Cannot write stacked DeepSeek checkpoint because " + ". ".join(issues) + ".")
+
+
 def save_dequantized_hf_checkpoint(
     source_model_path: str | Path,
     output_model_path: str | Path | None = None,
     *,
     overwrite: bool = False,
     dtype: torch.dtype = torch.bfloat16,
+    stack_experts: bool = True,
 ) -> Path:
     source_model_path = Path(source_model_path).resolve()
     output_model_path = (
-        default_dequantized_model_path(source_model_path)
+        default_stacked_dequantized_model_path(source_model_path)
+        if output_model_path is None and stack_experts
+        else default_dequantized_model_path(source_model_path)
         if output_model_path is None
         else Path(output_model_path).resolve()
     )
@@ -268,36 +636,40 @@ def save_dequantized_hf_checkpoint(
     output_model_path.mkdir(parents=True, exist_ok=True)
     _copy_non_weight_artifacts(source_model_path, output_model_path)
 
-    block_shape = get_weight_block_shape_from_model_path(source_model_path)
+    config_obj = _load_model_config_json(source_model_path)
+    block_shape = _get_weight_block_shape_from_quant_config(config_obj.get("quantization_config"))
     weight_map, metadata = _load_model_weight_map(source_model_path)
-    shard_to_keys: dict[str, list[str]] = {}
-    for key, shard_name in weight_map.items():
-        shard_to_keys.setdefault(shard_name, []).append(key)
+    stacked_expert_keys = _group_stacked_expert_keys(weight_map) if stack_experts else {}
+    if stack_experts:
+        _validate_stacked_expert_groups(
+            stacked_expert_keys,
+            expected_experts=config_obj.get("n_routed_experts"),
+            first_moe_layer=config_obj.get("first_k_dense_replace"),
+            num_hidden_layers=config_obj.get("num_hidden_layers"),
+        )
+    skipped_weight_keys = {
+        source_key
+        for projections in stacked_expert_keys.values()
+        for source_keys in projections.values()
+        for source_key in source_keys
+    }
 
+    shard_to_keys: dict[str, list[str]] = {}
     output_weight_map: dict[str, str] = {}
     total_size = 0
+    for key, shard_name in weight_map.items():
+        if key.endswith("_scale_inv") or key in skipped_weight_keys:
+            continue
+        shard_to_keys.setdefault(shard_name, []).append(key)
+
     file_handles: dict[str, Any] = {}
     try:
         for shard_name in sorted(shard_to_keys):
             output_tensors: dict[str, torch.Tensor] = {}
             for key in shard_to_keys[shard_name]:
-                if key.endswith("_scale_inv"):
-                    continue
-
-                scale_key = f"{key}_scale_inv"
-                tensor = _load_tensor_from_shards(source_model_path, weight_map, file_handles, key)
-                if scale_key in weight_map:
-                    output_tensor = dequantize_weight_tensor(
-                        tensor,
-                        _load_tensor_from_shards(source_model_path, weight_map, file_handles, scale_key),
-                        block_shape,
-                        dtype=dtype,
-                    )
-                else:
-                    if tensor.dtype == torch.float8_e4m3fn:
-                        raise ValueError(f"Found float8 tensor '{key}' without matching inverse scale '{scale_key}'.")
-                    output_tensor = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
-
+                output_tensor = _load_converted_tensor_from_shards(
+                    source_model_path, weight_map, file_handles, key, block_shape, dtype=dtype
+                )
                 output_tensors[key] = output_tensor
                 output_weight_map[key] = shard_name
                 total_size += output_tensor.numel() * output_tensor.element_size()
@@ -305,6 +677,35 @@ def save_dequantized_hf_checkpoint(
             if output_tensors:
                 logger.info(f"Saving dequantized shard {shard_name} with {len(output_tensors)} tensors")
                 save_file(output_tensors, str(output_model_path / shard_name))
+
+        if stack_experts:
+            for layer_idx in sorted(stacked_expert_keys):
+                shard_name = f"stacked-experts-layer-{layer_idx:05d}.safetensors"
+                output_tensors: dict[str, torch.Tensor] = {}
+                for projection in sorted(stacked_expert_keys[layer_idx]):
+                    source_keys = stacked_expert_keys[layer_idx][projection]
+                    output_key = _stacked_expert_weight_name(layer_idx, projection)
+                    source_tensors = [
+                        _load_converted_tensor_from_shards(
+                            source_model_path,
+                            weight_map,
+                            file_handles,
+                            source_key,
+                            block_shape,
+                            dtype=dtype,
+                        )
+                        for source_key in source_keys
+                    ]
+                    output_tensor = torch.stack(source_tensors).contiguous()
+                    output_tensors[output_key] = output_tensor
+                    output_weight_map[output_key] = shard_name
+                    total_size += output_tensor.numel() * output_tensor.element_size()
+
+                if output_tensors:
+                    logger.info(
+                        f"Saving stacked expert shard {shard_name} with {len(output_tensors)} tensors for layer {layer_idx}"
+                    )
+                    save_file(output_tensors, str(output_model_path / shard_name))
     finally:
         _close_shard_handles(file_handles)
 
@@ -315,6 +716,209 @@ def save_dequantized_hf_checkpoint(
         handle.write("\n")
 
     logger.info(f"Saved dequantized DeepSeek HF checkpoint to {output_model_path}")
+    return output_model_path
+
+
+def save_quad_ring_hf_checkpoint(
+    source_model_path: str | Path,
+    output_model_path: str | Path | None = None,
+    *,
+    overwrite: bool = False,
+    num_devices: int = 128,
+) -> Path:
+    source_model_path = Path(source_model_path).resolve()
+    output_model_path = (
+        default_quad_ring_model_path(source_model_path)
+        if output_model_path is None
+        else Path(output_model_path).resolve()
+    )
+
+    if output_model_path == source_model_path:
+        raise ValueError("Output checkpoint path must differ from the source model path.")
+    if not source_model_path.is_dir():
+        raise FileNotFoundError(f"Source model path does not exist: {source_model_path}")
+
+    if output_model_path.exists() and overwrite:
+        if output_model_path.is_dir():
+            shutil.rmtree(output_model_path)
+        else:
+            output_model_path.unlink()
+
+    if not output_model_path.exists():
+        logger.info(
+            f"Creating quad-ring checkpoint overlay at {output_model_path} "
+            f"from source {source_model_path} using symlinks."
+        )
+        _mirror_checkpoint_with_symlinks(source_model_path, output_model_path)
+    elif not output_model_path.is_dir():
+        raise FileExistsError(
+            f"Output checkpoint path exists but is not a directory: {output_model_path}. "
+            "Remove it manually or pass --force."
+        )
+    else:
+        logger.info(f"Resuming quad-ring checkpoint preparation in existing directory: {output_model_path}")
+
+    output_index_path = output_model_path / MODEL_INDEX_FILENAME
+    if not output_index_path.is_file():
+        raise FileNotFoundError(f"Could not find model index at {output_index_path}")
+    with output_index_path.open("r", encoding="utf-8") as handle:
+        output_index = json.load(handle)
+
+    weight_map = dict(output_index.get("weight_map", {}))
+    discovered_quad_ring_weight_map = _discover_existing_quad_ring_weight_map(output_model_path)
+    indexed_quad_ring_keys = [key for key in list(weight_map) if QUAD_RING_EXPERT_TENSOR_PATTERN.match(key) is not None]
+    stale_quad_ring_keys = [key for key in indexed_quad_ring_keys if key not in discovered_quad_ring_weight_map]
+    if stale_quad_ring_keys:
+        logger.warning(
+            f"Dropping {len(stale_quad_ring_keys)} stale quad-ring entries from index "
+            "(missing or unreadable shard files). They will be regenerated."
+        )
+        for key in stale_quad_ring_keys:
+            weight_map.pop(key, None)
+    if discovered_quad_ring_weight_map:
+        logger.info(
+            f"Discovered {len(discovered_quad_ring_weight_map)} existing quad-ring expert tensor entries in "
+            f"{output_model_path}; they will be reused."
+        )
+        weight_map.update(discovered_quad_ring_weight_map)
+    metadata = dict(output_index.get("metadata", {}))
+    config_obj = _load_model_config_json(output_model_path)
+
+    try:
+        num_hidden_layers = int(config_obj["num_hidden_layers"])
+        first_moe_layer = int(config_obj.get("first_k_dense_replace", 0))
+        num_routed_experts = int(config_obj["n_routed_experts"])
+        hidden_size = int(config_obj["hidden_size"])
+    except KeyError as e:
+        raise ValueError(f"Missing required DeepSeek config field for quad-ring export: {e}") from e
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid DeepSeek config value for quad-ring export: {e}") from e
+    if num_devices <= 0:
+        raise ValueError(f"num_devices must be positive, got {num_devices}")
+    if first_moe_layer < 0 or first_moe_layer > num_hidden_layers:
+        raise ValueError(
+            f"Invalid first_k_dense_replace={first_moe_layer}; expected 0 <= first_k_dense_replace <= num_hidden_layers={num_hidden_layers}"
+        )
+
+    stacked_expert_keys = _group_stacked_expert_tensor_keys(weight_map)
+    _validate_stacked_expert_groups(
+        stacked_expert_keys,
+        expected_experts=None,
+        first_moe_layer=first_moe_layer,
+        num_hidden_layers=num_hidden_layers,
+    )
+
+    base_total_size = int(metadata.get("total_size", 0))
+    added_total_size = 0
+    _write_weight_index_file(
+        output_index_path,
+        {**metadata, "total_size": base_total_size + added_total_size},
+        weight_map,
+    )
+    file_handles: dict[str, Any] = {}
+    try:
+        for layer_idx in range(first_moe_layer, num_hidden_layers):
+            quad_ring_w0_w1_key = _quad_ring_expert_weight_name(layer_idx, "w0_w1")
+            quad_ring_w2_key = _quad_ring_expert_weight_name(layer_idx, "w2")
+            existing_w0_w1_shard = weight_map.get(quad_ring_w0_w1_key)
+            existing_w2_shard = weight_map.get(quad_ring_w2_key)
+            if (
+                existing_w0_w1_shard is not None
+                and existing_w2_shard is not None
+                and existing_w0_w1_shard == existing_w2_shard
+                and (output_model_path / existing_w0_w1_shard).is_file()
+            ):
+                logger.info(
+                    f"Skipping layer {layer_idx}: using existing quad-ring shard {existing_w0_w1_shard} "
+                    f"for keys '{quad_ring_w0_w1_key}' and '{quad_ring_w2_key}'."
+                )
+                continue
+
+            layer_stacked_keys = stacked_expert_keys[layer_idx]
+            gate_key = layer_stacked_keys["gate_proj"]
+            up_key = layer_stacked_keys["up_proj"]
+            down_key = layer_stacked_keys["down_proj"]
+
+            gate_weight = _load_tensor_from_shards(output_model_path, weight_map, file_handles, gate_key)
+            up_weight = _load_tensor_from_shards(output_model_path, weight_map, file_handles, up_key)
+            down_weight = _load_tensor_from_shards(output_model_path, weight_map, file_handles, down_key)
+
+            _validate_quad_ring_stacked_projection_shape(
+                gate_weight,
+                tensor_name=gate_key,
+                num_routed_experts=num_routed_experts,
+            )
+            _validate_quad_ring_stacked_projection_shape(
+                up_weight,
+                tensor_name=up_key,
+                num_routed_experts=num_routed_experts,
+            )
+            _validate_quad_ring_stacked_projection_shape(
+                down_weight,
+                tensor_name=down_key,
+                num_routed_experts=num_routed_experts,
+            )
+
+            prepared_w0_w1, prepared_w2 = _prepare_quad_ring_expert_tensors(
+                gate_weight,
+                up_weight,
+                down_weight,
+                num_routed_experts=num_routed_experts,
+                num_devices=num_devices,
+                hidden_size=hidden_size,
+            )
+
+            quad_ring_shard_name = f"quad-ring-experts-layer-{layer_idx:05d}.safetensors"
+            quad_ring_tensors = {
+                quad_ring_w0_w1_key: prepared_w0_w1,
+                quad_ring_w2_key: prepared_w2,
+            }
+            logger.info(
+                f"Saving quad-ring prepared expert shard {quad_ring_shard_name} "
+                f"for layer {layer_idx} (keys: {list(quad_ring_tensors.keys())})"
+            )
+            try:
+                save_file(quad_ring_tensors, str(output_model_path / quad_ring_shard_name))
+            except Exception as e:
+                if _is_no_space_left_error(e):
+                    prepared_layers = sorted(_group_quad_ring_expert_tensor_keys(weight_map))
+                    if prepared_layers:
+                        layer_summary = f"{prepared_layers[0]}..{prepared_layers[-1]} ({len(prepared_layers)} layers)"
+                    else:
+                        layer_summary = "none"
+                    raise RuntimeError(
+                        "No space left while writing quad-ring prepared expert tensors. "
+                        f"Already-prepared layers are preserved ({layer_summary}). "
+                        "Free more space and rerun without --force to resume."
+                    ) from e
+                raise
+
+            for key, tensor in quad_ring_tensors.items():
+                weight_map[key] = quad_ring_shard_name
+                added_total_size += tensor.numel() * tensor.element_size()
+
+            _write_weight_index_file(
+                output_index_path,
+                {**metadata, "total_size": base_total_size + added_total_size},
+                weight_map,
+            )
+
+            # Keep local references short-lived while iterating all MoE layers.
+            del prepared_w0_w1
+            del prepared_w2
+            del gate_weight
+            del up_weight
+            del down_weight
+    finally:
+        _close_shard_handles(file_handles)
+
+    metadata["total_size"] = base_total_size + int(added_total_size)
+    _write_weight_index_file(output_index_path, metadata, weight_map)
+
+    logger.info(
+        f"Saved quad-ring prepared DeepSeek checkpoint to {output_model_path} "
+        f"(added {added_total_size} bytes of expert tensors)"
+    )
     return output_model_path
 
 
@@ -340,12 +944,42 @@ def apply_with_names(
 def load_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor]
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
+    def resolve_weight(name: str) -> torch.Tensor | None:
+        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
+        if match is not None:
+            stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
+            if name in weights_dict and stacked_name in weights_dict:
+                raise RuntimeError(
+                    f"Checkpoint mixes legacy expert tensor '{name}' with stacked tensor '{stacked_name}'."
+                )
+            if name in weights_dict:
+                return weights_dict[name]
+            if stacked_name not in weights_dict:
+                return None
+
+            stacked_weight = weights_dict[stacked_name]
+            if stacked_weight.ndim != 3:
+                raise RuntimeError(
+                    f"Expected stacked expert tensor '{stacked_name}' to have rank 3, got {stacked_weight.ndim}"
+                )
+            expert_idx = int(match.group("expert"))
+            if expert_idx >= stacked_weight.shape[0]:
+                raise RuntimeError(
+                    f"Expected stacked expert tensor '{stacked_name}' to contain expert {expert_idx}, "
+                    f"got {stacked_weight.shape[0]} experts"
+                )
+            return stacked_weight[expert_idx]
+
+        if name in weights_dict:
+            return weights_dict[name]
+        return None
+
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         print(f"Loading weight: {name}" + " " * 50, end="\r")
-        if name not in weights_dict:
+        loaded_weight = resolve_weight(name)
+        if loaded_weight is None:
             return tensor
-        loaded_weight = weights_dict[name]
         if loaded_weight.dtype == torch.float8_e4m3fn:
             raise RuntimeError(
                 f"Expected already-dequantized bf16 weights for '{name}', but found float8 tensor. "
@@ -363,9 +997,22 @@ def load_weight_from_weights_dict(
 def unload_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor],
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
+    def has_weight(name: str) -> bool:
+        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
+        if match is not None:
+            stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
+            if name in weights_dict and stacked_name in weights_dict:
+                raise RuntimeError(
+                    f"Checkpoint mixes legacy expert tensor '{name}' with stacked tensor '{stacked_name}'."
+                )
+            if name in weights_dict:
+                return True
+            return stacked_name in weights_dict
+        return name in weights_dict
+
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
-        if name not in weights_dict:
+        if not has_weight(name):
             return tensor
         tensor.data = torch.empty(0, dtype=tensor.dtype)
         evict_fn = getattr(weights_dict, "evict", None)

@@ -122,6 +122,7 @@ def test_perf_eltwise_binary_sfpu_float(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -142,6 +143,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -206,6 +209,7 @@ def test_perf_eltwise_binary_sfpu_int(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -257,6 +261,9 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
         )
 
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
+
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -299,6 +306,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)

@@ -73,6 +73,54 @@ def _normalize_run_type(run_type: str) -> str:
     return run_type.strip().replace(" ", "_")
 
 
+def _format_error_cell(test: dict, max_len: int = 90) -> str:
+    """One-line error summary for the failed-tests table.
+
+    The result's message/error fields hold either the PCC value (for a PCC
+    assertion failure — a bare float) or the exception text (TT_FATAL/assert/etc.).
+    Render a bare float as ``PCC=<v>`` and otherwise the first line of the message,
+    truncated and made table-safe (no pipes/backticks/newlines).
+    """
+    raw = test.get("message") or test.get("error_message") or test.get("exception") or ""
+    raw = str(raw).strip()
+    if not raw:
+        return "—"
+    try:
+        return f"PCC={float(raw):.4f}"
+    except (TypeError, ValueError):
+        pass
+    msg = raw.splitlines()[0].replace("|", "\\|").replace("`", "'")
+    if len(msg) > max_len:
+        msg = msg[: max_len - 1] + "…"
+    return msg
+
+
+def _short_hardware_label(card_type: str) -> str:
+    """Extract a concise hardware label from card_type strings like 'wormhole_b0 (N300)'."""
+    if not card_type:
+        return "—"
+    ct = card_type.lower()
+    if "t3000" in ct or "t3k" in ct or "4c" in ct:
+        return "T3K"
+    if "n300" in ct or "2 device" in ct:
+        return "N300"
+    if "n150" in ct or "1 device" in ct:
+        return "N150"
+    # Distinguish the blackhole boards (card_type is e.g. "blackhole (p150b)",
+    # "blackhole (p100a)", "blackhole (P300)") instead of collapsing to "BH".
+    if "p100" in ct:
+        return "P100a"
+    if "p300" in ct:
+        return "P300a"
+    if "p150" in ct:
+        return "P150b"
+    if "blackhole" in ct:
+        return "BH"
+    if "galaxy" in ct:
+        return "Galaxy"
+    return card_type
+
+
 def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) -> None:
     """Write a GitHub Actions Job Summary with sweep run results.
 
@@ -91,7 +139,16 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
     passed = sum(1 for t in tests if t.get("status") == "pass")
     failed = sum(1 for t in tests if _is_failure(t.get("status", "")))
     skipped = total - passed - failed
-    pass_rate = f"{passed * 100.0 / total:.2f}%" if total else "N/A"
+    # Pass rate is over EXECUTED vectors (pass + fail), not the whole set. A skipped vector
+    # never produced a result: it is NOT_RUN because the runner classified an environment
+    # fault -- a box that enumerated 16 chips instead of 32, a device that wedged, a failed
+    # reset -- and booked the rest of the batch rather than reporting phantom test failures.
+    # Dividing by total made a bad runner look like an op regression: one 16-chip box taking
+    # six jobs in run 31290760722 booked 239 vectors NOT_RUN and dropped the reported rate to
+    # 66.7% on a run with ZERO test failures. Skipped stays its own row so the coverage loss
+    # is still visible -- it just no longer masquerades as a correctness signal.
+    executed = passed + failed
+    pass_rate = f"{passed * 100.0 / executed:.2f}%" if executed else "N/A"
     status_icon = "✅" if failed == 0 else "⚠️"
 
     normalized_type = _normalize_run_type(run_type) if run_type else ""
@@ -112,10 +169,11 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
     lines.extend(
         [
             f"| **Total Tests** | {total} |",
+            f"| **Executed** | {executed} |",
             f"| **Passed** | {passed} |",
             f"| **Failed** | {failed} |",
-            f"| **Skipped** | {skipped} |",
-            f"| **Pass Rate** | **{pass_rate}** |",
+            f"| **Skipped** (not run — infra) | {skipped} |",
+            f"| **Pass Rate** (of executed) | **{pass_rate}** |",
             "",
         ]
     )
@@ -141,15 +199,17 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
         for module, module_tests in sorted_modules:
             lines.append(f"**{module}** ({len(module_tests)} failures)")
             lines.append("")
-            lines.append("| Test Name | Config Hash | Status |")
-            lines.append("|-----------|-------------|--------|")
+            lines.append("| Test Name | Config Hash | Status | Hardware | Error |")
+            lines.append("|-----------|-------------|--------|----------|-------|")
             for t in module_tests[:4]:
                 name = t.get("full_test_name", "unknown")
                 config_hash = t.get("input_hash", "—")
                 status = t.get("status", "fail")
-                lines.append(f"| `{name}` | `{config_hash}` | {status} |")
+                hardware = _short_hardware_label(t.get("card_type", ""))
+                error = _format_error_cell(t)
+                lines.append(f"| `{name}` | `{config_hash}` | {status} | {hardware} | {error} |")
             if len(module_tests) > 4:
-                lines.append(f"| ... and {len(module_tests) - 4} more | | |")
+                lines.append(f"| ... and {len(module_tests) - 4} more | | | | |")
             lines.append("")
 
         lines.append("</details>")
@@ -334,10 +394,16 @@ def push_results(
         print(f"  GitHub Pipeline ID: {github_pipeline_id}")
         print(f"  Run Contents: {run_contents}")
         print(f"  Card Type: {card_type}")
+        # Same denominator as the job summary: executed = pass + fail. Skipped vectors are
+        # environment faults booked NOT_RUN, not results, so they are reported separately
+        # rather than folded into the rate. See _write_job_summary for the rationale.
+        executed = pass_count + fail_count
         print(f"  Total Tests: {len(tests)}")
+        print(f"  Executed: {executed}")
         print(f"  Pass Count: {pass_count}")
         print(f"  Fail Count: {fail_count}")
-        print(f"  Pass Rate: {pass_count * 100.0 / len(tests):.2f}%" if tests else "N/A")
+        print(f"  Skipped (not run): {len(tests) - executed}")
+        print(f"  Pass Rate (of executed): {pass_count * 100.0 / executed:.2f}%" if executed else "  Pass Rate: N/A")
 
         return run_id
 
@@ -354,7 +420,10 @@ def main():
     # --summary-only mode: write GitHub Step Summary without DB push
     if len(sys.argv) >= 2 and sys.argv[1] == "--summary-only":
         if len(sys.argv) < 3:
-            print("Usage: push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+            print(
+                "Usage: push_sweep_results.py --summary-only <results_dir> [run_type]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         results_dir = sys.argv[2]
         run_type = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -379,7 +448,10 @@ def main():
 
     if len(sys.argv) < 3:
         print("Usage: push_sweep_results.py <results_dir> <run_contents>", file=sys.stderr)
-        print("       push_sweep_results.py --summary-only <results_dir> [run_type]", file=sys.stderr)
+        print(
+            "       push_sweep_results.py --summary-only <results_dir> [run_type]",
+            file=sys.stderr,
+        )
         print("")
         print("  results_dir: Directory containing JSON result files")
         print("  run_contents: Type of run (e.g., 'lead models')")

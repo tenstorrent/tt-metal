@@ -44,6 +44,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -86,24 +87,30 @@ def _create_output_device_tensor(
     tile=None,
     mesh_mapper=None,
 ):
-    """Allocate a zeroed output tensor on device."""
-    num_cores = core_range_set.num_cores()
-    shard = _shard_shape(height, width, num_cores, sharding)
+    """Allocate an uninitialized output tensor on device.
+
+    Uses ``allocate_tensor_on_device`` (alloc-only) rather than
+    ``from_torch(torch.zeros(...))``. The latter host-materializes zeros
+    and dispatches a tilize program, which allocates a ROW_MAJOR staging
+    buffer the same size as the output plus non-globally-allocated CBs.
+    For BFLOAT16 that combined footprint, on top of the already-live
+    fused overlap tensor, pushes L1 past its waterline and clashes with
+    the statically reserved CB region. The allocated buffer is
+    immediately overwritten by ``CopyToOutput.op``, so its initial
+    contents don't matter.
+    """
+    shard = _shard_shape(height, width, core_range_set.num_cores(), sharding)
     shard_spec = ttnn.ShardSpec(core_range_set, shard, ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(sharding, ttnn.BufferType.L1, shard_spec)
-    kwargs = {}
-    if tile is not None:
-        kwargs["tile"] = tile
-    if mesh_mapper is not None:
-        kwargs["mesh_mapper"] = mesh_mapper
-    return ttnn.from_torch(
-        torch.zeros(height, width, dtype=torch.bfloat16),
+    tensor_spec = ttnn.TensorSpec(
+        ttnn.Shape([height, width]),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        **kwargs,
+        memory_layout=sharding,
+        shard_spec=shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
+    return ttnn.allocate_tensor_on_device(tensor_spec, device)
 
 
 def _get_roundtrip_reference(
@@ -456,6 +463,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@requires_hybrid_allocator
 def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
 
@@ -501,7 +509,7 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
         kv_raw,
         submesh,
         o_proj_dtype=o_proj_dtype,
-        mla_proj_dtype=o_proj_dtype,
+        q_ab_dtype=o_proj_dtype,
     )
     o_proj = fused["o_proj"]
     gate_mm = fused["gate_mm"]

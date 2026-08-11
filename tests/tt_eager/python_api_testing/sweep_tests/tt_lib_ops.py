@@ -216,7 +216,7 @@ def eltwise_erfc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.erfc(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
+    t1 = ttnn.erfc(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -235,7 +235,7 @@ def eltwise_hardtanh(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardtanh(t0, low, high, memory_config=output_mem_config)
+    t1 = ttnn.hardtanh(t0, min_val=low, max_val=high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -271,7 +271,7 @@ def eltwise_elu(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.elu(t0, alpha, memory_config=output_mem_config)
+    t1 = ttnn.elu(t0, alpha=alpha, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -312,12 +312,11 @@ def eltwise_rsqrt(
     else:
         # this case is for test_eltwise_rsqrt_in_depth.py with shape (3, 11, 92, 100) RM
         # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
-        input_shape = t0.shape
         t0 = t0.cpu().pad_to_tile(0)
         t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
         t1 = ttnn.rsqrt(t0, memory_config=output_mem_config)
-        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
+        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     return tt2torch_tensor(t1)
 
@@ -2128,7 +2127,6 @@ eltwise_min = make_binary_op(ttnn.minimum)
 eltwise_max = make_binary_op(ttnn.maximum)
 
 matmul = make_binary_op_ttnn(ttnn.matmul)
-outer = make_binary_op(ttnn.outer)
 
 eltwise_nextafter = make_binary_op_ttnn(ttnn.nextafter)
 

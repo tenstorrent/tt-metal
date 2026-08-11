@@ -179,8 +179,8 @@ static Op2DSliceConfig determine_slice_config_internal(
         return_slice_config.slice_type = slice_config_.value().slice_type;
     }
 
-    log_info(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-    log_info(
+    log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    log_debug(
         tt::LogOp,
         "Determining slice config: output_layout={}, output_height={}, output_width={}, auto_slice_type={}",
         output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
@@ -196,7 +196,7 @@ static Op2DSliceConfig determine_slice_config_internal(
 
     const uint32_t max_num_slices = compute_max_num_slices(output_sliced_dim, slice_rounding_value, output_layout);
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "Max possible slices for {} layout and {}-slicing: {} (output_sliced_dim={})",
         output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
@@ -217,7 +217,7 @@ static Op2DSliceConfig determine_slice_config_internal(
             L1_stats.total_free_bytes);
         if (L1_stats.total_free_bytes >= l1_usage) {
             found_valid_config = true;
-            log_info(tt::LogOp, "Found valid config with num_slices={}, L1 usage={}", current_num_slices, l1_usage);
+            log_debug(tt::LogOp, "Found valid config with num_slices={}, L1 usage={}", current_num_slices, l1_usage);
             break;
         }
         current_num_slices++;
@@ -293,7 +293,7 @@ void run_sliced_op(
         output_tensors[0].get().logical_shape().to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "run_sliced_op called: output_layout={}, output_shape={}x{}, dram_slice_config_.has_value()={}",
         output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
@@ -303,9 +303,9 @@ void run_sliced_op(
 
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
-        log_info(tt::LogOp, "Using provided slice config: num_slices={}", dram_slice_config.num_slices);
+        log_debug(tt::LogOp, "Using provided slice config: num_slices={}", dram_slice_config.num_slices);
     } else {
-        log_info(tt::LogOp, "Calling determine_slice_config to auto-determine configuration");
+        log_debug(tt::LogOp, "Calling determine_slice_config to auto-determine configuration");
         dram_slice_config = determine_slice_config(
             op_slice_attr,
             input_tensor.logical_shape(),
@@ -313,7 +313,7 @@ void run_sliced_op(
             dram_slice_config_,
             output_layout,
             input_tensor.device());
-        log_info(tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
+        log_debug(tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
 
         // If auto-determination resulted in num_slices==1, convert to L1_FULL to avoid DRAM slicing overhead
         // A single slice means the entire operation fits in L1, so we should use the L1 path instead
@@ -483,9 +483,9 @@ void run_sliced_op(
 
         const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor,
-            ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
-            ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
+            ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+            ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
             sliced_input_tensor_memory_config);
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
@@ -522,10 +522,10 @@ void run_sliced_op(
             ttnn::experimental::slice_write(
                 sliced_output_tensor,
                 output_tensor,
-                ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
-                ttnn::SmallVector<uint32_t>{
+                ttsl::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
+                ttsl::SmallVector<uint32_t>{
                     batch_size, output_slice_height_end, output_slice_width_end, output_channels},
-                ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
         }
         output_slice_dim_start += output_slice_size;
         slice_index++;

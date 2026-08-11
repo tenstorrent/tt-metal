@@ -8,6 +8,7 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_binary.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -31,7 +32,7 @@ inline void calculate_addcdiv(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 + (in1 * value_float * _sfpu_reciprocal_<2>(in2));
+        sfpi::vFloat result = in0 + (in1 * value_float * sfpu_reciprocal_iter<2>(in2));
         if constexpr (!is_fp32_dest_acc_en) {
             result = float32_to_bf16_rne(result);
         }
@@ -42,7 +43,7 @@ inline void calculate_addcdiv(
 
 template <bool APPROXIMATION_MODE>
 void init_addcdiv() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

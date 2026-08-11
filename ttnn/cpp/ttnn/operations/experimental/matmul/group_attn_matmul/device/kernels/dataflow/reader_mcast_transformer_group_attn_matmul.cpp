@@ -4,12 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -51,8 +51,8 @@ void kernel_main() {
     uint32_t in1_mcast_num_dests = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_num_cores = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_grid_size = get_arg_val<uint32_t>(i++);
-    experimental::Semaphore<> sender_sem(get_arg_val<uint32_t>(i++));
-    experimental::Semaphore<> receiver_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> sender_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> receiver_sem(get_arg_val<uint32_t>(i++));
 
     uint32_t in1_mcast_sender_size_bytes = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_sender_id = get_arg_val<uint32_t>(i++);
@@ -70,9 +70,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
     constexpr uint32_t cb_id_in2 = 2;  // all interleaved or sharded KV heads for one user batch
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1_obj(cb_id_in1);
-    experimental::CircularBuffer cb_in2_obj(cb_id_in2);
+    Noc noc;
+    CircularBuffer cb_in1_obj(cb_id_in1);
+    CircularBuffer cb_in2_obj(cb_id_in2);
 
     constexpr uint32_t num_rows_in_one_tile = 32;
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
@@ -80,7 +80,7 @@ void kernel_main() {
 
 #ifndef IN1_SHARDED
     constexpr auto in1_args = TensorAccessorArgs<3>();
-    const auto s1 = TensorAccessor(in1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(in1_args, src1_addr);
 #endif
 
     // Mcast setup
@@ -116,7 +116,7 @@ void kernel_main() {
 
     uint32_t local_noc_x = my_x[noc.get_noc_id()];
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
-    experimental::UnicastEndpoint local_src;
+    UnicastEndpoint local_src;
 
     const bool in1_sender_in_receiver_grid = in1_mcast_sender_id < in1_mcast_grid_size;
     bool mcast_in1_to_local_cb = false;
@@ -236,11 +236,11 @@ void kernel_main() {
 
                                 // Now we have the block in the CB address, we can mcast to dests!
                                 if (mcast_in1_to_local_cb) {  // directly mcast data in in1 sharded cb
-                                    experimental::CoreLocalMem<uint32_t> mcast_src(in1_sharded_cb_addr);
+                                    CoreLocalMem<uint32_t> mcast_src(in1_sharded_cb_addr);
                                     if (in1_sender_in_receiver_grid) {
                                         // if sender is in receiver grid, num_dests will include source, since we are
                                         // copying to a different local CB as well
-                                        noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                             mcast_src,
                                             cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
@@ -254,7 +254,7 @@ void kernel_main() {
                                     } else {
                                         // if sender is not in receiver grid, do a regular multicast but from
                                         // in1_sharded_cb_addr
-                                        noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                                        noc.async_write_multicast(
                                             mcast_src,
                                             cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
@@ -268,8 +268,8 @@ void kernel_main() {
                                     }
                                 } else {  // mcast from l1_write_addr_in1 which is populated locally by copying from in1
                                           // sharded or interleaved
-                                    experimental::CoreLocalMem<uint32_t> mcast_src(l1_write_addr_in1);
-                                    noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                                    CoreLocalMem<uint32_t> mcast_src(l1_write_addr_in1);
+                                    noc.async_write_multicast(
                                         mcast_src,
                                         cb_in1_obj,
                                         in1_mcast_sender_size_bytes,

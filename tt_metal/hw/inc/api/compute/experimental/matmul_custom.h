@@ -11,9 +11,6 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
-#ifdef TRISC_PACK
-#include "llk_pack_api.h"
-#endif
 
 // defines the default throttle level for no-mop matmul kernels (default 0)
 #ifndef MM_THROTTLE
@@ -26,6 +23,8 @@ namespace ckernel {
 /**
  * Short initialization for the no-MOP matmul block operation. Configures only the unpacker and math
  * engine, without touching hardware configuration or pack. Safe to call at any point mid-kernel.
+ * On Wormhole, the current no-MOP implementation is intentionally scoped to the SDPA full-tile,
+ * throttle-0 path.
  *
  * Return value: None
  *
@@ -82,13 +81,16 @@ ALWI void matmul_block_no_mop(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+    // Pass the operand cb ids so the math execute can re-derive the tile geometry and replay the
+    // geometry-correct length (16x32 tiny tiles use a shorter replay than full 32x32 tiles).
+    MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
 }
 
 // clang-format off
 /**
  * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions
  * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init.
+ * On Wormhole, this reinit path is only intended for the SDPA full-tile, throttle-0 use case.
  *
  * Return value: None
  */
@@ -101,7 +103,9 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
+    // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
+    // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }
 
 }  // namespace ckernel

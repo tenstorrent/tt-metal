@@ -21,26 +21,220 @@ Multi-upstream mode:
   When upstream_sockets (list) or upstream_core_coords (list) is provided, the sender
   side uses the d2d_exchange_multiple_upstreams kernel which receives from N upstream
   sockets (one per worker), cycles through them, and assembles a single downstream page.
+
+ParallelSocketInterface:
+  Manages N parallel 1-1 D2D socket connections between two pipeline stages.
+  Each channel has its own core pair (send_core, recv_core) running an independent
+  d2d_exchange kernel, but all channels share a single termination semaphore and
+  are dispatched together via a single generic_op call.
 """
 
 import ttnn
 
 
 class MeshWrapper:
-    def __init__(self, mesh_device=None, mesh_id=None):
+    """Wraps a local MeshDevice or identifies a remote endpoint by rank.
+
+    For local endpoints, pass ``mesh_device``.  The rank defaults to the
+    current MPI rank and mesh_id is read from the device.
+
+    For remote endpoints, pass ``rank`` (the MPI rank that owns the remote
+    mesh).  Optionally pass ``mesh_id`` for backwards compatibility with the
+    old multi-mesh code path; when omitted it defaults to 0.
+    """
+
+    def __init__(self, mesh_device=None, mesh_id=None, rank=None):
         self.mesh_device = mesh_device
 
         if self.mesh_device is not None:
             self.mesh_id = self.mesh_device.get_system_mesh_id()
+            self._rank = rank if rank is not None else int(ttnn.distributed_context_get_rank())
         else:
-            assert mesh_id is not None
             self.mesh_id = mesh_id
+            assert (
+                rank is not None or mesh_id is not None
+            ), "MeshWrapper requires at least one of mesh_device, mesh_id, or rank"
+            self._rank = rank if rank is not None else mesh_id
 
     def get_mesh_device(self):
         return self.mesh_device
 
     def get_mesh_id(self):
         return self.mesh_id
+
+    def get_rank(self):
+        return self._rank
+
+
+def _create_socket_resource(
+    mesh_device,
+    send_core_coord,
+    recv_core_coord,
+    socket_fifo_size,
+    sender_mesh,
+    receiver_mesh,
+    *,
+    use_rank_scoped_mesh_socket=False,
+    local_endpoint_type=None,
+):
+    """Create a socket resource and return the local endpoint object.
+
+    This is a minimal helper for cases that need to create the real point-to-point
+    socket resource without also materializing a forwarding kernel or an extra local
+    handoff pair. Existing ``SocketInterface`` construction paths remain unchanged.
+    """
+
+    socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
+    socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+
+    if sender_mesh.get_mesh_device() and receiver_mesh.get_mesh_device():
+        socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+        pair = ttnn.create_socket_pair(sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config)
+        assert local_endpoint_type is not None, "local_endpoint_type is required when both endpoints are local"
+        socket = pair[0] if local_endpoint_type == ttnn.SocketEndpoint.SENDER else pair[1]
+    else:
+        same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+        if same_mesh or use_rank_scoped_mesh_socket:
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_rank=sender_mesh.get_rank(),
+                receiver_rank=receiver_mesh.get_rank(),
+            )
+        else:
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_mesh_id=sender_mesh.get_mesh_id(),
+                receiver_mesh_id=receiver_mesh.get_mesh_id(),
+            )
+        socket = ttnn.MeshSocket(mesh_device, socket_config)
+
+    return socket
+
+
+def _build_exchange_program(
+    page_size,
+    termination_semaphore,
+    my_mesh_device,
+    my_core_coord,
+    my_upstream_socket,
+    my_downstream_socket,
+    packet_header_cb_index,
+):
+    """Build a d2d_exchange program for a single upstream->downstream path on one core."""
+
+    def _socket_is_active_on_runtime_core(socket, runtime_core_coord):
+        socket_core_coord = socket.get_active_cores()[0]
+        if socket_core_coord.core_coord != runtime_core_coord.core_coord:
+            return False
+
+        socket_fabric_node_id = socket.get_fabric_node_id(
+            socket.get_socket_endpoint_type(), socket_core_coord.device_coord
+        )
+        runtime_fabric_node_id = my_mesh_device.get_fabric_node_id(runtime_core_coord.device_coord)
+        return socket_fabric_node_id == runtime_fabric_node_id
+
+    assert _socket_is_active_on_runtime_core(my_upstream_socket, my_core_coord)
+    assert _socket_is_active_on_runtime_core(my_downstream_socket, my_core_coord)
+
+    upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
+    downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
+
+    my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
+    my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
+
+    my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
+    my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
+        ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
+    )
+    my_downstream_fabric_node_id = my_downstream_socket.get_fabric_node_id(
+        ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
+    )
+
+    use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
+    use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
+
+    num_fwd_links = 2
+    num_bwd_links = 1
+
+    fabric_max_payload_size = 0
+    num_whole_fabric_packets_per_link = 0
+    partial_packet_size_per_link = 0
+
+    packet_header_cb_desc = None
+    if use_fabric_on_receiver or use_fabric_on_sender:
+        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        page_size_per_link = page_size // num_fwd_links
+        num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
+        partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
+        packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+
+        packet_header_cb_desc = ttnn.CBDescriptor(
+            total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=packet_header_cb_index,
+                    data_format=ttnn.uint32,
+                    page_size=packet_header_cb_page_size,
+                )
+            ],
+        )
+
+    kernel_ct_args = [
+        downstream_socket_config_addr,
+        upstream_socket_config_addr,
+        ttnn.get_global_semaphore_address(termination_semaphore),
+        page_size,
+        num_whole_fabric_packets_per_link,
+        fabric_max_payload_size,
+        partial_packet_size_per_link,
+        packet_header_cb_index,
+        use_fabric_on_receiver,
+        use_fabric_on_sender,
+    ]
+
+    exchange_kernel = ttnn.KernelDescriptor(
+        kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
+        compile_time_args=kernel_ct_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    program = ttnn.ProgramDescriptor(
+        kernels=[exchange_kernel],
+        semaphores=[],
+        cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
+    )
+
+    program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
+    rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
+
+    if use_fabric_on_sender:
+        for idx in range(num_fwd_links):
+            fwd_fabric_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_downstream_fabric_node_id,
+                idx,
+                program,
+                my_core_coord.core_coord,
+            )
+            rt_args_ref.extend(fwd_fabric_args)
+
+    if use_fabric_on_receiver:
+        for idx in range(num_bwd_links):
+            bwd_fabric_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_upstream_fabric_node_id,
+                idx,
+                program,
+                my_core_coord.core_coord,
+            )
+            rt_args_ref.extend(bwd_fabric_args)
+
+    return program
 
 
 class SocketInterface:
@@ -62,6 +256,8 @@ class SocketInterface:
         upstream_sockets=None,
         upstream_core_coords=None,
         upstream_page_size=None,
+        forward_metadata_size_bytes=0,
+        use_rank_scoped_mesh_socket=False,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -81,6 +277,8 @@ class SocketInterface:
 
         # Determine multi-upstream mode
         self.multi_upstream = upstream_sockets is not None or upstream_core_coords is not None
+        self.forward_metadata_size_bytes = forward_metadata_size_bytes
+        self.use_rank_scoped_mesh_socket = use_rank_scoped_mesh_socket
         if self.multi_upstream:
             assert upstream_page_size is not None, "upstream_page_size required for multi-upstream mode"
             assert upstream_socket is None, "Cannot mix upstream_socket (singular) with multi-upstream params"
@@ -104,9 +302,14 @@ class SocketInterface:
                     self.upstream_socket_pairs = []
                     buffer_depth = socket_fifo_size // page_size
                     upstream_fifo_size = self.upstream_page_size * buffer_depth
-                    for uc in upstream_core_coords:
+                    last_upstream_page_size = self.upstream_page_size + self.forward_metadata_size_bytes
+                    last_upstream_fifo_size = last_upstream_page_size * buffer_depth
+                    num_upstreams = len(upstream_core_coords)
+                    for idx, uc in enumerate(upstream_core_coords):
+                        is_last = idx == num_upstreams - 1
+                        fifo_size = last_upstream_fifo_size if is_last else upstream_fifo_size
                         socket_connection = ttnn.SocketConnection(uc, send_core_coord)
-                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, upstream_fifo_size)
+                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, fifo_size)
                         socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                         pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                         self.upstream_socket_pairs.append(pair)
@@ -144,23 +347,33 @@ class SocketInterface:
         self.recv_core_coord = recv_core_coord
 
         # Create a socket between the sender and receiver cores
-        socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
+        socket_connection = ttnn.SocketConnection(self.send_core_coord, self.recv_core_coord)
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         if self.local_socket:
-            # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
             self.internal_socket_pair = ttnn.create_socket_pair(
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
-            # If running across multiple hosts/processes create a single socket interface
-            socket_config = ttnn.SocketConfig(
-                connections=[socket_connection],
-                memory_config=socket_memory_config,
-                sender_mesh_id=sender_mesh.get_mesh_id(),
-                receiver_mesh_id=receiver_mesh.get_mesh_id(),
-            )
+            same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+            # Rank-scoped sockets are required when one logical stage spans multiple
+            # hosts: the data edge is still point-to-point between endpoint owners,
+            # even if the two owners live on different meshes.
+            if same_mesh or self.use_rank_scoped_mesh_socket:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_rank=sender_mesh.get_rank(),
+                    receiver_rank=receiver_mesh.get_rank(),
+                )
+            else:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_mesh_id=sender_mesh.get_mesh_id(),
+                    receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                )
             self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:
@@ -189,6 +402,64 @@ class SocketInterface:
             1 if receiver_packet_header_cb_index is None else receiver_packet_header_cb_index
         )
 
+    @classmethod
+    def from_existing_sockets(
+        cls,
+        page_size,
+        data_size_per_transfer,
+        *,
+        mesh_device,
+        runtime_core_coord,
+        upstream_socket,
+        downstream_socket,
+        packet_header_cb_index=None,
+    ):
+        """Create a one-core forwarder over precreated upstream/downstream sockets.
+
+        This opt-in path avoids creating any extra local handoff socket pairs and is
+        intended for reference-style stage wiring where the real socket resources are
+        planned separately from the forwarder kernel placement.
+        """
+
+        del data_size_per_transfer  # Unused in the existing constructor as well.
+
+        self = cls.__new__(cls)
+        self.mesh_device = mesh_device
+        self.local_socket = False
+        self.forwarder_only = True
+        self.multi_upstream = False
+        self.forward_metadata_size_bytes = 0
+        self.use_rank_scoped_mesh_socket = False
+
+        self.page_size = page_size
+        self.send_core_coord = runtime_core_coord
+        self.recv_core_coord = runtime_core_coord
+        self.runtime_core_coord = runtime_core_coord
+
+        self.upstream_socket = upstream_socket
+        self.upstream_sockets_list = None
+        self.downstream_socket = downstream_socket
+
+        self.upstream_socket_pair = None
+        self.upstream_socket_pairs = []
+        self.downstream_socket_pair = None
+        self.internal_socket = None
+        self.internal_socket_pair = None
+
+        termination_semaphore_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(runtime_core_coord.core_coord, runtime_core_coord.core_coord)]
+        )
+        self.termination_semaphore = ttnn.create_global_semaphore(
+            mesh_device,
+            termination_semaphore_core_range,
+            0,
+            ttnn.BufferType.L1,
+        )
+        self.sender_packet_header_cb_index = 0 if packet_header_cb_index is None else packet_header_cb_index
+        self.receiver_packet_header_cb_index = self.sender_packet_header_cb_index
+
+        return self
+
     def _create_single_upstream_program(
         self,
         my_mesh_device,
@@ -197,107 +468,15 @@ class SocketInterface:
         my_downstream_socket,
         packet_header_cb_index,
     ):
-        # Upstream Socket (feeding this stage) and Downstream Socket (draining this stage) must be on my_core.
-        assert my_upstream_socket.get_active_cores()[0] == my_core_coord
-        assert my_downstream_socket.get_active_cores()[0] == my_core_coord
-
-        upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
-        downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
-
-        my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
-        my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
-
-        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
-        my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
-            ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
-        )
-        my_downstream_fabric_node_id = my_downstream_socket.get_fabric_node_id(
-            ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
-        )
-
-        use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
-        use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
-
-        num_fwd_links = 2
-        num_bwd_links = 1
-
-        fabric_max_payload_size = 0
-        num_whole_fabric_packets_per_link = 0
-        partial_packet_size_per_link = 0
-
-        if use_fabric_on_receiver or use_fabric_on_sender:
-            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            page_size_per_link = self.page_size // num_fwd_links
-            num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
-            partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
-            packet_header_cb_num_pages = num_fwd_links + num_bwd_links
-            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
-
-            packet_header_cb_desc = ttnn.CBDescriptor(
-                total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
-                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=packet_header_cb_index,
-                        data_format=ttnn.uint32,
-                        page_size=packet_header_cb_page_size,
-                    )
-                ],
-            )
-
-        kernel_ct_args = [
-            downstream_socket_config_addr,
-            upstream_socket_config_addr,
-            ttnn.get_global_semaphore_address(self.termination_semaphore),
+        return _build_exchange_program(
             self.page_size,
-            num_whole_fabric_packets_per_link,
-            fabric_max_payload_size,
-            partial_packet_size_per_link,
+            self.termination_semaphore,
+            my_mesh_device,
+            my_core_coord,
+            my_upstream_socket,
+            my_downstream_socket,
             packet_header_cb_index,
-            use_fabric_on_receiver,
-            use_fabric_on_sender,
-        ]
-
-        exchange_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
-            compile_time_args=kernel_ct_args,
-            config=ttnn.WriterConfigDescriptor(),
         )
-
-        program = ttnn.ProgramDescriptor(
-            kernels=[exchange_kernel],
-            semaphores=[],
-            cbs=[packet_header_cb_desc] if (use_fabric_on_receiver or use_fabric_on_sender) else [],
-        )
-
-        program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
-        rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
-
-        if use_fabric_on_sender:
-            for idx in range(num_fwd_links):
-                fwd_fabric_args = ttnn.setup_fabric_connection(
-                    my_fabric_node_id,
-                    my_downstream_fabric_node_id,
-                    idx,
-                    program,
-                    my_core_coord.core_coord,
-                )
-                rt_args_ref.extend(fwd_fabric_args)
-
-        if use_fabric_on_receiver:
-            for idx in range(num_bwd_links):
-                bwd_fabric_args = ttnn.setup_fabric_connection(
-                    my_fabric_node_id,
-                    my_upstream_fabric_node_id,
-                    idx,
-                    program,
-                    my_core_coord.core_coord,
-                )
-                rt_args_ref.extend(bwd_fabric_args)
-
-        return program
 
     def _create_multi_upstream_program(
         self,
@@ -307,14 +486,26 @@ class SocketInterface:
         my_downstream_socket,
         packet_header_cb_index,
     ):
+        def _socket_is_active_on_runtime_core(socket, runtime_core_coord):
+            socket_core_coord = socket.get_active_cores()[0]
+            if socket_core_coord.core_coord != runtime_core_coord.core_coord:
+                return False
+
+            socket_fabric_node_id = socket.get_fabric_node_id(
+                socket.get_socket_endpoint_type(), socket_core_coord.device_coord
+            )
+            runtime_fabric_node_id = my_mesh_device.get_fabric_node_id(runtime_core_coord.device_coord)
+            return socket_fabric_node_id == runtime_fabric_node_id
+
         for s in my_upstream_sockets:
-            assert s.get_active_cores()[0] == my_core_coord
-        assert my_downstream_socket.get_active_cores()[0] == my_core_coord
+            assert _socket_is_active_on_runtime_core(s, my_core_coord)
+        assert _socket_is_active_on_runtime_core(my_downstream_socket, my_core_coord)
 
         num_upstream = len(my_upstream_sockets)
-        num_sockets_per_risc = num_upstream // 2
-        brisc_sockets = my_upstream_sockets[:num_sockets_per_risc]
-        ncrisc_sockets = my_upstream_sockets[num_sockets_per_risc:]
+        brisc_count = (num_upstream + 1) // 2
+        brisc_sockets = my_upstream_sockets[:brisc_count]
+        ncrisc_sockets = my_upstream_sockets[brisc_count:]
+        num_sockets_per_risc = brisc_count
         brisc_socket_addrs = [s.get_config_buffer_address() for s in brisc_sockets]
         ncrisc_socket_addrs = [s.get_config_buffer_address() for s in ncrisc_sockets]
 
@@ -387,18 +578,21 @@ class SocketInterface:
                 packet_header_cb_index,  # 8
                 use_fabric_on_receiver,  # 9
                 use_fabric_on_sender,  # 10
-                page_ready_sem_id,  # 11
-                ncrisc_done_sem_id,  # 12
-                socket_start_idx,  # 13
-                pkt_hdr_slot_start,  # 14
+                self.forward_metadata_size_bytes,  # 11: forward_metadata_size_bytes
+                page_ready_sem_id,  # 12
+                ncrisc_done_sem_id,  # 13
+                socket_start_idx,  # 14
+                pkt_hdr_slot_start,  # 15
             ]
-            ct_args.extend(socket_addrs)  # 15..15+len(socket_addrs)-1
+            ct_args.extend(socket_addrs)  # 16..16+len(socket_addrs)-1
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])
         kernel_source = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
 
-        # BRISC kernel: handles sockets 0..N/2-1, packet header slots 0-1, fabric link 0
+        # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
+        # Giving the odd-one-out to BRISC ensures local NOC writes use NOC0 addresses.
+        # BRISC kernel: handles sockets 0..brisc_count-1, packet header slots 0-1, fabric link 0
         brisc_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -407,7 +601,7 @@ class SocketInterface:
             config=ttnn.WriterConfigDescriptor(),
         )
 
-        # NCRISC kernel: handles sockets N/2..N-1, packet header slots 2-3, fabric link 1
+        # NCRISC kernel: handles sockets brisc_count..N-1, packet header slots 2-3, fabric link 1
         if use_fabric_on_sender and not use_fabric_on_receiver:
             ncrisc_pkt_hdr_slot_start = 1
         else:
@@ -507,10 +701,23 @@ class SocketInterface:
                 packet_header_cb_index,
             )
 
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
+    def build_programs(self):
+        """Build exchange programs and return (device_coord, program) pairs without dispatching.
+
+        This enables multiple SocketInterface instances to have their programs
+        merged and dispatched together in a single generic_op call.
+        """
+        if getattr(self, "forwarder_only", False):
+            program = self._create_single_upstream_program(
+                self.mesh_device,
+                self.runtime_core_coord,
+                self.upstream_socket,
+                self.downstream_socket,
+                self.sender_packet_header_cb_index,
+            )
+            return [(self.runtime_core_coord.device_coord, program)]
+
+        entries = []
         if self.local_socket:
             sender_program = self._create_sender_program(
                 self.mesh_device,
@@ -518,7 +725,6 @@ class SocketInterface:
                 self.internal_socket_pair[0],
                 self.sender_packet_header_cb_index,
             )
-
             receiver_program = self._create_single_upstream_program(
                 self.mesh_device,
                 self.recv_core_coord,
@@ -526,26 +732,7 @@ class SocketInterface:
                 self.downstream_socket,
                 self.receiver_packet_header_cb_index,
             )
-        else:
-            if self.upstream_socket or self.upstream_sockets_list:
-                program = self._create_sender_program(
-                    self.mesh_device,
-                    self.send_core_coord,
-                    self.internal_socket,
-                    self.sender_packet_header_cb_index,
-                )
-            else:
-                assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
-                program = self._create_single_upstream_program(
-                    self.mesh_device,
-                    self.recv_core_coord,
-                    self.internal_socket,
-                    self.downstream_socket,
-                    self.receiver_packet_header_cb_index,
-                )
 
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        if self.local_socket:
             same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
             if same_device:
                 sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
@@ -559,34 +746,44 @@ class SocketInterface:
                     semaphores=[],
                     cbs=combined_cbs,
                 )
-                # Preserve per-kernel runtime args from the independently built programs.
                 for i, k in enumerate(sender_program.kernels):
                     combined_program.kernels[i].runtime_args = k.runtime_args
                 for i, k in enumerate(receiver_program.kernels):
                     combined_program.kernels[len(sender_program.kernels) + i].runtime_args = k.runtime_args
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-                ] = combined_program
+                entries.append((self.send_core_coord.device_coord, combined_program))
             else:
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-                ] = sender_program
-                mesh_program_descriptor[
-                    ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
-                ] = receiver_program
+                entries.append((self.send_core_coord.device_coord, sender_program))
+                entries.append((self.recv_core_coord.device_coord, receiver_program))
         else:
-            device_coord = (
-                self.send_core_coord.device_coord
-                if (self.upstream_socket or self.upstream_sockets_list)
-                else self.recv_core_coord.device_coord
-            )
-            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
+            if self.upstream_socket or self.upstream_sockets_list:
+                program = self._create_sender_program(
+                    self.mesh_device,
+                    self.send_core_coord,
+                    self.internal_socket,
+                    self.sender_packet_header_cb_index,
+                )
+                entries.append((self.send_core_coord.device_coord, program))
+            else:
+                assert self.downstream_socket, "Internal Error - Has no upstream or downstream socket"
+                program = self._create_single_upstream_program(
+                    self.mesh_device,
+                    self.recv_core_coord,
+                    self.internal_socket,
+                    self.downstream_socket,
+                    self.receiver_packet_header_cb_index,
+                )
+                entries.append((self.recv_core_coord.device_coord, program))
+        return entries
 
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+    def run(self):
+        entries = self.build_programs()
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, program in entries:
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def terminate(self, sync_devices):
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
@@ -599,11 +796,258 @@ class SocketInterface:
                 ttnn.synchronize_device(self.mesh_device)
 
     def get_downstream_socket(self):
+        if getattr(self, "forwarder_only", False):
+            return self.downstream_socket
         return self.downstream_socket_pair[1]
 
     def get_upstream_socket(self):
+        if getattr(self, "forwarder_only", False):
+            return self.upstream_socket
         return self.upstream_socket_pair[0]
 
     def get_upstream_sockets(self):
         """Return sender sides of all upstream socket pairs (for multi-upstream mode)."""
         return [pair[0] for pair in self.upstream_socket_pairs]
+
+
+def _group_by_device(entries):
+    """Group (device_coord, program) entries by device_coord using equality comparison."""
+    groups = []
+    for device_coord, prog in entries:
+        found = False
+        for group_coord, group_progs in groups:
+            if device_coord == group_coord:
+                group_progs.append(prog)
+                found = True
+                break
+        if not found:
+            groups.append((device_coord, [prog]))
+    return groups
+
+
+class ParallelSocketInterface:
+    """Manages N parallel 1-1 D2D socket connections between two pipeline stages.
+
+    Each channel i has its own (send_core_coords[i], recv_core_coords[i]) pair
+    running an independent d2d_exchange kernel. All channels share a single
+    termination semaphore and are dispatched together in one generic_op call.
+    """
+
+    def __init__(
+        self,
+        page_size,
+        socket_fifo_size,
+        send_core_coords,
+        recv_core_coords,
+        upstream_sockets=None,
+        downstream_sockets=None,
+        upstream_core_coords=None,
+        downstream_core_coords=None,
+        sender_mesh=None,
+        receiver_mesh=None,
+        sender_packet_header_cb_index=None,
+        receiver_packet_header_cb_index=None,
+    ):
+        num_channels = len(send_core_coords)
+        assert len(recv_core_coords) == num_channels, "send/recv core coord lists must have equal length"
+        assert num_channels > 0, "Must have at least one channel"
+
+        assert (
+            sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
+        ), "Either sender or receiver mesh device must be set"
+
+        if sender_mesh.get_mesh_device() and receiver_mesh.get_mesh_device():
+            assert (
+                sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+            ), "Sender and receiver mesh IDs must be the same when both MeshDevices are provided"
+            self.mesh_device = sender_mesh.get_mesh_device()
+            self.local_socket = True
+        else:
+            self.mesh_device = (
+                sender_mesh.get_mesh_device() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_device()
+            )
+            self.local_socket = False
+
+        self.page_size = page_size
+        self.num_channels = num_channels
+        self.send_core_coords = list(send_core_coords)
+        self.recv_core_coords = list(recv_core_coords)
+
+        self._upstream_sockets = [None] * num_channels
+        self._downstream_sockets = [None] * num_channels
+        self._upstream_socket_pairs = [None] * num_channels
+        self._downstream_socket_pairs = [None] * num_channels
+        self._internal_pairs = [None] * num_channels
+        self._internal_sockets = [None] * num_channels
+
+        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+
+        for i in range(num_channels):
+            if sender_mesh.get_mesh_device():
+                if upstream_sockets is not None and upstream_sockets[i] is not None:
+                    assert upstream_sockets[i].get_mesh_device().get_system_mesh_id() == sender_mesh.get_mesh_id()
+                    self._upstream_sockets[i] = upstream_sockets[i]
+                elif upstream_core_coords is not None and upstream_core_coords[i] is not None:
+                    conn = ttnn.SocketConnection(upstream_core_coords[i], send_core_coords[i])
+                    cfg = ttnn.SocketConfig([conn], socket_memory_config)
+                    pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, cfg)
+                    self._upstream_socket_pairs[i] = pair
+                    self._upstream_sockets[i] = pair[1]
+
+            if receiver_mesh.get_mesh_device():
+                if downstream_sockets is not None and downstream_sockets[i] is not None:
+                    assert downstream_sockets[i].get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
+                    self._downstream_sockets[i] = downstream_sockets[i]
+                elif downstream_core_coords is not None and downstream_core_coords[i] is not None:
+                    conn = ttnn.SocketConnection(recv_core_coords[i], downstream_core_coords[i])
+                    cfg = ttnn.SocketConfig([conn], socket_memory_config)
+                    pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, cfg)
+                    self._downstream_socket_pairs[i] = pair
+                    self._downstream_sockets[i] = pair[0]
+
+            conn = ttnn.SocketConnection(send_core_coords[i], recv_core_coords[i])
+            if self.local_socket:
+                cfg = ttnn.SocketConfig([conn], socket_memory_config)
+                self._internal_pairs[i] = ttnn.create_socket_pair(
+                    sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), cfg
+                )
+            else:
+                cfg = ttnn.SocketConfig(
+                    connections=[conn],
+                    memory_config=socket_memory_config,
+                    sender_mesh_id=sender_mesh.get_mesh_id(),
+                    receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                )
+                self._internal_sockets[i] = ttnn.MeshSocket(self.mesh_device, cfg)
+
+        all_core_ranges = []
+        seen_cores = set()
+        for i in range(num_channels):
+            for cc in (send_core_coords[i].core_coord, recv_core_coords[i].core_coord):
+                key = (cc.x, cc.y)
+                if key not in seen_cores:
+                    all_core_ranges.append(ttnn.CoreRange(cc, cc))
+                    seen_cores.add(key)
+
+        self.termination_semaphore = ttnn.create_global_semaphore(
+            self.mesh_device,
+            ttnn.CoreRangeSet(all_core_ranges),
+            0,
+            ttnn.BufferType.L1,
+        )
+
+        self.sender_packet_header_cb_index = (
+            0 if sender_packet_header_cb_index is None else sender_packet_header_cb_index
+        )
+        self.receiver_packet_header_cb_index = (
+            1 if receiver_packet_header_cb_index is None else receiver_packet_header_cb_index
+        )
+
+    def build_programs(self):
+        """Build exchange programs and return (device_coord, program) pairs without dispatching.
+
+        This enables multiple ParallelSocketInterface instances to have their programs
+        merged and dispatched together in a single generic_op call, which is required
+        when entry and exit d2d_exchange kernels share the same device.
+        """
+        device_program_entries = []
+
+        if self.local_socket:
+            for i in range(self.num_channels):
+                sender_prog = _build_exchange_program(
+                    self.page_size,
+                    self.termination_semaphore,
+                    self.mesh_device,
+                    self.send_core_coords[i],
+                    self._upstream_sockets[i],
+                    self._internal_pairs[i][0],
+                    self.sender_packet_header_cb_index,
+                )
+                receiver_prog = _build_exchange_program(
+                    self.page_size,
+                    self.termination_semaphore,
+                    self.mesh_device,
+                    self.recv_core_coords[i],
+                    self._internal_pairs[i][1],
+                    self._downstream_sockets[i],
+                    self.receiver_packet_header_cb_index,
+                )
+                device_program_entries.append((self.send_core_coords[i].device_coord, sender_prog))
+                device_program_entries.append((self.recv_core_coords[i].device_coord, receiver_prog))
+        else:
+            for i in range(self.num_channels):
+                if self._upstream_sockets[i] is not None:
+                    prog = _build_exchange_program(
+                        self.page_size,
+                        self.termination_semaphore,
+                        self.mesh_device,
+                        self.send_core_coords[i],
+                        self._upstream_sockets[i],
+                        self._internal_sockets[i],
+                        self.sender_packet_header_cb_index,
+                    )
+                    device_program_entries.append((self.send_core_coords[i].device_coord, prog))
+                else:
+                    assert self._downstream_sockets[i] is not None, f"Channel {i}: no upstream or downstream socket"
+                    prog = _build_exchange_program(
+                        self.page_size,
+                        self.termination_semaphore,
+                        self.mesh_device,
+                        self.recv_core_coords[i],
+                        self._internal_sockets[i],
+                        self._downstream_sockets[i],
+                        self.receiver_packet_header_cb_index,
+                    )
+                    device_program_entries.append((self.recv_core_coords[i].device_coord, prog))
+
+        return device_program_entries
+
+    def run(self):
+        device_program_entries = self.build_programs()
+
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+        )
+
+        groups = _group_by_device(device_program_entries)
+
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for device_coord, progs in groups:
+            if len(progs) == 1:
+                merged = progs[0]
+            else:
+                merged = ttnn.merge_program_descriptors(progs)
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
+
+        io_tensors = [dummy_tensor, dummy_tensor]
+        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+
+    def terminate(self, sync_devices):
+        ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        if sync_devices:
+            if self.local_socket:
+                ttnn.synchronize_device(self.mesh_device)
+                for ds in self._downstream_sockets:
+                    if ds is not None:
+                        ttnn.synchronize_device(ds.get_mesh_device())
+                        break
+            else:
+                ttnn.synchronize_device(self.mesh_device)
+
+    def get_downstream_sockets(self):
+        """Return receiver sockets from all downstream socket pairs (one per channel)."""
+        return [pair[1] for pair in self._downstream_socket_pairs if pair is not None]
+
+    def get_upstream_sockets(self):
+        """Return sender sockets from all upstream socket pairs (one per channel)."""
+        return [pair[0] for pair in self._upstream_socket_pairs if pair is not None]
+
+    def get_downstream_socket(self, channel_idx):
+        """Return receiver socket from the downstream socket pair for a specific channel."""
+        assert self._downstream_socket_pairs[channel_idx] is not None
+        return self._downstream_socket_pairs[channel_idx][1]
+
+    def get_upstream_socket(self, channel_idx):
+        """Return sender socket from the upstream socket pair for a specific channel."""
+        assert self._upstream_socket_pairs[channel_idx] is not None
+        return self._upstream_socket_pairs[channel_idx][0]

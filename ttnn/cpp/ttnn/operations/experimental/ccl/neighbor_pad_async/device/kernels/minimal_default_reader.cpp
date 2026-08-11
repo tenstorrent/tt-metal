@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <cstdint>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -19,20 +23,9 @@ constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(uint32_t cb_output_id) {
-    //  Zero-fill from MEM_ZEROS
-    constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
-    constexpr uint32_t partial_read_size = stick_size_bytes % MEM_ZEROS_SIZE;
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t cb_write_addr = get_write_ptr(cb_output_id);
-
-    for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
-        cb_write_addr += MEM_ZEROS_SIZE;
-    }
-    if (partial_read_size > 0) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
-    }
+inline void zeroPad(Noc& noc, CircularBuffer& cb_output) {
+    noc.async_write_zeros(cb_output, stick_size_bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -61,7 +54,11 @@ void kernel_main() {
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
+
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+    CircularBuffer cb_recv(recv_cb_id);
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
@@ -76,22 +73,20 @@ void kernel_main() {
                 }
                 src_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_reserve_back(cb_output_id, 1);
-                    uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
+                    cb_output.reserve_back(1);
 
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
-                    noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+                    noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
 
                     src_stick_id++;
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, 1);
+                    noc_obj.async_read_barrier();
+                    cb_output.push_back(1);
                 }
             } else {
-                cb_reserve_back(cb_output_id, 1);
-                zeroPad<stick_size>(cb_output_id);
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, 1);
+                cb_output.reserve_back(1);
+                zeroPad<stick_size>(noc_obj, cb_output);
+                noc_obj.async_read_barrier();
+                cb_output.push_back(1);
             }
         }
 
@@ -106,16 +101,14 @@ void kernel_main() {
                 }
                 src_stick_id += outer_dim_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_reserve_back(cb_output_id, 1);
-                    uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
+                    cb_output.reserve_back(1);
 
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
-                    noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+                    noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
 
                     src_stick_id++;
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, 1);
+                    noc_obj.async_read_barrier();
+                    cb_output.push_back(1);
                 }
             }
         }
@@ -130,7 +123,7 @@ void kernel_main() {
         if constexpr (use_l1_intermediate) {
             // L1 intermediate: fabric delivered H halo data to our L1 recv buffer.
             // Push it into CB for the paired writer to write to output DRAM.
-            uint32_t recv_buf_addr = get_write_ptr(recv_cb_id);
+            uint32_t recv_buf_addr = cb_recv.get_write_ptr();
             uint32_t buf_offset = 0;  // Accumulates across all outer_dims (no L1 reuse)
 
             for (uint32_t od = 0; od < outer_dim_size; od++) {
@@ -144,11 +137,11 @@ void kernel_main() {
                     // Use num_l1_recv_sticks_per_row (corners-only count) instead of
                     // num_sticks_to_read (full row width) for the L1 recv path.
                     for (uint32_t iter = 0; iter < num_l1_recv_sticks_per_row; iter++) {
-                        cb_reserve_back(cb_output_id, 1);
-                        uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
+                        cb_output.reserve_back(1);
+                        uint32_t dst_l1_addr = cb_output.get_write_ptr();
                         noc_async_read(get_noc_addr(recv_buf_addr + buf_offset), dst_l1_addr, stick_size);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_output_id, 1);
+                        noc_obj.async_read_barrier();
+                        cb_output.push_back(1);
                         buf_offset += stick_size;
                     }
                 }

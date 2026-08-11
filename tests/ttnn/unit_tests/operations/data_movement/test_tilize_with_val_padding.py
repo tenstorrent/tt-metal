@@ -135,14 +135,14 @@ def test_run_tilize_large_row_input(device, input_shape):
         (
             [3, 100, 158],
             [2, 64, 96],
-            [4, 128, 160],
+            [3, 128, 160],
             [3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
         (
             [5, 3, 100, 158],
             [4, 2, 64, 96],
-            [8, 4, 128, 160],
+            [5, 3, 128, 160],
             [5, 3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
         ),
@@ -288,7 +288,7 @@ def test_tilize_with_val_padding_interleaved_to_nd_sharded(
     [
         (
             [3, 100, 128],
-            [4, 128, 160],
+            [3, 128, 128],
             [3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
@@ -454,7 +454,7 @@ def test_tilize_with_val_padding_nd_sharded_to_legacy_sharded(
     "tensor_shape, output_padded_shape",
     [
         # Input smaller than output (padding in both dims). Shard row size must be multiple of 8 (16-byte alignment).
-        ([3, 100, 128], [3, 128, 160]),
+        ([3, 100, 128], [3, 128, 128]),
     ],
 )
 @pytest.mark.parametrize("pad_value", [10.2])

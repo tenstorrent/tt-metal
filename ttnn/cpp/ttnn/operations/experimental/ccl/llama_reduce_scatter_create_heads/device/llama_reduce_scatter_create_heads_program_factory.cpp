@@ -20,7 +20,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail::rs_heads_fusion {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
-    ttnn::SmallVector<uint32_t> device_order;
+    ttsl::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
     for (uint32_t i = 0; i < ring_size; i++) {
@@ -196,6 +196,11 @@ uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
 std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
+    size_t total_num_requests = 0;
+    for (const auto& chunk : schedule) {
+        total_num_requests += chunk.size();
+    }
+    schedule_flattened.reserve(total_num_requests);
     for (const auto& chunk : schedule) {
         schedule_flattened.insert(schedule_flattened.end(), chunk.begin(), chunk.end());
     }
@@ -302,25 +307,29 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     const uint32_t num_devices = ring_size;
 
     uint32_t ring_index = 0;  // Initialize device index
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
 
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
+                                     ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                     : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
+
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
             }
 
             if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -592,6 +601,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
                                std::optional<uint32_t> num_max_cores = std::nullopt) -> std::vector<CoreCoord> {
         std::vector<CoreCoord> worker_cores;
         auto num_cores = num_max_cores.has_value() ? num_max_cores.value() : cores.size();
+        worker_cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
             worker_cores.push_back(mesh_device->worker_core_from_logical_core(core));
@@ -780,13 +790,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto forward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
-                    forward_device_fabric_node_id,
+                    forward_fabric_node_id.value(),
                     link_idx,
                     program,
                     core,
@@ -795,13 +802,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto backward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
-                    backward_device_fabric_node_id,
+                    backward_fabric_node_id.value(),
                     link_idx,
                     program,
                     core,

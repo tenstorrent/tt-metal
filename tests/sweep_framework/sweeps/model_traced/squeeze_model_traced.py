@@ -9,14 +9,16 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -45,25 +47,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -72,6 +60,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     dim=None,
+    output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -81,7 +71,11 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    output_memory_config = kwargs.get("output_memory_config", None)
+
+    # Resolve output_memory_config before build_op_kwargs so it sees the final value
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
@@ -89,13 +83,25 @@ def run(
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
+    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
+    if len(shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
+        shape = (1, shape[0])
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # In V2 format, dim comes as arg1 (positional parameter)
+    # In V2 format, dim may come as the named `dim` kwarg or positionally (arg1).
+    # Reproduce the master's call form: if the trace passed dim as a named kwarg
+    # (dim present, no arg1), call ttnn.squeeze(input, dim=dim); else positional.
+    # Otherwise the sweep records arg1 where master recorded dim (extra_key diff).
+    pos_args = extract_positional_args(kwargs)
+    dim_was_named = dim is not None and dim != "__ABSENT__"
     if dim is None:
-        dim = kwargs.get("arg1", 0)
+        dim = pos_args.get(1, 0)
+    # Handle __ABSENT__ sentinel from V2 loader
+    if dim == "__ABSENT__":
+        dim = 0
     torch_output_tensor = torch.squeeze(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -123,12 +129,18 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # squeeze with dim as positional argument (no memory_config support)
-    output_tensor = ttnn.squeeze(input_tensor_a, dim)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    # squeeze with dim (no memory_config support); match master's call form
+    if dim_was_named:
+        output_tensor = ttnn.squeeze(input_tensor_a, dim=dim)
+    else:
+        output_tensor = ttnn.squeeze(input_tensor_a, dim)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

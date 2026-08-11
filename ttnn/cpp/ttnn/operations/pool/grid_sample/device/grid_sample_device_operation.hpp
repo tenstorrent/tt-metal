@@ -5,14 +5,14 @@
 #pragma once
 
 #include <optional>
+#include <variant>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation_types.hpp"
-#include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
-#include "ttnn/operations/pool/grid_sample/device/grid_sample_nearest_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -20,10 +20,20 @@ constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
 constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
+struct GridSampleBilinearProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor);
+};
+
+struct GridSampleNearestProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor);
+};
+
 struct GridSampleOperation {
     using operation_attributes_t = GridSampleParams;
     using tensor_args_t = GridSampleInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<GridSampleBilinearProgramFactory, GridSampleNearestProgramFactory>;
 
@@ -44,5 +54,6 @@ ttnn::Tensor grid_sample(
     bool align_corners = false,
     bool use_precomputed_grid = false,
     bool batch_output_channels = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

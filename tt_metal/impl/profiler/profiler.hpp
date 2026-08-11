@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <map>
@@ -86,6 +87,9 @@ private:
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
+
+    // Set if any risc reported DROPPED_ZONES; downgrades start-without-end errors to warnings.
+    std::atomic<bool> had_dropped_markers{false};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
@@ -266,6 +270,16 @@ public:
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
+
+    // Optional rt-profiler clock anchor (host_anchor TSC, device_anchor cycle, frequency GHz) set by
+    // RealtimeProfilerManager, kept in lockstep with the rt Tracy calibration so worker zones render against the same
+    // anchor. Valid because all cores share one device wall clock.
+    struct RealtimeSyncLine {
+        double host_anchor = 0.0;
+        double device_anchor = 0.0;
+        double frequency = 0.0;
+    };
+    std::optional<RealtimeSyncLine> realtime_sync_line;
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;

@@ -3,73 +3,55 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t col_start_tile_id =
-        get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
-    uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
-    uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
-    uint32_t mask_h = get_arg_val<uint32_t>(4);
+        get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the start of a column
+    uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
+    uint32_t mask_h = get_arg(args::mask_h);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t HtWt = get_arg(args::HtWt);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
-    constexpr auto src_args = TensorAccessorArgs<3>();
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    cb_reserve_back(cb_id_in2, 1);
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id_in2);
-    // Fill tile with zeros
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-    if constexpr (scaler != 0) {
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in2));
-        uint32_t idx = 0;
-        for (uint32_t k = 0; k < 4; ++k) {
-            uint32_t curr_idx = idx;
-            for (uint32_t j = 0; j < 8; ++j) {
-                ptr[curr_idx] = scaler;
-                curr_idx++;
-            }
-            idx += 128;
-        }
-    }
-    cb_push_back(cb_id_in2, 1);
+    constexpr uint32_t reduce_factor = get_arg(args::reduce_factor);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        dfb::scaler,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_COL,
+        reduce_factor>();
 #endif
 
-    constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_3;
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    DataflowBuffer dfb_mask_h(dfb::mask_h);
+    generate_mask_h(dfb_mask_h, mask_h);
 #endif
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(tensor::src);
+
+    Noc noc;
+    DataflowBuffer dfb_in0(dfb::input);
+    const auto in0_tile_bytes = dfb_in0.get_tile_size();
 
     uint32_t w = curr_col_in_batch;
 
-    // this reader will read a NHW tensor in NWH order
     for (uint32_t i = 0; i < num_cols; i++) {
         uint32_t curr_id = col_start_tile_id;
         for (uint32_t j = 0; j < Ht; j++) {
-            cb_reserve_back(cb_id_in0, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(curr_id, s, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
+            dfb_in0.reserve_back(onetile);
+            noc.async_read(s, dfb_in0, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_in0.push_back(onetile);
             curr_id += Wt;  // stride in H
         }
         w++;

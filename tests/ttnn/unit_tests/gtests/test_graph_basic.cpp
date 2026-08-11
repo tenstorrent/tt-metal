@@ -58,35 +58,35 @@ TEST_P(BufferTestFixture, BufferTest) {
     auto params = std::get<0>(param_combination);
     auto run_mode = std::get<1>(param_combination);
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
     {
         ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {
-            const auto input_a = ttnn::TensorSpec(
+            const auto input_a = tt::tt_metal::TensorSpec(
                 params.shape_a,
                 tt::tt_metal::TensorLayout(
                     tt::tt_metal::DataType::BFLOAT16,
                     tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                     ttnn::L1_MEMORY_CONFIG));
-            const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+            const auto input_tensor_a = ttnn::create_device_tensor(input_a, device);
         }
         {
-            const auto input_a = ttnn::TensorSpec(
+            const auto input_a = tt::tt_metal::TensorSpec(
                 params.shape_a,
                 tt::tt_metal::TensorLayout(
                     tt::tt_metal::DataType::BFLOAT16,
                     tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                     ttnn::L1_MEMORY_CONFIG));
-            const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+            const auto input_tensor_a = ttnn::create_device_tensor(input_a, device);
 
-            const auto input_b = ttnn::TensorSpec(
+            const auto input_b = tt::tt_metal::TensorSpec(
                 params.shape_b,
                 tt::tt_metal::TensorLayout(
                     tt::tt_metal::DataType::BFLOAT16,
                     tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                     ttnn::L1_MEMORY_CONFIG));
 
-            const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+            const auto input_tensor_b = ttnn::create_device_tensor(input_b, device);
         }
         auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
 
@@ -133,8 +133,7 @@ INSTANTIATE_TEST_SUITE_P(
     BufferTestFixture,
     ::testing::Combine(
         ::testing::Values(BufferTestParam{
-            .shape_a = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
-            .shape_b = ttnn::Shape(tt::tt_metal::Array4D{32, 1, 32, 32})}),
+            .shape_a = ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}), .shape_b = ttnn::Shape(ttnn::Array4D{32, 1, 32, 32})}),
         ::testing::Values(
             tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)),
     [](const testing::TestParamInfo<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>>& info) {
@@ -155,14 +154,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input_a = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 4, 512, 512}),
+        const auto input_a = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 4, 512, 512}),
             tt::tt_metal::TensorLayout(
                 datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+        const auto input_tensor_a = ttnn::create_device_tensor(input_a, device);
         const auto output_tensor = ttnn::softmax(input_tensor_a, -1);
     };
 
@@ -235,16 +234,16 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
 }
 
 TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
-    const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
-    const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
+    const auto tensor_b = ttnn::create_device_tensor(tensor_spec, device);
     auto operation = [](const auto& a, const auto& b) {
         const auto output_tensor_1 = ttnn::subtract(a, b);
         const auto output_tensor_2 = ttnn::subtract(b, a);
@@ -310,15 +309,15 @@ TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
 }
 
 TEST_F(TestScopedGraphCapture, SameTensorMultipleTimesTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
-    const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
 
     nlohmann::json trace;
     {
@@ -359,17 +358,17 @@ TEST_F(TestScopedGraphCapture, TernaryOpDifferentOrderTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
-    const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
-    const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
-    const auto tensor_c = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
+    const auto tensor_b = ttnn::create_device_tensor(tensor_spec, device);
+    const auto tensor_c = ttnn::create_device_tensor(tensor_spec, device);
 
     nlohmann::json trace;
     {
@@ -434,16 +433,16 @@ TEST_F(TestScopedGraphCapture, TernaryOpRepeatedTensorsTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
-    const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
-    const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
+    const auto tensor_b = ttnn::create_device_tensor(tensor_spec, device);
 
     nlohmann::json trace;
     {
@@ -503,16 +502,16 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
-    const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array2D{64, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
-    const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
+    const auto tensor_b = ttnn::create_device_tensor(tensor_spec, device);
 
     nlohmann::json trace;
     {
@@ -582,19 +581,19 @@ TEST_F(TestScopedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
     // the graph correctly tracks the argument order for non-commutative operations like subtract.
     // We test subtract(a, b) vs subtract(b, a) to ensure the order is preserved.
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
 
-        const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
-        const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto tensor_a = ttnn::create_device_tensor(tensor_spec, device);
+        const auto tensor_b = ttnn::create_device_tensor(tensor_spec, device);
 
         // Perform subtract operations in different orders
         const auto output_tensor_1 = ttnn::subtract(tensor_a, tensor_b, std::nullopt, std::nullopt);
@@ -667,19 +666,18 @@ class DurationTrackingTest : public ttnn::TTNNFixtureWithDevice,
 
 TEST_P(DurationTrackingTest, DurationTracking) {
     auto run_mode = GetParam();
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 4, 512, 512}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 4, 512, 512}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         trace = capture.end_graph_capture();
@@ -737,19 +735,18 @@ class TensorInfoTest : public ttnn::TTNNFixtureWithDevice,
 
 TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
     auto run_mode = GetParam();
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
 
         trace = capture.end_graph_capture();
     }
@@ -813,19 +810,18 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Test report contains cluster_descriptor when devices are present
 TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
-    tt::tt_metal::IDevice* device = device_;
 
     auto report_path = std::filesystem::temp_directory_path() / "test_cluster_desc_report.json";
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
 
         capture.end_graph_capture_to_file(report_path);
     }
@@ -846,19 +842,18 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
 }
 
 TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
 
         trace = capture.end_graph_capture();
     }
@@ -882,20 +877,19 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
 }
 
 TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
-    tt::tt_metal::IDevice* device = device_;
 
     auto report_path = std::filesystem::temp_directory_path() / "test_per_op_buffers_report.json";
     {
         ttnn::graph::GraphProcessor::enable_detailed_buffer_tracing();
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         capture.end_graph_capture_to_file(report_path);
@@ -926,19 +920,18 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
 }
 
 TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
-    tt::tt_metal::IDevice* device = device_;
 
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
 
-        const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, device);
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         trace = capture.end_graph_capture();

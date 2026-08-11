@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -69,12 +70,14 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t kt_dim = 1) {
     // In0/InA -> srcB
     // In1/InB -> srcA
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const LocalDFBInterface& local_dfb_interface_a = g_dfb_interface[operandA_id];
-    const LocalDFBInterface& local_dfb_interface_b = g_dfb_interface[operandB_id];
+    const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
+    const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t l1_tile_idx_0 =
         local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;

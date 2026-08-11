@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -46,8 +49,8 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
 
     const auto output_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);
@@ -57,13 +60,18 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
                 generate_mask<false, 0, use_joint_mask, cb_mask_in>(
+                    noc,
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,
@@ -77,7 +85,7 @@ void kernel_main() {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
                 const auto out_row_end_tile = out_row_start_tile + Sq_chunk_t;
-                write_block(cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
+                write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
             }
         }
     }

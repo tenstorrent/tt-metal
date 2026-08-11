@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const auto input_grad_addr = get_arg_val<uint32_t>(0);
@@ -14,23 +17,28 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_input_grad = 16;
 
-    const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
-
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     uint32_t offs = 0;
     const auto NCHt = num_rows_per_core;
     constexpr uint32_t onetile = 1;
 
-    const auto input_grad_l1_read_addr = get_read_ptr(cb_id_input_grad);
+    Noc noc;
+    DataflowBuffer dfb_input_grad(cb_id_input_grad);
+    const auto input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
 
     for (uint32_t ncht = 0; ncht < num_rows_per_core; ncht++) {
         // input_grad (N, C, H, W)
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(cb_id_input_grad, onetile);
-            noc_async_write_tile(offs + wt + tile_offset, input_grad_addrg, input_grad_l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_input_grad, onetile);
+            dfb_input_grad.wait_front(onetile);
+            noc.async_write(
+                dfb_input_grad,
+                input_grad_addrg,
+                input_grad_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = offs + wt + tile_offset});
+            noc.async_write_barrier();
+            dfb_input_grad.pop_front(onetile);
         }  // wt loop
         offs += Wt;
 

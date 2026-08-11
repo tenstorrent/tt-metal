@@ -7,9 +7,14 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
 #include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
@@ -21,6 +26,81 @@
 #endif
 
 namespace tt::tt_metal::distributed::multihost {
+
+namespace {
+
+// Sub-context layout comes from tt-run env vars (set per-process, no collectives):
+//   TT_RUN_SUBCONTEXT_ID     -> this rank's sub-context id (absent => single-context job)
+//   TT_RUN_SUBCONTEXT_SIZES  -> comma-separated sizes of all sub-contexts, in id order
+struct MpiLauncherEnvLayout {
+    std::optional<int> this_subcontext_id;
+    std::vector<int> subcontext_sizes;
+    // Prefix sum of subcontext_sizes: world_rank_prefix[s] is the first MPI_COMM_WORLD rank in sub-context s.
+    // E.g. sizes {64,1} -> prefix {0,64}; decode local 3 -> world 0+3, prefill local 0 -> world 64+0.
+    std::vector<int> world_rank_prefix;
+};
+
+MpiLauncherEnvLayout g_mpi_launcher_env_layout{};
+
+// `job_world_size` is MPI_COMM_WORLD (pre-split) rank count; used to validate TT_RUN_SUBCONTEXT_SIZES and
+// to build the single-context layout when TT_RUN_SUBCONTEXT_ID is unset.
+MpiLauncherEnvLayout parse_launcher_env_layout_from_env(int job_world_size) {
+    MpiLauncherEnvLayout m;
+    TT_FATAL(job_world_size > 0, "job_world_size must be positive");
+
+    const char* id_env = std::getenv("TT_RUN_SUBCONTEXT_ID");
+    if (id_env == nullptr || id_env[0] == '\0') {
+        m.subcontext_sizes = {job_world_size};
+        m.world_rank_prefix = {0};
+        return m;
+    }
+
+    const char* sizes_env = std::getenv("TT_RUN_SUBCONTEXT_SIZES");
+    TT_FATAL(
+        sizes_env != nullptr && sizes_env[0] != '\0',
+        "TT_RUN_SUBCONTEXT_ID is set but TT_RUN_SUBCONTEXT_SIZES is missing");
+
+    try {
+        m.this_subcontext_id = std::stoi(std::string(id_env));
+    } catch (const std::exception&) {
+        TT_THROW("Invalid TT_RUN_SUBCONTEXT_ID (expected integer): {}", id_env);
+    }
+    TT_FATAL(*m.this_subcontext_id >= 0, "TT_RUN_SUBCONTEXT_ID must be non-negative, got {}", *m.this_subcontext_id);
+
+    std::stringstream ss(sizes_env);
+    for (std::string tok; std::getline(ss, tok, ',');) {
+        const int sz = std::stoi(tok);
+        TT_FATAL(sz > 0, "TT_RUN_SUBCONTEXT_SIZES: sizes must be positive, got {}", sz);
+        m.subcontext_sizes.push_back(sz);
+    }
+
+    const int this_id = *m.this_subcontext_id;
+    TT_FATAL(
+        this_id < static_cast<int>(m.subcontext_sizes.size()),
+        "TT_RUN_SUBCONTEXT_ID {} out of range for {} sub-contexts",
+        this_id,
+        m.subcontext_sizes.size());
+
+    int sum_sizes = 0;
+    for (int s : m.subcontext_sizes) {
+        sum_sizes += s;
+    }
+    TT_FATAL(
+        sum_sizes == job_world_size,
+        "TT_RUN_SUBCONTEXT_SIZES sum {} does not match MPI_COMM_WORLD size {}",
+        sum_sizes,
+        job_world_size);
+
+    // world_rank_prefix[i] = sum(subcontext_sizes[0..i-1]) so local rank L in sub-context i maps to
+    // MPI world rank world_rank_prefix[i] + L (tt-run merges sub-contexts as contiguous world blocks).
+    m.world_rank_prefix.assign(m.subcontext_sizes.size(), 0);
+    for (std::size_t i = 1; i < m.subcontext_sizes.size(); ++i) {
+        m.world_rank_prefix[i] = m.world_rank_prefix[i - 1] + m.subcontext_sizes[i - 1];
+    }
+    return m;
+}
+
+}  // namespace
 
 /* ----------------------------- helpers ---------------------------------- */
 
@@ -175,10 +255,38 @@ inline void init_env(int& argc, char**& argv) {
 }
 
 void MPIContext::create(int argc, char** argv) {
+    if (current_world_) {
+        return;
+    }
     init_env(argc, argv);
-    // it is a good idea to duplicate the world communicator
-    // don't want to rely on the global comm_world which cannot be replaced
-    current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+
+    ContextPtr parent = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+    const int job_world_size = static_cast<int>(*parent->size());
+
+    g_mpi_launcher_env_layout = parse_launcher_env_layout_from_env(job_world_size);
+
+    if (g_mpi_launcher_env_layout.this_subcontext_id.has_value()) {
+        const int color = *g_mpi_launcher_env_layout.this_subcontext_id;
+        const auto mpi_parent = std::dynamic_pointer_cast<MPIContext>(parent);
+        TT_FATAL(mpi_parent != nullptr, "MPIContext::create: parent must be MPIContext");
+        int parent_rank = 0;
+        MPI_CHECK(MPI_Comm_rank(mpi_parent->comm(), &parent_rank));
+        // Key = rank on parent comm so sub-context ranks follow global (parent) order within each color.
+        current_world_ = mpi_parent->split(Color(color), Key(parent_rank));
+        TT_FATAL(
+            static_cast<int>(*current_world_->size()) ==
+                g_mpi_launcher_env_layout.subcontext_sizes[static_cast<std::size_t>(color)],
+            "MPI_Comm_split size {} does not match TT_RUN_SUBCONTEXT_SIZES[{}]={}",
+            *current_world_->size(),
+            color,
+            g_mpi_launcher_env_layout.subcontext_sizes[static_cast<std::size_t>(color)]);
+    } else {
+        current_world_ = std::move(parent);
+    }
+
+    if (!mpi_job_world_) {
+        mpi_job_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    }
 }
 
 const ContextPtr& MPIContext::get_current_world() {
@@ -187,6 +295,58 @@ const ContextPtr& MPIContext::get_current_world() {
         MPIContext::create(0, nullptr);
     }
     return current_world_;
+}
+
+ContextPtr MPIContext::get_world_context() {
+    if (!mpi_job_world_) {
+        if (!current_world_) {
+            MPIContext::create(0, nullptr);
+        }
+        mpi_job_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    }
+    return mpi_job_world_;
+}
+
+std::optional<SubcontextId> MPIContext::subcontext_id() const {
+    const auto& id = g_mpi_launcher_env_layout.this_subcontext_id;
+    if (!id.has_value()) {
+        return std::nullopt;
+    }
+    return SubcontextId{*id};
+}
+
+int MPIContext::subcontext_count() const { return static_cast<int>(g_mpi_launcher_env_layout.subcontext_sizes.size()); }
+
+Size MPIContext::subcontext_size(SubcontextId subcontext_id) const {
+    const auto& L = g_mpi_launcher_env_layout;
+    TT_FATAL(
+        *subcontext_id >= 0 && *subcontext_id < static_cast<int>(L.subcontext_sizes.size()),
+        "subcontext_id {} out of range [0, {})",
+        *subcontext_id,
+        L.subcontext_sizes.size());
+    return Size(L.subcontext_sizes[*subcontext_id]);
+}
+
+ttsl::Span<const int> MPIContext::subcontext_sizes() const {
+    const auto& L = g_mpi_launcher_env_layout;
+    return {L.subcontext_sizes.data(), L.subcontext_sizes.size()};
+}
+
+Rank MPIContext::local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const {
+    const auto& L = g_mpi_launcher_env_layout;
+    TT_FATAL(
+        *subcontext_id >= 0 && *subcontext_id < static_cast<int>(L.subcontext_sizes.size()),
+        "subcontext_id {} out of range [0, {})",
+        *subcontext_id,
+        L.subcontext_sizes.size());
+    TT_FATAL(
+        *local_rank >= 0 && *local_rank < L.subcontext_sizes[*subcontext_id],
+        "local_rank {} out of range for sub-context {} (size {})",
+        *local_rank,
+        *subcontext_id,
+        L.subcontext_sizes[*subcontext_id]);
+    // World rank = start of this sub-context's block + offset within that block.
+    return Rank{L.world_rank_prefix[*subcontext_id] + *local_rank};
 }
 
 void MPIContext::set_current_world(const ContextPtr& ctx) {
@@ -204,6 +364,9 @@ bool MPIContext::is_initialized() {
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
+    // Cache the comm's process group for MPI_Group_incl / MPI_Group_translate_ranks (create_sub_context,
+    // translate_ranks_to_other_ctx). Without a stored group those paths would need ad-hoc Comm_group + free
+    // at every call. Omitting MPI_Group_free in ~MPIContext leaks one MPI_Group per wrapper instance.
     MPI_CHECK(MPI_Comm_group(comm_, &group_));
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
@@ -224,22 +387,22 @@ void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
-void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+void MPIContext::send(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+void MPIContext::ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
+void MPIContext::recv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
 }
 
-RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+RequestPtr MPIContext::isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Isend(
@@ -247,7 +410,7 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     return std::make_shared<MPIRequest>(req);
 }
 
-RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
+RequestPtr MPIContext::irecv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
@@ -256,13 +419,13 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 /* ---- collectives ------------------------------------------------------- */
 
-void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
+void MPIContext::broadcast(ttsl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
 }
 
 void MPIContext::all_reduce(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     check_size_fits_int(send_buf.size());
 
     TT_FATAL(
@@ -287,7 +450,7 @@ void MPIContext::all_reduce(
 }
 
 void MPIContext::reduce(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
     const int elem_sz = mpi_dtype_size(dtype);
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
@@ -312,7 +475,7 @@ void MPIContext::reduce(
     MPI_CHECK(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
 }
 
-void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+void MPIContext::gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
@@ -326,7 +489,7 @@ void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::by
     MPI_CHECK(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
 }
 
-void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+void MPIContext::scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
     const int recv_count = static_cast<int>(recv_buf.size());
     check_size_fits_int(recv_count);
 
@@ -339,7 +502,7 @@ void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::b
     MPI_CHECK(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
 }
 
-void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+void MPIContext::all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
@@ -357,7 +520,7 @@ void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     MPI_CHECK(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
 }
 
-void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+void MPIContext::all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
     const int world = *size();
 
     TT_FATAL(
@@ -380,7 +543,7 @@ void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
 }
 
 void MPIContext::reduce_scatter(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     const int world = *size();
     const int elem_sz = mpi_dtype_size(dtype);
 
@@ -420,7 +583,7 @@ void MPIContext::reduce_scatter(
 }
 
 void MPIContext::scan(
-    tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
@@ -455,7 +618,7 @@ ContextPtr MPIContext::split(Color color, Key key) const {
     return std::make_shared<MPIContext>(split_comm);
 }
 
-ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
+ContextPtr MPIContext::create_sub_context(ttsl::Span<int> ranks) const {
     MPI_Group sub_grp = MPI_GROUP_NULL;
     MPI_Comm sub_comm = MPI_COMM_NULL;
 
@@ -475,7 +638,7 @@ ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
 }
 
 void MPIContext::translate_ranks_to_other_ctx(
-    tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const {
+    ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const {
     TT_FATAL(
         ranks.size() == translated_ranks.size(),
         "translate_ranks_to_other_ctx: ranks size {} != translated_ranks size {}",
@@ -551,9 +714,20 @@ MPIContext::~MPIContext() {
     if (was_mpi_finalized()) {
         return;  // MPI_Finalize() already called
     }
-    if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
+    // comm_ vs group_: different object types. MPI_COMM_WORLD is predefined at MPI_Init; MPI_Finalize tears
+    // down the whole runtime — never MPI_Comm_free(MPI_COMM_WORLD). MPI_Comm_group(comm_, &group_) allocates
+    // a separate MPI_Group (same process set as comm_) that we own and must MPI_Group_free — not the comm.
+    // group_ is kept for APIs that take MPI_Group (e.g. Group_incl, translate_ranks).
+    if (group_ != MPI_GROUP_NULL) {
         MPI_Group_free(&group_);
+        group_ = MPI_GROUP_NULL;
+    }
+    // Omitting Group_free above (or dropping group_ without redesign) leaks one MPI_Group per context — handle
+    // growth and possible resource exhaustion in long-lived or many-context workloads.
+    // Only Comm_dup / Comm_split / … handles; never MPI_COMM_WORLD or MPI_COMM_NULL.
+    if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
         MPI_Comm_free(&comm_);
+        comm_ = MPI_COMM_NULL;
     }
 }
 }  // namespace tt::tt_metal::distributed::multihost

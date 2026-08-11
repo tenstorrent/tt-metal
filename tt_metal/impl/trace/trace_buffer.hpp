@@ -17,6 +17,11 @@
 
 namespace tt::tt_metal {
 
+// Bounds on the interleaved trace buffer page size (see compute_interleaved_trace_buf_page_size).
+// Min is bounded by NOC transfer efficiency; max by the prefetcher CmdDatQ size.
+inline constexpr uint32_t kMinTraceBufPageSize = 1024;
+inline constexpr uint32_t kMaxTraceBufPageSize = 8192;
+
 // Forward decl to avoid including header
 class Buffer;
 
@@ -24,6 +29,12 @@ struct TraceWorkerDescriptor {
     uint32_t num_completion_worker_cores = 0;
     uint32_t num_traced_programs_needing_go_signal_multicast = 0;
     uint32_t num_traced_programs_needing_go_signal_unicast = 0;
+    bool operator==(const TraceWorkerDescriptor& other) const {
+        return num_completion_worker_cores == other.num_completion_worker_cores &&
+               num_traced_programs_needing_go_signal_multicast ==
+                   other.num_traced_programs_needing_go_signal_multicast &&
+               num_traced_programs_needing_go_signal_unicast == other.num_traced_programs_needing_go_signal_unicast;
+    }
 };
 
 struct TraceDescriptor {

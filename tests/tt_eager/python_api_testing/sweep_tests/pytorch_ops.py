@@ -497,7 +497,8 @@ def rsqrt(x, *args, **kwargs):
 
 
 def logit(x, *args, eps, **kwargs):
-    return torch.special.logit(x, eps=eps)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    return golden_function(x, eps=eps)
 
 
 def polygamma(x, *args, k, **kwargs):
@@ -1231,10 +1232,6 @@ def mul_bw(x, y, z, *args, **kwargs):
 
 def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
-
-
-def outer(x, y, *args, **kwargs):
-    return torch.outer(x.squeeze(), y.squeeze())
 
 
 def reduce_sum(x, dims=None, keepdim=False, *args, **kwargs):

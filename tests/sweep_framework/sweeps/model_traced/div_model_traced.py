@@ -9,10 +9,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -50,32 +52,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -100,12 +81,27 @@ def run(
 
     # Extract kwargs
     scalar = kwargs.get("scalar", None)
+    # V2 traces the scalar divisor positionally as arg1 (e.g. ttnn.div(x, 16384));
+    # use it when no explicit `scalar` kwarg, else the golden/device default to 2.0.
+    if scalar is None and isinstance(arg1, (int, float)):
+        scalar = arg1
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
     op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+
+    # Forward rounding_mode / memory_config when the master trace recorded them
+    # (dropping them is a rounding_mode/memory_config extra_key diff vs master).
+    if rounding_mode is not None and rounding_mode != "__ABSENT__" and "rounding_mode" not in op_kwargs:
+        op_kwargs["rounding_mode"] = rounding_mode
+    if memory_config is not None and memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value as _pdv
+
+        op_kwargs["memory_config"] = (
+            _pdv("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+        )
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -115,19 +111,23 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
+    # Apply the traced rounding_mode (e.g. "floor") to the golden too, else the
+    # device floors but the golden doesn't -> PCC fail.
+    _rm = rounding_mode if rounding_mode in ("floor", "trunc") else None
+
     # Check if this is a scalar div operation (shape_b is None or scalar is provided)
     if shape_b is None or scalar is not None:
         # Tensor-scalar div: use the scalar value directly
         # If scalar is None but shape_b is None, default to scalar=2.0
         scalar_value = scalar if scalar is not None else 2.0
-        torch_output_tensor = torch.div(torch_input_tensor_a, scalar_value)
+        torch_output_tensor = torch.div(torch_input_tensor_a, scalar_value, rounding_mode=_rm)
         is_scalar_div = True
     else:
         # Tensor-tensor div: generate second tensor
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
-        torch_output_tensor = torch.div(torch_input_tensor_a, torch_input_tensor_b)
+        torch_output_tensor = torch.div(torch_input_tensor_a, torch_input_tensor_b, rounding_mode=_rm)
         is_scalar_div = False
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -192,10 +192,15 @@ def run(
 
         output_tensor = ttnn.div(input_tensor_a, input_tensor_b, **op_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

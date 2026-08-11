@@ -4,8 +4,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
     const uint32_t index_tensor_addr = get_arg_val<uint32_t>(2);
@@ -33,17 +40,25 @@ void kernel_main() {
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
     const uint32_t St = get_compile_time_arg_val(16);
-    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(17);  // semaphore for receiver
+    // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
+    // page_table lookup (bounded sliding-window cache support).
+    constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(18);
 
-    constexpr auto s0_args = TensorAccessorArgs<18>();
+    constexpr auto s0_args = TensorAccessorArgs<19>();
     constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t head_offset_t = Wt * St;
 
+    CircularBuffer cb_cache(cache_cb_id);
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_index(cb_index_id);
+    CircularBuffer cb_page_table(page_table_cb_id);
+
     // Kick off compute
-    cb_reserve_back(input_cb_id, Wt);
-    cb_push_back(input_cb_id, Wt);
+    cb_input.reserve_back(Wt);
+    cb_input.push_back(Wt);
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
@@ -52,36 +67,43 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
 
-    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, cache_addr);
 
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
-        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr, index_stick_size_B);
+        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr);
 
-        cb_reserve_back(cb_index_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+        cb_index.reserve_back(1);
+        uint32_t index_cb_wr_ptr = cb_index.get_write_ptr();
         // index_tensor has one page to read
-        uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-        noc_async_read_barrier();
-        cb_push_back(cb_index_id, 1);
+        noc.async_read(addrg, CoreLocalMem<uint32_t>(index_cb_wr_ptr), index_stick_size_B, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        cb_index.push_back(1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
-        const uint32_t update_idx = index_ptr[my_batch_idx];
-        if (update_idx == (uint32_t)-1) {
+        const uint32_t raw_update_idx = index_ptr[my_batch_idx];
+        if (raw_update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
         } else {
+            // Wrap into the bounded sliding-window cache when enabled, so positions past
+            // the physical capacity are addressed correctly (cache_position_modulo is a
+            // multiple of block_size, so this preserves the intra-block offset).
+            const uint32_t update_idx =
+                cache_position_modulo > 0 ? raw_update_idx % cache_position_modulo : raw_update_idx;
             if constexpr (is_paged_cache) {
-                const auto page_table_gen =
-                    TensorAccessor(page_table_args, page_table_tensor_addr, page_table_stick_size);
-                cb_reserve_back(page_table_cb_id, 1);
-                uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
-                uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(my_batch_idx);
-                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-                noc_async_read_barrier();
-                cb_push_back(page_table_cb_id, 1);
+                const auto page_table_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
+                cb_page_table.reserve_back(1);
+                uint32_t page_table_cb_wr_ptr = cb_page_table.get_write_ptr();
+                noc.async_read(
+                    page_table_gen,
+                    CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
+                    page_table_stick_size,
+                    {.page_id = my_batch_idx},
+                    {});
+                noc.async_read_barrier();
+                cb_page_table.push_back(1);
                 volatile tt_l1_ptr uint32_t* page_table_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 
@@ -101,25 +123,25 @@ void kernel_main() {
     }
 
     if (wait_to_start_signal) {
-        // wait for signal to start pushing tensor
-        volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, 1);
-        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        // wait for signal from writer that it has finished using the input CB
+        Semaphore<> receiver_sem(receiver_sem_id);
+        receiver_sem.wait(1);
+        receiver_sem.set(0);
     }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        cb_reserve_back(cache_cb_id, Wt);
+        cb_cache.reserve_back(Wt);
         if (!skip_update) {
-            uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
+            uint32_t cache_l1_write_addr = cb_cache.get_write_ptr();
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                noc.async_read(
+                    s0, CoreLocalMem<uint32_t>(cache_l1_write_addr), cache_tile_bytes, {.page_id = curr_cache_id}, {});
                 cache_l1_write_addr += cache_tile_bytes;
             }
 
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
-        cb_push_back(cache_cb_id, Wt);
+        cb_cache.push_back(Wt);
 
         cache_id += head_offset_t;
     }

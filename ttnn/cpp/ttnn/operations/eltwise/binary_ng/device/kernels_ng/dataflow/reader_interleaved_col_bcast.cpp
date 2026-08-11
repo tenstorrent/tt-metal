@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -39,27 +39,27 @@ void kernel_main() {
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
 #if SRC_SHARDED
 #if !SRC_BCAST
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #endif
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if SRC_SHARDED_B
 #if !SRC_BCAST_B
-    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
-    cb_push_back(cb_id_src_b, src_num_tiles_b);
+    cb_src_b.reserve_back(src_num_tiles_b);
+    cb_src_b.push_back(src_num_tiles_b);
 #endif
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
+    const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
@@ -113,7 +113,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                        FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_src.get_write_ptr());
 #endif
                         cb_src.push_back(onetile);
 #endif
@@ -125,7 +125,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_src_b.get_write_ptr());
 #endif
                         cb_src_b.push_back(onetile);
 #endif

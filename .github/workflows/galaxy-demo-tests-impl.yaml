@@ -24,14 +24,15 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_demo_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -90,7 +91,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        - ${{ contains(matrix.test-group.sku, 'perf') && (inputs.mlperf-read-only && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/mnt/MLPerf:/mnt/MLPerf') || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -98,7 +99,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job

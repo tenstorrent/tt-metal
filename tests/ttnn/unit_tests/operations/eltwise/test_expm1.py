@@ -25,11 +25,7 @@ def flush_subnormal_values(tensor):
         "float32",
     ],
 )
-def test_expm1_arange_masking(dtype, device):
-    # Expm1 Working range - Overflow from 88.5(inf) as in exp
-    low = -math.inf
-    high = 88.5
-
+def test_expm1_all_bitpatterns(dtype, device):
     torch_dtype = getattr(torch, dtype)
     tt_dtype = getattr(ttnn, dtype)
 
@@ -43,9 +39,11 @@ def test_expm1_arange_masking(dtype, device):
     # If input is subnormal then we assume hardware will flush it to 0.0
     input_tensor = flush_subnormal_values(input_tensor)
 
-    # masking to working range
-    mask = (input_tensor >= low) & (input_tensor <= high)
-    input_tensor = input_tensor[mask]
+    # BF16 NaN values are packed as infinity during device transfer, so they are not
+    # valid inputs for checking expm1's NaN propagation. The float32 parametrisation
+    # covers NaN propagation using the same generated bit patterns.
+    if tt_dtype == ttnn.bfloat16:
+        input_tensor = input_tensor[~torch.isnan(input_tensor)]
 
     tt_in = ttnn.from_torch(
         input_tensor,
@@ -64,7 +62,7 @@ def test_expm1_arange_masking(dtype, device):
     # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
     result = flush_subnormal_values(result)
 
-    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

@@ -11,11 +11,17 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -55,12 +61,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
+            device = ttnn.open_device(device_id=0, l1_small_size=79104)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0)
+        device = ttnn.open_device(device_id=0, l1_small_size=79104)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -83,9 +89,17 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Extract dims from kwargs (from traced config) or use default
-    dims = kwargs.get("dims", [0, 1])
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    # Re-add memory_config kwarg when the master recorded it. Validation-vector
+    # runs deliver memory_config as a serialized dict, so parse it back to a
+    # ttnn.MemoryConfig before forwarding to the op binding.
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        if isinstance(memory_config, dict):
+            memory_config = parse_dict_value("memory_config", memory_config)
+        op_kwargs["memory_config"] = memory_config
+
+    # Extract dims from op_kwargs for golden computation
+    dims = op_kwargs.get("dims", [0, 1])
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -124,23 +138,66 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Pre-allocate output tensor if the master config recorded one (named "output")
+    output_info = extract_named_tensor_kwargs(kwargs, "output")
+    output_pre = None
+    if output_info and output_info.get("shape"):
+        ot_shape = tuple(output_info["shape"])
+        ot_dtype = output_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            output_pre = create_tensor_on_mesh(torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement)
+        elif not is_host:
+            output_pre = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None, **op_kwargs)
+    if output_pre is not None:
+        output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=output_pre, **op_kwargs)
+    else:
+        output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)
     for dim in dims:
         output_shape[dim] = 1
 
-    # Convert to torch, unpad from tile, then compare
+    # Convert to torch, unpad from tile, then compare. On a mesh device the
+    # output is sharded across chips and must be reassembled with
+    # mesh_tensor_to_torch (taking just device_tensors[0] returns only the
+    # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
-        device_tensors = ttnn.get_device_tensors(output_tensor)
-        output_tensor = device_tensors[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
+        output_tensor = mesh_tensor_to_torch(output_tensor, device)
+        # mesh_tensor_to_torch returns the device tensor with reduced dims still
+        # tile-padded (a reduced dim of logical size 1 comes back as 32). Slice
+        # back to the logical reduced shape — mirrors the single-device
+        # unpad_from_tile path; otherwise the tile-padding rows (garbage) tank
+        # the PCC (e.g. a (1,1,1,16384) reduce read back as (1,1,32,16384)).
+        if output_tensor.ndim == len(output_shape) and all(
+            output_tensor.shape[d] >= output_shape[d] for d in range(len(output_shape))
+        ):
+            output_tensor = output_tensor[tuple(slice(0, s) for s in output_shape)]
     else:
         output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - use 0.999 threshold like unit test
+    # Check with PCC - use 0.999 threshold like unit test. Only reconcile if the
+    # gathered shape still differs (genuine shard tiling) after unpadding.
+    if is_mesh_device and tuple(torch_output_tensor.shape) != tuple(output_tensor.shape):
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

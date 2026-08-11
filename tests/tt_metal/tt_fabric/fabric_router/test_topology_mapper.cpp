@@ -27,9 +27,8 @@ protected:
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-        auto psd =
-            tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        auto psd = tt::tt_metal::run_physical_system_discovery(
+            *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     }
 
@@ -671,8 +670,8 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
     const auto my_host = physical_system_descriptor_->my_host_name();
     auto pinned_asic = AsicPosition{1, 1};
 
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins = {
-        {FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{pinned_asic}},
+    std::vector<AsicPinningGroup> pins = {
+        {{FabricNodeId(MeshId{0}, 0)}, {pinned_asic}},
     };
 
     TopologyMapper topology_mapper_with_pins(
@@ -714,9 +713,9 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
     auto pinned_asic = AsicPosition{1, 1};
     auto pinned_asic2 = AsicPosition{1, 5};
 
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins = {
-        {FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{pinned_asic}},
-        {FabricNodeId(MeshId{0}, 1), std::vector<AsicPosition>{pinned_asic2}},
+    std::vector<AsicPinningGroup> pins = {
+        {{FabricNodeId(MeshId{0}, 0)}, {pinned_asic}},
+        {{FabricNodeId(MeshId{0}, 1)}, {pinned_asic2}},
     };
 
     TopologyMapper topology_mapper_with_pins(
@@ -760,9 +759,8 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
     }
 
     // Use an ASIC position that does not exist in this environment
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> pins_missing = {
-        {FabricNodeId(MeshId{0}, 0),
-         std::vector<AsicPosition>{AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}}}},
+    std::vector<AsicPinningGroup> pins_missing = {
+        {{FabricNodeId(MeshId{0}, 0)}, {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}}}},
     };
 
     // Expect a throw due to missing ASIC position in the local mesh physical topology

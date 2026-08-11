@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Make n reads defined by num_reads
 // Writes to Specified Circular Buffers in L1
@@ -29,8 +33,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_block_base_offset = num_tensors;
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
 
-    auto tensor_accessors_tuple =
-        make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx, page_size_base_idx);
+    auto tensor_accessors_tuple = make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx);
     auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
@@ -39,15 +42,22 @@ void kernel_main() {
         tile_id_per_tensor[i] = arg_ptr[tile_id_per_tensor_offset + i];
     }
 
+    DataflowBuffer dfb_in(cb_id_in);
+    Noc noc;
+
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_reserve_back(cb_id_in, ublock_size_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-        auto read_addr = abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(tile_id_per_tensor[curr_tensor]);
-        noc_async_read(read_addr, l1_write_addr, tile_size_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in, ublock_size_tiles);
+        dfb_in.reserve_back(ublock_size_tiles);
+        uint32_t l1_write_addr = dfb_in.get_write_ptr();
+        noc.async_read(
+            abstract_tensor_accessor_wrappers[curr_tensor],
+            CoreLocalMem<uint8_t>(l1_write_addr),
+            tile_size_bytes,
+            {.page_id = tile_id_per_tensor[curr_tensor]},
+            {});
+        noc.async_read_barrier();
+        dfb_in.push_back(ublock_size_tiles);
 
         tile_id_per_tensor[curr_tensor]++;
         curr_tensor_id++;

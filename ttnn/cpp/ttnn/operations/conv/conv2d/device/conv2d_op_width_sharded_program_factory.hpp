@@ -3,34 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::prim {
 
 struct Conv2dWidthShardedProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_sharded_act{};
-        tt::tt_metal::CBHandle cb_output{};
-        tt::tt_metal::CBHandle cb_partials{};
-        bool partials_cb_uses_output = false;
-        bool has_bias = false;
-        CoreCoord full_core_grid;
-        tt::tt_metal::KernelHandle weights_kernel_id{};
-        uint32_t total_num_active_cores = 0;
-        tt::tt_metal::DeviceStorage conv_reader_indices_storage;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Builds the workload in one call (cache miss).  The intermediate
+    // conv_reader_indices tensor — which must outlive the cached program — is
+    // allocated here and parked on the WorkloadDescriptor's `buffers` vector
+    // (wrapped in `shared_ptr<Tensor>` so `~Tensor` cannot force-deallocate the
+    // device memory while the cached program is still alive).
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const Conv2dParams& operation_attributes,
         const Conv2dInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim

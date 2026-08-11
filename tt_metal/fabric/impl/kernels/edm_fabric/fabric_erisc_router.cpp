@@ -881,14 +881,41 @@ FORCE_INLINE void receiver_forward_packet(
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
-            case LowLatencyFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            case LowLatencyFields::WRITE_AND_FORWARD: {
+                // Resolve noc_send_type via the same packed 4B load the local-write path uses, then
+                // reuse it through the _impl entry point so the standard path does no extra L1 read
+                // versus the non-sparse build. The sparse case is unlikely, keeping the common path hot.
+                const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+                if (packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
+                    // This chip writes its own page group (counts[chip_idx] pages from write_idx), then
+                    // write_idx/chip_idx advance so the downstream chip picks the next group. The advance
+                    // must precede the forward because forwarding sends the (mutated) header downstream,
+                    // and must follow the write because the write reads the pre-advance chip_idx.
+                    execute_chip_unicast_to_local_chip_impl(
+                        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+                    auto& sparse = packet_start->command_fields.sparse_mcast_write;
+                    sparse.write_idx += sparse.counts[sparse.chip_idx];
+                    sparse.chip_idx++;
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interface,
+                        transaction_id);
+                } else {
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interface,
+                        transaction_id);
+                    execute_chip_unicast_to_local_chip_impl(
+                        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+                }
                 // In 1D, the forwarding sender channel is always sender channel 1
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
-                break;
+            } break;
             default: {
                 ASSERT(false);
             }
@@ -2196,14 +2223,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
 
-#if defined(FABRIC_2D_VC1_ACTIVE)
-    // VC1 receiver channel pointer for inter-mesh routing
+#if defined(FABRIC_2D_VC1_SERVICED)
+    // VC1 receiver channel pointer for inter-mesh routing. Gated on _SERVICED (not _ACTIVE) because
+    // these locals are only consumed inside the FABRIC_2D_VC1_SERVICED block further down; on routers
+    // that have VC1 channels (ACTIVE) but do not service them (e.g. inter-mesh routers without
+    // pass-through), defining them here trips -Wunused-but-set-variable in the kernel JIT compile.
     auto outbound_to_receiver_channel_pointer_ch1 =
         outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
-#endif  // FABRIC_2D_VC1_ACTIVE
+#endif  // FABRIC_2D_VC1_SERVICED
 
 #if defined(FABRIC_2D_VC2_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch2 =
@@ -2280,17 +2310,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
-                auto check_connection_status =
-                    !channel_connection_established[0] ||
-                    local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
-                if (check_connection_status) {
-                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                        local_sender_channel_worker_interfaces.template get<0>(),
-                        channel_connection_established[0],
-                        local_sender_channel_free_slots_stream_ids[0]);
-                }
-            }
 #if defined(FABRIC_2D_VC2_SERVICED)
             if constexpr (is_sender_channel_serviced[VC2_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
@@ -2313,7 +2332,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY,
+                            true /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<0>(),
                             local_sender_channel_worker_interfaces.template get<0>(),
                             outbound_to_receiver_channel_pointer_ch0,
@@ -2537,7 +2557,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         tx_progress |= run_sender_channel_step_speedy<
                             VC2_SENDER_CHANNEL_START,
                             to_receiver_packets_sent_streams[VC2_RECEIVER_CHANNEL],
-                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2>(
+                            SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2,
+                            false /*MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER*/>(
                             local_sender_channels.template get<VC2_SENDER_CHANNEL_START>(),
                             local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>(),
                             outbound_to_receiver_channel_pointer_ch2,
@@ -2692,7 +2713,7 @@ void
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
-        if (!sender_ch_live_check_skip[sender_channel_idx]) {
+        if (!sender_ch_wait_static_connection[sender_channel_idx]) {
             return;
         }
         uint32_t count = 0;

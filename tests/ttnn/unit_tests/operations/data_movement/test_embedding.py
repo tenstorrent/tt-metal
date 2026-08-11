@@ -5,8 +5,8 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def test_base_case(device):
@@ -19,7 +19,7 @@ def test_base_case(device):
     embeddings = ttnn.embedding(indices, embedding_matrix)
     assert tuple(expected_embeddings.shape) == tuple(embeddings.shape)
     embeddings = ttnn.to_torch(ttnn.from_device(embeddings))
-    assert_with_pcc(expected_embeddings, embeddings)
+    assert_equal(expected_embeddings, embeddings)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8, 9])
@@ -55,7 +55,7 @@ def test_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [55, 100, 200])
@@ -91,7 +91,7 @@ def test_embedding_unaligned_RM_pages(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [8])
@@ -123,7 +123,7 @@ def test_bloom_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -156,7 +156,7 @@ def test_moe_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8, 9])
@@ -212,7 +212,7 @@ def test_embedding_tiled_input(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 def reverse_embedding_output(output_tensor, weights_tensor):
@@ -316,7 +316,7 @@ def test_tiled(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim, vocabulary_size", [(10, 96, 2048, 128256)])
@@ -389,7 +389,7 @@ def test_embedding_tiled_sharded_output(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @run_for_wormhole_b0()
@@ -413,7 +413,8 @@ def test_tg_llama_sharded_embedding(
     sentence_size = 1 + token_padding
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_weights_bfloat16 = torch_weights.to(torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights_bfloat16)
 
     start_core = ttnn.CoreCoord(1, 0)
     core_grid = ttnn.CoreRangeSet(
@@ -439,7 +440,7 @@ def test_tg_llama_sharded_embedding(
         torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     weights = ttnn.as_tensor(
-        torch_weights,
+        torch_weights_bfloat16,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -452,7 +453,7 @@ def test_tg_llama_sharded_embedding(
         ttnn.Shape((batch_size, 32, hidden_embedding_dim)),
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))
+    assert_equal(torch_output_tensor[:, 0, :].unsqueeze(1), output_tensor)
 
 
 @run_for_wormhole_b0()
@@ -473,7 +474,8 @@ def test_tg_llama_sharded_rm_embedding(device):
     hidden_embedding_dim = 128
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, num_heads))
     torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_weights_bfloat16 = torch_weights.to(torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights_bfloat16)
 
     start_core = ttnn.CoreCoord(1, 0)
     core_grid = ttnn.CoreRangeSet(
@@ -499,7 +501,7 @@ def test_tg_llama_sharded_rm_embedding(device):
         torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     weights = ttnn.as_tensor(
-        torch_weights,
+        torch_weights_bfloat16,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -510,7 +512,7 @@ def test_tg_llama_sharded_rm_embedding(device):
             input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config
         )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(output_tensor, torch_output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
     assert device.num_program_cache_entries() == 1
 
 
@@ -540,4 +542,52 @@ def test_embedding_oom(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
+
+
+# Regression for the chunked-tilize embedding path with non-multiple-of-cap
+# tile counts (i.e. partial trailing chunk). The chunked reader/compute path
+# previously assumed each chunk had the same tile count and read
+# `weight_block_size / num_chunks` bytes (integer division) per row, which
+# left the last chunk's CB slot partially uninitialised when
+# `num_tiles_per_block` did not evenly divide. Each entry below is a
+# previously failing (D, tile_count) pair drawn from the wider sweep,
+# including a prime tile count to exercise the worst-case partial chunk.
+@pytest.mark.parametrize(
+    "hidden_embedding_dim",
+    [
+        8224,  # tile_count = 257 — prime, tiny last chunk
+        8320,  # tile_count = 260 — smallest known failing chunked config
+        10752,  # tile_count = 336 — Gemma-4 per-layer embedding
+        15488,  # tile_count = 484
+    ],
+)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("sentence_size", [64])
+@pytest.mark.parametrize("vocabulary_size", [256])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_embedding_chunked_partial_last_chunk(
+    device,
+    hidden_embedding_dim,
+    batch_size,
+    sentence_size,
+    vocabulary_size,
+    dtype,
+    input_mem_config,
+    output_mem_config,
+):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
+
+    output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)

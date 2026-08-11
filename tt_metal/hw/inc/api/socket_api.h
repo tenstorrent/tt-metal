@@ -150,7 +150,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
 }
 
 #ifndef COMPILE_FOR_TRISC
-void socket_notify_receiver(const SocketSenderInterface& socket) {
+void socket_notify_receiver(const SocketSenderInterface& socket, uint8_t noc = noc_index) {
     // TODO: Store noc encoding in struct?
     if (socket.is_d2h) {
         volatile tt_l1_ptr sender_socket_md* socket_config =
@@ -159,17 +159,18 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
         uint32_t local_bytes_sent_addr = socket.config_addr;
         uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
                                         (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
-        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+            noc, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
     } else {
         for (uint32_t i = 0; i < socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
             auto downstream_bytes_sent_noc_addr = get_noc_addr(
                 downstream_enc.d2d.downstream_noc_x,
                 downstream_enc.d2d.downstream_noc_y,
-                socket.downstream_bytes_sent_addr);
-            noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
+                socket.downstream_bytes_sent_addr,
+                noc);
+            noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent, 0xF, noc);
         }
     }
 }
@@ -284,10 +285,10 @@ bool socket_wait_for_pages(
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
-        iter_count++;
         if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
             return false;
         }
+        iter_count++;
     } while (bytes_recv < num_bytes);
     return true;
 #endif
@@ -367,7 +368,7 @@ void socket_notify_sender(const SocketReceiverInterface& socket, uint8_t noc = n
             noc, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
     } else {
         auto upstream_bytes_acked_noc_addr =
-            get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
+            get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr, noc);
         noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked, 0xF, noc);
     }
 }

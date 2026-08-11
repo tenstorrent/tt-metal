@@ -9,77 +9,8 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_api.h"
 
-// The SFPU itself only available on the MATH core. The TRISC_MATH macro
-// is defined when the code is being compiled for the MATH core.
 #ifdef TRISC_MATH
-
-/**
- * The SFPU (Special Function Processing Unit) is the vector engine in Tensix that operates
- * on data already loaded into the Dst registers. Unlike the matrix engine (FPU) which takes
- * circular buffer indices as parameters, SFPU functions work with Dst register indices.
- *
- * Key SFPU Concepts:
- * - SFPU operates on 32x32 tiles organized as tile faces
- * - Each tile face contains 32 SIMD lanes of data
- * - A full tile has multiple faces (typically 4 faces for a 32x32 tile)
- * - SFPU processes one face at a time in a loop
- *
- * @param dst_index_in0  Index of the first input tile in Dst registers (not CB index!)
- * @param dst_index_in1  Index of the second input tile in Dst registers (not CB index!)
- * @param dst_index_out  Index of the output tile in Dst registers (not CB index!)
- */
-inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
-    // SFPU Tile Organization:
-    // Each tile in Dst registers is divided into four 16x16 faces.
-    // n_vector_in_tile = 32 as there are 32 SIMD lanes per tile
-    // i.e.
-    //   dst_reg[0:31] holds the first tile
-    //          dst_reg[0:8] holds the first face of the first tile
-    //          dst_reg[8:15] holds the second face of the first tile,
-    //   dst_reg[32:63] holds the second tile
-    //          dst_reg[32:40] holds the first face of the second tile
-    //          dst_reg[40:47] holds the second face of the second tile,
-    //         etc.
-    // NOTE: This value is architectural dependent and may change in future hardware revisions.
-    //       For Blackhole and Whitehole, SFPU is 32 elements wide.
-    constexpr uint32_t n_vector_in_tile = 32;
-
-    // Calculate base indices for each tile in the Dst register array.
-    // Each tile occupies multiple consecutive slots in dst_reg[].
-    // The multiplication accounts for the face structure within each tile.
-    const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_tile;
-    const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_tile;
-    const uint32_t out_base_idx = dst_index_out * n_vector_in_tile;
-
-    // Process one face of the tile (8 SIMD operations).
-    // Why 8 iterations? Each iteration processes 32 elements (vFloat is 32-elements-wide SIMD),
-    // so 32 * 8 = 16*16 (a full face).
-    //
-    // SFPU Programming Pattern:
-    // 1. Load data from Dst registers into vFloat SIMD variables
-    // 2. Perform SIMD arithmetic operations
-    // 3. Store results back to Dst registers
-    for (size_t i = 0; i < 8; i++) {
-        // Load 32-element SIMD vectors from Dst registers.
-        // vFloat represents 32 parallel floating-point values.
-        // This is the SFPU's native SIMD data type.
-        vFloat a = dst_reg[in0_base_idx + i];
-        vFloat b = dst_reg[in1_base_idx + i];
-
-        // Perform SIMD addition: all 32 elements are added in parallel.
-        // This is where the actual computation happens on the vector engine.
-        // For FP32 accuracy, ensure the host sets fp32_dest_acc_en=true.
-        dst_reg[out_base_idx + i] = a + b;
-
-        // The above program can be shortened to a single line:
-        // However, the expanded form is clearer for educational purposes.
-        // dst_reg[out_base_idx] = dst_reg[in0_base_idx] + dst_reg[in1_base_idx];
-    }
-
-    // Note: This function only processes ONE FACE of a tile.
-    // The _llk_math_eltwise_binary_sfpu_params_ wrapper  will call this function
-    // for each face in the tile (typically 4 times for a 32x32 tile).
-}
+#include "experimental/llk_sfpu/ckernel_sfpu_custom_add.h"
 #endif
 
 /**
@@ -105,7 +36,8 @@ inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_in
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
+    MATH(SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, my_add_tile_face, idx_dst0, idx_dst1, idx_out0, VectorMode::RC));
 }
 
 void kernel_main() {

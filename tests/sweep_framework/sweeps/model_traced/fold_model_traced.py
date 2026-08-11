@@ -9,10 +9,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -48,32 +50,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -113,6 +94,48 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # ttnn.fold treats the input as NHWC and requires H (dim 1) divisible by
+    # stride_h and W (dim 2) by stride_w ("Input height must be divisible by
+    # stride_h"). A trace can record the shape in NCHW order (N, C, H, W) — e.g.
+    # (16, 3, 224, 224) with stride 2 has dim 1 = 3 (indivisible) but is really a
+    # (16, 224, 224, 3) NHWC image that folds to (16, 112, 112, 12). When the
+    # as-NHWC dims don't divide the strides but the NCHW->NHWC permute does,
+    # permute the input so both the device op and the golden see valid NHWC.
+    _permuted = (
+        len(shape) == 4
+        and (shape[1] % stride_h != 0 or shape[2] % stride_w != 0)
+        and shape[2] % stride_h == 0
+        and shape[3] % stride_w == 0
+    )
+    if _permuted:
+        torch_input_tensor_a = torch_input_tensor_a.permute(0, 2, 3, 1).contiguous()
+        shape = tuple(torch_input_tensor_a.shape)
+        # The traced shard memory configs were laid out for the NCHW shape and no
+        # longer match the permuted NHWC tensor (they would mis-shard -> L1 OOM),
+        # so feed the permuted input from DRAM interleaved and let fold choose the
+        # output layout (drop the traced sharded output/override configs).
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        op_kwargs.pop("memory_config", None)
+        op_kwargs.pop("override_memory_config", None)
+        op_kwargs.pop("output_memory_config", None)
+        # grid_size / use_transpose_as_fold were chosen for the original sharded
+        # NCHW layout; on the re-laid-out NHWC DRAM input they force a huge
+        # sharded output (L1 OOM). Drop them so fold sizes itself for this input.
+        op_kwargs.pop("grid_size", None)
+        op_kwargs.pop("use_transpose_as_fold", None)
+
+    # The device applies the traced `padding` to the NHWC input before folding;
+    # mirror it in the golden. padding = [H_top, H_bot, W_left, W_right, C_front,
+    # C_back] (e.g. [3,3,3,3,0,1] pads 224->230 H/W and 3->4 C, so a stride-2 fold
+    # yields 115x115x16). torch.nn.functional.pad takes dims last-first.
+    _golden_input = torch_input_tensor_a
+    _pad = op_kwargs.get("padding")
+    if isinstance(_pad, (list, tuple)) and len(_pad) == 6 and any(int(p) for p in _pad):
+        import torch.nn.functional as _F
+
+        ht, hb, wl, wr, cf, cb = (int(p) for p in _pad)
+        _golden_input = _F.pad(torch_input_tensor_a, (cf, cb, wl, wr, ht, hb))
+
     # fold_torch golden function (NHWC format)
     def fold_torch(input_tensor, stride_h, stride_w):
         N, H, W, C = input_tensor.shape
@@ -120,7 +143,7 @@ def run(
         transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
         return transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
 
-    torch_output_tensor = fold_torch(torch_input_tensor_a, stride_h, stride_w)
+    torch_output_tensor = fold_torch(_golden_input, stride_h, stride_w)
 
     # ttnn.fold outputs in TTNN format [1, 1, N*H'*W', C'] — reshape golden to match
     if torch_output_tensor.ndim == 4:
@@ -162,10 +185,27 @@ def run(
     start_time = start_measuring_time()
     # fold expects stride_h and stride_w as positional args
     output_tensor = ttnn.fold(input_tensor_a, stride_h, stride_w, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    if _permuted and is_mesh_device:
+        # The re-laid-out NHWC input was replicated across the mesh (a Shard
+        # placement is materialized replicated on this device), so each chip holds
+        # the full fold result — read one device instead of concatenating (which
+        # would multiply the batch by the mesh factor). The DRAM fold returns a 4D
+        # [N, H', W', C']; flatten to the [1, 1, N*H'*W', C'] form the golden uses.
+        output_tensor = mesh_tensor_to_torch(output_tensor, device, force_single_device=True)
+        if output_tensor.ndim == 4:
+            _n, _h, _w, _c = output_tensor.shape
+            output_tensor = output_tensor.reshape(1, 1, _n * _h * _w, _c)
+    else:
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
+        if is_mesh_device:
+            torch_output_tensor = reconcile_golden_to_actual(
+                torch_output_tensor, output_tensor, input_a_tensor_placement
+            )
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

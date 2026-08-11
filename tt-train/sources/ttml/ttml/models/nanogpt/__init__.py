@@ -26,6 +26,7 @@ from ttml.modules import (
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
 from .gpt_block import GPTBlock
+from .safetensors_loader import load_gpt2_from_safetensors
 
 
 @dataclass
@@ -79,7 +80,7 @@ class NanoGPT(AbstractModuleBase):
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(
@@ -162,6 +163,8 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
     return NanoGPT(config)
 
 
+from .flops import calculate_flops_per_token
+
 __all__ = [
     "PositionalEmbedding",
     "TrainablePositionalEmbedding",
@@ -169,5 +172,7 @@ __all__ = [
     "NanoGPT",
     "NanoGPTExperimentalConfig",
     "NanoGPTConfig",
+    "calculate_flops_per_token",
     "create_nanogpt",
+    "load_gpt2_from_safetensors",
 ]

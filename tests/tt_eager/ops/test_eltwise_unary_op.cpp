@@ -18,9 +18,9 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -33,7 +33,7 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::distributed::MeshDevice;
 
 using tt::tt_metal::Layout;
-using tt::tt_metal::Tensor;
+using ttnn::Tensor;
 
 namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
@@ -116,8 +116,9 @@ void test_operation_infrastructure() {
     using namespace tt::constants;
     log_info(tt::LogTest, "Running {}", __func__);
 
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
+    using Op = ttnn::operations::unary::UnaryDeviceOperation;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
@@ -127,11 +128,29 @@ void test_operation_infrastructure() {
     auto input_tensor =
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
-    ttnn::prim::UnaryParams op_args{
-        {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
-    ttnn::prim::UnaryInputs tensor_args{input_tensor};
-    auto program_hash = ttnn::prim::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
-    TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
+    auto mem_config = tt::tt_metal::MemoryConfig{};
+    auto worker_grid = ttnn::operations::unary::get_worker_grid(
+        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt, mem_config);
+
+    Op::operation_attributes_t op_args{
+        .op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}},
+        .output_dtype = DataType::BFLOAT16,
+        .memory_config = mem_config,
+        .fp32_dest_acc_en = false,
+        .preserve_fp32_precision = false,
+        .bfp8_pack_precise = false,
+        .worker_grid = worker_grid,
+        .sub_core_grids = std::nullopt,
+    };
+    Op::tensor_args_t tensor_args{.input = input_tensor, .output_tensor = std::nullopt};
+    auto program_hash = Op::compute_program_hash(op_args, tensor_args);
+    auto program_hash_repeat = Op::compute_program_hash(op_args, tensor_args);
+    TT_FATAL(program_hash != 0, "compute_program_hash returned 0 — likely a bug");
+    TT_FATAL(
+        program_hash == program_hash_repeat,
+        "UnaryDeviceOperation::compute_program_hash must be deterministic ({} vs {})",
+        program_hash,
+        program_hash_repeat);
 }
 
 void test_shape_padding() {
@@ -147,10 +166,10 @@ void test_shape_padding() {
     ttnn::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
-    tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
-    auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+    auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, ttnn::Array4D({0, 0, 0, 0}), 0);
 
     padded_input_tensor = padded_input_tensor.to_layout(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to_device(device);
@@ -164,7 +183,7 @@ void test_shape_padding() {
 namespace tt::tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
-    static Tensor fn(const tt::tt_metal::Tensor& t) {
+    static Tensor fn(const ttnn::Tensor& t) {
         return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };

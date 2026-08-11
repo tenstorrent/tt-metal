@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
-tt_reuse_precompile_headers(ttnn_op_transformer TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_transformer TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
 
 set_target_properties(
@@ -13,9 +15,10 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    sdpa/device/kernels/*
-    sdpa_decode/device/kernels/*
-    sdpa_windowed/device/kernels/*
+    sdpa/device/kernels/*.hpp
+    sdpa_decode/device/kernels/*.hpp
+    gated_delta_attn/device/kernels/*.cpp
+    chunk_gated_delta_rule/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer
@@ -24,40 +27,24 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            sdpa_config.hpp
+            attention_softmax/attention_softmax.hpp
+            concatenate_heads/concatenate_heads.hpp
+            sdpa/sdpa.hpp
+            sdpa/sparse_sdpa.hpp
+            sdpa/sparse_sdpa_msa.hpp
+            sdpa_decode/sdpa_decode.hpp
+            split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        attention_softmax/attention_softmax.cpp
-        concatenate_heads/concatenate_heads.cpp
-        sdpa/device/ring_fusion.cpp
-        sdpa/device/joint_sdpa_device_operation.cpp
-        sdpa/device/joint_sdpa_program_factory.cpp
-        sdpa/device/ring_joint_sdpa_device_operation.cpp
-        sdpa/device/ring_joint_sdpa_program_factory.cpp
-        sdpa/device/ring_distributed_sdpa_device_operation.cpp
-        sdpa/device/ring_distributed_sdpa_program_factory.cpp
-        sdpa/device/sdpa_device_operation.cpp
-        sdpa/device/sdpa_perf_model.cpp
-        sdpa/device/sdpa_program_factory.cpp
-        sdpa/sdpa.cpp
-        sdpa_decode/device/sdpa_decode_device_operation.cpp
-        sdpa_decode/device/sdpa_decode_program_factory.cpp
-        sdpa_decode/sdpa_decode.cpp
-        sdpa_windowed/device/sdpa_windowed_device_operation.cpp
-        sdpa_windowed/device/sdpa_windowed_program_factory.cpp
-        sdpa_windowed/sdpa_windowed.cpp
-        split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
+        ${TTNN_OP_TRANSFORMER_SRCS}
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_transformer
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_transformer PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -69,3 +56,20 @@ install(
 )
 
 install(TARGETS ttnn_op_transformer LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_transformer FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_TRANSFORMER_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_TRANSFORMER_NANOBIND_SRCS})
+endif()

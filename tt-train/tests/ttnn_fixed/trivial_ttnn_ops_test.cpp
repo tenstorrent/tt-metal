@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -38,12 +40,8 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_EQ(res_vector.size(), 6);
-    bool all_equal = true;
-    for (const auto& value : res_vector) {
-        if (std::fabs(value + 1.F) > 1e-2) {
-            all_equal = false;
-        }
-    }
+    bool all_equal =
+        std::all_of(res_vector.begin(), res_vector.end(), [](float v) { return std::fabs(v + 1.F) <= 1e-2F; });
     EXPECT_TRUE(all_equal);
 }
 
@@ -262,7 +260,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
     // Test sampling with positive temperature, no mask, and xarray of shape {1, 1, 32, 64}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 64};
-    xt::xarray<float> a = xt::random::rand<float>(shape);
+    xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 42U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
     float temperature = 1.0F;
     auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42);
@@ -284,7 +282,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
     }
     // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
-    xt::xarray<float> a = xt::random::rand<float>(shape);
+    xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 84U);
     // Create a mask: mask out the last column (set to large negative value)
     xt::xarray<float> mask = xt::zeros<float>(shape);
     for (size_t i = 0; i < 32; ++i) {

@@ -482,7 +482,7 @@ public:
     static size_t get_max_packet_payload_size_for_arch(tt::ARCH arch);
 
     FabricEriscDatamoverBuilder(
-        const CoreCoord& my_eth_core_logical,
+        const tt::tt_metal::CoreCoord& my_eth_core_logical,
         size_t my_noc_x,
         size_t my_noc_y,
         const FabricNodeId& local_fabric_node_id,
@@ -501,14 +501,17 @@ public:
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         bool has_tensix_extension = false,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
-        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc =
+            std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
+            std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
-        const CoreCoord& ethernet_core,
+        const tt::tt_metal::CoreCoord& ethernet_core,
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
@@ -516,14 +519,17 @@ public:
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
-        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc =
+            std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
+            std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
-        const CoreCoord& ethernet_core,
+        const tt::tt_metal::CoreCoord& ethernet_core,
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
@@ -531,9 +537,12 @@ public:
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
-        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt,
-        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt);
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc =
+            std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
+            std::nullopt,
+        std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
@@ -578,7 +587,7 @@ public:
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
-    CoreCoord my_eth_core_logical;
+    tt::tt_metal::CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
 
     FabricEriscDatamoverConfig config;
@@ -627,6 +636,7 @@ public:
     // Actual channel counts per VC for this specific router (may differ from config max)
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc_ = std::nullopt;
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc_ = std::nullopt;
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info_ = std::nullopt;
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;

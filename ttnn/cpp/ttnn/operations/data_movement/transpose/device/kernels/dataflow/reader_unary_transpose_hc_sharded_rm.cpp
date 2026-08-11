@@ -4,6 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
 #ifdef USE_SPECIAL_CASE
@@ -17,56 +22,76 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read));
     tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read * 2));
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
+
+    Noc noc;
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;
         uint32_t l1_write_offset = 0;
 
         for (uint32_t core = 0; core < num_cores_read; ++core) {
-            uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset[core];
-            uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
-            uint32_t l1_write_addr = get_write_ptr(cb_out0) + l1_write_offset;
+            uint32_t src_addr = dfb_in.get_read_ptr() + read_stick_offset[core];
+            uint32_t l1_write_addr = dfb_out.get_write_ptr() + l1_write_offset;
 
-            noc_async_read_one_packet_set_state(noc_read_addr, stick_size_bytes);
+            noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                stick_size_bytes,
+                {.noc_x = noc_coord_x[core], .noc_y = noc_coord_y[core], .addr = src_addr});
 
             for (uint32_t i = 0; i < num_sticks_per_shard_core; ++i) {
-                noc_async_read_one_packet_with_state(noc_read_addr, l1_write_addr);
-                noc_read_addr += read_stick_stride;
+                CoreLocalMem<uint32_t> dst(l1_write_addr);
+                noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    UnicastEndpoint{},
+                    dst,
+                    stick_size_bytes,
+                    {.noc_x = noc_coord_x[core], .noc_y = noc_coord_y[core], .addr = src_addr},
+                    {.offset_bytes = 0});
+                src_addr += read_stick_stride;
                 l1_write_addr += write_stick_stride;
             }
             l1_write_offset += stick_size_bytes;
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
     } else {
-        uint32_t l1_write_addr = get_write_ptr(cb_out0);
-        uint32_t l1_read_addr = get_read_ptr(cb_in0);
+        uint32_t l1_write_addr = dfb_out.get_write_ptr();
+        uint32_t l1_read_addr = dfb_in.get_read_ptr();
 
         for (uint32_t c = 0; c < num_C_blocks_per_core; ++c) {
             for (uint32_t core = 0; core < num_cores_read; ++core) {
-                uint64_t noc_read_addr =
-                    get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr + read_stick_offset[core]);
+                uint32_t src_addr = l1_read_addr + read_stick_offset[core];
 
-                noc_async_read_one_packet_set_state(noc_read_addr, stick_size_bytes);
+                noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    UnicastEndpoint{},
+                    stick_size_bytes,
+                    {.noc_x = noc_coord_x[core], .noc_y = noc_coord_y[core], .addr = src_addr});
 
                 for (uint32_t i = 0; i < num_sticks_per_shard_core; ++i) {
-                    noc_async_read_one_packet_with_state(noc_read_addr, l1_write_addr);
-                    noc_read_addr += read_stick_stride;
+                    CoreLocalMem<uint32_t> dst(l1_write_addr);
+                    noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        UnicastEndpoint{},
+                        dst,
+                        stick_size_bytes,
+                        {.noc_x = noc_coord_x[core], .noc_y = noc_coord_y[core], .addr = src_addr},
+                        {.offset_bytes = 0});
+                    src_addr += read_stick_stride;
                     l1_write_addr += stick_size_bytes;
                 }
             }
 
             l1_read_addr += stick_size_bytes;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
 
 #else
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t N = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr uint32_t C = get_compile_time_arg_val(4);
@@ -91,8 +116,12 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    cb_reserve_back(cb_out0, num_sticks_per_core);
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    Noc noc;
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
+
+    dfb_out.reserve_back(num_sticks_per_core);
+    uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core; ++iter) {
@@ -117,10 +146,15 @@ void kernel_main() {
             worker_y_physical = shard_grid_y_map[shard_grid_inner_dim_id];
         }
 
-        uint32_t l1_read_addr = get_read_ptr(cb_in0) + stick_id_in_shard * stick_size_bytes;
+        uint32_t l1_read_addr = dfb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
 
-        uint64_t read_noc_addr = get_noc_addr(worker_x_physical, worker_y_physical, l1_read_addr);
-        noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
+        CoreLocalMem<uint32_t> dst(l1_write_addr);
+        noc.async_read(
+            UnicastEndpoint{},
+            dst,
+            stick_size_bytes,
+            {.noc_x = worker_x_physical, .noc_y = worker_y_physical, .addr = l1_read_addr},
+            {.offset_bytes = 0});
         l1_write_addr += stick_size_bytes;
 
         curr_c++;
@@ -139,8 +173,8 @@ void kernel_main() {
         }
     }
 
-    noc_async_read_barrier();
-    cb_push_back(cb_out0, num_sticks_per_core);
+    noc.async_read_barrier();
+    dfb_out.push_back(num_sticks_per_core);
 
 #endif
 }

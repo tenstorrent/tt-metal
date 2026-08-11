@@ -9,6 +9,17 @@
 namespace ckernel
 {
 
+// Currently unused but kept for backwards compatibility
+enum class VectorMode : std::uint8_t
+{
+    None      = 0,
+    R         = 1,
+    C         = 2,
+    RC        = 4,
+    RC_custom = 6,
+    Invalid   = 0xFF,
+};
+
 enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
@@ -52,6 +63,14 @@ enum class BroadcastType : std::uint8_t
     SCALAR,
 };
 
+enum class Transpose : std::uint8_t
+{
+    None      = 0,
+    IntraFace = 1,
+    InterFace = 2,
+    Both      = 3,
+};
+
 enum class SfpuType : std::uint32_t
 {
     tanh,
@@ -62,14 +81,45 @@ enum class SfpuType : std::uint32_t
     rsqrt,
     relu,
     lrelu,
-    relumin,
-    relumax,
+    relu_min,
+    relu_max,
     stochround,
     typecast,
     add,
     square,
     sigmoid,
-    silu
+    silu,
+    abs,
+    clamp,
+    negative,
+    softplus,
+    sine,
+    cosine,
+    acosh,
+    asinh,
+    atanh,
+    fill,
+    swiglu,
+    where,
+    unused,
+    lt,
+    gt,
+    le,
+    ge,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    mul_int,
+    topk_local_sort,
+    topk_merge,
+    topk_rebuild,
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    greater_than_equal_zero,
 };
 
 enum class DstSync : std::uint8_t
@@ -92,6 +142,13 @@ enum class StochRndType : std::uint8_t
     Fpu  = 1,
     Pack = 2,
     All  = 3,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
 };
 
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.
@@ -149,6 +206,8 @@ private:
     ReluType mode           = ReluType::NO_RELU;
     std::uint32_t threshold = 0;
 };
+
+constexpr std::uint32_t SFPU_ITERATIONS = 8; // Number of iterations to unroll for SFPU loops
 
 } // namespace ckernel
 

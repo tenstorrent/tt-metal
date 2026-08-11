@@ -13,6 +13,12 @@
 
 namespace ttnn::operations::normalization {
 
+ttnn::CoreGrid core_grid_from_shard_bounding_box(const tt::tt_metal::CoreRange& bbox) {
+    return ttnn::CoreGrid(
+        static_cast<uint32_t>(bbox.end_coord.x - bbox.start_coord.x + 1),
+        static_cast<uint32_t>(bbox.end_coord.y - bbox.start_coord.y + 1));
+}
+
 namespace {
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
@@ -147,9 +153,13 @@ uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_
 }
 
 std::optional<ttnn::CoreGrid> find_expected_dram_grid(
-    uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw) {
+    uint32_t max_x, uint32_t max_y, uint32_t num_channels, int num_groups, uint32_t input_nhw, uint32_t num_batches) {
+    TT_FATAL(num_batches >= 1, "find_expected_dram_grid: num_batches must be >= 1, got {}", num_batches);
     uint32_t Ht = static_cast<uint32_t>(std::ceil(static_cast<double>(input_nhw) / ttnn::types::TILE_SIZE));
 
+    // Prefer gx values where all x-columns are fully utilized (gx % nvc == 0),
+    // falling back to grids with unused columns only if no fully-utilized grid exists.
+    std::optional<ttnn::CoreGrid> fallback;
     for (uint32_t gx = max_x; gx >= 1; --gx) {
         uint32_t nvc = compute_num_virtual_cols(gx, num_groups, num_channels);
         if (nvc == 0) {
@@ -162,12 +172,24 @@ std::optional<ttnn::CoreGrid> find_expected_dram_grid(
         uint32_t max_gy = std::min<uint32_t>(Ht / rows_per_y, max_y);
         for (uint32_t gy = max_gy; gy >= 1; --gy) {
             uint32_t num_virtual_rows = rows_per_y * gy;
-            if (Ht % num_virtual_rows == 0) {
+            if (Ht % num_virtual_rows != 0) {
+                continue;
+            }
+            if (num_virtual_rows >= num_batches && num_virtual_rows % num_batches != 0) {
+                continue;
+            }
+            if (gx % nvc == 0) {
                 return ttnn::CoreGrid(gx, gy);
             }
+            if (!fallback.has_value()) {
+                fallback = ttnn::CoreGrid(gx, gy);
+            }
+            // nvc depends only on gx, so gx % nvc is fixed for this gx; smaller gy can only produce
+            // additional partial-utilization candidates we'd discard. Move on to the next gx.
+            break;
         }
     }
-    return std::nullopt;
+    return fallback;
 }
 
 }  // namespace ttnn::operations::normalization

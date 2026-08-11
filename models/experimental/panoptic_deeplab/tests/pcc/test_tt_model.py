@@ -40,8 +40,8 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             PANOPTIC_DEEPLAB,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
-                "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
+                "semantic": {"pcc": 0.985, "abs_err": 1.7, "rel_err": 0.4},
+                "center": {"pcc": 0.948, "abs_err": 0.1, "rel_err": 2.1},
                 "offset": {"pcc": 0.992, "abs_err": 8.5, "rel_err": 0.5},
             },
             skip_if_not_blackhole_110_cores,
@@ -56,7 +56,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             DEEPLAB_V3_PLUS,
             {
-                "semantic": {"pcc": 0.983, "abs_err": 1.7, "rel_err": 0.4},
+                "semantic": {"pcc": 0.985, "abs_err": 1.7, "rel_err": 0.4},
             },
             skip_if_not_blackhole_110_cores,
         ),

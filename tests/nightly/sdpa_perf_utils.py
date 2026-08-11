@@ -6,7 +6,7 @@
 Shared utilities for SDPA performance testing across architectures.
 
 Used by:
-- tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py
+- tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
 - tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py
 - tests/nightly/t3000/ccl/test_ring_joint_attention.py
 """
@@ -46,8 +46,11 @@ def _detect_devices_without_opening():
     This is required for performance tests that use run_device_profiler().
     """
     import glob
+    import os
 
-    device_files = glob.glob("/dev/tenstorrent/*")
+    # Device nodes are named numerically (/dev/tenstorrent/0, .../1, ...). Filter to those
+    # so sibling entries like the `by-id/` directory are not miscounted as devices.
+    device_files = [p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()]
     return len(device_files)
 
 
@@ -65,6 +68,7 @@ class MeshConfig:
     GALAXY_SP_SIZE: ClassVar[int] = 8
 
     # Non-Galaxy hardware constants
+    # 11x10 full grid -> 10x10 (100 cores) for SDPA after reserving the last column for CCL.
     NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
 
     # Instance fields (set by detect())

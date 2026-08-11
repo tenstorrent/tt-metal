@@ -9,8 +9,14 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     // Compile-time args
     constexpr uint32_t tile_size = get_named_compile_time_arg_val("tile_size_bf16");
     constexpr uint32_t n_tiles_total = get_named_compile_time_arg_val("n_tiles");
@@ -44,12 +50,16 @@ void kernel_main() {
     const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_weight = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_bias = tt::CBIndex::c_4;
+    constexpr auto cb_weight_id = tt::CBIndex::c_0;
+    constexpr auto cb_input_id = tt::CBIndex::c_1;
+    constexpr auto cb_bias_id = tt::CBIndex::c_4;
 
-    const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr, tile_size);
-    const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr, tile_size);
+    CircularBuffer cb_weight(cb_weight_id);
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_bias(cb_bias_id);
+
+    const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr);
+    const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr);
 
     // Push tiles in blocks so compute can start matmul before all tiles arrive.
     constexpr uint32_t BLOCK_SIZE = 2;
@@ -61,31 +71,37 @@ void kernel_main() {
             block = BLOCK_SIZE;
         }
 
-        cb_reserve_back(cb_input, block);
-        cb_reserve_back(cb_weight, block);
-        uint32_t inp_wr = get_write_ptr(cb_input);
-        uint32_t wt_wr = get_write_ptr(cb_weight);
+        cb_input.reserve_back(block);
+        cb_weight.reserve_back(block);
+        uint32_t inp_wr = cb_input.get_write_ptr();
+        uint32_t wt_wr = cb_weight.get_write_ptr();
 
         for (uint32_t k = 0; k < block; k++) {
             uint32_t kg = k_tile_offset + tiles_done + k;
-            noc_async_read_tile(kg, input_addrgen, inp_wr + k * tile_size);
-            noc_async_read_tile(kg * n_tiles_total + n_tile_id, weight_addrgen, wt_wr + k * tile_size);
+            noc.async_read(
+                input_addrgen, CoreLocalMem<uint32_t>(inp_wr + k * tile_size), tile_size, {.page_id = kg}, {});
+            noc.async_read(
+                weight_addrgen,
+                CoreLocalMem<uint32_t>(wt_wr + k * tile_size),
+                tile_size,
+                {.page_id = kg * n_tiles_total + n_tile_id},
+                {});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_input, block);
-        cb_push_back(cb_weight, block);
+        noc.async_read_barrier();
+        cb_input.push_back(block);
+        cb_weight.push_back(block);
 
         tiles_done += block;
     }
 
     // Read bias (worker only, 1 tile)
     if (is_worker) {
-        const auto bias_addrgen = TensorAccessor(bias_accessor_args, bias_addr, tile_size);
+        const auto bias_addrgen = TensorAccessor(bias_accessor_args, bias_addr);
 
-        cb_reserve_back(cb_bias, 1);
-        uint32_t bias_write_ptr = get_write_ptr(cb_bias);
-        noc_async_read_tile(n_tile_id, bias_addrgen, bias_write_ptr);
-        noc_async_read_barrier();
-        cb_push_back(cb_bias, 1);
+        cb_bias.reserve_back(1);
+        uint32_t bias_write_ptr = cb_bias.get_write_ptr();
+        noc.async_read(bias_addrgen, CoreLocalMem<uint32_t>(bias_write_ptr), tile_size, {.page_id = n_tile_id}, {});
+        noc.async_read_barrier();
+        cb_bias.push_back(1);
     }
 }

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     ArgFetcher arg_fetcher;
@@ -13,16 +16,18 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_out(cb_id_out);
+    const auto out_tile_bytes = get_tile_size(cb_id_out);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
-        cb_wait_front(cb_id_out, onetile);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, s, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, onetile);
+        dfb_out.wait_front(onetile);
+        noc.async_write(dfb_out, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        dfb_out.pop_front(onetile);
     }
 }

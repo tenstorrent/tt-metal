@@ -2,58 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
+#include "api/kernel_thread_globals.h"
 
 void kernel_main() {
-    const uint32_t src_addr_base = get_compile_time_arg_val(0);
-    const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
-    constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
-    // BLOCKED consumer does block reads (TC0 fully exhausted before TC1, etc.), so the DFB
-    // uses a contiguous layout per producer. Producer i must write pages [i*N .. i*N+(N-1)]
-    // so that each consumer TC sees a contiguous, in-order slice.
-    // STRIDED consumer reads in round-robin (TC0, TC1, ..., TC0, ...), so the DFB uses an
-    // interleaved layout and producer i writes pages [i, i+P, i+2P, ...].
-    constexpr uint32_t blocked_consumer = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
+    constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
+    constexpr uint32_t num_producers = get_arg(args::num_producers);
 
-    uint32_t producer_mask = get_arg_val<uint32_t>(0);
-    // Base page offset for this core's slice of the global buffer.
-    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
-    const uint32_t chunk_offset = get_arg_val<uint32_t>(1);
-    const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
+    const uint32_t chunk_offset = get_arg(args::chunk_offset);
+    const uint32_t entries_per_core = get_arg(args::entries_per_core);
+    const uint32_t producer_idx = get_my_thread_id();
 
-    experimental::DataflowBuffer dfb(0);
-    experimental::Noc noc;
-
-    // TODO: Replace with get_thread_idx() kernel API when available
-#ifdef ARCH_QUASAR
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
-#else
-    uint32_t producer_idx = 0;
-#endif
-
-    // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
-    // ENDL(); DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);
+    DataflowBuffer dfb(dfb::out);
+    Noc noc;
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
-
-    DPRINT << "HERE" << ENDL();
-    DEVICE_PRINT("HERE\n");
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        const uint32_t page_id = blocked_consumer ? chunk_offset + producer_idx * num_entries_per_producer + tile_id
-                                                  : chunk_offset + tile_id * num_producers + producer_idx;
-        DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
-        DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
+        // Strided access: producer i owns pages i, i+P, i+2P, ...
+        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+        // Skip if this producer's slice overshoots the actual buffer size (happens when
+        // entries_per_core is not a multiple of num_producers).
+        if (page_id >= chunk_offset + entries_per_core) {
+            break;
+        }
+        // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
+            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {
             dfb.reserve_back(1);
@@ -62,9 +44,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    DPRINT << "PFW" << ENDL();
-    DEVICE_PRINT("PFW\n");
+    // DPRINT("PFW\n");
     dfb.finish();
-    DPRINT << "PFD" << ENDL();
-    DEVICE_PRINT("PFD\n");
+    // DPRINT("PFD\n");
 }

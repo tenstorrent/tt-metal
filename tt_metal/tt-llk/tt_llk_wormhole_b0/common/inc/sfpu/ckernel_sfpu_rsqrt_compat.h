@@ -22,11 +22,11 @@ sfpi_inline sfpi::vFloat _sqrt_compat_(sfpi::vFloat val)
 
         // sqrt initial approximation
         //  adjust bias
-        sfpi::vUInt val_s = magic + sfpi::reinterpret<sfpi::vUInt>(val);
+        sfpi::vUInt val_s = magic + sfpi::as<sfpi::vUInt>(val);
 
         // approximation of square root
         val_s >>= 1;
-        result = sfpi::reinterpret<sfpi::vFloat>(val_s);
+        result = sfpi::as<sfpi::vFloat>(val_s);
     }
     else
     {
@@ -36,7 +36,7 @@ sfpi_inline sfpi::vFloat _sqrt_compat_(sfpi::vFloat val)
         v_if (val != 0.0f)
         {
             sfpi::vUInt magic   = 0x5f37 << 16;
-            sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
+            sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
 
             // Reciproot iterations
             for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
@@ -110,14 +110,11 @@ inline void _calculate_rsqrt_compat_(const int iterations)
             out = -out;
         }
         v_endif;
-        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
+        if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            sfpi::dst_reg[0] = out;
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
-        }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
     }
 }
@@ -146,14 +143,11 @@ inline void _calculate_reciprocal_compat_(const int iterations)
             out = -out;
         }
         v_endif;
-        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
+        if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            sfpi::dst_reg[0] = out;
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
-        }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
     }
 }

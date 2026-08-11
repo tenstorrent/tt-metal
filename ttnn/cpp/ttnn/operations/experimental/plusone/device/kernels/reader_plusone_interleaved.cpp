@@ -5,8 +5,14 @@
 #include <stdint.h>
 #include <limits.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t src_addr = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
@@ -17,16 +23,18 @@ void kernel_main() {
     constexpr bool skip_negative_entries = get_compile_time_arg_val(5);
 
     constexpr auto s0_args = TensorAccessorArgs<6>();
-    const auto s0 = TensorAccessor(s0_args, src_addr, stick_size);
+    const auto s0 = TensorAccessor(s0_args, src_addr);
+
+    CircularBuffer cb_in0(cb_id_in0);
 
     // Use cb as L1 scratch memory
-    uint32_t cb_addr = get_write_ptr(cb_id_in0);
+    uint32_t cb_addr = cb_in0.get_write_ptr();
     volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
 
     for (uint32_t h = 0; h < H; h++) {
         if (src0_is_dram) {
-            noc_async_read_page(h, s0, cb_addr);
-            noc_async_read_barrier();
+            noc.async_read(s0, CoreLocalMem<uint32_t>(cb_addr), stick_size, {.page_id = h}, {});
+            noc.async_read_barrier();
         }
         for (uint32_t i = 0; i < W; i++) {
             int32_t val = stick[i];
@@ -41,9 +49,8 @@ void kernel_main() {
             }
         }
         if (src0_is_dram) {
-            uint64_t dst_noc_addr = s0.get_noc_addr(h);
-            noc_async_write(cb_addr, dst_noc_addr, stick_size);
-            noc_async_write_barrier();
+            noc.async_write(CoreLocalMem<uint32_t>(cb_addr), s0, stick_size, {}, {.page_id = h});
+            noc.async_write_barrier();
         }
     }
 }

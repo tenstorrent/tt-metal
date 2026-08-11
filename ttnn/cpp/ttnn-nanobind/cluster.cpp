@@ -52,6 +52,32 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
         )doc");
+
+    mod.def(
+        "get_chip_unique_id_from_fabric_node_id",
+        &ttnn::cluster::get_chip_unique_id_from_fabric_node_id,
+        nb::arg("mesh_id"),
+        nb::arg("chip_id"),
+        R"doc(
+            Resolve a FabricNodeId (mesh_id, chip_id) to the chip's hardware-stable 64-bit ASIC unique id.
+
+            This is the chip's physical, host-global-unique identity (the same value fabric sockets
+            route by and the migration worker keys per-chip state on). It is NOT the process-local
+            logical device id (ttnn.MeshDevice.get_device_id), which collides across the meshes on a host.
+
+            Args:
+                mesh_id (int): The fabric mesh id of the node.
+                chip_id (int): The fabric chip id of the node within the mesh.
+
+            Returns:
+                int: The chip's 64-bit ASIC unique id.
+
+            Example:
+                >>> import ttnn
+                >>> fnid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
+                >>> unique_id = ttnn.cluster.get_chip_unique_id_from_fabric_node_id(
+                ...     int(fnid.mesh_id), int(fnid.chip_id))
+        )doc");
 }
 
 }  // namespace
@@ -74,6 +100,7 @@ void py_cluster_module_types(nb::module_& mod) {
         .value("SIMULATOR_BLACKHOLE", tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "Simulator Blackhole")
         .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
         .value("P300", tt::tt_metal::ClusterType::P300, "Production P300")
+        .value("SIMULATOR_QUASAR", tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "Simulator Quasar")
         .value("BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio")
         .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards")
         .value("CUSTOM", tt::tt_metal::ClusterType::CUSTOM, "Custom cluster");

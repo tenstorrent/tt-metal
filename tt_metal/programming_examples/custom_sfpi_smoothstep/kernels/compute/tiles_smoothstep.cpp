@@ -9,36 +9,8 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_api.h"
 
-// The SFPU itself only available on the MATH core. The TRISC_MATH macro
-// is defined when the code is being compiled for the MATH core.
 #ifdef TRISC_MATH
-
-/**
- * SFPU Smoothstep Tile Face
- *
- * Implements the smoothstep function for a single tile face in the SFPU (Special Function Processing Unit).
- * The smoothstep function is defined as:
- *   result = t * t * (3 - 2 * t), where t = clamp((x - edge0) / (edge1 - edge0), 0, 1)
- *
- * - Operates on 32x32 tiles, one face at a time (8 SIMD ops per face)
- * - Each face contains 32 SIMD lanes
- * - edge0 and edge1 are compile-time constants
- * - Input and output are in Dst registers
- *
- * This function only processes ONE FACE of a tile. The wrapper will call it for each face.
- */
-inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
-    constexpr size_t vectors_per_face = 8;
-    for (size_t i = 0; i < vectors_per_face; i++) {
-        vFloat x = dst_reg[i];
-        vFloat t = (x - edge0) * inv_delta;
-        v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
-        v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
-        v_endif;
-        vFloat result = t * t * (3.0f - 2.0f * t);
-        dst_reg[i] = result;
-    }
-}
+#include "experimental/llk_sfpu/ckernel_sfpu_smoothstep.h"
 #endif
 
 /**
@@ -56,8 +28,8 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  *   - Results written to specified Dst register
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
-        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
+    MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
 void kernel_main() {

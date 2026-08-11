@@ -16,10 +16,9 @@ void kernel_main() {
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr uint32_t onetile = 1;  // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
+    const auto c = TensorAccessor(c_args, dst_addr);
 
     // Loop through the tile indices and write each tile to DRAM in order.
     uint32_t end_id = start_id + num_tiles;
@@ -28,7 +27,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out, onetile);
         // Write the output tile to DRAM.
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, c, l1_read_addr);
+        noc_async_write_page(i, c, l1_read_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to

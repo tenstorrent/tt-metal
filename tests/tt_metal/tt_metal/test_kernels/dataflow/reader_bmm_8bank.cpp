@@ -4,52 +4,40 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#ifdef ARCH_QUASAR
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/kernel_thread_globals.h"
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#endif
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uintptr_t src0_addr = get_arg_val<uint32_t>(0);
-    uintptr_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t batch = get_arg_val<uint32_t>(7);
-    uint32_t bcast_B = get_arg_val<uint32_t>(8);
-    uint32_t reader_id = 0;
-    uint32_t num_readers = 1;
-    uint32_t batch_start = 0;
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);
+    uint32_t KtNt = get_arg(args::KtNt);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t bcast_B = get_arg(args::do_bcast);
+    uint32_t batch_start = get_arg(args::batch_start);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    uint32_t reader_id = get_my_thread_id();
+    uint32_t num_readers = get_num_threads();
 
     constexpr uint32_t onetile = 1;
-#ifdef ARCH_QUASAR
-    reader_id = get_my_thread_id();
-    num_readers = get_num_threads();
-    batch_start = get_arg_val<uint32_t>(9);
-    experimental::Noc noc;
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
-    const uint32_t src0_tile_bytes = dfb0.get_entry_size();
-    const uint32_t src1_tile_bytes = dfb1.get_entry_size();
-#else
-    const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+
+    Noc noc;
+    DataflowBuffer dfb0(dfb::src0);
+    DataflowBuffer dfb1(dfb::src1);
+#ifndef ARCH_QUASAR
+    const uint32_t entry_size0 = dfb0.get_entry_size();
+    const uint32_t entry_size1 = dfb1.get_entry_size();
 #endif
-    constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+
+    const auto s0 = TensorAccessor(tensor::src0);
+    const auto s1 = TensorAccessor(tensor::src1);
 
     uint32_t itileA_batch = batch_start * MtKt;
     uint32_t itileB_batch = batch_start * KtNt;
-
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
-
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;
@@ -58,39 +46,28 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < Nt; nt++) { // col of in1
                 for (uint32_t kt = 0; kt < Kt; kt++) { // col of in0, row of in1
                     // Read A's tile at (mt, kt)
-                    {
+                    if (mt % num_readers == reader_id) {
 #ifdef ARCH_QUASAR
-                        if (mt % num_readers == reader_id) {
-                            dfb0.reserve_back(onetile);
-                            uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
-                            noc_async_read_tile(itileA, s0, l1_write_addr_in0);
-                            noc.async_read_barrier();
-                            dfb0.push_back(onetile);
-                        }
+                        // Quasar: implicit-sync read. The DFB credit advances via the per-trid
+                        // completion ISR; no reserve_back / barrier / push_back required.
+                        noc.async_read<NocOptions::TXN_ID>(s0, dfb0, {.page_id = itileA}, {});
 #else
-                        cb_reserve_back(cb_id_in0, onetile);
-                        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                        noc_async_read_tile(itileA, s0, l1_write_addr_in0);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_in0, onetile);
+                        dfb0.reserve_back(onetile);
+                        noc.async_read(s0, dfb0, entry_size0, {.page_id = itileA}, {});
+                        noc.async_read_barrier();
+                        dfb0.push_back(onetile);
 #endif
                     }
 
-                    {  // Read B's tile at (kt, nt)
+                    // Read B's tile at (kt, nt)
+                    if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
 #ifdef ARCH_QUASAR
-                        if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
-                            dfb1.reserve_back(onetile);
-                            uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
-                            noc_async_read_tile(itileB, s1, l1_write_addr_in1);
-                            noc.async_read_barrier();
-                            dfb1.push_back(onetile);
-                        }
+                        noc.async_read<NocOptions::TXN_ID>(s1, dfb1, {.page_id = itileB}, {});
 #else
-                        cb_reserve_back(cb_id_in1, onetile);
-                        uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                        noc_async_read_tile(itileB, s1, l1_write_addr_in1);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_in1, onetile);
+                        dfb1.reserve_back(onetile);
+                        noc.async_read(s1, dfb1, entry_size1, {.page_id = itileB}, {});
+                        noc.async_read_barrier();
+                        dfb1.push_back(onetile);
 #endif
                     }
 
@@ -109,8 +86,6 @@ void kernel_main() {
         }
     }  // batch loop
 
-#ifdef ARCH_QUASAR
     dfb0.finish();
     dfb1.finish();
-#endif
 }

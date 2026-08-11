@@ -203,6 +203,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
     std::vector<CoreRange> output_cores;
+    output_cores.reserve(sub_device_cores.ranges().size());
     for (const auto& cr : sub_device_cores.ranges()) {
         const auto intersection = output_tensor_cores.intersection(cr);
         if (!intersection.empty()) {
@@ -267,6 +268,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     // Create output tensor splits
     // TODO: Currently does not support output shards being split across multiple links
     std::vector<CoreRangeSet> output_corerangeset_per_link;
+    output_corerangeset_per_link.reserve(num_links);
     std::vector<uint32_t> num_output_cores_in_link(num_links, 0);
     uint32_t output_cores_per_link = tt::div_up(output_tensor_cores.num_cores(), num_links);
     uint32_t num_assigned_cores = 0;
@@ -282,13 +284,14 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     }
 
     // Create output tensor page splits
-    std::vector<uint32_t> output_tensor_pages_in_link(num_links, 0);
+    std::vector<uint32_t> output_tensor_pages_in_link;
+    output_tensor_pages_in_link.reserve(num_links);
     uint32_t num_assigned_pages = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t num_output_pages_per_link = output_tensor_shard_num_pages * num_output_cores_in_link[link];
         uint32_t num_pages_this_link =
             std::min(num_output_pages_per_link, output_tensor_num_pages - num_assigned_pages);
-        output_tensor_pages_in_link[link] = num_pages_this_link;
+        output_tensor_pages_in_link.push_back(num_pages_this_link);
         num_assigned_pages += num_pages_this_link;
     }
 
@@ -311,7 +314,8 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
             to the end_core_idx of the current link. Ie, 2 links read from the same core
     */
     std::vector<std::pair<uint32_t, uint32_t>> input_cores_idx_per_link(num_links, {0, 0});
-    std::vector<uint32_t> input_tensor_tile_offset_per_link(num_links, 0);
+    std::vector<uint32_t> input_tensor_tile_offset_per_link;
+    input_tensor_tile_offset_per_link.reserve(num_links);
     uint32_t start_core_idx = 0;
     uint32_t num_pages_overflow = 0;
     for (uint32_t link = 0; link < num_links; link++) {
@@ -320,7 +324,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         // Get offset based on previous overflow
         uint32_t input_tensor_tile_offset =
             (input_tensor_shard_num_pages - num_pages_overflow) % input_tensor_shard_num_pages;
-        input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
+        input_tensor_tile_offset_per_link.push_back(input_tensor_tile_offset);
 
         uint32_t end_core_idx = std::min(
             start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
@@ -345,9 +349,10 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     }
 
     // Create reduction semaphores for each link
-    std::vector<uint32_t> reduction_semaphore_ids(num_links, 0);
+    std::vector<uint32_t> reduction_semaphore_ids;
+    reduction_semaphore_ids.reserve(num_links);
     for (uint32_t link = 0; link < num_links; link++) {
-        reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        reduction_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, all_cores, 0));
     }
 
     /* reduction cb */
@@ -396,6 +401,11 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
 
     // Create reduction dataflow kernel
     auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
+    if (operation_attributes.fp32_dest_acc) {
+        // fp32 dest accumulation -> ring sum independent of ETH arrival order.
+        reduction_kernel_config.fp32_dest_acc_en = true;
+        reduction_kernel_config.dst_full_sync_en = true;
+    }
     reduction_kernel_config.compile_args = {
         reduction_cb_index,  // reduction_cb_index
         out_cb_index,        // out_cb_index
@@ -466,10 +476,16 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
         uint32_t output_first_core_tile_start_offset = 0;
 
+        const uint32_t num_input_cores_in_link =
+            input_cores_idx_per_link[link].second - input_cores_idx_per_link[link].first;
         std::vector<uint32_t> input_tensor_cores_x;
+        input_tensor_cores_x.reserve(num_input_cores_in_link);
         std::vector<uint32_t> input_tensor_cores_y;
+        input_tensor_cores_y.reserve(num_input_cores_in_link);
         std::vector<uint32_t> output_tensor_cores_x;
+        output_tensor_cores_x.reserve(num_output_cores_in_link[link]);
         std::vector<uint32_t> output_tensor_cores_y;
+        output_tensor_cores_y.reserve(num_output_cores_in_link[link]);
         for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
             auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
@@ -500,10 +516,15 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
+        const size_t num_mcast_ranges = output_corerangeset_per_link[link].ranges().size();
         std::vector<uint32_t> mcast_start_x;
+        mcast_start_x.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_start_y;
+        mcast_start_y.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_end_x;
+        mcast_end_x.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_end_y;
+        mcast_end_y.reserve(num_mcast_ranges);
 
         uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {

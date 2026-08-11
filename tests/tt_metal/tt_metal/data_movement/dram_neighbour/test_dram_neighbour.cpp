@@ -119,7 +119,8 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.pages_per_bank,
         (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.num_banks};
 
     // Worker cores
     vector<CoreCoord> worker_cores;
@@ -488,6 +489,62 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourSingleRowSweep) 
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
 
     std::map<uint32_t, uint32_t> core_dram_map = add_single_row_cores_dram_mapping(mesh_device);
+
+    EXPECT_TRUE(run_sweep_test(
+        mesh_device,
+        test_id,
+        max_transactions,
+        num_banks,
+        max_num_pages,
+        page_size_bytes,
+        l1_data_format,
+        core_dram_map));
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourOneHopSweep) {
+    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto logical_grid_size = device->logical_grid_size();
+
+    uint32_t test_id = 508;
+    uint32_t num_banks = 1;
+    uint32_t max_num_pages = 32;
+    uint32_t max_transactions = 256;
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(mesh_device, num_banks);
+    CoreCoord singleCore = CoreCoord{core_dram_map.begin()->first >> 16, core_dram_map.begin()->first & 0xFFFF};
+    core_dram_map
+        [(static_cast<uint32_t>((singleCore.x + 1) % logical_grid_size.x) << 16) |
+         static_cast<uint32_t>(singleCore.y)] = core_dram_map.begin()->second;
+
+    EXPECT_TRUE(run_sweep_test(
+        mesh_device,
+        test_id,
+        max_transactions,
+        num_banks,
+        max_num_pages,
+        page_size_bytes,
+        l1_data_format,
+        core_dram_map));
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourLoopBackSweep) {
+    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto logical_grid_size = device->logical_grid_size();
+
+    uint32_t test_id = 509;
+    uint32_t num_banks = 1;
+    uint32_t max_num_pages = 32;
+    uint32_t max_transactions = 256;
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(mesh_device, num_banks);
+    CoreCoord singleCore = CoreCoord{core_dram_map.begin()->first >> 16, core_dram_map.begin()->first & 0xFFFF};
+    core_dram_map
+        [(static_cast<uint32_t>((singleCore.x == 0) ? logical_grid_size.x - 2 : singleCore.x - 1) << 16) |
+         static_cast<uint32_t>(singleCore.y)] = core_dram_map.begin()->second;
 
     EXPECT_TRUE(run_sweep_test(
         mesh_device,

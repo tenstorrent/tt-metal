@@ -82,22 +82,25 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
+                                     ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                     : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(operation_attributes.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
             }
             if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -231,6 +234,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     llama_config llama_configuration;
     std::vector<CoreRange> q_cores_vector;
+    q_cores_vector.reserve(ring_core_ranges.size());
     uint32_t range_count = 0;
     for (auto cr : ring_core_ranges) {
         q_cores_vector.push_back(cr);
@@ -395,7 +399,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
 
     std::vector<uint32_t> nlp_local_core_x;
+    nlp_local_core_x.reserve(llama_configuration.num_cores_input_tensor);
     std::vector<uint32_t> nlp_local_core_y;
+    nlp_local_core_y.reserve(llama_configuration.num_cores_input_tensor);
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
         auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
@@ -489,9 +495,13 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
         auto sem_mcast_ranges = CoreRangeSet(llama_configuration.semaphore_mcast_ranges);
         std::vector<uint32_t> mcast_start_x;
+        mcast_start_x.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_start_y;
+        mcast_start_y.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_end_x;
+        mcast_end_x.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_end_y;
+        mcast_end_y.reserve(sem_mcast_ranges.ranges().size());
 
         for (const auto& range : sem_mcast_ranges.ranges()) {
             auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
@@ -517,23 +527,17 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
+            const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
+            const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_device_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
@@ -550,7 +554,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         // the upper half of the tile and rest are in the lower half of tile.
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
+        input_cores_x.reserve(llama_configuration.num_cores_input_tensor);
         std::vector<uint32_t> input_cores_y;
+        input_cores_y.reserve(llama_configuration.num_cores_input_tensor);
         std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
         std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {

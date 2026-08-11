@@ -4,11 +4,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
 #ifndef ARCH_QUASAR
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 template <bool use_dfbs, typename SyncBuffer>
@@ -19,12 +19,12 @@ inline __attribute__((always_inline)) void pop_from_cb_and_write(
     uint32_t ublock_size_bytes,
     uint32_t bank_id,
     uint32_t& dram_buffer_dst_addr) {
-    experimental::Noc noc;
+    Noc noc;
     for (uint32_t i = 0; i < num_tiles_per_cb; i += ublock_size_tiles) {
         sync_buffer.wait_front(ublock_size_tiles);
         noc.async_write(
             sync_buffer,
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             ublock_size_bytes,
             {},
             {.bank_id = bank_id, .addr = dram_buffer_dst_addr});
@@ -53,33 +53,33 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_cbs_stride; i++) {
         uint32_t cb_id = start_cb + i * stride;
 #ifndef ARCH_QUASAR
-        experimental::CircularBuffer cb(cb_id);
+        CircularBuffer cb(cb_id);
 #endif
-        experimental::DataflowBuffer dfb(cb_id);
+        DataflowBuffer dfb(cb_id);
         uint32_t ublock_size_bytes;
         if constexpr (use_dfbs) {
             ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
-            pop_from_cb_and_write<true, experimental::DataflowBuffer>(
+            pop_from_cb_and_write<true, DataflowBuffer>(
                 dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_dst_addr);
         } else {
             ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
-            pop_from_cb_and_write<false, experimental::CircularBuffer>(
+            pop_from_cb_and_write<false, CircularBuffer>(
                 cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_dst_addr);
         }
     }
     // Process topmost CB
 #ifndef ARCH_QUASAR
-    experimental::CircularBuffer cb(topmost_cb);
+    CircularBuffer cb(topmost_cb);
 #endif
-    experimental::DataflowBuffer dfb(topmost_cb);
+    DataflowBuffer dfb(topmost_cb);
     uint32_t ublock_size_bytes;
     if constexpr (use_dfbs) {
         ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
-        pop_from_cb_and_write<true, experimental::DataflowBuffer>(
+        pop_from_cb_and_write<true, DataflowBuffer>(
             dfb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_dst_addr);
     } else {
         ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
-        pop_from_cb_and_write<false, experimental::CircularBuffer>(
+        pop_from_cb_and_write<false, CircularBuffer>(
             cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_dst_addr);
     }
 }

@@ -13,7 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -155,7 +155,8 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
         .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b};
 
     std::vector<uint32_t> dfb_ids(total_dfbs);

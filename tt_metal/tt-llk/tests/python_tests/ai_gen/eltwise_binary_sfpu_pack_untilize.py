@@ -130,8 +130,11 @@ def test_sweep_test(config):
     input_dimensions = [32, 32]
 
     # Stimuli generation
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     # If unary op is Sqrt, ensure binary result will be non-negative to avoid NaNs/​Infs

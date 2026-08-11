@@ -9,6 +9,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.ttnn_falcon7b.tt import TtFalconAttention
 from models.demos.ttnn_falcon7b.tt.common import (
     create_attention_input,
@@ -30,15 +31,28 @@ def get_model_prefix(layer_index: int = 0):
 
 @pytest.fixture(scope="module")
 def torch_model():
-    hugging_face_reference_model = transformers.FalconForCausalLM.from_pretrained(
-        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto"
-    ).eval()
+    hugging_face_reference_model = (
+        transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto")
+        .eval()
+        .to(torch.float32)
+    )
     state_dict = hugging_face_reference_model.state_dict()
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_model = transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval()
+    # transformers 5.x indexes FALCON_ATTENTION_CLASSES[config._attn_implementation] when a Falcon
+    # attention/decoder layer is built standalone from a bare config; from_pretrained on a *config*
+    # leaves _attn_implementation=None -> KeyError(None). Pin it to eager (what the TT model emulates).
+    configuration._attn_implementation = "eager"
+    torch_model = (
+        transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval().to(torch.float32)
+    )
     torch_model.load_state_dict(filtered_state_dict)
+    # transformers 5.x moved RoPE off FalconAttention onto FalconModel; re-attach a
+    # FalconRotaryEmbedding to torch_model where <5 had it, so both the reference forward and
+    # the ttnn parameter preprocessor (which derives cos/sin from this submodule) find it.
+    if not hasattr(torch_model, "rotary_emb"):
+        torch_model.rotary_emb = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(configuration)
     return torch_model
 
 
@@ -73,9 +87,19 @@ def test_falcon_attention(
         llm_mode, dtype, attention_input, batch, seq_len, configuration.num_attention_heads, kv_cache_len, device
     )
     layer_past, tt_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
-    position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
+    # transformers 5.x moved RoPE off FalconAttention onto FalconModel.rotary_emb; the bare
+    # attention/decoder layer no longer exposes .rotary_emb. Use it when present (<5), else
+    # build a FalconRotaryEmbedding from the config (5.x).
+    if hasattr(torch_model, "rotary_emb"):
+        position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
+    else:
+        from transformers.models.falcon.modeling_falcon import FalconRotaryEmbedding
 
-    pytorch_out, pytorch_layer_present = torch_model(
+        position_embeddings = FalconRotaryEmbedding(configuration)(attention_input, position_ids)
+
+    # transformers 5.x decoder/attention returns (output, attn_weights), not the KV cache; the
+    # present KV lives in the in-place-updated `layer_past` (DynamicCache) under both <5 and 5.x.
+    pytorch_out, _ = torch_model(
         attention_input,
         alibi=None,
         attention_mask=attention_mask,
@@ -130,12 +154,12 @@ def test_falcon_attention(
     passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
     assert_with_pcc(
-        pytorch_layer_present.key_cache[0].squeeze(1),
-        tt_layer_present[0].to(pytorch_layer_present.key_cache[0].dtype),
+        hf_cache_layer_kv(layer_past, 0)[0].squeeze(1),
+        tt_layer_present[0].to(hf_cache_layer_kv(layer_past, 0)[0].dtype),
         expected_pcc,
     )
     assert_with_pcc(
-        pytorch_layer_present.value_cache[0].squeeze(1),
-        tt_layer_present[1].to(pytorch_layer_present.value_cache[0].dtype),
+        hf_cache_layer_kv(layer_past, 0)[1].squeeze(1),
+        tt_layer_present[1].to(hf_cache_layer_kv(layer_past, 0)[1].dtype),
         expected_pcc,
     )

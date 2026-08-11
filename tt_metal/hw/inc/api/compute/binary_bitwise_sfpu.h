@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_bitwise.h"
+#include "ckernel_sfpu_binary_bitwise.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -34,24 +35,61 @@ namespace ckernel {
  */
 // clang-format on
 
+namespace detail {
+template <DataFormat data_format>
+constexpr InstrModLoadStore bitwise_instr_mode() {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
+    return data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+}
+}  // namespace detail
+
 template <DataFormat data_format>
 ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, sfpu::BinaryBitwiseOp::AND, data_format>(idst0, idst1, odst)));
+    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_bitwise,
+        (APPROX, sfpu::BinaryBitwiseOp::AND, INSTRUCTION_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 }
 
 template <DataFormat data_format>
 ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, sfpu::BinaryBitwiseOp::OR, data_format>(idst0, idst1, odst)));
+    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_bitwise,
+        (APPROX, sfpu::BinaryBitwiseOp::OR, INSTRUCTION_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 }
 
 template <DataFormat data_format>
 ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, sfpu::BinaryBitwiseOp::XOR, data_format>(idst0, idst1, odst)));
+    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::bitwise_instr_mode<data_format>();
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_bitwise,
+        (APPROX, sfpu::BinaryBitwiseOp::XOR, INSTRUCTION_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binary_bitwise_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bitwise_init<APPROX>())); }
+ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
 
 }  // namespace ckernel

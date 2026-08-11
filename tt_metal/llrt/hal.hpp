@@ -27,8 +27,9 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
-#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
+#include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -58,9 +59,10 @@ bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
     PROFILER = 1,
-    DRAM_BACKED_COMMAND_QUEUES = 2,
-    UNRESERVED = 3,
-    COUNT = 4
+    DEVICE_PRINT_DISPATCH = 2,
+    DRAM_BACKED_COMMAND_QUEUES = 3,
+    UNRESERVED = 4,
+    COUNT = 5
 };
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
@@ -115,7 +117,31 @@ enum class FWMailboxMsg : uint8_t {
     RX_LINK_UP,
     // Port Status
     PORT_STATUS,
+    // Postcode
+    POSTCODE,
+    // ETH link training status
+    TRAIN_STATUS,
+    // SerDes reset status
+    SERDES_RESET_STATUS,
     // Number of mailbox message types
+    COUNT,
+};
+
+// Hardware debug registers on active ethernet cores.
+// Populated only on archs that expose them (currently BH) - callers must check
+// Hal::get_supports_eth_debug_regs() before reading addresses.
+enum class EthDebugReg : uint8_t {
+    // PCS status register
+    PCS_STATUS,
+    // ERISC0 reset PC
+    ERISC0_RESET_PC,
+    // ERISC1 reset PC
+    ERISC1_RESET_PC,
+    // RISC soft reset register
+    RISC_SOFT_RESET,
+    // ETH_CTRL ERR_STAT register (link error status)
+    ERR_STAT,
+    // Number of debug register entries
     COUNT,
 };
 
@@ -129,6 +155,8 @@ enum class DispatchFeature : uint8_t {
     DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
     // Dispatch to Tensix cores utilize a kernel config buffer
     DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Quasar dispatch-engine cores utilize a kernel config buffer for kernel binaries
+    DISPATCH_KERNEL_CONFIG_BUFFER,
 };
 
 class Hal;
@@ -149,11 +177,13 @@ private:
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
+    std::vector<uint32_t> eth_debug_regs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
     tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
+    realtime_profiler_msgs::Factory realtime_profiler_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -169,7 +199,9 @@ public:
         bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
-        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
+        realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
+        std::vector<uint32_t> eth_debug_regs = {}) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -178,11 +210,13 @@ public:
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        eth_debug_regs_(std::move(eth_debug_regs)),
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory),
-        fabric_telemetry_factory_(fabric_telemetry_factory) {}
+        fabric_telemetry_factory_(fabric_telemetry_factory),
+        realtime_profiler_msgs_factory_(realtime_profiler_msgs_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -195,7 +229,19 @@ public:
     uint32_t get_processor_class_num_fw_binaries(uint32_t processor_class_idx) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
     const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory() const;
+
+    const std::vector<std::vector<HalJitBuildConfig>>& processor_classes() const { return processor_classes_; }
+    const std::vector<DeviceAddr>& mem_map_bases() const { return mem_map_bases_; }
+    const std::vector<uint32_t>& mem_map_sizes() const { return mem_map_sizes_; }
+    const std::vector<uint32_t>& eth_fw_mailbox_msgs() const { return eth_fw_mailbox_msgs_; }
 };
+
+// Placeholder core_info slot (empty processor classes) for enum indices with no HAL registration on this arch.
+HalCoreInfoType create_unregistered_programmable_core(
+    HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source);
+
+void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source);
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
@@ -229,6 +275,10 @@ inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { 
 
 inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
     return this->fabric_telemetry_factory_;
+}
+
+inline const realtime_profiler_msgs::Factory& HalCoreInfoType::get_realtime_profiler_msgs_factory() const {
+    return this->realtime_profiler_msgs_factory_;
 }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
@@ -344,6 +394,10 @@ private:
     uint32_t remapper_pair_stride_{};
     uint32_t remapper_num_pairs_{};
 
+    uint32_t eth_interrupt_mode_base_reg_{};
+    uint32_t eth_interrupt_num_vecs_{};
+    uint32_t noc_max_burst_size_bytes_{};
+
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
@@ -430,6 +484,10 @@ public:
     uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
     uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
 
+    // Base address of ETH RISC interrupt mode registers. Returns 0 if not supported on an arch
+    uint32_t get_eth_interrupt_mode_base_reg() const { return eth_interrupt_mode_base_reg_; }
+    uint32_t get_eth_interrupt_num_vecs() const { return eth_interrupt_num_vecs_; }
+
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
@@ -438,6 +496,8 @@ public:
     uint32_t get_arch_num_circular_buffers() const {
         return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
     }
+
+    uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
@@ -469,14 +529,17 @@ public:
     }
 
     bool get_supports_eth_fw_mailbox() const;
+    bool get_supports_eth_debug_regs() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
+    uint32_t get_eth_debug_reg_addr(EthDebugReg reg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     bool has_programmable_core_type(HalProgrammableCoreType programmable_core_type) const {
-        return static_cast<uint32_t>(programmable_core_type) < get_programmable_core_type_count();
+        const uint32_t index = static_cast<uint32_t>(programmable_core_type);
+        return index < get_programmable_core_type_count() && get_processor_classes_count(programmable_core_type) > 0;
     }
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
@@ -568,6 +631,13 @@ public:
         TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
         auto index = get_programmable_core_type_index(programmable_core_type);
         return this->core_info_[index].get_fabric_telemetry_factory();
+    }
+
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_realtime_profiler_msgs_factory();
     }
 
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
@@ -779,6 +849,18 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
 }
 
+inline bool Hal::get_supports_eth_debug_regs() const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return !this->core_info_[index].eth_debug_regs_.empty();
+}
+
+inline uint32_t Hal::get_eth_debug_reg_addr(EthDebugReg reg) const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].eth_debug_regs_[ttsl::as_underlying_type<EthDebugReg>(reg)];
+}
+
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
     return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
@@ -808,6 +890,8 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
         case HalProgrammableCoreType::DRAM:
             // DRAM kernels are always loaded directly to L1; no config buffer indirection.
             return false;
+        case HalProgrammableCoreType::DISPATCH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }
@@ -820,6 +904,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
         case CoreType::DRAM: return HalProgrammableCoreType::DRAM;
+        case CoreType::DISPATCH: return HalProgrammableCoreType::DISPATCH;
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }

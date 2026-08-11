@@ -15,11 +15,13 @@ import json
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.cache.types import (
+    CompressedTensorTarget,
     Fingerprint,
     FusionGroupSpec,
     RegionSpec,
     Shard2dMeshMapper,
     ShardMeshMapper,
+    SramCompressedTensorTarget,
     TensorTarget,
 )
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
@@ -28,10 +30,17 @@ from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpe
 def _canonical_mesh_mapper(mapper_config) -> dict:
     """Serialize a MeshMapperConfig variant to a dict compatible with existing fingerprint hashes."""
     if isinstance(mapper_config, ShardMeshMapper):
-        return {"strategy": "shard", "dim": mapper_config.dim, "dims": None}
-    if isinstance(mapper_config, Shard2dMeshMapper):
-        return {"strategy": "shard_2d", "dim": None, "dims": list(mapper_config.dims)}
-    return {"strategy": "replicate", "dim": None, "dims": None}
+        out = {"strategy": "shard", "dim": mapper_config.dim, "dims": None}
+    elif isinstance(mapper_config, Shard2dMeshMapper):
+        out = {"strategy": "shard_2d", "dim": None, "dims": list(mapper_config.dims)}
+    else:
+        out = {"strategy": "replicate", "dim": None, "dims": None}
+    # Omit defaults so fingerprints stay byte-identical to pre-override cache hashes.
+    if mapper_config.mesh_shape_override is not None:
+        out["mesh_shape_override"] = list(mapper_config.mesh_shape_override)
+    if any(mapper_config.mesh_offset_override):
+        out["mesh_offset_override"] = list(mapper_config.mesh_offset_override)
+    return out
 
 
 def _canonical_core_range_set(crs: ttnn.CoreRangeSet) -> list:
@@ -69,6 +78,7 @@ def _canonical_fusion_group(target: FusionGroupSpec) -> dict:
         "sharding_strategy": target.sharding_strategy.name,
         "mesh_mapper_config": _canonical_mesh_mapper(target.mesh_mapper_config),
         "transform_version": target.transform_version,
+        "per_core": target.per_core,
     }
 
 
@@ -88,6 +98,31 @@ def canonical(fingerprint: Fingerprint) -> dict:
         }
     elif isinstance(target, FusionGroupSpec):
         target_dict = _canonical_fusion_group(target)
+    elif isinstance(target, CompressedTensorTarget):
+        target_dict = {
+            "kind": "compressed_tensor",
+            "name": target.name,
+            "K": target.K,
+            "N_padded": target.N_padded,
+            "num_banks": target.num_banks,
+            "bspm_variant": target.bspm_variant,
+            "bspm_budget": target.bspm_budget,
+            "assignment_hash": target.assignment_hash,
+            "transform_version": target.transform_version,
+        }
+    elif isinstance(target, SramCompressedTensorTarget):
+        target_dict = {
+            "kind": "sram_compressed_tensor",
+            "name": target.name,
+            "tensor_shape": list(target.tensor_shape),
+            "tile_hw": target.tile_hw,
+            "memory_config": json.loads(target.memory_config.to_json()),
+            "per_core_allocation": target.per_core_allocation,
+            "mesh_mapper_config": _canonical_mesh_mapper(target.mesh_mapper_config),
+            "assigner_fingerprint": target.assigner_fingerprint,
+            "assignment_hash": target.assignment_hash,
+            "transform_version": target.transform_version,
+        }
     else:
         raise TypeError(f"Unsupported target type: {type(target)}")
     return {

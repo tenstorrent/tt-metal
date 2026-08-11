@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -24,13 +27,15 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    Noc noc;
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
+    const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
 
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i = 0;
@@ -38,19 +43,17 @@ void kernel_main() {
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
             for (uint32_t wt = 0; wt < Wt; wt++) {
-                cb_reserve_back(cb_id_in0, onetile);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(i, s0, l1_write_addr_in0);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                dfb_in0.reserve_back(onetile);
+                noc.async_read(s0, dfb_in0, tile_bytes_0, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                dfb_in0.push_back(onetile);
 
                 // for each W-tile of the first tensor we push one tile from the second arg tile list
                 // but we loop the second list around
-                cb_reserve_back(cb_id_in1, onetile);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i1, s1, l1_write_addr_in1);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, onetile);
+                dfb_in1.reserve_back(onetile);
+                noc.async_read(s1, dfb_in1, tile_bytes_1, {.page_id = i1, .offset_bytes = 0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                dfb_in1.push_back(onetile);
                 i1++;
                 i++;  // input tile iterates over NC Ht Wt
             }

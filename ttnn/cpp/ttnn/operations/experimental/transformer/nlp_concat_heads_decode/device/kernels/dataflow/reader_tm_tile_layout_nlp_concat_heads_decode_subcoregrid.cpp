@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
 
@@ -25,17 +31,21 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores));
 
+    CircularBuffer cb_q_out(cb_id_q_out);
+    UnicastEndpoint src_ep;
+
     // Q
     uint32_t cur_core_idx = 0;
     uint32_t total_input_cores = in_num_cores;
     uint32_t num_tiles_per_core = (head_size_num_tiles * batch) / total_input_cores;
 
-    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             in_tile_offset_by_head;
+    uint32_t qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
+    uint32_t qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
+    uint32_t qkv_read_addr = q_start_addr + in_tile_offset_by_head;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
     uint32_t tile_size = head_size / head_size_num_tiles;
-    const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
+    const uint32_t cb_write_ptr_base = cb_q_out.get_write_ptr();
 
     for (uint32_t q = 0; q < batch; ++q) {
         uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
@@ -43,12 +53,21 @@ void kernel_main() {
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
-                noc_async_read(qkv_read_addr, q_write_addr, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    src_ep,
+                    CoreLocalMem<uint32_t>(q_write_addr),
+                    SUBTILE_LINE_BYTES,
+                    {.noc_x = qkv_noc_x, .noc_y = qkv_noc_y, .addr = qkv_read_addr},
+                    {});
             }
             // Read second phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
-                noc_async_read(
-                    qkv_read_addr + face_hw * ELEMENT_SIZE, q_write_addr + face_hw * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                noc.async_read(
+                    src_ep,
+                    CoreLocalMem<uint32_t>(q_write_addr + face_hw * ELEMENT_SIZE),
+                    SUBTILE_LINE_BYTES,
+                    {.noc_x = qkv_noc_x, .noc_y = qkv_noc_y, .addr = qkv_read_addr + face_hw * ELEMENT_SIZE},
+                    {});
             }
 
             qkv_read_addr += tile_size;
@@ -57,13 +76,13 @@ void kernel_main() {
 
             if (num_tiles_read_cur_core == num_tiles_per_core) {
                 cur_core_idx++;
-                qkv_read_addr =
-                    get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                    in_tile_offset_by_head;
+                qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
+                qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
+                qkv_read_addr = q_start_addr + in_tile_offset_by_head;
                 num_tiles_read_cur_core = 0;
             }
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

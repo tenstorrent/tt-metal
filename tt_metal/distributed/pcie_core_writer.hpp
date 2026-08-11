@@ -19,9 +19,11 @@ namespace tt::tt_metal::distributed {
 /**
  * Lightweight UMD-only device access for cross-process socket connectors.
  *
- * Opens the UMD driver for a single chip without going through MetalContext
+ * Opens the UMD driver for the local host without going through MetalContext
  * or tt-metal's Cluster (no ethernet firmware init, no RISC reset).
- * Caches the UMD Cluster per device_id so topology discovery runs only once.
+ *
+ * A single `tt::umd::Cluster` is shared across all PCIeCoreWriters in this process to
+ * avoid the file-descriptor exhaustion of building one cluster per chip.
  */
 class PCIeCoreWriter {
 public:
@@ -35,10 +37,10 @@ public:
     std::function<void(void*, uint32_t, uint64_t)> get_pcie_writer() const;
 
 private:
-    static tt::umd::Cluster* get_or_create_cluster(uint32_t device_id);
+    static tt::umd::Cluster* get_or_create_cluster();
 
-    static std::mutex cluster_cache_mutex_;
-    static std::unordered_map<uint32_t, std::unique_ptr<tt::umd::Cluster>> cluster_cache_;
+    static std::mutex cluster_mutex_;
+    static std::unique_ptr<tt::umd::Cluster> shared_cluster_;
 
     uint32_t device_id_ = 0;
     uint32_t virtual_core_x_ = 0;

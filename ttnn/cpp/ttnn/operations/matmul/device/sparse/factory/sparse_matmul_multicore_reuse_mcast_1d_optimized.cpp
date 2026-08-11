@@ -6,10 +6,13 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
@@ -47,6 +50,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         /*transpose_b=*/false,
         /*bias_single_tile_size=*/0,
         matmul_attributes);
+    operations::matmul::normalize_program_config(
+        chosen_program_config, tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size());
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -54,7 +59,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& output_tensor = tensor_return_value.at(0);
     auto program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
@@ -83,6 +88,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
+    // 64B alignment) are padded to it in DRAM. in0/in1 are interleaved here, so the reader copies
+    // tiles at the padded stride; the CBs must hold pages at the aligned stride and the unpacker
+    // walks tiles at the same stride. No-op when already aligned. Replaces the staging-CB workaround.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
+    const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
     const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
@@ -141,7 +153,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     // Only support mcast_in0 for now
     TT_FATAL(mcast_in0, "Only mcast_in0 is supported for sparse matmul");
 
-    using tt::tt_metal::num_cores_to_corerangeset;
+    using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     uint32_t num_blocks = Kt / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -165,7 +177,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     if (batchA * batchB * num_blocks > 1) {
         in0_CB_tiles *= ttnn::operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -173,7 +185,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         in1_CB_tiles *= ttnn::operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
@@ -184,6 +196,15 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     CoreCoord start_core = {0, 0};
 
+    // The matmul region is the rectangle of size `compute_with_storage_grid_size`
+    // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
+    // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
+    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
+    CoreRangeSet matmul_core_rect(CoreRange(
+        start_core,
+        CoreCoord(
+            start_core.x + compute_with_storage_grid_size.x - 1, start_core.y + compute_with_storage_grid_size.y - 1)));
+
     uint32_t num_cores_with_work = num_blocks_total;
 
     uint32_t in0_sender_num_cores = 1;
@@ -191,13 +212,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
@@ -223,11 +244,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
     if (in0_mcast_receiver_num_cores > 1) {
-        auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
-                                       ? CoreCoord{start_core.x + 1, start_core.y}
-                                       : CoreCoord{start_core.x, start_core.y + 1};
+        // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
+        // sub-devices anchored away from (0, 0) would wrap correctly.
+        auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
+                                                                        : CoreCoord{start_core.x, start_core.y + 1};
         in0_mcast_receivers =
-            num_cores_to_corerangeset(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+            num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
     // Mcast args
@@ -301,6 +323,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in0_sender_compile_time_args);
+    // num_batch_compute (== nnz when supplied). The sender uses this to validate, on-device, that
+    // count_nonzero(sparsity) matches the loop count baked into the receiver/compute kernels, failing
+    // loudly instead of deadlocking. See https://github.com/tenstorrent/tt-metal/issues/45943.
+    in0_sender_compile_time_args.push_back((std::uint32_t)num_batch_compute);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -386,44 +412,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-
-    // Intermediate CB read
-    /*
-    Blackhole architecture alignment issue workaround for tiny tiles:
-
-    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
-    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
-    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
-
-    Example scenario:
-    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
-    - CB configured with size=2 to hold both tiles
-
-    Result:
-    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
-    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
-
-    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
-    the intermediate CB first, then copy to the destination CB. This ensures proper
-    alignment at the cost of additional memory bandwidth overhead.
-
-    Note: This workaround should only be used for this specific alignment issue case.
-    */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -442,7 +437,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -475,7 +469,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
             }});
 
     // Compute kernel compile time args
@@ -523,6 +516,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -532,8 +526,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_intermed0", tt::CBIndex::c_5},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
             }});
 
@@ -541,7 +533,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
@@ -555,7 +547,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_page_size(src1_cb_index, in1_aligned_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
 
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
@@ -635,24 +627,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         output_single_tile_size,
         out_CB_size / output_single_tile_size,
         out_CB_size);
-
-    // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
-        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
-                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
-    }
-    if (in0_needs_intermediate_cb_read) {
-        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
-        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
-            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
-                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
-                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
-    }
 
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;

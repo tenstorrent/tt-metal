@@ -24,10 +24,10 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_output_idx);
 
     constexpr auto output_args = TensorAccessorArgs<1U>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_size_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 #if USE_MOMENTUM
     constexpr auto momentum_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    const auto momentum_dram_addr_generator = TensorAccessor(momentum_dram_args, momentum_dram_addr, tile_size_bytes);
+    const auto momentum_dram_addr_generator = TensorAccessor(momentum_dram_args, momentum_dram_addr);
 #endif
 
     uint32_t end_tile = start_tile + num_tiles_to_process;

@@ -14,13 +14,13 @@
 //
 // Usage:
 //   // With default GPT-OSS config (alpha=1.702, clamp_limit=7.0):
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(gate, up, out)));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(gate, up, out)));
 //
 //   // With custom config:
 //   struct MyConfig { static constexpr float alpha = 1.0f; static constexpr float clamp_limit = 5.0f; };
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
-//   PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false, MyConfig>(gate, up, out)));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false, MyConfig>(gate, up, out)));
 //
 // This header is designed to be reusable across different models.
 // Include it from a compute kernel that runs SFPU on the PACK or MATH thread.
@@ -30,8 +30,7 @@
 
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
-#include "llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 
 namespace ckernel::sfpu {
 
@@ -55,11 +54,11 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
     } else {
         exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+    sfpi::vFloat denominator = 1.0f + exp_neg_x;
     if constexpr (is_fp32_dest_acc_en) {
-        return _sfpu_reciprocal_<2>(denominator);
+        return sfpu_reciprocal_iter<2>(denominator);
     } else {
-        return _sfpu_reciprocal_<1>(denominator);
+        return sfpu_reciprocal_iter<1>(denominator);
     }
 }
 
@@ -88,7 +87,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
         v_endif;
 
         // up = up + 1
-        up = up + sfpi::vConst1;
+        up = up + 1.0f;
 
         // sigmoid(alpha * gate)
         sfpi::vFloat alpha_gate = gate * alpha;
@@ -101,7 +100,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
 
         // Round to bf16 if not in fp32 dest accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
         }
 
         sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
@@ -109,26 +108,31 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
     }
 }
 
-template <bool APPROXIMATION_MODE>
 inline void swiglu_init() {
     // SwiGLU uses sigmoid internally, which needs reciprocal table init.
-    _init_reciprocal_<false, false>();
+    recip_init<false, false>();
 }
 
 }  // namespace ckernel::sfpu
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>(ckernel::sfpu::swiglu_init<APPROXIMATE>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
 inline void llk_math_eltwise_binary_sfpu_swiglu(
-    uint gate_tile, uint32_t up_tile, uint32_t out_tile, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_swiglu<is_fp32_dest_acc_en, 8, Config>, gate_tile, up_tile, out_tile, vector_mode);
+    uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_swiglu,
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        vector_mode);
 }
 
 }  // namespace ckernel

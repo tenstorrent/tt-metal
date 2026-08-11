@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include "cmath_common.h"  // math::reset_counters, p_setrwc
 #include "ckernel_sfpu_sigmoid.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -19,7 +21,7 @@ inline void calculate_silu() {
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
@@ -29,6 +31,7 @@ inline void calculate_silu() {
 
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must use non-approx sigmoid_init
     sigmoid_init<false>();
 }

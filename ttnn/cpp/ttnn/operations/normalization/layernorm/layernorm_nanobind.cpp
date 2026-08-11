@@ -15,8 +15,6 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
-#include "device/layernorm_op_multi_core.hpp"
-#include "device/layernorm_op_multi_core_sharded.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -191,8 +189,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
             - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
-            - If `residual_input_tensor` is provided, it must match the input's padded shape.
-            - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+            - If `residual_input_tensor` is provided, its shape must match the input's logical and padded shape.
+            - If TILE: `weight` and `bias` last dim must match input's last dim in both logical and padded shape; their padded height (second-to-last dim) must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
 
         )doc";
@@ -295,7 +293,7 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
                 tensor_args (LayerNormInputs): Input tensors.
 
             Returns:
-                ttnn.TensorSpec: The output tensor specification.
+                ttnn.tt::tt_metal::TensorSpec: The output tensor specification.
             )doc")
         .def_static(
             "select_program_factory",
@@ -382,16 +380,18 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                     Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
                 tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
                 tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set. If provided, validates that the
-                    sharded tensor's shard spec cores lie entirely within this core range set. Raises an error if any
-                    shard spec core is outside the provided range.
+                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set restricting the cores this
+                    descriptor may use. If provided, validates that every core the program touches lies within it.
+                    Because the reduction multicasts over the bounding box of the shard grid, that footprint is the
+                    whole bounding box: for a non-rectangular shard grid the holes inside the box also get kernels,
+                    circular buffers and semaphores, so they must be included too.
 
             Returns:
                 ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
 
             Raises:
-                RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
-                    entirely contained within it.
+                RuntimeError: If core_range_set is provided and the bounding box of the sharded tensor's shard grid
+                    is not entirely contained within it.
             )doc");
 }
 

@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifdef TRISC_PACK
+#include "llk_pack_common_api.h"
+#endif
 
 namespace ckernel {
 

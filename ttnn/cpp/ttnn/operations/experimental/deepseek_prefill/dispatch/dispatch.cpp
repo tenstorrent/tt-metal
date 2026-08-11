@@ -14,7 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -23,12 +22,18 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
+    const std::optional<ttnn::Tensor>& scales_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    bool use_l1_small_for_semaphores,
+    bool fp8_output,
+    bool fp8_scaled_input,
+    uint32_t num_workers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -57,7 +62,6 @@ std::array<ttnn::Tensor, 2> dispatch(
 
     return ttnn::prim::prefill_dispatch(
         input_tensor,
-        weights_tensor,
         indices_tensor,
         expert_offsets_tensor,
         expert_dispatch_table_tensor,
@@ -66,12 +70,18 @@ std::array<ttnn::Tensor, 2> dispatch(
         num_routed_experts,
         num_experts_per_tok,
         metadata_len,
-        max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size,
+        padding_config,
+        scales_tensor,
         axis,
         num_links_,
         usable_topology,
         memory_config_,
-        subdevice_core_range_set);
+        subdevice_core_range_set,
+        use_l1_small_for_semaphores,
+        fp8_output,
+        fp8_scaled_input,
+        num_workers_per_sender);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

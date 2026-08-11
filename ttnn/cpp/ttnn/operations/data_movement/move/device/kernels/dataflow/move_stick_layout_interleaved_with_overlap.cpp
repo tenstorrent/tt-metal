@@ -4,13 +4,18 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t num_pages = get_arg_val<uint32_t>(3);
-    uint32_t semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
+    uint32_t semaphore_arg = get_arg_val<uint32_t>(4);
     uint32_t controller_noc_x = get_arg_val<uint32_t>(5);
     uint32_t controller_noc_y = get_arg_val<uint32_t>(6);
     uint32_t control_value = get_arg_val<uint32_t>(7);
@@ -33,60 +38,59 @@ void kernel_main() {
     bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
     uint32_t aligned_page_size = get_arg_val<uint32_t>(25);
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    const auto src_addrgen = TensorAccessor(src_args, src_addr, page_size);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr, page_size);
+    Noc noc;
+    DataflowBuffer dfb(dfb_id);
+
+    const auto src_addrgen = TensorAccessor(src_args, src_addr);
+    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
     // control_value locally
-    volatile uint32_t* semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(semaphore_addr);
+    Semaphore<> sem(semaphore_arg);
 
     // read a ublock of tiles from src to CB
-    cb_reserve_back(cb_id, num_pages);
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
+    dfb.reserve_back(num_pages);
+    uint32_t l1_write_addr = dfb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        uint64_t src_noc_addr = src_addrgen.get_noc_addr(i);
-        noc_async_read(src_noc_addr, l1_write_addr, page_size);
-        noc_async_read_barrier();
+        CoreLocalMem<uint32_t> dst(l1_write_addr);
+        noc.async_read(src_addrgen, dst, page_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
         l1_write_addr += aligned_page_size;
     }
-    cb_push_back(cb_id, num_pages);
+    dfb.push_back(num_pages);
 
     if (is_controller) {
-        noc_semaphore_wait(semaphore_addr_ptr, control_value);
+        sem.wait(control_value);
 
         // signal to cores that write to dst can begin
-        uint64_t range0_multicast_semaphore_addr = get_noc_multicast_addr(
-            range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, semaphore_addr);
-        noc_semaphore_set_multicast(semaphore_addr, range0_multicast_semaphore_addr, range_0_size);
-        uint64_t range1_multicast_semaphore_addr = get_noc_multicast_addr(
-            range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, semaphore_addr);
-        noc_semaphore_set_multicast(semaphore_addr, range1_multicast_semaphore_addr, range_1_size);
+        sem.set_multicast<NocOptions::DEFAULT>(
+            noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
+        sem.set_multicast<NocOptions::DEFAULT>(
+            noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
         if (do_third_multicast) {
-            uint64_t range2_multicast_semaphore_addr = get_noc_multicast_addr(
-                range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, semaphore_addr);
-            noc_semaphore_set_multicast(semaphore_addr, range2_multicast_semaphore_addr, range_2_size);
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, range_2_size);
         }
     } else {
         // increment controller core semaphore
-        uint64_t controller_noc_address = get_noc_addr(controller_noc_x, controller_noc_y, semaphore_addr);
-        noc_semaphore_inc(controller_noc_address, 1);
+        sem.up(noc, controller_noc_x, controller_noc_y, 1);
         // wait for controller to signal write
-        noc_semaphore_wait(semaphore_addr_ptr, control_value);
+        sem.wait(control_value);
     }
 
-    cb_wait_front(cb_id, num_pages);
-    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    dfb.wait_front(num_pages);
+    uint32_t l1_read_addr = dfb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        uint64_t dst_noc_addr = dst_addrgen.get_noc_addr(i);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-        noc_async_write_barrier();
+        CoreLocalMem<uint32_t> src(l1_read_addr);
+        noc.async_write(src, dst_addrgen, page_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
+        noc.async_write_barrier();
         l1_read_addr += aligned_page_size;
     }
-    cb_pop_front(cb_id, num_pages);
+    dfb.pop_front(num_pages);
 }

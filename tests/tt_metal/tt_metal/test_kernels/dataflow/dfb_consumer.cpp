@@ -2,42 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
+#include "api/kernel_thread_globals.h"
 
 void kernel_main() {
-    const uint32_t dst_addr_base = get_compile_time_arg_val(0);
-    const uint32_t num_entries_per_consumer = get_compile_time_arg_val(1);
-    const uint32_t blocked_consumer = get_compile_time_arg_val(2);
-    constexpr uint32_t implicit_sync = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
+    constexpr uint32_t blocked_consumer = get_arg(args::blocked_consumer);
+    constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
+    constexpr uint32_t num_consumers = get_arg(args::num_consumers);
 
-    uint32_t consumer_mask = get_arg_val<uint32_t>(0);
-    uint32_t logical_dfb_id = get_arg_val<uint32_t>(1);
-    // Base page offset for this core's slice of the global buffer.
-    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
-    const uint32_t chunk_offset = get_arg_val<uint32_t>(2);
-    const uint32_t num_consumers = static_cast<uint32_t>(__builtin_popcount(consumer_mask));
+    const uint32_t chunk_offset = get_arg(args::chunk_offset);
+    const uint32_t entries_per_core = get_arg(args::entries_per_core);
+    const uint32_t consumer_idx = get_my_thread_id();
 
-    experimental::DataflowBuffer dfb(logical_dfb_id);
-    experimental::Noc noc;
+    DataflowBuffer dfb(dfb::in);
+    Noc noc;
 
-    // TODO: Replace with get_thread_idx() kernel API when available
-#ifdef ARCH_QUASAR
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
-#else
-    uint32_t consumer_idx = 0;
-#endif
-
-    DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
-    DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
+    // DPRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
+    const auto tensor_accessor = TensorAccessor(tensor::dst_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         uint32_t page_id = 0;
@@ -46,11 +34,15 @@ void kernel_main() {
         } else {
             page_id = chunk_offset + tile_id * num_consumers + consumer_idx;
         }
-        DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
-        DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
+        // Skip if this consumer's slice overshoots the actual buffer size (happens when
+        // entries_per_core is not a multiple of num_consumers).
+        if (page_id >= chunk_offset + entries_per_core) {
+            break;
+        }
+        // DPRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            dfb.write_out(noc, tensor_accessor, {.page_id = page_id});
+            noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
             dfb.wait_front(1);
@@ -60,9 +52,7 @@ void kernel_main() {
         }
     }
     dfb.finish();
-    DPRINT << "CBW" << ENDL();
-    DEVICE_PRINT("CBW\n");
-    noc.async_write_barrier();
-    DPRINT << "CBWD" << ENDL();
-    DEVICE_PRINT("CBWD\n");
+    // DPRINT("CBW\n");
+    dfb.write_barrier(noc);
+    // DPRINT("CBWD\n");
 }

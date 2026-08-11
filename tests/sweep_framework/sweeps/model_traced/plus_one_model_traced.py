@@ -10,10 +10,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
@@ -41,25 +43,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -90,7 +78,29 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    torch_output_tensor = torch_input_tensor_a + 1
+    # The traced `skip_negative_entries` flag changes the op's semantics: the kernel
+    # increments ONLY entries in [0, INT32_MAX) and leaves negative entries (and
+    # INT32_MAX, which would overflow) unchanged --
+    # see reader_plusone_interleaved.cpp: `if (val < INT32_MAX && val >= 0) val + 1`.
+    # The golden must model that, otherwise every negative entry is off by one.
+    #
+    # On multi-element tensors PCC HIDES the mismatch: an all-negative input is a
+    # uniform +1 offset (perfectly correlated, PCC 1.0) and a mixed-sign input still
+    # scores ~0.99999 against the 0.999 threshold. But on a SINGLE-element tensor PCC
+    # is undefined (zero variance), so comp_pcc falls back to an exact allclose and the
+    # off-by-one surfaces as PCC 0.0. That is the deterministic `(1,)` INT32 failure
+    # seen on every lane (n150/n300/t3k/p100a/p150b/p300a/galaxy) -- with seed 0 the
+    # single element is -56, so the device correctly returns -56 while an unconditional
+    # golden expects -55.
+    if op_kwargs.get("skip_negative_entries", False):
+        _INT32_MAX = 2**31 - 1
+        torch_output_tensor = torch.where(
+            (torch_input_tensor_a >= 0) & (torch_input_tensor_a < _INT32_MAX),
+            torch_input_tensor_a + 1,
+            torch_input_tensor_a,
+        )
+    else:
+        torch_output_tensor = torch_input_tensor_a + 1
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -119,9 +129,12 @@ def run(
     output_tensor = ttnn.plus_one(input_tensor_a, **op_kwargs)
     if output_memory_config and output_memory_config != input_a_memory_config:
         output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

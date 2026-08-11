@@ -40,7 +40,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, pad_or_trim_seq_len
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -336,7 +336,7 @@ def _build_lm_head_inputs(
     weight_config = get_test_weight_config(
         LMHead1D, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_config = get_model_config(LMHead1D, mode, hf_config, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, None)  # CCL not needed for linear only
     run_config = create_run_config(model_config, weight_config, model_state)
 
@@ -417,8 +417,8 @@ def _build_lm_head_inputs(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,  # Large trace region for vocab projection
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,  # Use dynamic trace-region allocation for this workload
         }
     ],
     indirect=True,
@@ -515,8 +515,8 @@ def test_ds_lm_head(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

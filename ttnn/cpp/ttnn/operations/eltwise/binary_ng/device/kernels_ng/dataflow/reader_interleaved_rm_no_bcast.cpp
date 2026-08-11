@@ -5,8 +5,10 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -44,9 +46,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
@@ -62,6 +64,8 @@ void kernel_main() {
     const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
     const uint32_t page_size_b = align(page_size_b_arg, alignment_b);
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
 
@@ -133,8 +137,12 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = get_noc_addr(row_idx_a, src) + current_chunk_offset;
-                                noc_async_read(addr_a, curr_l1_a, current_read_len_a);
+                                noc.async_read(
+                                    src,
+                                    CoreLocalMem<uint32_t>(curr_l1_a),
+                                    current_read_len_a,
+                                    {.page_id = row_idx_a, .offset_bytes = current_chunk_offset},
+                                    {});
                                 curr_l1_a += current_chunk_bytes;
                             }
                             noc.async_read_barrier();
@@ -142,8 +150,12 @@ void kernel_main() {
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
-                                const uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + current_chunk_offset;
-                                noc_async_read(addr_b, curr_l1_b, current_read_len_b);
+                                noc.async_read(
+                                    src_b,
+                                    CoreLocalMem<uint32_t>(curr_l1_b),
+                                    current_read_len_b,
+                                    {.page_id = row_idx_b, .offset_bytes = current_chunk_offset},
+                                    {});
                                 curr_l1_b += current_chunk_bytes;
                             }
                             noc.async_read_barrier();

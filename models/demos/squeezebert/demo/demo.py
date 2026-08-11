@@ -8,13 +8,14 @@ import evaluate
 import pytest
 import torch
 from loguru import logger
-from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer, pipeline
+from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 
 
 def load_inputs(input_path, batch):
@@ -48,13 +49,13 @@ def run_squeezebert_question_and_answering_inference(
     squeezebert,
     input_path,
 ):
-    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
     tokenizer = SqueezeBertTokenizer.from_pretrained(model_name)
     config = hugging_face_reference_model.config
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     tt_model_name = f"ttnn_{model_name}"
 
@@ -162,7 +163,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     squeezebert,
     n_iterations,
 ):
-    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
@@ -177,7 +178,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
         device=device,
     )
 
-    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    nlp = QuestionAnsweringPipeline(model=hugging_face_reference_model, tokenizer=tokenizer)
 
     attention_mask = True
     token_type_ids = True

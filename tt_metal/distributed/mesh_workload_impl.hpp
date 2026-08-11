@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -40,7 +42,6 @@ private:
 
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
-    void compile(MeshDevice* mesh_device);
     void load_binaries(MeshCommandQueue& mesh_cq);
     void generate_dispatch_commands(MeshCommandQueue& mesh_cq);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -48,7 +49,6 @@ private:
     std::vector<Semaphore>& semaphores();
     std::vector<uint32_t> get_program_config_sizes();
     std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
-    bool kernel_binary_always_stored_in_ringbuffer();
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
@@ -67,6 +67,13 @@ private:
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
+
+    // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed once and reused so
+    // re-enqueues skip the O(programs*coords*cores) no-mixing scan. nullopt = not yet classified.
+    // Classify-once holds because the classification depends only on core placement (fixed at build) and
+    // the claimed-core set (worker cores never become service cores, and service workloads are only
+    // re-enqueued onto still-claimed cores - which the dispatch path re-checks).
+    std::optional<bool> is_service_workload_;
 
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
@@ -87,6 +94,7 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void compile(MeshDevice* mesh_device);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

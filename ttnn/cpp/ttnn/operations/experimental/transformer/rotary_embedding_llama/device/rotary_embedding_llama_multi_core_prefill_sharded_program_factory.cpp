@@ -3,26 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
+#include "rotary_embedding_llama_metal2_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
-RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLlamaMultiCorePrefillSharded::create(
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+using namespace ttnn::experimental::prim::rope_metal2;
+
+ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSharded::create_program_artifacts(
     const RotaryEmbeddingLlamaParams& operation_attributes,
     const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
-    using namespace tt::constants;
-    using namespace tt::tt_metal;
-    using namespace tt;
-
-    const auto& input = tensor_args.input_tensor;
-    const auto& cos = tensor_args.cos_cache;
-    const auto& sin = tensor_args.sin_cache;
-    const auto& trans_mat = tensor_args.trans_mat;
-
-    Program program{};
+    ttnn::Tensor& tensor_return_value) {
+    const auto& input = tensor_args.input_tensor.mesh_tensor();
+    const auto& cos = tensor_args.cos_cache.mesh_tensor();
+    const auto& sin = tensor_args.sin_cache.mesh_tensor();
+    const auto& trans_mat = tensor_args.trans_mat.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -43,6 +49,20 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t sin_seq_len_t = sin.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t rotary_seq_len_t = std::min({seq_len_t, cos_seq_len_t, sin_seq_len_t});
+
+    if (seq_len_t != cos_seq_len_t || seq_len_t != sin_seq_len_t) {
+        log_warning(
+            tt::LogOp,
+            "rotary_embedding_llama prefill sequence tile coverage mismatch: input_Ht={}, cos_Ht={}, sin_Ht={}, "
+            "rotary_Ht={}. Tiles beyond rotary_Ht will be zero-filled in the output.",
+            seq_len_t,
+            cos_seq_len_t,
+            sin_seq_len_t,
+            rotary_seq_len_t);
+    }
 
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
     const bool freq_per_head = cos.padded_shape()[1] == n_heads;
@@ -51,7 +71,7 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
-    tt_metal::IDevice* device = input.device();
+    tt_metal::IDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -61,9 +81,6 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    bool in_sharded = input.shard_spec().has_value();
-    std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
     const uint32_t num_input_tiles = 2 * head_dim_t;
     const uint32_t num_output_tiles = num_input_tiles;
@@ -81,7 +98,6 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
     const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * n_heads;
 
     uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
-
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
     // Reload implementation is always used when cos/sin are HEIGHT_SHARDED
@@ -92,255 +108,224 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
-    // When cos/sin are sharded: fast path (seq_per_core==1) uses globally-allocated L1 view;
-    // reload path reads each row via TensorAccessor (used when seq_per_core>1 or active cores exceed shard count).
-    // We compare against active cores (not total device cores) to preserve the fast L1 path
-    // when the shard grid is smaller than the device grid but still covers all active cores.
-    const uint32_t num_active_cores_upper_bound = batch_parallel_factor * seq_parallel_factor;
+    // Borrowed cos/sin (a globally-allocated L1 view of the resident shard) is only expressible in
+    // Metal 2.0 when the shard grid covers ALL cores. A DFB has a single `borrowed_from` and its
+    // placement is derived from the union of its bound kernels' nodes, so — unlike the legacy CB —
+    // it cannot present a per-node borrowed/plain split (borrowed on the shard grid, plain on the
+    // remaining cores). When the shard is partial we therefore fall back to the reload path (read
+    // each row via TensorAccessor), which is layout-agnostic and runs on all_cores exactly as the
+    // interleaved path does. This keeps the port a faithful all_cores placement; the only observable
+    // difference from legacy is that a partial-shard config legacy would have served from the fast L1
+    // view now takes the (output-identical) reload path.
+    const bool cos_sin_shard_full = cos_sin_sharded && cos.shard_spec()->grid.num_cores() == num_cores;
     const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || num_active_cores_upper_bound > cos.shard_spec()->grid.num_cores());
+        cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full || seq_len_t > cos_seq_len_t);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
+    // Globally-allocated (borrowed) CB for trans_mat likewise requires the shard grid to cover all
+    // cores; otherwise fall back to TensorAccessor reads (the non-global-cb kernel path).
+    const bool trans_mat_use_global_cb = trans_mat_sharded && trans_mat.shard_spec()->grid.num_cores() == num_cores;
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* trans_mat_buffer = trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
+    const uint32_t num_interm_tiles = head_dim_t;
 
-    uint32_t input_cb_index = CBIndex::c_0;
-    tt_metal::CircularBufferConfig cb_input_config =
-        tt_metal::CircularBufferConfig(
-            input_cb_num_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
+    // Borrowed-memory selection. Borrow only in the full-shard fast path (above), where the borrowed
+    // DFB is placed on all_cores and every node has its own shard to back it.
+    const bool cos_sin_borrowed = cos_sin_sharded && !cos_sin_sharded_reload;
+    const bool cos_sin_accessor = !cos_sin_borrowed;  // reader reads cos/sin via TensorAccessor
+    const bool trans_mat_borrowed = trans_mat_use_global_cb;
+    const bool trans_mat_accessor = !trans_mat_borrowed;
 
     // ------------------------------------------------------------------
-    // Cos / Sin CBs — sharded path with optional reload fallback
+    // Dataflow buffers.
     // ------------------------------------------------------------------
-    uint32_t cos_cb_index = CBIndex::c_1;
-    uint32_t sin_cb_index = CBIndex::c_2;
-    std::optional<CBHandle> cb_cos_handle;
-    std::optional<CBHandle> cb_sin_handle;
+    DataflowBufferSpec input_dfb{
+        .unique_id = INPUT_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = input_cb_num_tiles,
+        .data_format_metadata = input_cb_data_format};
+    DataflowBufferSpec cos_dfb{
+        .unique_id = COS_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = cos_cb_data_format,
+        .borrowed_from = cos_sin_borrowed ? std::optional<TensorParamName>{COS_PARAM} : std::nullopt};
+    DataflowBufferSpec sin_dfb{
+        .unique_id = SIN_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = sin_cb_data_format,
+        .borrowed_from = cos_sin_borrowed ? std::optional<TensorParamName>{SIN_PARAM} : std::nullopt};
+    DataflowBufferSpec trans_mat_dfb{
+        .unique_id = TRANS_MAT_DFB,
+        .entry_size = trans_mat_single_tile_size,
+        .num_entries = 1,  // We only take one tile of trans_mat
+        .data_format_metadata = trans_mat_cb_data_format,
+        .borrowed_from = trans_mat_borrowed ? std::optional<TensorParamName>{TRANS_MAT_PARAM} : std::nullopt};
+    DataflowBufferSpec rotated_interm_dfb{
+        .unique_id = ROTATED_INTERM_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = input_cb_data_format};
+    DataflowBufferSpec cos_interm_dfb{
+        .unique_id = COS_INTERM_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = cos_cb_data_format};
+    DataflowBufferSpec sin_interm_dfb{
+        .unique_id = SIN_INTERM_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = sin_cb_data_format};
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = output_cb_data_format};
+    DataflowBufferSpec zero_dfb{
+        .unique_id = ZERO_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = output_cb_data_format};
+
+    // ------------------------------------------------------------------
+    // Tensor parameters. INPUT/OUTPUT always accessor-read. COS/SIN and TRANS_MAT are borrowed_from
+    // in the L1-resident configs and accessor-read otherwise — either way each is referenced.
+    // ------------------------------------------------------------------
+    TensorParameter input_param{.unique_id = INPUT_PARAM, .spec = input.tensor_spec()};
+    TensorParameter cos_param{.unique_id = COS_PARAM, .spec = cos.tensor_spec()};
+    TensorParameter sin_param{.unique_id = SIN_PARAM, .spec = sin.tensor_spec()};
+    TensorParameter trans_mat_param{.unique_id = TRANS_MAT_PARAM, .spec = trans_mat.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
+
+    // hw_config — Style B (see the interleaved factory for the rationale).
+    const ComputeHardwareConfig compute_hw_config =
+        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+
+    // ------------------------------------------------------------------
+    // Reader kernel. cos_sin_sharded / trans_mat_use_global_cb move from CTAs to preprocessor defines
+    // so the conditional cos/sin/trans_mat TensorAccessor references parse away when unbound.
+    // ------------------------------------------------------------------
+    KernelSpec::CompilerOptions::Defines reader_defines;
+    reader_defines.insert({"RELOAD_IMPL", use_reload_impl ? "1" : "0"});
+    reader_defines.insert({"COS_SIN_SHARDED_RELOAD", cos_sin_sharded_reload ? "1" : "0"});
     if (cos_sin_sharded) {
-        if (cos_sin_sharded_reload) {
-            tt_metal::CircularBufferConfig cos_cb_cfg =
-                tt_metal::CircularBufferConfig(
-                    num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-                    .set_page_size(cos_cb_index, cos_single_tile_size);
-            tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
-
-            tt_metal::CircularBufferConfig sin_cb_cfg =
-                tt_metal::CircularBufferConfig(
-                    num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-                    .set_page_size(sin_cb_index, sin_single_tile_size);
-            tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
-        } else {
-            const CoreRangeSet& cos_sin_shard_grid = cos.shard_spec()->grid;
-            const bool partial_cos_sin = cos_sin_shard_grid.num_cores() < num_cores;
-            const auto& cos_sin_cb_cores = partial_cos_sin ? cos_sin_shard_grid : CoreRangeSet(all_cores);
-
-            auto cos_cb_cfg = tt_metal::CircularBufferConfig(
-                                  num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-                                  .set_page_size(cos_cb_index, cos_single_tile_size)
-                                  .set_globally_allocated_address(*cos_buffer);
-            cb_cos_handle = tt_metal::CreateCircularBuffer(program, cos_sin_cb_cores, cos_cb_cfg);
-
-            auto sin_cb_cfg = tt_metal::CircularBufferConfig(
-                                  num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-                                  .set_page_size(sin_cb_index, sin_single_tile_size)
-                                  .set_globally_allocated_address(*sin_buffer);
-            cb_sin_handle = tt_metal::CreateCircularBuffer(program, cos_sin_cb_cores, sin_cb_cfg);
-
-            // Cores outside the shard grid still need a CB defined (they won't run work).
-            if (partial_cos_sin) {
-                CoreRangeSet remaining_cores = CoreRangeSet(all_cores).subtract(cos_sin_shard_grid);
-                if (remaining_cores.num_cores() > 0) {
-                    tt_metal::CreateCircularBuffer(
-                        program,
-                        remaining_cores,
-                        tt_metal::CircularBufferConfig(cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-                            .set_page_size(cos_cb_index, cos_single_tile_size));
-                    tt_metal::CreateCircularBuffer(
-                        program,
-                        remaining_cores,
-                        tt_metal::CircularBufferConfig(sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-                            .set_page_size(sin_cb_index, sin_single_tile_size));
-                }
-            }
-        }
-    } else {
-        // Interleaved cos/sin (trans_mat may still be sharded).
-        tt_metal::CircularBufferConfig cb_cos_config =
-            tt_metal::CircularBufferConfig(
-                num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-                .set_page_size(cos_cb_index, cos_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
-
-        tt_metal::CircularBufferConfig cb_sin_config =
-            tt_metal::CircularBufferConfig(
-                num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-                .set_page_size(sin_cb_index, sin_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+        reader_defines.insert({"COS_SIN_SHARDED", "1"});
     }
-
-    // ------------------------------------------------------------------
-    // Trans_mat CB — sharded (global CB) or interleaved fallback
-    // ------------------------------------------------------------------
-    uint32_t trans_mat_cb_index = CBIndex::c_3;
-    // We only take one tile of trans_mat
-    uint32_t num_trans_mat_tiles = 1;
-    // Globally-allocated CB for trans_mat requires shard grid to cover all active cores.
-    // When shard count < active cores, fall back to TensorAccessor reads (the non-sharded kernel path).
-    const bool trans_mat_use_global_cb =
-        trans_mat_sharded && num_active_cores_upper_bound <= trans_mat.shard_spec()->grid.num_cores();
-    std::optional<CBHandle> cb_trans_mat_handle;
     if (trans_mat_use_global_cb) {
-        const CoreRangeSet& tm_shard_grid = trans_mat.shard_spec()->grid;
-        const bool partial_tm = tm_shard_grid.num_cores() < num_cores;
-        const auto& tm_cb_cores = partial_tm ? tm_shard_grid : CoreRangeSet(all_cores);
-
-        auto tm_cb_cfg =
-            tt_metal::CircularBufferConfig(
-                num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size)
-                .set_globally_allocated_address(*trans_mat_buffer);
-        cb_trans_mat_handle = tt_metal::CreateCircularBuffer(program, tm_cb_cores, tm_cb_cfg);
-
-        // Cores outside the shard grid still need a CB defined (they won't run work).
-        if (partial_tm) {
-            CoreRangeSet tm_remaining = CoreRangeSet(all_cores).subtract(tm_shard_grid);
-            if (tm_remaining.num_cores() > 0) {
-                tt_metal::CreateCircularBuffer(
-                    program,
-                    tm_remaining,
-                    tt_metal::CircularBufferConfig(
-                        trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-                        .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size));
-            }
-        }
-    } else {
-        tt_metal::CircularBufferConfig cb_trans_mat_config =
-            tt_metal::CircularBufferConfig(
-                num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
+        reader_defines.insert({"TRANS_MAT_USE_GLOBAL_CB", "1"});
     }
 
-    uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
-    tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
-            .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
+    Group<TensorBinding> reader_tensor_bindings{
+        TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"}};
+    if (cos_sin_accessor) {
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = COS_PARAM, .accessor_name = "cos"});
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"});
+    }
+    if (trans_mat_accessor) {
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"});
+    }
 
-    uint32_t cos_interm_cb_index = CBIndex::c_25;
-    tt_metal::CircularBufferConfig cb_cos_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = kReaderPrefillShardedSource,
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = TRANS_MAT_DFB,
+                 .accessor_name = "trans_mat",
+                 .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = reader_tensor_bindings,
+        .compile_time_args =
+            {{"n_heads", n_heads},
+             {"Ht", seq_len_t},
+             {"Wt", head_dim_t},
+             {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
+             {"cos_Ht", cos_seq_len_t},
+             {"sin_Ht", sin_seq_len_t},
+             {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = create_reader_datamovement_config(device->arch())};
 
-    uint32_t sin_interm_cb_index = CBIndex::c_26;
-    tt_metal::CircularBufferConfig cb_sin_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
+    // Writer / compute — identical to the interleaved factory (shared kernel sources).
+    const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = kWriterSource,
+        .compiler_options = {.defines = reload_define},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = create_writer_datamovement_config(device->arch())};
 
-    std::map<std::string, std::string> kernel_defines;
-    kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
-    kernel_defines["COS_SIN_SHARDED_RELOAD"] = cos_sin_sharded_reload ? "1" : "0";
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = kComputeSource,
+        .compiler_options = {.defines = reload_define},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = TRANS_MAT_DFB,
+                 .accessor_name = "trans_mat",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = ROTATED_INTERM_DFB,
+                 .accessor_name = "rotated_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = COS_INTERM_DFB,
+                 .accessor_name = "cos_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SIN_INTERM_DFB,
+                 .accessor_name = "sin_interm",
+                 .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .hw_config = compute_hw_config};
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)n_heads,
-        (std::uint32_t)seq_len_t,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)freq_per_head,
-        (std::uint32_t)trans_mat_use_global_cb,
-        (std::uint32_t)cos_sin_sharded,
-    };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)n_heads,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)seq_len_t,
-    };
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-
-    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "reader_rotary_embedding_llama_prefill_sharded.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
-
-    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-        "writer_rotary_embedding_llama_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
-
-    std::vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)head_dim_t,
-        (std::uint32_t)n_heads,
-    };
-
-    auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-        "rotary_embedding_llama.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = kernel_defines});
-
+    // ------------------------------------------------------------------
+    // Per-node runtime args (batch×seq parallelization; idle cores zero-filled exactly as legacy).
+    // Placement is all_cores (faithful to legacy): borrowed DFBs are used only on the full-shard fast
+    // path, where every core has its own shard to back the borrow, so no placement narrowing is needed.
+    // ------------------------------------------------------------------
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    /*
-        Overall loop iterations: # total cores
-    */
-
-    std::vector<uint32_t> default_reader_args = {
-        src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_writer_args = {dst_buffer->address(), 0, 0, 0, 0};
-
-    std::vector<uint32_t> default_compute_args = {0, 0, 0, 0};
-
-    std::vector<std::vector<uint32_t>> unary_reader_args = {cores.size(), default_reader_args};
-    std::vector<std::vector<uint32_t>> unary_writer_args = {cores.size(), default_writer_args};
-    std::vector<std::vector<uint32_t>> unary_compute_args = {cores.size(), default_compute_args};
-
-    uint32_t num_active_cores = 0;
+    struct CoreArgs {
+        uint32_t start_batch = 0;
+        uint32_t end_batch = 0;
+        uint32_t start_seq = 0;
+        uint32_t end_seq = 0;
+    };
+    std::vector<CoreArgs> per_core_args(cores.size());
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
@@ -355,105 +340,65 @@ RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLla
                 // on cos/sin data which will never arrive.
                 continue;
             }
-            log_debug(
-                tt::LogTest,
-                "core: {}, start_batch: {}, end_batch: {}, start_seq: {}, end_seq: {}",
-                core_idx,
-                start_batch,
-                end_batch,
-                start_seq,
-                end_seq);
-
-            // Reader runtime args
-            auto& reader_rt_args = unary_reader_args[core_idx];
-            reader_rt_args[4] = start_batch;
-            reader_rt_args[5] = end_batch;
-            reader_rt_args[6] = start_seq;
-            reader_rt_args[7] = end_seq;
-
-            // Writer runtime args
-            auto& writer_rt_args = unary_writer_args[core_idx];
-            writer_rt_args[1] = start_batch;
-            writer_rt_args[2] = end_batch;
-            writer_rt_args[3] = start_seq;
-            writer_rt_args[4] = end_seq;
-
-            // Compute runtime args
-            auto& compute_rt_args = unary_compute_args[core_idx];
-            compute_rt_args[0] = start_batch;
-            compute_rt_args[1] = end_batch;
-            compute_rt_args[2] = start_seq;
-            compute_rt_args[3] = end_seq;
-
-            num_active_cores = core_idx + 1;
+            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
-    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cores, unary_reader_args);
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
-    tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, cores, unary_compute_args);
-
-    RotaryEmbeddingLlamaMultiCorePrefillSharded::shared_variables_t shared_variables;
-    shared_variables.unary_reader_kernel_id = unary_reader_kernel_id;
-    shared_variables.unary_writer_kernel_id = unary_writer_kernel_id;
-    shared_variables.rotary_embedding_kernel_id = rotary_embedding_kernel_id;
-    shared_variables.cores = cores;
-    shared_variables.num_active_cores = num_active_cores;
-    shared_variables.cb_cos = cb_cos_handle;
-    shared_variables.cb_sin = cb_sin_handle;
-    shared_variables.cb_trans_mat = cb_trans_mat_handle;
-
-    return {std::move(program), std::move(shared_variables)};
-}
-
-void RotaryEmbeddingLlamaMultiCorePrefillSharded::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const RotaryEmbeddingLlamaParams& /*operation_attributes*/,
-    const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
-    using namespace tt::constants;
-    using namespace tt::tt_metal;
-
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* cos_buffer = tensor_args.cos_cache.buffer();
-    auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* trans_mat_buffer = tensor_args.trans_mat.buffer();
-    auto* dst_buffer = output.buffer();
-
-    auto& cached_reader_args = GetRuntimeArgs(program, shared_variables.unary_reader_kernel_id);
-    auto& cached_writer_args = GetRuntimeArgs(program, shared_variables.unary_writer_kernel_id);
-
-    const auto& cores = shared_variables.cores;
-    uint32_t num_active_cores = shared_variables.num_active_cores;
-
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
-        const CoreCoord& core = cores.at(i);
-        {
-            auto& runtime_args = cached_reader_args.at(core.x).at(core.y);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = cos_buffer->address();
-            runtime_args[2] = sin_buffer->address();
-            runtime_args[3] = trans_mat_buffer->address();
-        }
-
-        {
-            auto& runtime_args = cached_writer_args.at(core.x).at(core.y);
-            runtime_args[0] = dst_buffer->address();
-        }
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& a = per_core_args[i];
+        const NodeCoord node = cores[i];
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            node,
+            {{"batch_start", a.start_batch},
+             {"batch_end", a.end_batch},
+             {"seq_t_start", a.start_seq},
+             {"seq_t_end", a.end_seq}});
     }
 
-    if (shared_variables.cb_cos.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_cos, *cos_buffer);
-    }
-    if (shared_variables.cb_sin.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_sin, *sin_buffer);
-    }
-    if (shared_variables.cb_trans_mat.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_trans_mat, *trans_mat_buffer);
-    }
+    ProgramSpec spec{
+        .name = "rotary_embedding_llama_multi_core_prefill_sharded",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers =
+            {input_dfb,
+             cos_dfb,
+             sin_dfb,
+             trans_mat_dfb,
+             rotated_interm_dfb,
+             cos_interm_dfb,
+             sin_interm_dfb,
+             out_dfb,
+             zero_dfb},
+        .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run};
+    run_args.tensor_args = {
+        {INPUT_PARAM, TensorArgument{input}},
+        {COS_PARAM, TensorArgument{cos}},
+        {SIN_PARAM, TensorArgument{sin}},
+        {TRANS_MAT_PARAM, TensorArgument{trans_mat}},
+        {OUTPUT_PARAM, TensorArgument{output}}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim

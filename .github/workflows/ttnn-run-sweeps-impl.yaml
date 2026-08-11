@@ -35,6 +35,9 @@ on:
       measure-memory:
         type: string
         default: "false"
+      fail-on-test-failure:
+        type: string
+        default: "false"
       mesh-shape:
         type: string
         default: ""
@@ -65,7 +68,6 @@ jobs:
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TEST_GROUP_NAME: ${{ matrix.test_group_name }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -76,11 +78,18 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 60
+    # Single-source-of-truth per-job timeout: compute_sweep_matrix.py stamps
+    # matrix.timeout onto every entry from tests/pipeline_reorg/ttnn_sweep_tests.yaml
+    # (checked against .github/time_budget.yaml by verify_time_budget.py). Run types
+    # not budget-tracked in the yaml (nightly/comprehensive) are stamped with the
+    # 60-min default in matrix_runner_config.get_timeout_for, so the value is always
+    # present and consumed here directly.
+    timeout-minutes: ${{ matrix.timeout }}
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -90,6 +99,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # Sweep CI default of 5s is too aggressive for traced multi-device
+          # configs on Galaxy: linear/multiply/matmul with sharded I/O can
+          # exceed 5s during reshard + dispatch bring-up, producing false-
+          # positive op-timeouts. Raise to 30s for the whole sweep job so
+          # every op benefits without per-module env-var overrides.
+          hang-detection-timeout: 30
       - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
@@ -99,6 +114,10 @@ jobs:
           echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
           echo "│ Batch:                ${{ matrix.batch_display }}"
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
+          echo "│ Device-key Batch:     ${{ matrix.vectors_dir || 'none (un-partitioned export)' }}"
+          echo "│ Mesh Shape:           ${{ matrix.mesh_shape || 'auto-detect' }}"
+          echo "│ Dispatch Axis:        ${{ matrix.dispatch_axis || 'default' }}"
+          echo "│ Fabric:               ${{ matrix.fabric || 'n/a' }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
           echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
@@ -115,10 +134,34 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
+      - name: Clear stale kernel cache
+        # A stale/corrupt persisted kernel ELF (e.g. cq_prefetch) left in
+        # ~/.cache/tt-metal-cache from a prior build makes tt_elffile.cpp throw on
+        # load (observed: T3K all_gather FABRIC_2D configs 0256fe6b/0694284f fail
+        # "TT_THROW @ tt_elffile.cpp:405" / hang every retry, yet pass 207/207 on a
+        # runner with a fresh cache). Clear it so kernels JIT-rebuild cleanly.
+        run: |
+          rm -rf "${HOME}/.cache/tt-metal-cache" /github/home/.cache/tt-metal-cache 2>/dev/null || true
+          echo "Cleared tt-metal kernel cache"
+      - name: Split sweep vectors into device-key batches
+        run: |
+          # Materialise the batch directories this job's matrix entry refers to. The matrix
+          # planned the same partition from the same vectors (both call plan_batches), so the
+          # directory named by matrix.vectors_dir is produced here.
+          #
+          # split_vectors_by_axis.py still runs because the plain axis partitions remain
+          # referenced elsewhere; the device-key batches are what the run consumes.
+          cd /work
+          python3 tests/sweep_framework/split_vectors_by_axis.py
+          python3 tests/sweep_framework/split_vectors_by_device_key.py
+          echo "::group::Device-key batches"
+          ls tests/sweep_framework/vectors_export_by_device/ 2>/dev/null || true
+          echo "::endgroup::"
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"
+          MESH_DIMS="${{ matrix.mesh_dims }}"
 
           # Set skip-on-timeout flag
           SKIP_ON_TIMEOUT_FLAG=""
@@ -173,8 +216,51 @@ jobs:
             CMD+=(--suite-name "$SUITE_NAME")
           fi
 
-          "${CMD[@]}"
+          # Fabric-family split: restrict this job to 1D- or 2D-mesh vectors so a
+          # single process never does a live FABRIC_1D->FABRIC_2D transition.
+          if [[ -n "$MESH_DIMS" ]]; then
+            CMD+=(--mesh-dims "$MESH_DIMS")
+          fi
+          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
+            CMD+=("--fail-on-test-failure")
+          fi
+
+          # ONE device-key batch per job. The matrix (compute_sweep_matrix.py) and the
+          # splitter (split_vectors_by_device_key.py) share the same planner, so the batch
+          # named by the matrix is the directory the split step just wrote. That batch holds
+          # vectors for exactly ONE (mesh shape, dispatch axis, fabric), so the job opens one
+          # device and never switches -- no mid-job reopen, and therefore no Galaxy
+          # dispatch-wedge risk from one.
+          #
+          # MESH_DEVICE_SHAPE and TTNN_DISPATCH_AXIS are DECLARED from the matrix rather than
+          # auto-detected. Previously the shape came from hardware auto-detect and every
+          # vector in the job inherited it, so vectors traced at a different shape silently
+          # fell back to ReplicateTensorToMesh instead of their traced placement.
+          BATCH_DIR="${{ matrix.vectors_dir }}"
+          BATCH_MESH="${{ matrix.mesh_shape }}"
+          BATCH_AXIS="${{ matrix.dispatch_axis }}"
+
+          if [[ -z "$BATCH_DIR" || ! -d "$BATCH_DIR" ]]; then
+            # Module-batched matrix (SWEEP_DEVICE_KEY_BATCHING=0) or a nightly/comprehensive
+            # run: no device-key batch was planned, so run the export as a whole.
+            echo "[device-key] no batch directory for this entry — using the un-partitioned export"
+            TTNN_VECTORS_EXPORT_DIR="tests/sweep_framework/vectors_export" "${CMD[@]}"
+            exit $?
+          fi
+
+          echo "[device-key] === ${{ matrix.batch_display }} (mesh=${BATCH_MESH:-auto} axis=$BATCH_AXIS) ==="
+          # A mesh-less batch (no traced shape recorded) leaves MESH_DEVICE_SHAPE unset so the
+          # runner falls back to auto-detect, rather than exporting an empty value.
+          if [[ -n "$BATCH_MESH" ]]; then
+            export MESH_DEVICE_SHAPE="$BATCH_MESH"
+          fi
+          TTNN_DISPATCH_AXIS="$BATCH_AXIS" \
+            TTNN_VECTORS_EXPORT_DIR="$BATCH_DIR" \
+            "${CMD[@]}"
       - name: Compute artifact suffix
+        # Must run even when the sweep step fails so the upload step gets a unique
+        # BATCH_SUFFIX; without it the artifact name is incomplete and results may collide.
+        if: ${{ always() }}
         shell: bash
         run: |
           DISPLAY_LABEL="${{ matrix.batch_display }}"

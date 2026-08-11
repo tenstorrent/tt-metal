@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include "llrt/hal.hpp"
+#include <hostdevcommon/common_values.hpp>
 
 namespace tt {
 class Cluster;
@@ -29,7 +30,8 @@ public:
         const CoreType& core_type,
         bool is_galaxy_cluster,
         bool are_cqs_dram_backed,
-        uint32_t l1_alignment);
+        uint32_t l1_alignment,
+        uint32_t prefetch_q_entry_size_bytes);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -77,17 +79,13 @@ public:
     // Non Configurable Settings
     //
 
-    // Prefetch Queue entry type
-    // Same as the one in cq_prefetch.cpp
-    using prefetch_q_entry_type = uint16_t;
-
     // Prefetch Queue pointer type
     // Same as the one in cq_prefetch.cpp
     using prefetch_q_ptr_type = uint32_t;
 
-    static constexpr uint32_t MAX_NUM_HW_CQS = 2;
+    static constexpr uint32_t MAX_NUM_HW_CQS = ::MAX_NUM_HW_CQS;
 
-    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 8;
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = ::DISPATCH_MAX_MESSAGE_ENTRIES;
 
     // correctness asserted in .cpp
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = 255;
@@ -112,8 +110,6 @@ public:
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
 
-    static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
@@ -125,6 +121,8 @@ public:
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                         // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                      // 256 MB;
     static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE;  // 256 MB;
+
+    static constexpr uint32_t HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES = 2 * 1024 * 1024;  // 2 MiB
 
     // Number of entries in the fabric header ring buffer
     static constexpr uint32_t FABRIC_HEADER_RB_ENTRIES = 1;
@@ -143,6 +141,7 @@ public:
     uint32_t other_ptrs_size{};               // configured with alignment
 
     // cq_prefetch
+    uint32_t prefetch_q_entry_size_bytes_{};  // 2 for WH ETH, 4 otherwise
     uint32_t prefetch_q_entries_{0};
     uint32_t prefetch_q_size_{};
     uint32_t prefetch_max_cmd_size_{};
@@ -163,7 +162,10 @@ public:
 private:
     void init_worker_defaults(
         uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment);
+    void init_dispatch_defaults(uint32_t num_hw_cqs, bool are_cqs_dram_backed, uint32_t l1_alignment);
     void init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment);
+    uint32_t get_prefetch_q_entries(
+        CoreType core_type, uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed);
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.

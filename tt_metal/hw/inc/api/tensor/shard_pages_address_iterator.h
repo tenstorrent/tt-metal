@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
 #include "api/tensor/page.h"
 
 namespace tensor_accessor {
@@ -25,7 +24,6 @@ public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
     using PageMapping = typename Accessor::PageMapping;
 
-    using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
     using difference_type = std::ptrdiff_t;
     using reference = const Page&;
@@ -58,10 +56,11 @@ public:
         }
 
         // Calculate NOC address for the final position
+        const auto bank_shard = accessor.shard_to_bank(shard_id);
         PageMapping current_page_mapping{
-            .bank_id = shard_id % accessor.dspec().num_banks(),
+            .bank_id = bank_shard.bank_id,
             .bank_page_offset =
-                (shard_id / accessor.dspec().num_banks() * accessor.dspec().shard_volume()) + current_page_id_in_shard};
+                (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         update_current_page();
@@ -281,4 +280,112 @@ private:
     uint32_t end_page_offset_;
     uint8_t noc_;
 };
+/**
+ * Iterator over a strided subset of shards, yielding one ShardPages range per assigned shard.
+ *
+ * Each DM owns shards at indices: start_shard_id, start_shard_id + stride, ...
+ * This implements the whole-shard granularity for multi-threaded shard iteration.
+ */
+template <typename Accessor>
+class StridedShardPagesIterator {
+public:
+    using value_type = ShardPages<Accessor>;
+
+    StridedShardPagesIterator(
+        const Accessor& accessor,
+        uint32_t current_shard_id,
+        uint32_t end_shard_id,
+        uint32_t stride,
+        uint8_t noc) :
+        accessor_(accessor),
+        current_shard_id_(current_shard_id),
+        end_shard_id_(end_shard_id),
+        stride_(stride),
+        noc_(noc) {}
+
+    value_type operator*() const {
+        return ShardPages<Accessor>(accessor_, current_shard_id_, 0, accessor_.dspec().shard_volume(), noc_);
+    }
+
+    StridedShardPagesIterator& operator++() {
+        current_shard_id_ += stride_;
+        return *this;
+    }
+
+    StridedShardPagesIterator operator++(int) {
+        StridedShardPagesIterator tmp = *this;
+        ++(*this);
+        return tmp;
+    }
+
+    bool operator==(const StridedShardPagesIterator& other) const {
+        // Normalize past-end: treat any id >= end_shard_id as "at end".
+        // Stride overshoot is expected (stride > 1 means the last ++ may skip past the sentinel),
+        // but the overshoot must be < stride.
+        bool lhs_done = current_shard_id_ >= end_shard_id_;
+        bool rhs_done = other.current_shard_id_ >= other.end_shard_id_;
+        ASSERT(!lhs_done || (current_shard_id_ - end_shard_id_ < stride_));
+        ASSERT(!rhs_done || (other.current_shard_id_ - other.end_shard_id_ < other.stride_));
+        if (lhs_done && rhs_done) {
+            return true;
+        }
+        if (lhs_done || rhs_done) {
+            return false;
+        }
+        return current_shard_id_ == other.current_shard_id_;
+    }
+
+    bool operator!=(const StridedShardPagesIterator& other) const { return !(*this == other); }
+
+private:
+    const Accessor& accessor_;
+    uint32_t current_shard_id_;
+    uint32_t end_shard_id_;
+    uint32_t stride_;
+    uint8_t noc_;
+};
+
+/**
+ * Proxy that enables range-based for over the shards owned by this DM.
+ *
+ * Each iteration yields a ShardPages range covering all pages within one assigned shard.
+ * Thread i owns shards at indices: i, i + num_threads, i + 2*num_threads, ...
+ */
+template <typename Accessor>
+class StridedShardPages {
+public:
+    using iterator = StridedShardPagesIterator<Accessor>;
+    using const_iterator = iterator;
+
+    StridedShardPages(
+        const Accessor& accessor,
+        uint32_t start_shard_id,
+        uint32_t total_shards,
+        uint32_t stride,
+        uint8_t noc = noc_index) :
+        accessor_(accessor),
+        start_shard_id_(start_shard_id),
+        total_shards_(total_shards),
+        stride_(stride),
+        noc_(noc) {}
+
+    iterator begin() const {
+        return StridedShardPagesIterator<Accessor>(accessor_, start_shard_id_, total_shards_, stride_, noc_);
+    }
+
+    iterator end() const {
+        return StridedShardPagesIterator<Accessor>(accessor_, total_shards_, total_shards_, stride_, noc_);
+    }
+
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+
+private:
+    const Accessor& accessor_;
+    uint32_t start_shard_id_;
+    uint32_t total_shards_;
+    uint32_t stride_;
+    uint8_t noc_;
+};
+
 }  // namespace tensor_accessor

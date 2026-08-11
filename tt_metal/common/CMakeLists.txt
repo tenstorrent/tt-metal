@@ -24,11 +24,11 @@ target_link_libraries(
         enchantum::enchantum
         fmt::fmt-header-only
         TT::STL
-        umd::Firmware
         umd::tt-umd
         simde::simde
         Taskflow::Taskflow
     PRIVATE
+        BLAKE3::blake3
         Metalium::Metal::Hardware
         Tracy::TracyClient
         TT::Metalium::HostDevCommon

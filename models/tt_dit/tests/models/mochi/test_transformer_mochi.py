@@ -364,6 +364,7 @@ def test_mochi_transformer_model(
                 subfolder="transformer",
                 parallel_config=parallel_config,
                 mesh_shape=tuple(mesh_device.shape),
+                mesh_device=mesh_device,
             )
         except cache.MissingCacheError as err:
             msg = "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
@@ -381,7 +382,7 @@ def test_mochi_transformer_model(
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    tt_spatial_out = tt_model(
+    tt_spatial_out = tt_model.forward_full(
         spatial=spatial_input,
         prompt=prompt_input,
         timestep=timestep_input,
@@ -474,6 +475,7 @@ def test_mochi_transformer_model_caching(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     logger.info(f"Cache path {cache_dir}")
@@ -495,7 +497,7 @@ def test_mochi_transformer_model_caching(
         is_fsdp=True,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

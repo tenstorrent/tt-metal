@@ -51,7 +51,7 @@ void kernel_main() {
             .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
         constexpr auto tensor0_args = TensorAccessorArgs<4>();
-        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
+        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 #endif
 
         uint32_t tile_id = tile_id_start;
@@ -65,7 +65,7 @@ void kernel_main() {
 #ifdef SHARDED
                 noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
 #else
-                noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+                noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
 #endif
                 l1_write_addr += tensor0_page_size;
                 tile_id++;

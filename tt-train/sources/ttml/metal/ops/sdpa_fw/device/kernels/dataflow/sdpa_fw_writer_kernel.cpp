@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // number of tiles in inner dimension
+    constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -27,11 +27,12 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
     constexpr auto output_args = TensorAccessorArgs<3>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
+    const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
     constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 #endif
 
     constexpr uint32_t onetile = 1U;
@@ -46,13 +47,22 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Generate causal mask tile ONCE - will be reused for every diagonal
+    // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
+    // onto QK^T scores via the packer's L1-accumulate path (TTNN's
+    // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
+    // the packer's read-modify-write — score never leaves FP32, no DST→SRC truncation.
+    //
+    //   tile[0] = causal-diagonal: 0.0 on/below diagonal (kept), -1e9 above (masked).
+    //             Applied on the diagonal K tile of every row.
+    //   tile[1] = all -1e9: applied on K tiles strictly past the diagonal inside the
+    //             diagonal chunk when Sk_chunk_t > 1.
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
-    generate_causal_mask_tile(cb_attn_mask);
+    generate_pretransformed_causal_mask_tile(cb_attn_mask);
+    generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
 #endif
 
-    const uint32_t tiles_per_head = qWt;
-    constexpr uint32_t kIntermediateTilesPerRow = 2U;
+    const uint32_t tiles_per_head = vWt;
+    constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
 #ifdef BALANCED_PARALLELISM
     // Balanced parallelism mode: write outputs for pairs of rows (light + heavy).
@@ -72,10 +82,8 @@ void kernel_main() {
             ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        l1_intermediates_read_addr += tile_bytes;
-        noc_async_write_tile(intermediate_base_idx + 1, intermediates_addr_generator, l1_intermediates_read_addr);
+        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif
@@ -95,8 +103,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        write_row(light_global_row);
         write_row(heavy_global_row);
+        write_row(light_global_row);
     }
 #else
     // Standard mode: write outputs sequentially
@@ -114,23 +122,13 @@ void kernel_main() {
         write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
 
 #ifdef RETURN_INTERMEDIATES
-        // -------- Intermediates: (B, qNH, S, 64) = 2 tiles wide --------
-        // Tile 0: max_val at col 0, rest padded
-        // Tile 1: recip_sum_exp at col 32 (col 0 of second tile), rest padded
-        // Linear index for [B, qNH, S, 64]: ((b * q_heads + h) * Ht + s_tile) * 2 + tile_offset
+        // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile: logsumexp --------
         const uint32_t intermediate_base_idx =
             ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-
-        // Write tile 0 (max_val)
-        noc_async_write_tile(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        l1_intermediates_read_addr += tile_bytes;
-
-        // Write tile 1 (recip_sum_exp)
-        noc_async_write_tile(intermediate_base_idx + 1, intermediates_addr_generator, l1_intermediates_read_addr);
-
+        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
 #endif

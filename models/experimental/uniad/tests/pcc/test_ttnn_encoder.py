@@ -13,7 +13,7 @@ from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

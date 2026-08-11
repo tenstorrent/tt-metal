@@ -299,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -335,6 +335,8 @@ class CMakeBuild(build_ext):
             "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/**/kernels_dfb/**/*",
+            "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
@@ -358,6 +360,10 @@ class CMakeBuild(build_ext):
             "fabric/mesh_graph_descriptors/*.textproto",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2.cpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_manager.hpp",
+            "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",

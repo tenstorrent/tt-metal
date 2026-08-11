@@ -114,6 +114,9 @@ protected:
 };
 class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");

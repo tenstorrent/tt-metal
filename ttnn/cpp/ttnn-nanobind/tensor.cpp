@@ -37,7 +37,10 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -53,7 +56,21 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
-    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity");
+    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity", R"doc(
+        Number of mantissa-bit passes through the 5b×7b multiplier array.
+
+        Higher fidelity consumes more mantissa bits from each operand and therefore produces more
+        accurate results, at the cost of proportionally lower throughput. The matrix engine uses
+        5 bits (1 hidden + 4) from SrcA and 7 bits (1 hidden + 6) from SrcB per pass:
+
+        - ``LoFi``  (1 pass):  SrcA uses the 4 MSB mantissa bits; SrcB uses the 6 MSB mantissa bits.
+        - ``HiFi2`` (2 passes): SrcA adds the next 4 LSB bits; SrcB keeps the 6 MSB bits.
+        - ``HiFi3`` (3 passes): SrcA keeps the 4 MSB bits; SrcB adds the next 6 LSB bits.
+        - ``HiFi4`` (4 passes): SrcA adds the next 4 LSB bits; SrcB keeps both 6 MSB and 6 LSB bits.
+
+        Note: ``reduce_max`` and elementwise ``add``/``sub`` are unaffected by this setting.
+        Elementwise ``mul`` and ``reduce_average``/``sum`` do respect this setting.
+    )doc");
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     // export_enum<ShardMode>(m_tensor);
@@ -64,20 +81,20 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         .value("L1_SMALL", BufferType::L1_SMALL)
         .value("TRACE", BufferType::TRACE);
 
-    nb::enum_<TensorSpec::ShardShapeAlignment>(m_tensor, "ShardShapeAlignment")
+    nb::enum_<tt::tt_metal::TensorSpec::ShardShapeAlignment>(m_tensor, "ShardShapeAlignment")
         .value(
             "NONE",
-            TensorSpec::ShardShapeAlignment::NONE,
+            tt::tt_metal::TensorSpec::ShardShapeAlignment::NONE,
             "No shard shape alignment will be performed. If the shard shape is not following the alignment "
             "requirements, an exception will be thrown.")
         .value(
             "REQUIRED",
-            TensorSpec::ShardShapeAlignment::REQUIRED,
+            tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED,
             "Shard shape will be automatically aligned to the minimum required alignment. The Required alignment may "
             "cause higher memory usage and lower read/write performance for some use cases.")
         .value(
             "RECOMMENDED",
-            TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            tt::tt_metal::TensorSpec::ShardShapeAlignment::RECOMMENDED,
             "Shard shape will be automatically aligned to the recommended alignment, trying to achieve optimal "
             "performance and memory usage.");
 
@@ -89,7 +106,12 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         .value(
             "GRID_2D",
             ShardDistributionStrategy::GRID_2D,
-            "Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.");
+            "Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.")
+        .value(
+            "CONTIGUOUS_1D",
+            ShardDistributionStrategy::CONTIGUOUS_1D,
+            "Distribute shards contiguously over a linearized list of cores: adjacent shards go to the same "
+            "core (shard s -> core s/shards_per_core, slot s%shards_per_core). Requires uniform shards-per-core.");
 
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
@@ -99,7 +121,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         Class defining tile dims
     )doc");
 
-    nb::class_<ttnn::TensorSpec>(m_tensor, "TensorSpec", R"doc(
+    nb::class_<tt::tt_metal::TensorSpec>(m_tensor, "TensorSpec", R"doc(
         Class defining the specification of Tensor
     )doc");
 
@@ -223,17 +245,55 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "Get tile size in bytes for the given data type")
         .def(nb::self == nb::self);
 
-    auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
+    // Standalone tile/element size utilities — equivalent to Tile.get_tile_size but
+    // usable without a Tile object (e.g., for intermediate CB sizing).
+    m_tensor.def(
+        "tile_size",
+        [](DataType dtype) -> uint32_t { return tt::tile_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get tile size in bytes for the given data type (standard 32x32 tile).
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Tile size in bytes (e.g., 2048 for bfloat16, 4096 for float32).
+
+            Example:
+            >>> ttnn.tile_size(ttnn.bfloat16)  # Returns 2048
+            >>> ttnn.tile_size(ttnn.float32)   # Returns 4096
+        )doc");
+
+    m_tensor.def(
+        "element_size",
+        [](DataType dtype) -> uint32_t { return tt::datum_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get element size in bytes for the given data type.
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+
+            Example:
+            >>> ttnn.element_size(ttnn.bfloat16)  # Returns 2
+            >>> ttnn.element_size(ttnn.float32)   # Returns 4
+        )doc");
+
+    auto pyTensorSpec = static_cast<nb::class_<tt::tt_metal::TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
         .def(
             "__init__",
-            [](TensorSpec* t,
+            [](tt::tt_metal::TensorSpec* t,
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
-                new (t) TensorSpec(
+                new (t) tt::tt_metal::TensorSpec(
                     shape,
                     TensorLayout(
                         dtype, PageConfig(layout, tile), MemoryConfig(TensorMemoryLayout::INTERLEAVED, buffer_type)));
@@ -244,12 +304,12 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("buffer_type") = BufferType::DRAM,
             nb::arg("tile") = nb::none(),
             R"doc(
-                Create TensorSpec class.
-                This constructor is used to create TensorSpec for tensors that are not sharded.
+                Create tt::tt_metal::TensorSpec class.
+                This constructor is used to create tt::tt_metal::TensorSpec for tensors that are not sharded.
             )doc")
         .def(
             "__init__",
-            [](TensorSpec* t,
+            [](tt::tt_metal::TensorSpec* t,
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
@@ -257,7 +317,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::optional<ShardSpec>& shard_spec,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
-                new (t) TensorSpec(
+                new (t) tt::tt_metal::TensorSpec(
                     shape,
                     TensorLayout(
                         dtype, PageConfig(layout, tile), MemoryConfig(memory_layout, buffer_type, shard_spec)));
@@ -270,19 +330,19 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("buffer_type") = BufferType::DRAM,
             nb::arg("tile") = nb::none(),
             R"doc(
-                Create TensorSpec class.
-                This constructor is used to create TensorSpec for tensors that are sharded.
+                Create tt::tt_metal::TensorSpec class.
+                This constructor is used to create tt::tt_metal::TensorSpec for tensors that are sharded.
             )doc")
         .def(
             "__init__",
-            [](TensorSpec* t,
+            [](tt::tt_metal::TensorSpec* t,
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
                const NdShardSpec& nd_shard_spec,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
-                new (t) TensorSpec(
+                new (t) tt::tt_metal::TensorSpec(
                     shape, TensorLayout(dtype, PageConfig(layout, tile), MemoryConfig(buffer_type, nd_shard_spec)));
             },
             nb::arg("shape"),
@@ -292,13 +352,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("buffer_type") = BufferType::DRAM,
             nb::arg("tile") = nb::none(),
             R"doc(
-                Create TensorSpec class.
-                This constructor is used to create TensorSpec for ND sharded tensors.
+                Create tt::tt_metal::TensorSpec class.
+                This constructor is used to create tt::tt_metal::TensorSpec for ND sharded tensors.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
             "sharded_across_dims",
-            [](const TensorSpec& self,
+            [](const tt::tt_metal::TensorSpec& self,
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
@@ -308,13 +368,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Shards TensorSpec across the specified dimensions.
+                Shards tt::tt_metal::TensorSpec across the specified dimensions.
                 This would result in the shard shape to be minimal (typically 1 or tile size) in the sharded dimensions.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
             "sharded_across_dims_except",
-            [](const TensorSpec& self,
+            [](const tt::tt_metal::TensorSpec& self,
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
@@ -325,86 +385,86 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Shards TensorSpec across all dimensions except for the specified ones.
+                Shards tt::tt_metal::TensorSpec across all dimensions except for the specified ones.
                 This would result in the shard shape to be minimal (typically 1 or tile size) in all dimensions except for the specified ones.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
             "height_sharded",
-            &TensorSpec::height_sharded,
+            &tt::tt_metal::TensorSpec::height_sharded,
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Performs 2D height sharding for TensorSpec.
+                Performs 2D height sharding for tt::tt_metal::TensorSpec.
                 This flattens the tensor into a 2D shape and splits it along the height to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
             )doc")
         .def(
             "width_sharded",
-            &TensorSpec::width_sharded,
+            &tt::tt_metal::TensorSpec::width_sharded,
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Performs 2D width sharding for TensorSpec.
+                Performs 2D width sharding for tt::tt_metal::TensorSpec.
                 This flattens the tensor into a 2D shape and splits it along the width to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
             )doc")
         .def(
             "block_sharded",
-            &TensorSpec::block_sharded,
+            &tt::tt_metal::TensorSpec::block_sharded,
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Performs 2D block sharding for TensorSpec.
+                Performs 2D block sharding for tt::tt_metal::TensorSpec.
                 This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
             )doc")
         .def(
             "block_sharded",
-            [](const TensorSpec& self, const CoreRangeSet& grid, ShardOrientation orientation) {
+            [](const tt::tt_metal::TensorSpec& self, const CoreRangeSet& grid, ShardOrientation orientation) {
                 TT_FATAL(grid.ranges().size() == 1, "Block sharding requires a single CoreRange");
                 return self.block_sharded(grid.ranges()[0], orientation);
             },
             nb::arg("grid"),
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             R"doc(
-                Performs 2D block sharding for TensorSpec.
+                Performs 2D block sharding for tt::tt_metal::TensorSpec.
                 This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
             )doc")
         .def(
             "sharded",
-            [](const TensorSpec& self,
+            [](const tt::tt_metal::TensorSpec& self,
                const Shape& shard_shape,
                const CoreRangeSet& grid,
-               TensorSpec::ShardShapeAlignment shard_alignment,
+               tt::tt_metal::TensorSpec::ShardShapeAlignment shard_alignment,
                ShardOrientation orientation,
                ShardDistributionStrategy shard_distribution_strategy) {
                 return self.sharded(shard_shape, grid, shard_alignment, orientation, shard_distribution_strategy);
             },
             nb::arg("shard_shape"),
             nb::arg("grid"),
-            nb::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            nb::arg("shard_alignment") = tt::tt_metal::TensorSpec::ShardShapeAlignment::RECOMMENDED,
             nb::arg("orientation") = ShardOrientation::ROW_MAJOR,
             nb::arg("shard_distribution_strategy") = ShardDistributionStrategy::ROUND_ROBIN_1D,
             R"doc(
-                Performs arbitrary sharding for TensorSpec using the specified shard shape, grid, shard shape alignment, and other optional parameters.
+                Performs arbitrary sharding for tt::tt_metal::TensorSpec using the specified shard shape, grid, shard shape alignment, and other optional parameters.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
         .def(
             "sharded",
-            [](const TensorSpec& self,
+            [](const tt::tt_metal::TensorSpec& self,
                const NdShardSpec& nd_shard_spec,
-               TensorSpec::ShardShapeAlignment shard_alignment) {
+               tt::tt_metal::TensorSpec::ShardShapeAlignment shard_alignment) {
                 return self.sharded(nd_shard_spec, shard_alignment);
             },
             nb::arg("nd_shard_spec"),
-            nb::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            nb::arg("shard_alignment") = tt::tt_metal::TensorSpec::ShardShapeAlignment::RECOMMENDED,
             R"doc(
-                Performs arbitrary sharding for TensorSpec using the specified shard spec and shard shape alignment.
+                Performs arbitrary sharding for tt::tt_metal::TensorSpec using the specified shard spec and shard shape alignment.
                 Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
             )doc")
-        .def_prop_ro("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
-        .def_prop_ro("layout", &TensorSpec::layout, "Layout of a tensor")
-        .def_prop_ro("dtype", &TensorSpec::data_type, "Dtype of a tensor")
-        .def_prop_ro("tile", &TensorSpec::tile, "Tile of a tensor")
-        .def_prop_ro("memory_config", &TensorSpec::memory_config, "Memory config of a tensor")
+        .def_prop_ro("shape", &tt::tt_metal::TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def_prop_ro("layout", &tt::tt_metal::TensorSpec::layout, "Layout of a tensor")
+        .def_prop_ro("dtype", &tt::tt_metal::TensorSpec::data_type, "Dtype of a tensor")
+        .def_prop_ro("tile", &tt::tt_metal::TensorSpec::tile, "Tile of a tensor")
+        .def_prop_ro("memory_config", &tt::tt_metal::TensorSpec::memory_config, "Memory config of a tensor")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
@@ -463,10 +523,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
-        .def(
-            "with_shard_spec",
-            &MemoryConfig::with_shard_spec,
-            "Returns a new MemoryConfig with the shard spec set to the given value")
         .def_prop_ro(
             "interleaved",
             [](const MemoryConfig& memory_config) {

@@ -50,6 +50,11 @@ pytestmark = [
         ],
         ids=["row_major_bf16", "tile_bf16", "tile_bf8b", "tile_bf4b"],
     ),
+    pytest.mark.parametrize(
+        "memory_config",
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        ids=["dram", "l1"],
+    ),
 ]
 
 
@@ -95,7 +100,9 @@ def _topology_signature(tt: ttnn.Tensor) -> tuple[tuple[str, tuple[int, ...]], t
 
 
 @pytest.mark.parametrize("storage", ["host", "device"])
-def test_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: str) -> None:
+def test_sharded_1d(
+    ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, memory_config: ttnn.MemoryConfig, storage: str
+) -> None:
     is_host_ref = storage == "host"
     num_devices = ttnn_mesh_device.get_num_devices()
 
@@ -109,6 +116,7 @@ def test_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: s
         device=None if is_host_ref else ttnn_mesh_device,
         dtype=dtype,
         layout=layout,
+        memory_config=memory_config,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=0),
     )
 
@@ -123,6 +131,7 @@ def test_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: s
     expected_topology = _topology_signature(ref_tt)
     assert _topology_signature(tt_as) == expected_topology
     assert tt_as.dtype == dtype
+    assert tt_as.memory_config() == memory_config
 
     # Verify round-trip via auto-composition matches the source
     if is_host_ref:
@@ -134,7 +143,14 @@ def test_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: s
 
 @pytest.mark.parametrize("storage", ["host", "device"])
 @pytest.mark.parametrize("dim", [0, 1, 2, -1])
-def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim: int, storage: str) -> None:
+def test_sharded_various_dims(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    layout,
+    dtype,
+    memory_config: ttnn.MemoryConfig,
+    dim: int,
+    storage: str,
+) -> None:
     is_host_ref = storage == "host"
     num_devices = ttnn_mesh_device.get_num_devices()
 
@@ -151,6 +167,7 @@ def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, 
         device=None if is_host_ref else ttnn_mesh_device,
         dtype=dtype,
         layout=layout,
+        memory_config=memory_config,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=dim),
     )
 
@@ -162,6 +179,7 @@ def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, 
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     assert tt_as.dtype == dtype
+    assert tt_as.memory_config() == memory_config
     if is_host_ref:
         torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
     else:
@@ -171,7 +189,14 @@ def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, 
 
 @pytest.mark.parametrize("storage", ["host", "device"])
 @pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
-def test_sharded_2d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair: tuple[int, int], storage: str) -> None:
+def test_sharded_2d(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    layout,
+    dtype,
+    memory_config: ttnn.MemoryConfig,
+    dims_pair: tuple[int, int],
+    storage: str,
+) -> None:
     is_host_ref = storage == "host"
     mesh_shape = tuple(ttnn_mesh_device.shape)
     if len(mesh_shape) != 2 and torch.prod(torch.tensor(mesh_shape)).item() <= 1:
@@ -191,7 +216,12 @@ def test_sharded_2d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair:
 
     mapper = ttnn.ShardTensor2dMesh(ttnn_mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
     ref_tt = ttnn.from_torch(
-        ref_input, device=None if is_host_ref else ttnn_mesh_device, dtype=dtype, layout=layout, mesh_mapper=mapper
+        ref_input,
+        device=None if is_host_ref else ttnn_mesh_device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=mapper,
     )
 
     new_input = ref_input + 1  # change values to avoid accidental equality
@@ -202,6 +232,7 @@ def test_sharded_2d(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair:
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     assert tt_as.dtype == dtype
+    assert tt_as.memory_config() == memory_config
     if is_host_ref:
         torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
     else:

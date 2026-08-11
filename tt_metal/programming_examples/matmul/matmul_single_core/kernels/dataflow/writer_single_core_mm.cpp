@@ -16,7 +16,7 @@ void kernel_main() {
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
+    const auto s = TensorAccessor(s_args, dst_addr);
 
     // Loop through the matrix dimensions Mt and Nt. bmm will generate C's tiles C=A*B, MN=MK*KN,
     // in row major order, we just read them from CB and write out to DRAM
@@ -26,7 +26,7 @@ void kernel_main() {
             cb_wait_front(cb_id_out0, 1);
             // Write the output tile to DRAM.
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-            noc_async_write_tile(m * Nt + n, s, l1_read_addr);
+            noc_async_write_page(m * Nt + n, s, l1_read_addr);
             noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                         // noc_async_write_flushed() can be faster because it waits
                                         // until the write request is sent. In that case, you have to

@@ -8,7 +8,7 @@
 // For multicast modes: always uses async_write_multicast (no stateful variant exists).
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "log_helpers.hpp"
 
 void kernel_main() {
@@ -41,9 +41,9 @@ void kernel_main() {
     constexpr uint32_t same_axis = get_compile_time_arg_val(18);
     constexpr uint32_t loopback_meta = get_compile_time_arg_val(19);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_ep;
-    experimental::MulticastEndpoint multicast_ep;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_ep;
+    MulticastEndpoint multicast_ep;
 
     // ============ MODE 0: UNICAST SINGLE (one_to_one) ============
     if constexpr (mode == WRITER_MODE_UNICAST_SINGLE) {
@@ -70,13 +70,13 @@ void kernel_main() {
                 DeviceZoneScopedN("RISCV0");
                 for (uint32_t i = 0; i < num_of_transactions; i++) {
                     uint32_t vc = i % num_virtual_channels;
-                    noc.async_write(
+                    noc.async_write<NocOptions::CUSTOM_VC>(
                         unicast_ep,
                         unicast_ep,
                         bytes_per_transaction,
                         {.addr = src_addr},
                         {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
-                        vc);
+                        NocOptVals{.vc = vc});
                 }
                 noc.async_write_barrier();
             }
@@ -123,8 +123,7 @@ void kernel_main() {
                             unicast_ep,
                             bytes_per_transaction,
                             {.addr = src_addr},
-                            {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
-                            0);
+                            {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr});
                     }
                 }
             }
@@ -156,13 +155,12 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr experimental::Noc::McastMode mcast_mode =
-            loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -202,14 +200,13 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr experimental::Noc::McastMode mcast_mode =
-            loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             // All but the last packet: linked=true to reserve the VC path
             for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -223,7 +220,7 @@ void kernel_main() {
                     true);  // linked
             }
             // Last packet: unlinked to release the VC
-            noc.async_write_multicast<mcast_mode>(
+            noc.async_write_multicast<mcast_opts>(
                 unicast_ep,
                 multicast_ep,
                 bytes_per_transaction,

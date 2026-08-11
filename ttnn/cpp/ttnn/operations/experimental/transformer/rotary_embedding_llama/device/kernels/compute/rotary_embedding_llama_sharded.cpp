@@ -8,104 +8,125 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    // Magic CB indices are gone: each buffer is a named DFB binding. The local
+    // aliases keep the LLK/FIFO call sites readable; each is the dfb:: handle.
+    constexpr auto in_dfb = dfb::input;
+    constexpr auto cos_dfb = dfb::cos;
+    constexpr auto sin_dfb = dfb::sin;
+    constexpr auto trans_mat_dfb = dfb::trans_mat;
 
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
+    constexpr auto rotated_in_interm_dfb = dfb::rotated_interm;
+    constexpr auto cos_interm_dfb = dfb::cos_interm;
+    constexpr auto sin_interm_dfb = dfb::sin_interm;
+    constexpr auto out_dfb = dfb::out;
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto Ht = get_arg(args::Ht);  // How many rows (tiles) in n_heads dimension
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    DataflowBuffer in_dfb_obj(in_dfb);
+    DataflowBuffer cos_dfb_obj(cos_dfb);
+    DataflowBuffer sin_dfb_obj(sin_dfb);
+    DataflowBuffer trans_mat_dfb_obj(trans_mat_dfb);
+    DataflowBuffer rotated_in_interm_dfb_obj(rotated_in_interm_dfb);
+    DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
+    DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);
+    DataflowBuffer out_dfb_obj(out_dfb);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
+    matmul_init(in_dfb, trans_mat_dfb);
+    compute_kernel_hw_startup(rotated_in_interm_dfb, sin_dfb, sin_interm_dfb);  // General Init for all binary ops
 
     // Get the trans_mat
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
+    trans_mat_dfb_obj.reserve_back(onetile);
+    trans_mat_dfb_obj.push_back(onetile);
+    trans_mat_dfb_obj.wait_front(onetile);
 
     // Get the sin/cos matrices
     // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
+    sin_dfb_obj.reserve_back(Wt);
+    cos_dfb_obj.reserve_back(Wt);
 
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
+    sin_dfb_obj.push_back(Wt);
+    cos_dfb_obj.push_back(Wt);
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
-        cb_reserve_back(rotated_in_interm_cb, Wt);
-        cb_reserve_back(sin_interm_cb, Wt);
-        cb_reserve_back(cos_interm_cb, Wt);
-        cb_reserve_back(out_cb, Wt);
+        rotated_in_interm_dfb_obj.reserve_back(Wt);
+        sin_interm_dfb_obj.reserve_back(Wt);
+        cos_interm_dfb_obj.reserve_back(Wt);
+        out_dfb_obj.reserve_back(Wt);
 
         // Get the input
-        cb_reserve_back(in_cb, Wt);
-        cb_push_back(in_cb, Wt);
-        cb_wait_front(in_cb, Wt);
+        in_dfb_obj.reserve_back(Wt);
+        in_dfb_obj.push_back(Wt);
+        in_dfb_obj.wait_front(Wt);
 
         // Do the computation
 
         // rotated = x @ trans_mat
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_dfb, trans_mat_dfb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
-            pack_tile(j, rotated_in_interm_cb, j);
+            matmul_tiles(in_dfb, trans_mat_dfb, j, 0, j);
+            pack_tile(j, rotated_in_interm_dfb, j);
         }
         REL();
-        cb_push_back(rotated_in_interm_cb, Wt);
-        cb_wait_front(rotated_in_interm_cb, Wt);
+        rotated_in_interm_dfb_obj.push_back(Wt);
+        rotated_in_interm_dfb_obj.wait_front(Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
+        mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
+            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_dfb, sin_dfb, j, j, j);
+            pack_tile(j, sin_interm_dfb, j);
         }
         REL();
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
+        sin_interm_dfb_obj.push_back(Wt);
+        rotated_in_interm_dfb_obj.pop_front(Wt);
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
+            mul_tiles_bcast<BroadcastType::ROW>(in_dfb, cos_dfb, j, j, j);
+            pack_tile(j, cos_interm_dfb, j);
         }
         REL();
-        cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(in_cb, Wt);  // Done with input
+        cos_interm_dfb_obj.push_back(Wt);
+        in_dfb_obj.pop_front(Wt);  // Done with input
 
-        cb_wait_front(sin_interm_cb, Wt);
-        cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        sin_interm_dfb_obj.wait_front(Wt);
+        cos_interm_dfb_obj.wait_front(Wt);
+        add_init(cos_interm_dfb, sin_interm_dfb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
+            add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
+            pack_tile(j, out_dfb, j);
         }
         REL();
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(sin_interm_cb, Wt);
-        cb_pop_front(cos_interm_cb, Wt);
+        out_dfb_obj.push_back(Wt);
+        sin_interm_dfb_obj.pop_front(Wt);
+        cos_interm_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
+    sin_dfb_obj.pop_front(Wt);
+    cos_dfb_obj.pop_front(Wt);
 
     // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
+    trans_mat_dfb_obj.pop_front(onetile);
 }

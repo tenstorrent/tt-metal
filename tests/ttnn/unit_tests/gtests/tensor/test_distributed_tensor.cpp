@@ -22,8 +22,8 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 // Returns the number of unique buffers in host-side multi-device tensor.
@@ -44,15 +44,15 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
 
     // If no device is provided, the tensor is kept on host.
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::HOST);
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == ttnn::StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != ttnn::StorageType::HOST);
 
     // Tensor topology is a single device
     const auto& tensor_topology = input_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(1));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 }
 
 TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
@@ -67,7 +67,7 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -112,7 +112,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DFewerShardsThanDevices) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices() - 1));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
@@ -147,7 +147,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DNegativeDim) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -175,7 +175,7 @@ TEST_F(TensorDistribution2x4Test, Shard1D) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 
@@ -544,7 +544,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 0);
         Tensor dist = create_distributed_tensor(
@@ -564,7 +564,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(
@@ -584,7 +584,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 2);
         Tensor dist = create_distributed_tensor(
@@ -605,7 +605,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 3);
         Tensor dist = create_distributed_tensor(
@@ -626,7 +626,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<uint32_t>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0u);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<uint32_t> span(data->data(), data->size());
+        ttsl::Span<uint32_t> span(data->data(), data->size());
         const TensorLayout rm_uint32_tensor_layout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{});
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
@@ -652,7 +652,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = create_mesh_mapper(
             *mesh_device_,
@@ -676,7 +676,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         SCOPED_TRACE("Negative: null buffer_pin (const span)");
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
-        tt::stl::Span<const float> const_span(data->data(), data->size());
+        ttsl::Span<const float> const_span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(
@@ -696,7 +696,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * kTileHW);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
         const TensorLayout tile_float_tensor_layout(DataType::FLOAT32, Layout::TILE, MemoryConfig{});
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
@@ -725,7 +725,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(2 * num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(
@@ -742,6 +742,130 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
             EXPECT_EQ(shard.to_vector<float>().size(), 2 * elements_per_shard);
         }
     }
+}
+
+// Returns the coordinates of populated shards in a host-distributed tensor, in row-major order.
+auto populated_coords(const Tensor& tensor) {
+    const auto& buffer = tensor.host_storage().buffer();
+    std::vector<MeshCoordinate> coords;
+    for (const auto& coord : MeshCoordinateRange(buffer.shape())) {
+        if (buffer.get_shard(coord).has_value()) {
+            coords.push_back(coord);
+        }
+    }
+    return coords;
+}
+
+TEST_F(TensorDistribution2x4Test, NdMapperOffsetSubmesh) {
+    // 2x4 device; distribute over a 2x2 sub-rectangle anchored at (row=0, col=2) — the right 2x2.
+    constexpr int kSubRows = 2;
+    constexpr int kSubCols = 2;
+    const MeshCoordinate offset(0, 2);
+
+    std::vector<float> test_data;
+    for (int i = 0; i < kSubRows * kSubCols; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kSubRows, kSubCols, 3}, DataType::FLOAT32));
+
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        .mesh_shape_override = MeshShape(kSubRows, kSubCols),
+        .mesh_offset_override = offset,
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    // Topology reflects the sub-rectangle shape and placements; only 4 unique buffers.
+    const auto& tensor_topology = sharded_tensor.tensor_topology();
+    EXPECT_EQ(tensor_topology.distribution_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
+    EXPECT_EQ(count_unique_buffers(sharded_tensor), kSubRows * kSubCols);
+
+    // Only the right 2x2 of the 2x4 mesh is populated, in row-major order.
+    EXPECT_THAT(
+        populated_coords(sharded_tensor),
+        ElementsAre(MeshCoordinate(0, 2), MeshCoordinate(0, 3), MeshCoordinate(1, 2), MeshCoordinate(1, 3)));
+
+    // get_device_tensors returns populated shards in row-major device order: chunk0..chunk3.
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    EXPECT_EQ(device_tensors.size(), kSubRows * kSubCols);
+    for (int i = 0; i < static_cast<int>(device_tensors.size()); i++) {
+        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
+    }
+}
+
+TEST_F(TensorDistribution2x4Test, NdMapperOffsetRoundTrip) {
+    // Distribute over a 2x2 sub-rectangle at offset (0,2), then compose back from the same
+    // sub-rectangle. The aggregated tensor should equal the original input.
+    constexpr int kSubRows = 2;
+    constexpr int kSubCols = 2;
+    const MeshCoordinate offset(0, 2);
+
+    std::vector<float> test_data;
+    for (int i = 0; i < kSubRows * kSubCols; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kSubRows, kSubCols, 3}, DataType::FLOAT32));
+
+    auto mapper = create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+            .mesh_shape_override = MeshShape(kSubRows, kSubCols),
+            .mesh_offset_override = offset,
+        });
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    // Composer dims {1, 2} invert mapper placements [Shard{1}, Shard{2}].
+    auto composer = create_mesh_composer(
+        *mesh_device_,
+        MeshComposerConfig{
+            .dims = {1, 2},
+            .mesh_shape_override = MeshShape(kSubRows, kSubCols),
+            .mesh_offset_override = offset,
+        });
+    Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
+
+    Tensor expected_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kSubRows, kSubCols, 3}, DataType::FLOAT32));
+    EXPECT_TRUE(ttnn::allclose<float>(aggregated_tensor, expected_tensor));
+}
+
+TEST_F(TensorDistribution2x4Test, NdMapperOffsetOutOfRange) {
+    // offset (0, 3) + shape (2, 2) needs column 4, but the 2x4 device only has columns 0..3.
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+            .mesh_shape_override = MeshShape(2, 2),
+            .mesh_offset_override = MeshCoordinate(0, 3),
+        }));
+}
+
+TEST_F(TensorDistribution2x4Test, NdMapperOffsetWrongDimensionality) {
+    // Non-zero offsets must match the device dimensionality (2). (All-zero offsets of any rank are a no-op.)
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+            .mesh_shape_override = MeshShape(2, 2),
+            .mesh_offset_override = MeshCoordinate(1u),
+        }));
+}
+
+TEST_F(TensorDistribution2x4Test, NdMapperOffsetRejectedForRowMajor) {
+    // MeshShape(1, 8) on a 2x4 device forces a row-major reshape (8 > 4 along the column dim);
+    // a non-zero offset is only supported in SUBMESH mode, so this must be rejected.
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}},
+            .mesh_shape_override = MeshShape(1, 8),
+            .mesh_offset_override = MeshCoordinate(0, 1),
+        }));
 }
 
 }  // namespace ttnn::distributed::test

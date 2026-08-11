@@ -150,9 +150,7 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
-        )
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()

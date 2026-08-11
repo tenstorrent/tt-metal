@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // out tensor args
@@ -28,15 +29,15 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
-    experimental::Noc noc;
+    Noc noc;
     constexpr uint32_t cb_id_out0 = 16;
-    experimental::CircularBuffer cb_out0(cb_id_out0);
+    CircularBuffer cb_out0(cb_id_out0);
 
     // single-tile
     uint32_t single_tile_size_bytes = cb_out0.get_tile_size();
 
-    constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_tensor_addr, single_tile_size_bytes);
 
     bool one_time_profile = true;
     uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;

@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -20,15 +20,15 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
     constexpr auto src_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(src_args, src_addr, page_size);
+    const auto s = TensorAccessor(src_args, src_addr);
     uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
 
     uint32_t page_idx = 0;
 
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t i = 0; i < num_loops; ++i) {
-        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         for (uint32_t j = 0; j < pages_per_loop; ++j) {
             noc.async_read(s, src_l1, page_size, {.page_id = page_idx}, {});
             page_idx++;
@@ -42,7 +42,7 @@ void kernel_main() {
         eth_wait_for_receiver_done();
     }
     if (remaining_bytes > 0) {
-        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         for (uint32_t j = 0; j < remaining_pages; ++j) {
             noc.async_read(s, src_l1, page_size, {.page_id = page_idx}, {});
             page_idx++;

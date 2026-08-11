@@ -8,11 +8,12 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/allocator_state.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
-namespace tt::tt_metal::experimental::unit_mesh {
+namespace ttnn::experimental::unit_mesh {
+using tt::tt_metal::MeshTensor;
 
 namespace {
 
@@ -20,19 +21,20 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
     auto* parent_allocator = parent_mesh->allocator().get();
     TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
 
-    tt::tt_metal::AllocatorState merged_state;
+    std::vector<tt::tt_metal::Allocator*> submesh_allocators;
+    submesh_allocators.reserve(parent_mesh->get_submeshes().size());
     for (const auto& submesh : parent_mesh->get_submeshes()) {
         auto* submesh_allocator = submesh->allocator().get();
         TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
-        merged_state.merge(submesh_allocator->extract_state());
+        submesh_allocators.push_back(submesh_allocator);
     }
 
-    parent_allocator->override_state(merged_state);
+    tt::tt_metal::experimental::synchronize_allocator_state(parent_allocator, submesh_allocators);
 }
 
 }  // namespace
 
-Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
+ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
 
     // Validate all tensors are allocated on the unit meshes.
@@ -69,7 +71,7 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     const auto& reference_spec = tensors[0].tensor_spec();
     auto reference_address = tensors[0].mesh_buffer().address();
     for (size_t i = 1; i < tensors.size(); i++) {
-        TT_FATAL(tensors[i].tensor_spec() == reference_spec, "All tensors must have the same TensorSpec");
+        TT_FATAL(tensors[i].tensor_spec() == reference_spec, "All tensors must have the same tt::tt_metal::TensorSpec");
         TT_FATAL(
             tensors[i].mesh_buffer().address() == reference_address, "All mesh buffers must be at the same address");
     }
@@ -95,13 +97,13 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     auto topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
         tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0);
 
-    MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
+    MeshTensor mesh_tensor = mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), reference_spec, topology);
 
-    auto result = Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    auto result = Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
 }
 
-std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tensor) {
+std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     using namespace tt::tt_metal;
 
     // Validate the tensor is allocated on mesh device, that is parent mesh of unit meshes.
@@ -138,7 +140,7 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
-        Tensor unit_tensor(tt::tt_metal::MeshTensor(mesh_buffer, reference_spec, TensorTopology{}));
+        Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec));
         TT_FATAL(
             unit_tensor.device_storage().get_coords().size() == 1 &&
                 unit_tensor.device_storage().get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
@@ -150,4 +152,4 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     return result;
 }
 
-}  // namespace tt::tt_metal::experimental::unit_mesh
+}  // namespace ttnn::experimental::unit_mesh

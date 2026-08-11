@@ -309,6 +309,15 @@ def run_broadcast_impl(
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
+        (
+            4,
+            1,
+            1,
+            [1, 16, 1, 16, 512],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
     ],
     ids=[
         "2-dev-DRAM",
@@ -320,6 +329,7 @@ def run_broadcast_impl(
         "8-dev-DRAM-2",
         "2-dev-L1-2",
         "4-dev-DRAM-3",
+        "4-dev-DRAM-5D",
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])

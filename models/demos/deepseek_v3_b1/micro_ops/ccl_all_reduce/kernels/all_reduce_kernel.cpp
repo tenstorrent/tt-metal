@@ -30,7 +30,11 @@ void kernel_main() {
         args.per_core_rta_start_idx = 0;
 
         deepseek_b1_ops::AllReduce::WriterSingleLink<WriterCT> writer;
-        writer(args);
+        {
+            DeviceZoneScopedN("CCL_SENDER_WRITER");
+            writer.open_connections(args);
+            writer(args);
+        }
     }
 #endif
 
@@ -56,8 +60,19 @@ void kernel_main() {
         args.sender_local_data_l1_addr = get_common_arg_val<uint32_t>(4);
         args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
 
+        // Residual CB is tensor-backed (data already in L1); signal TRISC so
+        // Compute's cb_wait_front(cb_residual) unblocks. Reader no longer does
+        // this — responsibility moved to the caller.
+        if constexpr (ReaderCT::has_residual) {
+            cb_reserve_back(ReaderCT::residual_cb_id, ReaderCT::total_num_tiles);
+            cb_push_back(ReaderCT::residual_cb_id, ReaderCT::total_num_tiles);
+        }
+
         deepseek_b1_ops::AllReduce::Reader<ReaderCT> reader;
-        reader(args);
+        {
+            DeviceZoneScopedN("CCL_RECEIVER");
+            reader(args);
+        }
     }
 #endif
 
@@ -75,7 +90,10 @@ void kernel_main() {
 
         deepseek_b1_ops::AllReduce::ComputeArgs args{};
         deepseek_b1_ops::AllReduce::Compute<ComputeCT> compute;
-        compute(args);
+        {
+            DeviceZoneScopedN("CCL_COMPUTE");
+            compute(args);
+        }
     }
 #endif
 }

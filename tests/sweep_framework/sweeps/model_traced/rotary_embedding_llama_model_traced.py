@@ -64,8 +64,11 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    apply_tensor_placement_topology,
     create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -119,12 +122,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
+            device = ttnn.open_device(device_id=0, l1_small_size=79104)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0)
+        device = ttnn.open_device(device_id=0, l1_small_size=79104)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -162,25 +165,33 @@ def apply_rotary_emb_golden(x: torch.Tensor, cos_cache: torch.Tensor, sin_cache:
     """
     seq_len = x.shape[2]  # For prefill mode
 
-    # Slice cos/sin to match seq_len (cache may be larger)
-    cos = cos_cache[..., :seq_len, :]
-    sin = sin_cache[..., :seq_len, :]
+    # The op rotates only the first min(seq_len, cos_seq) token rows and
+    # ZERO-FILLS the rest: when the (replicated) cos/sin cache has fewer seq rows
+    # than the input (e.g. cos seq=32 vs per-chip seq=128 on galaxy traces), rows
+    # >= cos_seq have no rotation factor and the kernel writes zeros there
+    # (rotary_embedding_llama_multi_core_program_factory.cpp). Mirror that instead
+    # of multiplying mismatched seq lengths (which used to crash).
+    s = min(seq_len, cos_cache.shape[2])
+
+    cos = cos_cache[..., :s, :]
+    sin = sin_cache[..., :s, :]
 
     # cos/sin are in TTNN "doubled" format: [c0, c0, c1, c1, ...]
     # Extract the "un-doubled" version: [c0, c1, c2, ...]
-    freqs_cos = cos[..., 0::2]  # [..., seq_len, head_dim//2]
+    freqs_cos = cos[..., 0::2]  # [..., s, head_dim//2]
     freqs_sin = sin[..., 0::2]
 
-    # Split input into even/odd (real/imaginary parts of complex rotation)
-    x_even = x[..., 0::2]  # [batch, n_heads, seq_len, head_dim//2]
-    x_odd = x[..., 1::2]
+    # Split the first s rows into even/odd (real/imaginary parts of the rotation).
+    x_even = x[..., :s, 0::2]
+    x_odd = x[..., :s, 1::2]
 
     # 2D rotation: [cos -sin; sin cos] @ [even; odd]
     cos_part = x_even * freqs_cos - x_odd * freqs_sin
     sin_part = x_even * freqs_sin + x_odd * freqs_cos
 
-    # Interleave back to original format
-    out = torch.stack([cos_part, sin_part], dim=-1).flatten(-2)
+    # Interleave back to original format; zero-fill rows >= s.
+    out = torch.zeros_like(x)
+    out[..., :s, :] = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(x.dtype)
     return out
 
 
@@ -301,6 +312,40 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
     return rope_params
 
 
+def _rel_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape=None,
     input_a_dtype=None,
@@ -350,7 +395,18 @@ def run(
     torch.manual_seed(0)
 
     is_mesh_device = hasattr(device, "get_num_devices")
-    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None) or _kwargs.get(
+        "input_tensor_a_tensor_placement"
+    )
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None) or _kwargs.get(
+        "input_tensor_b_tensor_placement"
+    )
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None) or _kwargs.get(
+        "input_tensor_c_tensor_placement"
+    )
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None) or _kwargs.get(
+        "input_tensor_d_tensor_placement"
+    )
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -386,10 +442,23 @@ def run(
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
     else:
         shape_a = list(input_shape)
-        batch, n_heads, seq_len, head_dim = shape_a
-        # Use explicit shapes from V2 vectors if available, otherwise derive
-        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(seq_len, 1024), head_dim]))
-        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(seq_len, 1024), head_dim]))
+        # Defer dim unpack until after potential shard-axis shrink.
+        # Use explicit shapes from V2 vectors if available, otherwise derive.
+        # shape_c is only consumed in the traced-config branch above; the
+        # non-traced cos/sin path constructs caches from shape_b alone.
+        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
+
+    # Decode mode (HEIGHT_SHARDED) uses replicate-with-topology to put the
+    # SAME per-chip tensor on every chip; V2 expanded the head_dim axis to
+    # global, so we must shrink shape_a back to per-chip there. Prefill mode
+    # (INTERLEAVED) uses create_tensor_on_mesh, which actually shards the
+    # global tensor across chips — so we MUST keep the global shape and skip
+    # the shrink.
+    # V2 vectors carry the per-chip shape (master's original_shape).
+    # create_tensor_on_mesh routes Shard placements through
+    # replicate_with_topology, which keeps per-chip .shape == torch input shape
+    # and stamps the master topology — so we keep shape_a as-is.
+    _rel_a_axis, _rel_a_factor = _rel_input_shard_axis_and_factor(input_a_tensor_placement)
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout
@@ -457,14 +526,27 @@ def run(
     else:
         # For sample configs, generate based on cache_size
         cache_size = shape_b[2]
+        # In Shard(-1) prefill, input_a stays global so create_tensor_on_mesh
+        # can shard it; cos/sin are Replicated and need to be sized per-chip.
+        # Use shape_b[3] when present — that's the per-chip cos head_dim.
+        _cache_head_dim = shape_b[3] if len(shape_b) >= 4 else head_dim
         cos_cache, sin_cache = generate_cos_sin_for_prefill(
             cache_size,
-            head_dim,
+            _cache_head_dim,
             theta=rope_params["theta"],
             scale_factor=rope_params["scale_factor"],
             orig_context_len=rope_params["orig_context_len"],
             rope_type=rope_params["rope_type"],
         )
+
+    # Match the traced cos/sin n_heads dim. Some prefill configs pass per-head
+    # cos/sin ([1, n_heads, seq, head_dim]); the generators produce [1, 1, ...],
+    # and the V2 (non-dict input_shape) path skips the traced-config n_heads
+    # expansion above — so a [1,6,...] cos/sin would be recorded as [1,1,...]
+    # (arg1/arg2 original_shape[1] diff). Repeat across heads when needed.
+    if not is_decode_mode and len(shape_b) >= 2 and int(shape_b[1]) != 1 and cos_cache.shape[1] == 1:
+        cos_cache = cos_cache.repeat(1, int(shape_b[1]), 1, 1)
+        sin_cache = sin_cache.repeat(1, int(shape_b[1]), 1, 1)
 
     # Convert to bfloat16 for consistency
     torch_cos_cache = cos_cache.to(torch.bfloat16)
@@ -474,10 +556,10 @@ def run(
     if is_decode_mode:
         # For decode mode, transformation matrix is [1, 1, batch*32, 32]
         # Each core gets a [32, 32] shard
-        torch_trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch, 1).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().repeat(1, 1, batch, 1).to(torch.bfloat16)
     else:
         # For prefill mode, use standard transformation matrix based on head_dim
-        torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().to(torch.bfloat16)
 
     # --- Compute Golden Reference Output ---
     if is_decode_mode:
@@ -504,10 +586,16 @@ def run(
 
         # Interleave back to original format
         torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
+
     else:
-        # For prefill mode
+        # For prefill mode. torch_input_tensor is GLOBAL (shape_a is unshrunk),
+        # while torch_cos_cache / torch_sin_cache were generated at the per-chip
+        # head_dim because cos/sin are Replicated and create_tensor_on_mesh
+        # shards Q along the shard axis. Run rope per-chunk with the replicated
+        # cos/sin and concat along the shard axis to produce the global golden
+        # that matches what mesh_tensor_to_torch reassembles.
         torch_output_tensor = apply_rotary_emb_golden(
-            torch_input_tensor.float(),  # Use float for golden computation
+            torch_input_tensor.float(),
             torch_cos_cache.float(),
             torch_sin_cache.float(),
         ).to(torch.bfloat16)
@@ -515,19 +603,39 @@ def run(
     # --- Create TTNN Tensors ---
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
-        # Get core grid for sharding
+        # Compute device-derived shard config first (used as fallback + for trans_mat).
         core_grid = device.compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(batch, core_grid, row_wise=True)
 
-        # Create sharded memory config for input, cos, sin
-        # Each shard has shape [TILE_HEIGHT=32, head_dim]
-        shard_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # Prefer master's traced memory_config when present so the recorded
+        # shard_spec.grid matches exactly (master may avoid dispatch cores in
+        # non-rectangular patterns).
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config as _d2mc
+
+        shard_mem_config = None
+        if isinstance(input_a_memory_config, dict):
+            try:
+                shard_mem_config = _d2mc(input_a_memory_config)
+                if not getattr(shard_mem_config, "is_sharded", lambda: False)():
+                    shard_mem_config = None
+            except Exception:
+                shard_mem_config = None
+        elif input_a_memory_config is not None and hasattr(input_a_memory_config, "is_sharded"):
+            try:
+                if input_a_memory_config.is_sharded():
+                    shard_mem_config = input_a_memory_config
+            except Exception:
+                # Best-effort: tolerate this failure so the sweep can continue.
+                pass
+
+        if shard_mem_config is None:
+            shard_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
         # Create sharded memory config for transformation matrix
         # Each shard has shape [TILE_SIZE, TILE_SIZE]
@@ -576,6 +684,18 @@ def run(
         )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
+        # Restore 2D mesh topology on decode-path tensors so the tracer
+        # records the canonical distribution_shape matching the master.
+        if is_mesh_device:
+            _mesh_shape = get_model_traced_mesh_shape()
+            for _t, _tp in [
+                (input_tensor_a, input_a_tensor_placement),
+                (cos_cache_tt, input_b_tensor_placement or input_a_tensor_placement),
+                (sin_cache_tt, input_c_tensor_placement or input_a_tensor_placement),
+                (trans_mat_tt, input_d_tensor_placement or input_a_tensor_placement),
+            ]:
+                apply_tensor_placement_topology(_t, _tp, _mesh_shape)
+
     else:
         # --- Prefill Mode: Use interleaved memory ---
         if is_mesh_device and input_a_tensor_placement:
@@ -588,13 +708,28 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -629,9 +764,17 @@ def run(
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
 
-    rope_call_kwargs = {"is_decode_mode": is_decode_mode}
-    if output_memory_config is not None:
-        rope_call_kwargs["memory_config"] = output_memory_config
+    # Do NOT inject memory_config — the master trace only has it when the model
+    # explicitly passed it.  Injecting from the vector's output_memory_config or
+    # memory_config metadata causes extra_key diffs in validation.
+
+    # Only pass is_decode_mode when the master trace passed it explicitly; some
+    # configs omit it (the op defaults to prefill), and injecting it then is an
+    # is_decode_mode extra_key diff vs master.
+    _traced_idm = _kwargs.get("is_decode_mode")
+    rope_call_kwargs = {}
+    if _traced_idm is not None and _traced_idm != "__ABSENT__":
+        rope_call_kwargs["is_decode_mode"] = is_decode_mode
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,
@@ -643,6 +786,14 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # In decode mode the input n_heads dim (e.g. 8) is tile-padded to 32 by
+    # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
+    if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
+        output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
+
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
 
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations

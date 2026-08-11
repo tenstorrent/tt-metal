@@ -4,6 +4,8 @@
 
 #include <memory>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
+#include "allocator_state.hpp"
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
@@ -16,6 +18,7 @@
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -34,7 +37,19 @@ void AllocatorImpl::validate_bank_assignments() const {
 
 void AllocatorImpl::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - config_->trace_region_size;
+    // trace_region_size is the TOTAL trace budget across all DRAM banks (not per-bank). Trace buffers are
+    // interleaved evenly across banks, so each bank reserves ceil(trace_region_size / num_banks). This is
+    // rounded up to a whole multiple of the max trace buffer page size (rather than just dram_alignment) so
+    // that the per-bank reservation always holds a whole number of trace pages: a trace whose total size fits
+    // the budget but whose pages skew onto a subset of banks (interleaving biases the leading pages toward the
+    // low banks) still fits per-bank. The aggregate reserved capacity (per_bank_trace_size * num_banks) is
+    // therefore >= trace_region_size.
+    DeviceAddr per_bank_trace_size = 0;
+    if (config_->trace_region_size > 0) {
+        per_bank_trace_size = round_up(
+            div_up(config_->trace_region_size, static_cast<size_t>(config_->num_dram_channels)), kMaxTraceBufPageSize);
+    }
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - per_bank_trace_size;
     std::vector<int64_t> bank_offsets(config_->num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
@@ -58,7 +73,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_->trace_region_size,
+        per_bank_trace_size,
         config_->dram_alignment,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
@@ -189,6 +204,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+
     return address;
 }
 
@@ -409,7 +425,17 @@ void AllocatorImpl::dump_memory_blocks(const BufferType& buffer_type, std::ostre
 std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
-    return l1_manager_->lowest_occupied_address(bank_id);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
+    // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
+    // have occupied a lower address range in this bank.
+    if (config_->allocator_mode == AllocatorMode::HYBRID) {
+        auto per_core = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
+        if (per_core.has_value()) {
+            lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
+        }
+    }
+    return lowest;
 }
 
 void AllocatorImpl::shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up) {
@@ -624,3 +650,15 @@ void Allocator::override_state(const AllocatorState& state) { impl->override_sta
 size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+
+void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
+    AllocatorState merged_state;
+    for (auto* source : sources) {
+        merged_state.merge(source->extract_state());
+    }
+    target->override_state(merged_state);
+}
+
+}  // namespace tt::tt_metal::experimental

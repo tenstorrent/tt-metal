@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 import itertools
 import os
@@ -15,14 +16,78 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import (
+    comp_pcc,
+    hf_cache_layer_kv,
+    hf_cache_to_legacy,
+    hf_dynamic_cache_from_legacy,
+)
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+def _chat_template_token_len(tokenizer, messages) -> int:
+    """len() of apply_chat_template(tokenize=True), tolerant of transformers 5.x.
+
+    5.x defaults apply_chat_template to return_dict=True -> a BatchEncoding (UserDict),
+    whose len() is the key count, not the token count. Extract input_ids first.
+    """
+    out = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+    if hasattr(out, "keys") and "input_ids" in out:  # BatchEncoding / dict / UserDict
+        out = out["input_ids"]
+    if out and isinstance(out[0], (list, tuple)):  # unwrap single-batch nesting
+        out = out[0]
+    return len(out)
+
+
+def create_prompt_of_length(target_token_length: int, model_path: Path) -> str:
+    """
+    Create a prompt that tokenizes to approximately the target token length.
+    Uses a repeating pattern to reach the desired length.
+    """
+    tokenizer = load_tokenizer(model_path)
+
+    # NOTE: space in the beginning and no space in the end is crutial for repeating:
+    # "The" and " The" are different tokens leading to different tokenization.
+    base_text = (
+        " The quick brown fox jumps over the lazy dog. "
+        "This is a test of long context sequences. "
+        "We need to test how the model handles increasingly longer input prompts."
+    )
+
+    template_overhead = _chat_template_token_len(tokenizer, [{"role": "user", "content": ""}])
+
+    tokens_per_repetition = (
+        _chat_template_token_len(tokenizer, [{"role": "user", "content": base_text}]) - template_overhead
+    )
+
+    content_tokens_needed = target_token_length - template_overhead
+    if tokens_per_repetition <= 0:
+        tokens_per_repetition = 1
+    num_repetitions = max(1, content_tokens_needed // tokens_per_repetition)
+
+    prompt = base_text * num_repetitions
+
+    actual_length = _chat_template_token_len(tokenizer, [{"role": "user", "content": prompt}])
+
+    if actual_length < target_token_length:
+        words = base_text.split()
+        word_idx = 0
+        max_iterations = (target_token_length - actual_length) * 2
+        iteration = 0
+        while actual_length < target_token_length and iteration < max_iterations:
+            prompt += words[word_idx % len(words)] + " "
+            actual_length = _chat_template_token_len(tokenizer, [{"role": "user", "content": prompt}])
+            word_idx += 1
+            iteration += 1
+
+    return prompt
 
 
 def load_state_dict(model_path: Path, module_path: str):
@@ -180,7 +245,7 @@ def paged_caches_from_torch(
 
 
 def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> DynamicCache:
-    return DynamicCache.from_legacy_cache(
+    return hf_dynamic_cache_from_legacy(
         tuple(
             (torch_cache, torch.empty((*torch_cache.shape[:-1], 0), dtype=torch_cache.dtype))
             for torch_cache in torch_caches
@@ -189,12 +254,14 @@ def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> Dyn
 
 
 def torch_cache_from_transformers(cache: DynamicCache) -> tuple[torch.Tensor, ...]:
-    torch_cache, _ = zip(*cache.to_legacy_cache())
+    torch_cache, _ = zip(*hf_cache_to_legacy(cache))
     return torch_cache
 
 
 def torch_cache_from_transformers_single_layer(cache: DynamicCache, layer_idx: int) -> torch.Tensor:
-    return cache[layer_idx][0]
+    # transformers 5.x Cache dropped __getitem__ (no cache[i][0]); hf_cache_layer_kv
+    # returns (key, value) version-tolerantly. [0] selects the key tensor.
+    return hf_cache_layer_kv(cache, layer_idx)[0]
 
 
 def transformers_cache_single_layer_from_torch(torch_cache: torch.Tensor, layer_idx: int) -> DynamicCache:
@@ -356,7 +423,7 @@ def run_reference_with_attention(
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
-                legacy_cache = current_cache.to_legacy_cache()
+                legacy_cache = hf_cache_to_legacy(current_cache)
                 if layer_idx is not None:
                     cache_tensor = legacy_cache[layer_idx][0]
                 else:
@@ -620,6 +687,8 @@ def get_test_weight_config(
     test_name: str | None = None,
     real_weights: bool = True,
     layer_id: str | int | None = None,
+    prefer_legacy_weight_cache: bool = False,
+    cache_identity: str | os.PathLike[str] | None = None,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating.
 
@@ -646,18 +715,70 @@ def get_test_weight_config(
             integer layer index, or a descriptive qualifier for random weights
             (``"kv_lora_rank"``).  ``None`` when no further distinction is
             needed.
+        prefer_legacy_weight_cache: When ``True``, prefer the historical
+            SavedWeight cache for this test case and rebuild that cache on
+            miss. Use this only for tests that intentionally compare against
+            the legacy SavedWeight emission path instead of the current direct
+            conversion path. Pair this with ``force_recalculate=True`` when a
+            test must validate the current input weights on every run.
+        cache_identity: Optional cache discriminator appended to the per-test
+            cache path. Use this when the same test/layer can legitimately run
+            against different checkpoint layouts or other distinct weight
+            sources that should not share a SavedWeight cache entry.
     """
     if test_name is not None:
         parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
         if layer_id is not None:
             parts.append(str(layer_id))
+        if cache_identity is not None:
+            raw_cache_identity = os.fspath(cache_identity).strip()
+            if not raw_cache_identity:
+                raise ValueError("cache_identity must be non-empty when provided")
+            normalized_cache_identity = raw_cache_identity
+            for old, new in ((os.sep, "__"), ("/", "__"), ("\\", "__"), (" ", "_"), (":", "_")):
+                normalized_cache_identity = normalized_cache_identity.replace(old, new)
+            cache_identity_digest = hashlib.sha256(raw_cache_identity.encode("utf-8")).hexdigest()[:16]
+            parts.append(f"{normalized_cache_identity}__{cache_identity_digest}")
         weight_config_id = "/".join(parts)
     else:
         weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
     per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
-    return get_weight_config(
-        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
-    )
+
+    if not prefer_legacy_weight_cache:
+        return get_weight_config(
+            ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+        )
+
+    if force_recalculate:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            force_recalculate=True,
+            emit_weight_cache=True,
+        )
+
+    try:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            use_weight_cache=True,
+        )
+    except FileNotFoundError:
+        logger.info(f"DeepSeek test weight cache miss at {per_test_weight_cache_path}; regenerating it")
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            emit_weight_cache=True,
+        )
 
 
 def get_rope_tensors(
@@ -680,6 +801,7 @@ def get_rope_tensors(
 # Mapping of system names to their corresponding mesh shapes
 SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
     "TG": (4, 8),
+    "TG8X4": (8, 4),
     "DUAL": (8, 8),
     "QUAD": (16, 8),
     "T3K": (1, 8),

@@ -117,6 +117,9 @@ def test_decoder_inference(
             model_args.max_seq_len,
             model_args.rope_theta_local,
             None,
+            # Match model.py: when fused QK is on, the local rope must also double
+            # its cos/sin batch so one tensor serves both Q and K (Gemma-2 sliding layers).
+            use_qk_fused=model_args.use_qk_fused,
         )
     else:
         rope_setup_local = None
@@ -239,10 +242,17 @@ def test_decoder_inference(
 
         # Reference model
         ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        if ref_output.dim() == 2:
+            ref_output = ref_output.unsqueeze(1)
 
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
+        # For some model variants the HF decoder returns output only for the first batch item.
+        # Since all users share the same position in this test, compare the first ref_output.shape[0]
+        # items from TT output to ref_output.
+        batch_cmp = ref_output.shape[0]
+        tt_output_cmp = tt_output_torch[:batch_cmp]
+        passing, pcc_message = comp_pcc(ref_output, tt_output_cmp)
 
-        logger.info(comp_allclose(ref_output, tt_output_torch))
+        logger.info(comp_allclose(ref_output, tt_output_cmp))
         logger.info(f"PCC: {pcc_message}")
 
         if passing:

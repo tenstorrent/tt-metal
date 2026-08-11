@@ -4,18 +4,17 @@
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
 
-namespace tt::tt_metal {
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+
+namespace ttnn {
+
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
 
 TensorAttributes::TensorAttributes(HostStorage storage) : storage_(std::move(storage)) {}
 
 TensorAttributes::TensorAttributes(DeviceStorage storage) : storage_(std::move(storage)) {}
-
-// Transitional: assumes a HostStorage constructed without proper TensorSpec and TensorTopology.
-// Overrides the existing spec and topology in the HostStorage.
-TensorAttributes::TensorAttributes(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    storage_(HostStorage(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
@@ -35,7 +34,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const HostStorage& host_storage) -> const TensorTopology& {
-                return host_storage.host_tensor().tensor_topology();
+                return tt::tt_metal::get_tensor_topology(host_storage.host_tensor());
             },
             [](const DeviceStorage& device_storage) -> const TensorTopology& {
                 return device_storage.get_tensor_topology();
@@ -47,12 +46,14 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
 void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topology) {
     std::visit(
         ttsl::overloaded{
-            [&](HostStorage& host_storage) { host_storage.host_tensor().update_tensor_topology(tensor_topology); },
+            [&](HostStorage& host_storage) {
+                tt::tt_metal::update_tensor_topology(host_storage.host_tensor(), tensor_topology);
+            },
             [&](DeviceStorage& device_storage) {
-                device_storage.get_mesh_tensor().update_tensor_topology(tensor_topology);
+                tt::tt_metal::update_tensor_topology(device_storage.get_mesh_tensor(), tensor_topology);
             },
         },
         storage_);
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

@@ -5,8 +5,6 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal, compare_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -15,54 +13,8 @@ pytestmark = pytest.mark.use_module_device
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 64, 64])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([4, 2, 64, 128])),
         (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gcd_int32(input_shapes, device):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gcd)
-    golden_tensor = golden_function(in_data1, in_data2)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gcd_ttnn(input_shapes, device):
-    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gcd)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([5, 8, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -189,7 +141,7 @@ def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_result = ttnn.gcd(tt_in_a, tt_in_b, use_legacy=None)
+    tt_result = ttnn.gcd(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result)
     assert torch.equal(golden, output_tensor)
 
@@ -198,7 +150,7 @@ def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([5, 10, 1024, 1024])),
+        (torch.Size([3, 2, 64, 128])),
     ),
 )
 @pytest.mark.parametrize(

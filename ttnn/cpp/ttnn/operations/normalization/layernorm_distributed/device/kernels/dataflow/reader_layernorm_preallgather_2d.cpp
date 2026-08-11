@@ -8,50 +8,62 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
-    const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
-    const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
-    const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
-    const bool is_merge_core = get_arg_val<uint32_t>(4);
-    const uint32_t reduce_core_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t reduce_core_noc_y = get_arg_val<uint32_t>(6);
-    const uint32_t y = get_arg_val<uint32_t>(7);
+    const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
+    const auto Wt = get_arg(args::Wt);                    // Width in tiles
+    const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
+    const bool is_merge_core = get_arg(args::is_merge_core);
+    const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
+    const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
+    const auto y = get_arg(args::y);
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x2_merge = tt::CBIndex::c_15;
-    constexpr uint32_t cb_zero = tt::CBIndex::c_13;
-
-    // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
     const uint32_t TILE_SIZE = 32 * 32;
     const uint32_t BF16_TILE_BYTES = 2 * TILE_SIZE;
     const uint32_t onetile = 1;
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));  // semaphore for reducer
-    constexpr uint32_t num_cores_to_wait = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto blk = get_arg(args::blk);
+    constexpr auto num_cores_to_wait = get_arg(args::num_cores_to_wait);
 
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
+    const auto src_a = TensorAccessor(tensor::src);
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    Noc noc;
+    // Input tiles, consumed downstream by the compute kernel.
+    DataflowBuffer dfb_inp_buf(dfb::inp);
+    // This core's partial statistic: produced by compute, then shipped over the NoC to the merge core.
+    DataflowBuffer dfb_out_buf(dfb::out);
+    // Gather buffer on the merge core: every core in the column lands its partial here.
+    DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
+    Semaphore<> reducer_sem(sem::reducer);
+
+    // ublocks size defined in tiles
+    const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
+
+#ifdef FUSE_PRE_ADD
+    // Residual tiles, added to the input by the compute kernel before the statistics pass.
+    DataflowBuffer dfb_res_buf(dfb::res);
+    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
+    const auto src_b = TensorAccessor(tensor::res_src);
+#endif
 
     // Generate constant tiles for reduce scalar
-    uint32_t scaler = get_arg_val<uint32_t>(8);
-
-    generate_reduce_scaler(cb_reduce, scaler);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        dfb::reduce,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     if (is_merge_core) {
-        generate_reduce_scaler(cb_zero, 0);
+        dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
     }
 
     uint32_t inp_tile_idx = tile_offset;
@@ -59,41 +71,67 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_reserve_back(cb_inp, blk);
-            uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
+            dfb_inp_buf.reserve_back(blk);
+#ifdef FUSE_PRE_ADD
+            dfb_res_buf.reserve_back(blk);
+#endif
 
             for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
-                inp_wr_ptr += src0_tile_bytes;
+                noc.async_read(
+                    src_a,
+                    dfb_inp_buf,
+                    src0_tile_bytes,
+                    {.page_id = inp_tile_idx},
+                    {.offset_bytes = r * src0_tile_bytes});
+#ifdef FUSE_PRE_ADD
+                noc.async_read(
+                    src_b,
+                    dfb_res_buf,
+                    src1_tile_bytes,
+                    {.page_id = inp_tile_idx},
+                    {.offset_bytes = r * src1_tile_bytes});
+#endif
                 inp_tile_idx++;
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
-            cb_push_back(cb_inp, blk);
+            dfb_inp_buf.push_back(blk);
+#ifdef FUSE_PRE_ADD
+            dfb_res_buf.push_back(blk);
+#endif
 
         }  // wt loop
 
     }  // ncht loop
 
-    // wait on cb_out and then write to merge core over noc
-    cb_wait_front(cb_out, onetile);
+    // wait on the partial output and then write it to the merge core over the NoC
+    dfb_out_buf.wait_front(onetile);
 
     uint32_t o_write_size = BF16_TILE_BYTES;
     uint32_t worker_offset = o_write_size * y;
-    uint64_t output_write_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_write_ptr(cb_x2_merge)) + worker_offset;
 
-    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, onetile);
+    UnicastEndpoint reduce_ep;
+    noc.async_write(
+        dfb_out_buf,
+        reduce_ep,
+        o_write_size,
+        {.offset_bytes = 0},
+        {.noc_x = reduce_core_noc_x,
+         .noc_y = reduce_core_noc_y,
+         // The gather buffer is laid out identically on every core in the column, so this core's own
+         // write pointer gives the same base address the merge core's instance has. The write itself
+         // lands on the remote core, not here.
+         .addr = dfb_x2_merge_buf.get_write_ptr() + worker_offset});
+    noc.async_write_barrier();
+    dfb_out_buf.pop_front(onetile);
 
     // increase semaphore
-    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-    noc_async_atomic_barrier();
+    reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
+    noc.async_atomic_barrier();
 
     if (is_merge_core) {
-        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, num_cores_to_wait);
-        cb_push_back(cb_x2_merge, num_cores_to_wait);
-        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        reducer_sem.wait(num_cores_to_wait);
+        dfb_x2_merge_buf.push_back(num_cores_to_wait);
+        reducer_sem.set(0);
     }
 }

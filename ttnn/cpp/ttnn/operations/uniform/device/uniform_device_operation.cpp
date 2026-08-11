@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
+
+#include <cstdint>
+
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -15,7 +18,9 @@ void UniformDeviceOperation::validate_inputs(
     TT_FATAL(
         tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
         "Uniform: Input tensor must be Float32 or Bfloat16");
-    TT_FATAL(operation_attributes.from < operation_attributes.to, "Uniform: from param must be < to");
+    TT_FATAL(
+        operation_attributes.lower_bound <= operation_attributes.upper_bound,
+        "Uniform: inclusive lower bound must be <= inclusive upper bound");
 }
 
 void UniformDeviceOperation::validate_on_program_cache_miss(
@@ -23,7 +28,7 @@ void UniformDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-TensorSpec UniformDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UniformDeviceOperation::compute_output_specs(
     const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.input.tensor_spec();
 }
@@ -34,28 +39,22 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
     return tensor_args.input;
 }
 
-ttsl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
-}
-
 }  // namespace ttnn::operations::uniform
 
 namespace ttnn::prim {
 ttnn::Tensor uniform(
     const Tensor& input,
-    const float from,
-    const float to,
-    const uint32_t seed,
+    const float lower_bound,
+    const float upper_bound,
+    const std::uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
     TT_FATAL(input.device() != nullptr, "Uniform: Input tensor needs to be on device");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            from,
-            to,
+            lower_bound,
+            upper_bound,
             seed,
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)},

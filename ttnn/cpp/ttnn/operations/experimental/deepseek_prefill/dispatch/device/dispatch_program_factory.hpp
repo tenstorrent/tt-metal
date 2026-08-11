@@ -11,42 +11,26 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <ttnn/global_semaphore.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
-struct DispatchSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    std::vector<CoreCoord> cores;
-    GlobalSemaphore init_semaphore;          // Initialized in create_at()
-    GlobalSemaphore cross_device_semaphore;  // Initialized in create_at()
-};
-
 struct DispatchProgramFactory {
-    using shared_variables_t = DispatchSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
     using tensor_return_value_t = std::array<Tensor, 2>;
 
-    static cached_mesh_workload_t create_mesh_workload(
+    // Declarative WorkloadDescriptor entry point (Contract 2).  Allocates the
+    // three GlobalSemaphores once per cache miss (parked in
+    // `WorkloadDescriptor::semaphores` so their device-side allocations outlive
+    // the cached workload), runs the cross-device Synchronize barrier, then
+    // builds one ProgramDescriptor per mesh coordinate.  The framework
+    // realises this into the cached MeshWorkload.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DispatchParams& operation_attributes,
-        const MeshCoordinateRangeSet& tensor_coords,
-        const DispatchInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const DispatchParams& operation_attributes,
-        const MeshCoordinate& mesh_coordinate,
         const DispatchInputs& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const MeshCoordinateRangeSet& tensor_coords,
-        const GlobalSemaphore& init_semaphore,
-        const GlobalSemaphore& cross_device_semaphore);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const DispatchParams& operation_attributes,
-        const DispatchInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

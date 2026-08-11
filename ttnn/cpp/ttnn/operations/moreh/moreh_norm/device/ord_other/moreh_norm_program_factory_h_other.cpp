@@ -2,24 +2,55 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 
-MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::ProgramFactoryHOther::create(
+ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOther::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    const auto& input = tensor_args.input;
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& out = output.mesh_tensor();
     const auto p = operation_attributes.p;
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Resource names
+    ////////////////////////////////////////////////////////////////////////////
+    // Declared function-local: ttnn_op_moreh is a unity build, so anonymous-namespace constants of
+    // the same name in the three sibling factory .cpp files would collide in the merged TU.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName ONE_DFB{"one"};
+    const DFBSpecName MASK_H_DFB{"mask_h"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const DFBSpecName VAL_DFB{"val"};        // f(x)
+    const DFBSpecName CAL_DFB{"cal"};        // calculate f(x) over dimension
+    const DFBSpecName REDUCE_DFB{"reduce"};  // reduce f(x)
+
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto* device = input.device();
-    auto program = CreateProgram();
+    const auto& device = input.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -39,10 +70,10 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = device.compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    auto arch = input.device()->arch();
+    auto arch = device.arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, operation_attributes.compute_kernel_config);
 
@@ -55,7 +86,7 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
          num_units_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_units);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                       DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
@@ -70,19 +101,51 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     const uint32_t im1_t{1};  // calculate f(x) over dimension
     const uint32_t im2_t{1};  // reduce f(x)
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},    // input
-            {tt::CBIndex::c_1, in1_t},    // one
-            {tt::CBIndex::c_2, in2_t},    // mask_h
-            {tt::CBIndex::c_16, out0_t},  // output
-            {tt::CBIndex::c_24, im0_t, intermed_data_format},
-            {tt::CBIndex::c_25, im1_t, intermed_data_format},
-            {tt::CBIndex::c_26, im2_t, intermed_data_format},
-        });
+    // No node_ranges: a DFB's placement is derived from the WorkUnitSpec membership of the kernels
+    // that bind it. The legacy CBs carried `.core_ranges = all_cores`, which the reader/writer
+    // membership in both work units reproduces.
+    DataflowBufferSpec dfb_input{
+        .unique_id = INPUT_DFB,
+        .entry_size = tile_size(cb_data_format),
+        .num_entries = in0_t,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec dfb_one{
+        .unique_id = ONE_DFB,
+        .entry_size = tile_size(cb_data_format),
+        .num_entries = in1_t,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec dfb_mask_h{
+        .unique_id = MASK_H_DFB,
+        .entry_size = tile_size(cb_data_format),
+        .num_entries = in2_t,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec dfb_output{
+        .unique_id = OUTPUT_DFB,
+        .entry_size = tile_size(cb_data_format),
+        .num_entries = out0_t,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec dfb_val{
+        .unique_id = VAL_DFB,
+        .entry_size = tile_size(intermed_data_format),
+        .num_entries = im0_t,
+        .data_format_metadata = intermed_data_format,
+    };
+    DataflowBufferSpec dfb_cal{
+        .unique_id = CAL_DFB,
+        .entry_size = tile_size(intermed_data_format),
+        .num_entries = im1_t,
+        .data_format_metadata = intermed_data_format,
+    };
+    DataflowBufferSpec dfb_reduce{
+        .unique_id = REDUCE_DFB,
+        .entry_size = tile_size(intermed_data_format),
+        .num_entries = im2_t,
+        .data_format_metadata = intermed_data_format,
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -94,19 +157,73 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "writer_moreh_norm_h.cpp";
 
-    std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_ct_args);
-    std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_ct_args);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_file,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = ONE_DFB,
+                    .accessor_name = "one",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = MASK_H_DFB,
+                    .accessor_name = "mask_h",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt", "origin_h"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_file,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "output",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"output_is_dram", "num_cols_per_core", "tile_offset"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
+    KernelSpec::CompilerOptions::Defines compute_defines;
+
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
-    if (p == 0.0) {
+    if (p == 0.0f) {
         compute_defines["REDUCE_OP"] = "PoolType::SUM";
         compute_defines["IS_ZERO"] = "1";
     } else {
@@ -120,94 +237,217 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "moreh_norm_h_kernel.cpp";
 
-    const auto compute_kernels_id_1 = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_units_per_core_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(arch, operation_attributes.compute_kernel_config);
+    // The legacy config set UnpackToDestMode::Default for every CB index; Default is UnpackToSrc.
+    // An explicit entry is *required* for any Float32 DFB the compute kernel consumes while
+    // enable_32_bit_dest (= fp32_dest_acc_en) is set. That is reachable two independent ways here:
+    // fp32_dest_acc_en makes intermed_data_format Float32, and cb_data_format is Float32 whenever the
+    // input dtype is float32. Naming every consumed DFB covers both without a dtype-dependent branch,
+    // and reproduces the legacy all-Default vector byte for byte. `output` is producer-only on
+    // compute, so it takes no entry.
+    std::get<ComputeGen1Config>(compute_hw_config).unpack_modes = {
+        {INPUT_DFB, UnpackMode::UnpackToSrc},
+        {ONE_DFB, UnpackMode::UnpackToSrc},
+        {MASK_H_DFB, UnpackMode::UnpackToSrc},
+        {VAL_DFB, UnpackMode::UnpackToSrc},
+        {CAL_DFB, UnpackMode::UnpackToSrc},
+        {REDUCE_DFB, UnpackMode::UnpackToSrc},
+    };
 
-    KernelHandle compute_kernels_id_2{0};
-    if (!core_group_2.ranges().empty()) {
-        compute_kernels_id_2 = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_units_per_core_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+    // One KernelSpec per legacy compute KernelDescriptor. The two are identical apart from their
+    // unique_id — the per-group work count travels as a runtime arg, as it did in legacy — but they
+    // must stay separate specs so each can sit in its own WorkUnitSpec and so land on its own core
+    // group. `val`, `cal` and `reduce` are compute-private accumulators: the compute kernel is their
+    // only toucher on any node, so each is self-looped (bound PRODUCER *and* CONSUMER) under a single
+    // accessor name, giving the kernel one DataflowBuffer object that drives both directions.
+    auto make_compute = [&](KernelSpecName unique_id) {
+        return KernelSpec{
+            .unique_id = std::move(unique_id),
+            .source = compute_kernel_file,
+            // opt_level is explicit because the default differs by API: legacy ComputeConfig
+            // defaults to O3, while Metal 2.0's type-agnostic CompilerOptions defaults to O2 for
+            // compute and data movement alike. The legacy compute descriptors set no opt_level, so
+            // they resolved to O3; leaving this unset would silently drop a level.
+            .compiler_options =
+                {
+                    .defines = compute_defines,
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = INPUT_DFB,
+                        .accessor_name = "x",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ONE_DFB,
+                        .accessor_name = "one",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = MASK_H_DFB,
+                        .accessor_name = "mask_h",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUTPUT_DFB,
+                        .accessor_name = "y",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = VAL_DFB,
+                        .accessor_name = "val",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = VAL_DFB,
+                        .accessor_name = "val",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = CAL_DFB,
+                        .accessor_name = "cal",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = CAL_DFB,
+                        .accessor_name = "cal",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = REDUCE_DFB,
+                        .accessor_name = "reduce",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = REDUCE_DFB,
+                        .accessor_name = "reduce",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"num_cols_per_core", "Ht", "origin_h"},
+                },
+            .hw_config = compute_hw_config,
+        };
+    };
+
+    const bool has_core_group_2 = !core_group_2.ranges().empty();
+
+    Group<KernelSpec> kernels = {std::move(reader), std::move(writer), make_compute(COMPUTE_G1)};
+
+    // reader and writer belong to BOTH work units, so their derived node set is
+    // core_group_1 | core_group_2 == all_cores (the legacy core_ranges), while each compute spec stays
+    // on its own group. This co-membership is also what the local-DFB invariant needs: on every node,
+    // each DFB sees exactly one producer instance and one consumer instance.
+    Group<WorkUnitSpec> work_units = {
+        WorkUnitSpec{
+            .name = "wu_g1",
+            .kernels = {READER, WRITER, COMPUTE_G1},
+            .target_nodes = core_group_1,
+        },
+    };
+    if (has_core_group_2) {
+        kernels.push_back(make_compute(COMPUTE_G2));
+        work_units.push_back(WorkUnitSpec{
+            .name = "wu_g2",
+            .kernels = {READER, WRITER, COMPUTE_G2},
+            .target_nodes = core_group_2,
+        });
     }
+
+    ProgramSpec spec{
+        .name = "moreh_norm_h_other",
+        .kernels = std::move(kernels),
+        .dataflow_buffers =
+            {std::move(dfb_input),
+             std::move(dfb_one),
+             std::move(dfb_mask_h),
+             std::move(dfb_output),
+             std::move(dfb_val),
+             std::move(dfb_cal),
+             std::move(dfb_reduce)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = out.tensor_spec()},
+            },
+        .work_units = std::move(work_units),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    // The legacy per-core loop is kept as-is; AddRuntimeArgsForNode transposes each node's values
+    // into ProgramRunArgs' name-first (name -> node -> value) table.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_g1_run_args{.kernel = COMPUTE_G1};
+    KernelRunArgs compute_g2_run_args{.kernel = COMPUTE_G2};
+
+    const auto input_is_dram = static_cast<uint32_t>(is_dram(tensor_args.input));
+    const auto output_is_dram = static_cast<uint32_t>(is_dram(output));
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_cols_per_core;
-        KernelHandle compute_kernel_id;
         if (core_group_1.contains(core)) {
             num_cols_per_core = num_units_per_core_group_1;
-            compute_kernel_id = compute_kernels_id_1;
+            AddRuntimeArgsForNode(
+                compute_g1_run_args.runtime_arg_values,
+                core,
+                {{"num_cols_per_core", num_cols_per_core},
+                 {"Ht", static_cast<uint32_t>(Ht)},
+                 {"origin_h", static_cast<uint32_t>(origin_h)}});
         } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_units_per_core_group_2;
-            compute_kernel_id = compute_kernels_id_2;
+            AddRuntimeArgsForNode(
+                compute_g2_run_args.runtime_arg_values,
+                core,
+                {{"num_cols_per_core", num_cols_per_core},
+                 {"Ht", static_cast<uint32_t>(Ht)},
+                 {"origin_h", static_cast<uint32_t>(origin_h)}});
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
-            input.buffer()->address(),
-            static_cast<uint32_t>(is_dram(input)),
-            num_cols_per_core,
-            tile_offset,
-            Ht,
-            Wt,
-            origin_h};
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"input_is_dram", input_is_dram},
+             {"num_cols_per_core", num_cols_per_core},
+             {"tile_offset", tile_offset},
+             {"Ht", static_cast<uint32_t>(Ht)},
+             {"Wt", static_cast<uint32_t>(Wt)},
+             {"origin_h", static_cast<uint32_t>(origin_h)}});
 
         // writer
-        const std::vector<uint32_t> writer_runtime_args{
-            output.buffer()->address(), static_cast<uint32_t>(is_dram(output)), num_cols_per_core, tile_offset};
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
-
-        // compute
-        const std::vector<uint32_t> compute_runtime_args{num_cols_per_core, Ht, origin_h};
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"output_is_dram", output_is_dram},
+             {"num_cols_per_core", num_cols_per_core},
+             {"tile_offset", tile_offset}});
 
         tile_offset += num_cols_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
-}
-
-void MorehNormOperation::ProgramFactoryHOther::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
-    auto& writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
-    auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    for (uint32_t icore = 0; icore < num_cores_to_be_used; icore++) {
-        CoreCoord core = {icore / num_cores_y, icore % num_cores_y};
-        // readers
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-        }
-
-        // writer
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_g1_run_args)};
+    if (has_core_group_2) {
+        run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
     }
+    run_args.tensor_args = {
+        {INPUT, input},
+        {OUTPUT, out},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 }  // namespace ttnn::operations::moreh::moreh_norm

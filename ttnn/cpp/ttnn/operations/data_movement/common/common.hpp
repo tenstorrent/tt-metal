@@ -23,18 +23,13 @@ ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
-std::vector<uint32_t> get_cycles_for_transaction_size(
-    uint32_t transaction_size,
-    bool is_dram,
-    bool is_local,
-    uint32_t num_transactions,
-    uint32_t num_cores,
-    int index,
-    bool is_read,
-    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
-    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
-    const std::map<uint32_t, std::array<float, 2>>& dram_bw);
+
+// Estimate NOC transfer cycles for a batch of transactions.
+// Returns {bw_cycles, latency_cycles} — BW is the steady-state transfer time,
+// latency is the per-transaction pipeline startup cost. Callers can model
+// pipelining by separating these: max(bw_terms...) + sum(latency_terms).
+std::pair<uint32_t, uint32_t> get_cycles_for_transaction_size(
+    uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read);
 int common_tm_bw_model(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -45,11 +40,14 @@ int common_tm_bw_model(
     bool bcast_local = false,
     bool concat_op = false);
 
+// Extra staging CBs (e.g. tilize block factory's c_1) must pass staging_bytes_per_tile / fixed_staging_bytes.
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
-    uint32_t num_tiles_per_row);
+    uint32_t num_tiles_per_row,
+    uint32_t staging_bytes_per_tile = 0,
+    uint32_t fixed_staging_bytes = 0);
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
@@ -57,7 +55,9 @@ bool is_enough_space(
     const Tensor& input_tensor_a,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
-    uint32_t num_tiles_per_row);
+    uint32_t num_tiles_per_row,
+    uint32_t staging_bytes_per_tile = 0,
+    uint32_t fixed_staging_bytes = 0);
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
@@ -228,5 +228,8 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& tensor_coord);
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor);
+
+// B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
+uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
 
 }  // namespace ttnn::operations::data_movement

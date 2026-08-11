@@ -23,8 +23,6 @@ struct SDPABackwardQDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::ops::sdpa_bw::device
@@ -41,6 +39,7 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_u_scaler = std::nullopt);
 
 }  // namespace ttnn::prim

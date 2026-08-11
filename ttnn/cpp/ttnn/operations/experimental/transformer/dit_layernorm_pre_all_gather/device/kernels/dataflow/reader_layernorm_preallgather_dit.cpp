@@ -9,8 +9,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -26,10 +25,13 @@ void kernel_main() {
 
     constexpr uint32_t input_block_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    uint32_t scaler = get_arg_val<uint32_t>(4);
-    generate_reduce_scaler(cb_reduce, scaler);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
     uint32_t inp_tile_idx = tile_offset;
 
@@ -38,7 +40,7 @@ void kernel_main() {
             cb_reserve_back(cb_inp, input_block_size);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t r = 0; r < input_block_size && wt + r < Wt; r++) {
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
+                noc_async_read_page(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
             }

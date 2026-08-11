@@ -14,6 +14,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -44,7 +45,7 @@ inline OutputCBs reduce_fct(
     uint32_t cb_l1_temp,
     uint32_t cb_l2_temp,
     uint32_t loop_size) {
-    constexpr int mode = VectorMode::R;
+    constexpr VectorMode mode = VectorMode::R;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
     // Wait for all inputs to be available
@@ -126,11 +127,10 @@ void kernel_main() {
 
     // for last round of device 1 add extra compute:
     // out = l / s
-    const bool use_half_tile = true;
-    constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
+    matmul_init(cb_out_accumulate_im, cb_out_accumulate_im);
 
     OutputCBs output_cbs = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
         cb_out_o,

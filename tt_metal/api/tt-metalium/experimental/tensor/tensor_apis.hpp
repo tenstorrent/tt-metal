@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -25,47 +26,65 @@ class MemoryConfig;
 namespace tt::tt_metal {
 
 // ======================================================================================
-//                                         .to_host() and .to_device()
+//                   Uniform enqueue_read/write_tensor
 // ======================================================================================
 
-HostTensor to_host(distributed::MeshCommandQueue& queue, const MeshTensor& tensor, bool blocking = true);
+HostTensor enqueue_read_tensor(
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
 
-void copy_to_host(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& device_tensor,
-    HostTensor& host_tensor,
-    bool blocking = true);
+void enqueue_read_tensor(
+    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
 
-MeshTensor to_device(
-    distributed::MeshCommandQueue& queue,
-    const HostTensor& tensor,
+MeshTensor enqueue_write_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    distributed::MeshDevice& mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
 
-void copy_to_device(distributed::MeshCommandQueue& queue, const HostTensor& host_tensor, MeshTensor& device_tensor);
+void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
-
-// ======================================================================================
-//                                  .pad() and .unpad()
-// ======================================================================================
-
-HostTensor pad(
-    const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
-
-HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-
-HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
-
-HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_tensor_shape);
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
+HostTensor to_row_major_layout(const HostTensor& tensor);
 
 // ======================================================================================
 //                                  .to_dtype()
 // ======================================================================================
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+
+// ======================================================================================
+//                                  .to_tensor_spec()
+// ======================================================================================
+
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec);
+
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+namespace host_buffer {
+
+// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+HostBuffer get_host_buffer(const HostTensor& tensor);
+
+template <typename T>
+ttsl::Span<const T> get_as(const HostBuffer& buffer);
+
+template <typename T>
+ttsl::Span<T> get_as(HostBuffer& buffer);
+
+template <typename T>
+ttsl::Span<const T> get_as(const HostTensor& tensor);
+
+template <typename T>
+ttsl::Span<T> get_as(HostTensor& tensor);
+
+}  // namespace host_buffer
 
 }  // namespace tt::tt_metal

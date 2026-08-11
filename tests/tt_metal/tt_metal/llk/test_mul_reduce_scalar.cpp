@@ -12,10 +12,12 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -25,7 +27,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
 #include "tt_metal/impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -40,43 +42,55 @@ namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar {
 
 struct MulReduceScalarConfig {
     uint32_t num_tiles = 1;
+    // Tile row height. 32 -> standard 32x32 tiles (4 faces); 16 -> 16x32 "tiny
+    // tiles" (2 faces, one face-row). Column dimension is always 32.
+    uint32_t tile_height = 32;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
 };
 
-constexpr uint32_t TILE_BYTE_SIZE = 2 * 32 * 32;  // bfloat16: 2 bytes * 32 * 32 elements
-
-bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& config) {
+bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
+    IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
-    uint32_t input_buffer_size = config.num_tiles * TILE_BYTE_SIZE;
+    // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.
+    const uint32_t tile_byte_size = 2 * config.tile_height * tt::constants::TILE_WIDTH;
+    const tt::tt_metal::Tile cb_tile({config.tile_height, tt::constants::TILE_WIDTH});
+    const bool tiny_tile = (config.tile_height != tt::constants::TILE_HEIGHT);
+
+    uint32_t input_buffer_size = config.num_tiles * tile_byte_size;
     tt_metal::InterleavedBufferConfig dram_config = {
         .device = device,
         .size = input_buffer_size,
-        .page_size = TILE_BYTE_SIZE,
+        .page_size = tile_byte_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     auto src0_dram_buffer = CreateBuffer(dram_config);
     auto src1_dram_buffer = CreateBuffer(dram_config);
 
-    dram_config.size = TILE_BYTE_SIZE;
+    dram_config.size = tile_byte_size;
     auto dst_dram_buffer = CreateBuffer(dram_config);
 
     uint32_t cb_tiles = std::max(8u, config.num_tiles);
-    uint32_t cb_size = cb_tiles * TILE_BYTE_SIZE;
+    uint32_t cb_size = cb_tiles * tile_byte_size;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_0, TILE_BYTE_SIZE);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
+            .set_page_size(tt::CBIndex::c_0, tile_byte_size);
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_1, TILE_BYTE_SIZE);
-    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-
+            .set_page_size(tt::CBIndex::c_1, tile_byte_size);
     tt_metal::CircularBufferConfig cb_out_config =
         tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_16, TILE_BYTE_SIZE);
+            .set_page_size(tt::CBIndex::c_16, tile_byte_size);
+    if (tiny_tile) {
+        // Advertise the 16x32 tile geometry so the compute kernel derives
+        // num_faces=2 from the operand CBs via get_operand_num_faces().
+        cb_src0_config.set_tile_dims(tt::CBIndex::c_0, cb_tile);
+        cb_src1_config.set_tile_dims(tt::CBIndex::c_1, cb_tile);
+        cb_out_config.set_tile_dims(tt::CBIndex::c_16, cb_tile);
+    }
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
     tt_metal::CreateCircularBuffer(program, core, cb_out_config);
 
     // Set up compile-time arguments for the reader kernel using TensorAccessor
@@ -94,7 +108,7 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -116,7 +130,7 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 
     SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles});
 
-    uint32_t byte_size = config.num_tiles * TILE_BYTE_SIZE;
+    uint32_t byte_size = config.num_tiles * tile_byte_size;
     auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
 
@@ -129,7 +143,16 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 
     tt_metal::detail::WriteToBuffer(*src0_dram_buffer, packed_input0);
     tt_metal::detail::WriteToBuffer(*src1_dram_buffer, packed_input1);
-    tt_metal::detail::LaunchProgram(device, program, true, true);
+
+    // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
+    // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(*dst_dram_buffer, result_vec);
@@ -167,22 +190,15 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
-// Test fixture that automatically skips if not on Blackhole
-class MulReduceScalarTest : public MeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {
-protected:
-    void SetUp() override {
-        MeshDeviceSingleCardFixture::SetUp();
-        if (this->arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Test only runs on Blackhole architecture";
-        }
-    }
-};
+// Runs on any single card (Wormhole or Blackhole); mul_reduce_scalar is
+// supported on both architectures.
+class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
-// Single parametrized test
+// Standard 32x32-tile suite parametrized by tile count.
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
-    IDevice* device = devices_[0]->get_devices()[0];
+    auto& mesh_device = *devices_[0];
     int num_tiles = GetParam();
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = num_tiles}));
+    ASSERT_TRUE(run_mul_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles, .tile_height = 32}));
 }
 
 // Instantiate the test suite with different tile counts
@@ -191,3 +207,20 @@ INSTANTIATE_TEST_SUITE_P(
     MulReduceScalarTest,
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) { return "MulReduceScalar_" + std::to_string(info.param) + "_Tiles"; });
+
+// 16x32 "tiny tile" (num_faces=2) suite parametrized by tile count.
+class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
+    auto& mesh_device = *devices_[0];
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles, .tile_height = 16}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarTinyTileTests,
+    MulReduceScalarTinyTileTest,
+    testing::Values(1, 2, 3, 7, 8),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });

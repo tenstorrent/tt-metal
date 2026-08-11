@@ -2,31 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "copy_default_row_major_program_factory.hpp"
+#include "copy_device_operation.hpp"
 
 #include <cmath>
 
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
-
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/work_split.hpp>
+
+namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::prim {
+namespace {
 
-CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFactory::create(
-    const CopyParams& /*operation_attributes*/, const CopyInputs& tensor_args, Tensor& output_tensor) {
+constexpr const char* KERNEL_READER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_reader.cpp";
+constexpr const char* KERNEL_WRITER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_writer.cpp";
+
+}  // namespace
+
+ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
-    tt::tt_metal::Program program{};
+
+    ProgramDescriptor desc;
 
     const auto bytes_per_element = input.element_size();
     const auto elements_per_tensor_row = input.logical_shape()[-1];
@@ -53,11 +63,9 @@ CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFa
     const auto input_pages_cb_index = tt::CBIndex::c_0;
     const auto output_page_cb_index = tt::CBIndex::c_1;
 
-    // Computation of core_grid
     auto* device = input.device();
 
-    auto compute_with_storage_grid_size =
-        device->compute_with_storage_grid_size();  // This can be replaced with get_worker_cores in subdevices
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     const uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
@@ -68,16 +76,16 @@ CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFa
     uint32_t input_page_size = input.buffer()->page_size();
     uint32_t aligned_output_page_size =
         output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
-                                               // the noc_write reads from an aligned address in the CB
-    uint32_t input_subblock_size_bytes =
-        elements_per_input_page *
+    // the noc_write reads from an aligned address in the CB
+    uint32_t input_subblock_size_bytes = elements_per_input_page * bytes_per_element;
+    uint32_t output_subblock_size_bytes =
+        elements_per_output_page *
         bytes_per_element;  // If the input/output row size is not too large, we can just set the subblock to be the
-                            // page and reduce the number of NoC reads/writes from/to pages.
-    uint32_t output_subblock_size_bytes = elements_per_output_page * bytes_per_element;
+    // page and reduce the number of NoC reads/writes from/to pages.
 
     if (input_page_size >
         MAX_SUBBLOCK_SIZE_BYTES) {  // If the input/output row size is too large, the page size will be too large for
-                                    // the CB, so we process data in subblock units of MAX_SUBBLOCK_SIZE_BYTES instead
+        // the CB, so we process data in subblock units of MAX_SUBBLOCK_SIZE_BYTES instead
         input_page_size = MAX_SUBBLOCK_SIZE_BYTES;
         input_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
     }
@@ -87,23 +95,33 @@ CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFa
     }
 
     // Configuring the CB that store input pages
+
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::tt_metal::CircularBufferConfig input_pages_cb_config =
-        tt::tt_metal::CircularBufferConfig(input_page_size, {{input_pages_cb_index, input_cb_data_format}})
-            .set_page_size(input_pages_cb_index, input_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_pages_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_pages_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_page_size,
+        }}},
+    });
 
     // Configuring the CB that stores output pages. This one is double buffered, since it is shared between the reader
     // and writer kernels.
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::tt_metal::CircularBufferConfig output_pages_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * aligned_output_page_size, {{output_page_cb_index, output_cb_data_format}})
-            .set_page_size(output_page_cb_index, aligned_output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_pages_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * aligned_output_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_page_cb_index),
+            .data_format = output_cb_data_format,
+            .page_size = aligned_output_page_size,
+        }}},
+    });
 
     // Reader kernel config with compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         static_cast<uint32_t>(input_pages_cb_index),
         static_cast<uint32_t>(output_page_cb_index),
         static_cast<uint32_t>(num_output_pages_in_row),
@@ -114,12 +132,11 @@ CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFa
         static_cast<uint32_t>(elements_per_tensor_row),
         input_subblock_size_bytes,
         output_subblock_size_bytes,
-
     };
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
 
     // Writer kernel config with compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
         static_cast<uint32_t>(output_page_cb_index),
         static_cast<uint32_t>(num_output_pages_in_row),
         static_cast<uint32_t>(elements_per_output_page),
@@ -130,58 +147,38 @@ CopyDefaultRowMajorProgramFactory::cached_program_t CopyDefaultRowMajorProgramFa
 
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/"
-        "redistribute_pages_row_major_reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = KERNEL_READER;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/"
-        "redistribute_pages_row_major_writer.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = KERNEL_WRITER;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     // Set runtime args
     uint32_t start_row_id = 0;
     for (const auto& core : ordered_cores) {
-        // Reader run-time args
         uint32_t num_rows_to_process = num_rows_per_core_group_1;
         if (core_group_2.contains(core)) {
             num_rows_to_process = num_rows_per_core_group_2;
         }
-        std::vector<uint32_t> reader_run_time_args = {input.buffer()->address(), start_row_id, num_rows_to_process};
-        std::vector<uint32_t> writer_run_time_args = {output.buffer()->address(), start_row_id, num_rows_to_process};
+        // Set run-time arg
+        reader_desc.emplace_runtime_args(core, {input.buffer(), start_row_id, num_rows_to_process});
+        writer_desc.emplace_runtime_args(core, {output.buffer(), start_row_id, num_rows_to_process});
 
         start_row_id += num_rows_to_process;
-        // Set run-time arg
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_run_time_args);
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores}};
-}
-void CopyDefaultRowMajorProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const CopyParams& /*operation_attributes*/,
-    const CopyInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
-    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
-    const auto& cores = cached_program.shared_variables.cores;
-    const auto& input_buffer = tensor_args.input.buffer();
-    const auto& output_buffer = output_tensor.buffer();
-    for (const auto& core : cores) {
-        auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
-        runtime_args_reader[0] = input_buffer->address();
-        auto& runtime_args_writer = runtime_args_by_core_writer[core.x][core.y];
-        runtime_args_writer[0] = output_buffer->address();
-    }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

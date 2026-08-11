@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import torch
+from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
 
@@ -24,6 +25,7 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import cache
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
@@ -46,6 +48,7 @@ class WanTransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -81,6 +84,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=True,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.attn2 = WanAttention(
@@ -93,6 +97,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.norm2 = (
@@ -111,12 +116,13 @@ class WanTransformerBlock(Module):
         self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            lora_enabled=lora_enabled,
         )
 
         self.norm3 = DistributedLayerNorm(
@@ -163,6 +169,7 @@ class WanTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
+        cross_attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
@@ -211,6 +218,7 @@ class WanTransformerBlock(Module):
             spatial_1BND=spatial_normed_1BND,
             N=N,
             prompt_1BLP=prompt_1BLP,
+            cross_attn_mask=cross_attn_mask,
         )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
@@ -266,6 +274,8 @@ class WanTransformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        output_dtype: ttnn.DataType = ttnn.float32,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -273,9 +283,11 @@ class WanTransformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
+        self.lora_enabled = lora_enabled
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
+        self.output_dtype = output_dtype
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -324,6 +336,7 @@ class WanTransformer3DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
+                lora_enabled=lora_enabled,
             )
             for i in range(num_layers)
         )
@@ -591,7 +604,9 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep):
+    def inner_step(
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=True
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -607,7 +622,7 @@ class WanTransformer3DModel(Module):
 
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        for idx, block in enumerate(self.blocks):
+        for block in self.blocks:
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
@@ -629,14 +644,15 @@ class WanTransformer3DModel(Module):
                 spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        spatial_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
         )
 
         # Gather fp32 spatial output across sequence parallel devices (remains on device)
-        spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
-            proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-        )
+        if gather_output:
+            spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            )
 
         return spatial_1BNI
 
@@ -653,7 +669,9 @@ class WanTransformer3DModel(Module):
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance_scale: float,
+        guidance_scale: ttnn.Tensor,
+        *,
+        gather_output: bool = True,
     ) -> ttnn.Tensor:
         cond = self.inner_step(
             spatial_1BNI,
@@ -663,14 +681,99 @@ class WanTransformer3DModel(Module):
             trans_mat,
             N,
             timestep,
+            gather_output=gather_output,
         )
         if not do_classifier_free_guidance:
             return cond
 
         uncond = self.inner_step(
-            spatial_1BNI, negative_prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep
+            spatial_1BNI,
+            negative_prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            timestep,
+            gather_output=gather_output,
         )
 
         combined = ttnn.lerp(uncond, cond, guidance_scale)
 
         return combined
+
+
+class WanCheckpoint:
+    """A Wan transformer-subfolder checkpoint: fetches weights and builds loaded transformers."""
+
+    def __init__(self, name: str, subfolder: str) -> None:
+        self._name = name
+        self._subfolder = subfolder
+        torch_transformer = TorchWanTransformer3DModel.from_pretrained(
+            name,
+            subfolder=subfolder,
+            trust_remote_code=True,
+        )
+        torch_transformer.eval()
+        self._config = torch_transformer.config
+        self._state_dict = torch_transformer.state_dict()
+
+    @property
+    def subfolder(self) -> str:
+        return self._subfolder
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        return dict(self._state_dict)
+
+    def build(
+        self,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        model_type: str,
+        lora_enabled: bool = False,
+    ) -> WanTransformer3DModel:
+        """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        """
+        c = self._config
+        return WanTransformer3DModel(
+            patch_size=c.patch_size,
+            num_heads=c.num_attention_heads,
+            dim=c.num_attention_heads * c.attention_head_dim,
+            in_channels=c.in_channels,
+            out_channels=c.out_channels,
+            text_dim=c.text_dim,
+            freq_dim=c.freq_dim,
+            ffn_dim=c.ffn_dim,
+            cross_attn_norm=c.cross_attn_norm,
+            eps=c.eps,
+            rope_max_seq_len=c.rope_max_seq_len,
+            mesh_device=ccl_manager.mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            model_type=model_type,
+            lora_enabled=lora_enabled,
+        )
+
+    def load(
+        self,
+        model: WanTransformer3DModel,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache.load_model(
+            tt_model=model,
+            get_torch_state_dict=lambda: self._state_dict,
+            model_name=os.path.basename(self._name),
+            subfolder=self._subfolder,
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
+            is_fsdp=is_fsdp,
+        )

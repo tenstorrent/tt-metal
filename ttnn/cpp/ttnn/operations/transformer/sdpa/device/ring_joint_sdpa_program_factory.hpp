@@ -4,8 +4,15 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -15,19 +22,29 @@
 
 namespace ttnn::prim {
 
-struct RingJointSDPASharedVariables {
-    uint32_t num_cores = 0;
-    tt::tt_metal::CoreCoord grid_size;
-    tt::tt_metal::KernelHandle reader_kernels_id{};
-    tt::tt_metal::KernelHandle writer_kernels_id{};
-    tt::tt_metal::KernelHandle compute_kernels_id{};
-    experimental::prim::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t
-        all_gather_shared_variables;
+namespace detail {
+
+struct RingJointSDPADescriptorAdapterOperation {
+    using operation_attributes_t = RingJointSDPAParams;
+    using tensor_args_t = RingJointSDPAInputs;
+    using spec_return_value_t = RingJointSDPAResultSpec;
+    using tensor_return_value_t = RingJointSDPAResult;
 };
 
+}  // namespace detail
+
 struct RingJointSDPAProgramFactory {
-    using shared_variables_t = RingJointSDPASharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const RingJointSDPAParams& args,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct RingJointSDPAMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::RingJointSDPADescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<RingJointSDPAProgramFactory>;
+    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
 
     static cached_mesh_workload_t create_mesh_workload(
         const RingJointSDPAParams& args,
@@ -40,15 +57,8 @@ struct RingJointSDPAProgramFactory {
         const RingJointSDPAParams& args,
         const RingJointSDPAInputs& tensor_args,
         RingJointSDPAResult& output_tensors);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const RingJointSDPAParams& args,
-        const ttnn::MeshCoordinate& coord,
-        const RingJointSDPAInputs& tensor_args,
-        RingJointSDPAResult& output_tensors);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingJointSDPAMeshWorkloadFactory>);
 
 }  // namespace ttnn::prim

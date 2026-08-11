@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 // This kernel is used to read untilized src0 data from DRAM and copy it to L1 in tilized layout.
 // For layout transformation, it uses a list of source addresses (a vector in L1 written by the host) to perform
@@ -30,10 +30,10 @@ void kernel_main() {
     constexpr uint32_t cb0_id = 0;
     constexpr uint32_t cb1_id = 1;
 
-    experimental::CircularBuffer cb0(cb0_id);
-    experimental::CircularBuffer cb1(cb1_id);
-    experimental::CoreLocalMem<std::uint32_t> source_addresses(address_map_l1_addr);
-    experimental::Noc noc;
+    CircularBuffer cb0(cb0_id);
+    CircularBuffer cb1(cb1_id);
+    CoreLocalMem<std::uint32_t> source_addresses(address_map_l1_addr);
+    Noc noc;
 
     uint32_t source_addresses_list_index = 0;
     // We push one block of tiles of src0 and src1.
@@ -45,7 +45,7 @@ void kernel_main() {
         // src1 is already tilized in DRAM. Read the whole block of tiles in a single DRAM read access.
         // src0 is not tilized in DRAM.
         noc.async_read(
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             cb1,
             src1_num_bytes_per_block,
             {.bank_id = dram_src1_bank_id, .addr = dram_buffer_src1_addr},
@@ -56,7 +56,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < src0_num_reads_per_block; i++) {
             uint32_t src_addr = source_addresses[source_addresses_list_index];
             noc.async_read(
-                experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                AllocatorBank<AllocatorBankType::DRAM>{},
                 cb0,
                 src0_dram_read_size_bytes,
                 {.bank_id = dram_src0_bank_id, .addr = dram_buffer_src0_addr + src_addr},

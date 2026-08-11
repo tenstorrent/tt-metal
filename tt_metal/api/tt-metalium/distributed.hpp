@@ -56,7 +56,8 @@ void ReadShard(
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
     auto* mesh_device = mesh_cq.device();
-    if (!mesh_device->is_local(coord)) {
+    auto devices = mesh_device->get_view().get_devices(MeshCoordinateRange(coord, coord));
+    if (devices.empty()) {
         return;
     }
 
@@ -72,6 +73,12 @@ void EnqueueWriteMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
+    TT_FATAL(src.size() * sizeof(DType) >= mesh_buffer->size(),
+        "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+        mesh_buffer->size(),
+        src.size(),
+        sizeof(DType));
+
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }
 

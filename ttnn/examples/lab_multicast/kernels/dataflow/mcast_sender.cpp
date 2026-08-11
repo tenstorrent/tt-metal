@@ -27,7 +27,7 @@ void kernel_main() {
     // Create address generator for the input buffer using TensorAccessorArgs.
     // TensorAccessorArgs extracts data distribution details from compile-time arguments.
     constexpr auto src_layout_args = TensorAccessorArgs<0>();
-    const auto src_addr_gen = TensorAccessor(src_layout_args, src_base_addr, tile_size_bytes);
+    const auto src_addr_gen = TensorAccessor(src_layout_args, src_base_addr);
 
     ////////// SEMAPHORE SETUP //////////
     volatile tt_l1_ptr uint32_t* receivers_ready_sem_ptr =
@@ -46,7 +46,7 @@ void kernel_main() {
         uint32_t cb_write_addr = get_write_ptr(cb_id_in0);
 
         // Read tile from DRAM into L1 circular buffer
-        noc_async_read_tile(tile_idx, src_addr_gen, cb_write_addr);
+        noc_async_read_page(tile_idx, src_addr_gen, cb_write_addr);
         noc_async_read_barrier();
 
         // Mark tile as ready in CB (for tracking, though we're the only consumer)

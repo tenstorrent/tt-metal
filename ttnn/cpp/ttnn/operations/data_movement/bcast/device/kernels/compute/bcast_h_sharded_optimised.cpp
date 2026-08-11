@@ -4,37 +4,55 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t onetile = 1;
-    uint32_t NC = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t h_blk = get_arg_val<uint32_t>(3);
-    uint32_t batch_b = get_arg_val<uint32_t>(4);
-    uint32_t Ht_per_batch_b = get_arg_val<uint32_t>(5);
+    constexpr std::uint32_t onetile = 1;
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    DataflowBuffer dfb_a(dfb::in0);
+    DataflowBuffer dfb_b(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
 
-    cb_wait_front(tt::CBIndex::c_0, Wt * Ht);
-    cb_reserve_back(tt::CBIndex::c_16, Wt * Ht);
-    uint32_t b_offset = 0;
-    for (uint32_t bn = 0; bn < batch_b; bn++) {
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(tt::CBIndex::c_1, onetile);
-            for (uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
-                acquire_dst();
-                for (uint32_t htr = 0; htr < h_blk; htr++) {
-                    uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
-                    BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, current_index, 0, htr);
-                    pack_tile<true>(htr, tt::CBIndex::c_16, current_index);
+    auto NC = get_arg(args::NC);
+    auto Ht = get_arg(args::Ht);
+    auto Wt = get_arg(args::Wt);
+    auto h_blk = get_arg(args::h_blk);
+    auto batch_b = get_arg(args::batch_b);
+    auto Ht_per_batch_b = get_arg(args::Ht_per_batch_b);
+
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(dfb::in0, dfb::in1);
+
+    dfb_a.wait_front(Wt * Ht);
+    dfb_out.reserve_back(Wt * Ht);
+    std::uint32_t b_offset = 0;
+    for (std::uint32_t bn = 0; bn < batch_b; bn++) {
+        for (std::uint32_t wt = 0; wt < Wt; wt++) {
+            dfb_b.wait_front(onetile);
+            for (std::uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
+                // Clamp the final (partial) block so we never process rows past this batch's
+                // Ht_per_batch_b tiles; otherwise current_index over-runs c_0/c_16 (past
+                // num_tile_per_core on the last batch), corrupting the borrowed shard buffers.
+                const std::uint32_t block_tiles = (Ht_per_batch_b - ht) < h_blk ? (Ht_per_batch_b - ht) : h_blk;
+                tile_regs_acquire();
+                for (std::uint32_t htr = 0; htr < block_tiles; htr++) {
+                    std::uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
+                    BCAST_OP<BroadcastType::ROW>(dfb::in0, dfb::in1, current_index, 0, htr);
                 }
-                release_dst();
+                tile_regs_commit();
+
+                tile_regs_wait();
+                for (std::uint32_t htr = 0; htr < block_tiles; htr++) {
+                    std::uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
+                    pack_tile<true>(htr, dfb::out, current_index);
+                }
+                tile_regs_release();
             }
-            cb_pop_front(tt::CBIndex::c_1, onetile);
+            dfb_b.pop_front(onetile);
         }
         b_offset += Ht_per_batch_b * Wt;
     }
-    cb_pop_front(tt::CBIndex::c_0, Wt * Ht);
-    cb_push_back(tt::CBIndex::c_16, Wt * Ht);
+    dfb_a.pop_front(Wt * Ht);
+    dfb_out.push_back(Wt * Ht);
 }

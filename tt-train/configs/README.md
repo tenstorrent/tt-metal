@@ -83,8 +83,8 @@ Device mesh and distributed training configuration.
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 
 ### Constraints
-- DDP and TP cannot both be enabled simultaneously
-- For DDP: batch_size must be divisible by number of devices
+- DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)
+- For DDP: batch_size must be divisible by number of DDP devices
 - For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
 
 ### Device Mesh Shapes
@@ -125,6 +125,7 @@ Model type and architecture configuration loaded from separate files.
 | `intermediate_dim` | int | null | Feed-forward intermediate dimension |
 | `theta` | float | null | RoPE theta parameter |
 | `num_groups` | int | 3 | Number of groups for grouped attention |
+| `embedding_placement` | str | "replicated" | Token-embedding TP placement (only under TP): `replicated` (sharding off), `vocab_parallel`, or `feature_parallel`. Overridable on the CLI via `--embedding-placement`. |
 
 ### RoPE Scaling (`rope_scaling`)
 | Parameter | Type | Default | Description |

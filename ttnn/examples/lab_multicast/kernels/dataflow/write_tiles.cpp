@@ -16,12 +16,11 @@ void kernel_main() {
 
     ////////// BUFFER SETUP //////////
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-    const uint32_t tile_size_bytes = get_tile_size(cb_id_out0);
 
     // Create address generator for the output buffer using TensorAccessorArgs.
     // TensorAccessorArgs extracts data distribution details from compile-time arguments.
     constexpr auto dst_layout_args = TensorAccessorArgs<0>();
-    const auto dst_addr_gen = TensorAccessor(dst_layout_args, dst_base_addr, tile_size_bytes);
+    const auto dst_addr_gen = TensorAccessor(dst_layout_args, dst_base_addr);
 
     // Calculate the starting tile offset for this receiver.
     // Each receiver writes n_tiles tiles, so receiver 0 writes tiles 0..n_tiles-1,
@@ -36,7 +35,7 @@ void kernel_main() {
 
         // Write tile to DRAM at the appropriate offset
         uint32_t dram_tile_id = tile_offset + tile_idx;
-        noc_async_write_tile(dram_tile_id, dst_addr_gen, l1_read_addr);
+        noc_async_write_page(dram_tile_id, dst_addr_gen, l1_read_addr);
         noc_async_write_barrier();
 
         // Free the CB slot for next tile

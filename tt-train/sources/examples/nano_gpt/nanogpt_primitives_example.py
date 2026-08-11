@@ -22,9 +22,9 @@ import ml_dtypes
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
+from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, build_causal_mask
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
-from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.data import CharTokenizer
 
 # Module-level cache for AutoContext singleton (initialized on first use)
 _autograd_ctx = None
@@ -1118,7 +1118,11 @@ def main():
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
                     print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
-                    if checkpoint_save_path and global_step % training_config.model_save_interval == 0:
+                    if (
+                        checkpoint_save_path
+                        and training_config.model_save_interval > 0
+                        and global_step % training_config.model_save_interval == 0
+                    ):
                         checkpoint_path = f"{checkpoint_save_path}_step_{global_step}.pkl"
                         save_checkpoint(
                             checkpoint_path,

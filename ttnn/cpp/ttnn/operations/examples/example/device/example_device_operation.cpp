@@ -9,12 +9,11 @@
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    bool some_condition_based_on_operation_attributes_and_or_tensor_args = true;
-    if (some_condition_based_on_operation_attributes_and_or_tensor_args) {
-        return SingleCore{};
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    if (operation_attributes.attribute) {
+        return MultiCore{};
     }
-    return MultiCore{};
+    return SingleCore{};
 }
 
 void ExampleDeviceOperation::validate_on_program_cache_miss(
@@ -23,7 +22,7 @@ void ExampleDeviceOperation::validate_on_program_cache_miss(
 ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{}));

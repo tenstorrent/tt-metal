@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <numeric>
 #include <functional>
 #include <tt-logger/tt-logger.hpp>
 #include <set>
@@ -15,21 +14,34 @@
 
 #include "ttnn/tensor/storage.hpp"
 
-namespace tt::tt_metal {
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+
+namespace ttnn {
+
+using tt::tt_metal::Buffer;
+using tt::tt_metal::DistributedHostBuffer;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-std::vector<distributed::MeshCoordinate> get_all_mesh_coordinates(const distributed::MeshDevice& device) {
-    std::vector<distributed::MeshCoordinate> coordinates;
+std::vector<tt::tt_metal::distributed::MeshCoordinate> get_all_mesh_coordinates(
+    const tt::tt_metal::distributed::MeshDevice& device) {
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
     coordinates.reserve(device.num_devices());
-    for (const auto& coord : distributed::MeshCoordinateRange(device.shape())) {
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(device.shape())) {
         coordinates.push_back(coord);
     }
     return coordinates;
 }
 
 void validate_mesh_coordinates(
-    const std::vector<distributed::MeshCoordinate>& coords, const distributed::MeshDevice& device) {
-    const distributed::MeshCoordinateRange valid_range(device.shape());
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    const tt::tt_metal::distributed::MeshDevice& device) {
+    const tt::tt_metal::distributed::MeshCoordinateRange valid_range(device.shape());
     for (const auto& coord : coords) {
         TT_FATAL(
             valid_range.contains(coord),
@@ -39,32 +51,10 @@ void validate_mesh_coordinates(
     }
 }
 
-DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
-    return distributed_buffer;
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-HostStorage::HostStorage(HostBuffer buffer) : HostStorage(CMAKE_UNIQUE_NAMESPACE::create_unit_distributed_host_buffer(std::move(buffer))) {}
-
-HostTensor create_dummy_host_tensor(DistributedHostBuffer buffer) {
-    TensorSpec spec{Shape{}, TensorLayout{DataType::BFLOAT16, PageConfig{Layout::ROW_MAJOR}, MemoryConfig{}}};
-    TensorTopology topology;
-    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
-}
-
-HostStorage::HostStorage(DistributedHostBuffer buffer) : tensor(create_dummy_host_tensor(std::move(buffer))) {}
-
 HostStorage::HostStorage(HostTensor tensor) : tensor(std::move(tensor)) {}
-
-HostStorage::HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology) :
-    tensor(HostTensor(other.buffer(), std::move(spec), std::move(topology))) {}
-
-HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology) :
-    tensor(HostTensor(std::move(other.tensor), std::move(spec), std::move(topology))) {}
 
 const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
 
@@ -80,7 +70,7 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
 // - Allocated: actively holding a MeshTensor.
 // - Deallocated: the MeshTensor was deallocated by any of the DeviceStorage instances.
 //
-// To ease transition, we keep a tombstone of the MeshTensor's spec, topology, and buffer when the MeshTensor is
+// To ease transition, we keep a tombstone of the MeshTensor's spec and topology when the MeshTensor is
 // deallocated.
 struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedDefaultConstructed {};
@@ -92,52 +82,57 @@ struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedTombStone {
         TensorSpec tensor_spec_;
         TensorTopology tensor_topology_;
-        // Deallocated buffer kept so device() stays valid without dangling MeshDevice.
-        // Remove once post-deallocation mesh_device access is no longer needed.
-        // See: get_device_bypass_deallocate_check
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
     };
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
     States state_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
-    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {
-        TT_FATAL(
-            std::get<Allocated>(state_).mesh_tensor_.is_initialized(),
-            "MeshTensor must not be in default constructed state.");
+    MeshTensorHolder(MeshTensor mesh_tensor) {
+        TT_FATAL(!mesh_tensor.is_valueless_after_move(), "MeshTensor must not be in a moved-from state.");
+        state_ = Allocated{std::move(mesh_tensor)};
     }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
-            // We should favor letting MeshTensor go out of scope instead of explicitly calling the underlying
-            // MeshBuffer. Calling deallocate is currently needed as we keep the MeshBuffer object alive in the
-            // DeallocatedTombStone state.
-            // Calling mesh_buffer_invariant_breaking() as we wish to get a mutable pointer to the MeshBuffer,
-            // and this is breaking the invariant of MeshTensor (Device memory is allocated when the MeshTensor object
-            // is alive).
-            allocated->mesh_tensor_.mesh_buffer_invariant_breaking()->deallocate();
-            // MeshTensor goes out of scope at this assignment:
+            // Capture spec/topology, then replace the Allocated state. The MeshTensor is destroyed by this
+            // assignment, and its destructor releases the underlying device memory.
             state_ = DeallocatedTombStone{
-                allocated->mesh_tensor_.tensor_spec(),
-                allocated->mesh_tensor_.tensor_topology(),
-                allocated->mesh_tensor_.mesh_buffer_invariant_breaking()};
+                allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
     }
 };
 
 DeviceStorage::DeviceStorage() : mesh_tensor_holder_(std::make_shared<MeshTensorHolder>()) {}
 
+DeviceStorage::DeviceStorage(DeviceStorage&& other) noexcept :
+    mesh_tensor_holder_(std::move(other.mesh_tensor_holder_)),
+    coords_(std::move(other.coords_)),
+    root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)) {
+    other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+}
+
+DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
+    if (this != &other) {
+        mesh_tensor_holder_ = std::move(other.mesh_tensor_holder_);
+        coords_ = std::move(other.coords_);
+        root_mesh_tensor_holder_ = std::move(other.root_mesh_tensor_holder_);
+        other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+    }
+    return *this;
+}
+
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
     mesh_tensor_holder_(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor))),
     coords_(CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(get_mesh_tensor().device())) {}
 
-DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<distributed::MeshCoordinate> coords) :
+DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor_)), std::move(coords), nullptr) {}
 
-DeviceStorage::DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords) :
+DeviceStorage::DeviceStorage(
+    const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
@@ -148,7 +143,7 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
-    std::vector<distributed::MeshCoordinate> coords,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
     std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder) :
     mesh_tensor_holder_(std::move(mesh_tensor_holder)),
     coords_(std::move(coords)),
@@ -160,13 +155,13 @@ DeviceStorage::DeviceStorage(
 
 Buffer* DeviceStorage::get_buffer() const { return get_mesh_buffer().get_reference_buffer(); }
 
-const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
+const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
     return std::visit(
         ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> const distributed::MeshBuffer& {
+            [](const MeshTensorHolder::Allocated& allocated) -> const tt::tt_metal::distributed::MeshBuffer& {
                 return allocated.mesh_tensor_.mesh_buffer();
             },
-            [](const auto&) -> const distributed::MeshBuffer& { TT_THROW("Tensor is not allocated"); }},
+            [](const auto&) -> const tt::tt_metal::distributed::MeshBuffer& { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
 }
 
@@ -185,24 +180,21 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
         mesh_tensor_holder_->state_);
 }
 
+MeshTensor DeviceStorage::release_mesh_tensor() {
+    auto result = std::visit(
+        ttsl::overloaded{
+            [](MeshTensorHolder::Allocated& allocated) -> MeshTensor { return std::move(allocated.mesh_tensor_); },
+            [](const auto&) -> MeshTensor { TT_THROW("Tensor is not allocated"); }},
+        mesh_tensor_holder_->state_);
+    mesh_tensor_holder_->state_ = MeshTensorHolder::DeallocatedDefaultConstructed{};
+    return result;
+}
+
 MeshTensor& DeviceStorage::get_mesh_tensor() {
     return std::visit(
         ttsl::overloaded{
             [](MeshTensorHolder::Allocated& allocated) -> MeshTensor& { return allocated.mesh_tensor_; },
             [](const auto&) -> MeshTensor& { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
-
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> std::shared_ptr<distributed::MeshBuffer> {
-                return allocated.mesh_tensor_.mesh_buffer_invariant_breaking();
-            },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> std::shared_ptr<distributed::MeshBuffer> {
-                return tombstone.mesh_buffer_;
-            },
-            [](const auto&) -> std::shared_ptr<distributed::MeshBuffer> { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
 }
 
@@ -221,25 +213,10 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
-distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) { return &allocated.mesh_tensor_.device(); },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) { return tombstone.mesh_buffer_->device(); },
-            [](const auto&) -> distributed::MeshDevice* { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
+bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 
-bool DeviceStorage::is_uniform_storage() const {
-    if (!is_allocated()) {
-        return true;
-    }
-    return coords_.size() == get_device_bypass_deallocate_check()->num_devices();
-}
-
-std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
-    // Conv breaks if we keep the assert here.
-    // TT_FATAL(is_allocated(), "Device memory is not allocated");
+std::span<const tt::tt_metal::distributed::MeshCoordinate> DeviceStorage::get_coords() const {
+    TT_FATAL(is_allocated(), "DeviceStorage is not allocated");
     return coords_;
 }
 
@@ -262,14 +239,14 @@ DeviceStorage DeviceStorage::combine_device_storages(
             }),
         "tensor shards must be allocated on the same mesh buffer.");
 
-    std::set<distributed::MeshCoordinate> seen_coords;
+    std::set<tt::tt_metal::distributed::MeshCoordinate> seen_coords;
     for (const auto& storage : storages) {
         for (const auto& coord : storage.get().get_coords()) {
             auto [_, coord_is_new] = seen_coords.insert(coord);
             TT_FATAL(coord_is_new, "Found a tensor shard at duplicate coordinate {}", coord);
         }
     }
-    std::vector<distributed::MeshCoordinate> vec_coords(seen_coords.begin(), seen_coords.end());
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> vec_coords(seen_coords.begin(), seen_coords.end());
 
     const int tensor_rank = static_cast<int>(model_storage.get_tensor_spec().logical_shape().rank());
     TT_FATAL(
@@ -279,11 +256,11 @@ DeviceStorage DeviceStorage::combine_device_storages(
         tensor_rank,
         tensor_rank);
 
-    TensorTopology topology =
-        TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(vec_coords.size()), shard_dim);
+    TensorTopology topology = TensorTopology::create_sharded_tensor_topology(
+        tt::tt_metal::distributed::MeshShape(vec_coords.size()), shard_dim);
 
     DeviceStorage res(model_storage, std::move(vec_coords));
-    res.get_mesh_tensor().update_tensor_topology(topology);
+    update_tensor_topology(res.get_mesh_tensor(), topology);
     return res;
 }
 
@@ -304,7 +281,7 @@ const TensorTopology& DeviceStorage::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const TensorTopology& {
-                return allocated.mesh_tensor_.tensor_topology();
+                return tt::tt_metal::get_tensor_topology(allocated.mesh_tensor_);
             },
             [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> const TensorTopology& {
                 return tombstone.tensor_topology_;
@@ -313,4 +290,4 @@ const TensorTopology& DeviceStorage::get_tensor_topology() const {
         mesh_tensor_holder_->state_);
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

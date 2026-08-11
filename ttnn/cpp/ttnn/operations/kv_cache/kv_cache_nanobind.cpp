@@ -23,13 +23,17 @@ namespace {
 
 void bind_fill_cache_for_user_(nb::module_& mod) {
     const auto* doc = R"doc(
-        Populates the :attr:`cache` tensor in-place with values sourced from :attr:`input` at :attr:`batch_index`.
+        Populates the :attr:`cache` tensor in-place with values sourced from :attr:`input` at :attr:`batch_index`,
+        optionally offset along the sequence dimension by :attr:`update_idx` (tile-aligned).
 
 
         Args:
             cache (ttnn.Tensor): the cache tensor to be written to.
-            input_tensor (ttnn.Tensor): the input tensor to be written to the cache.
+            input (ttnn.Tensor): the input tensor to be written to the cache.
             batch_index (int): the index into the cache tensor.
+
+        Keyword Args:
+            update_idx (int): seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.
 
 
         Returns:
@@ -39,7 +43,14 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
         )doc";
 
     ttnn::bind_function<"fill_cache_for_user_", "ttnn.kv_cache.">(
-        mod, doc, &ttnn::fill_cache_for_user_, nb::arg("cache"), nb::arg("input"), nb::arg("batch_index"));
+        mod,
+        doc,
+        &ttnn::fill_cache_for_user_,
+        nb::arg("cache"),
+        nb::arg("input"),
+        nb::arg("batch_index"),
+        nb::kw_only(),
+        nb::arg("update_idx") = 0);
 }
 
 void bind_update_cache_for_token_(nb::module_& mod) {
@@ -105,22 +116,33 @@ void bind_update_cache(nb::module_& mod) {
 
 void bind_fill_cache(nb::module_& mod) {
     const auto* doc = R"doc(
-        Fills the cache tensor in place with the values from input at the specified batch_idx.
+        Fills the cache tensor in place with the values from input at the specified batch_idx,
+        optionally offset along the sequence dimension by update_idx (tile-aligned).
 
         Args:
             * :attr:`cache_tensor` (ttnn.Tensor): The cache tensor to be written to.
             * :attr:`input_tensor` (ttnn.Tensor): The token tensor to be written to the cache.
             * :attr:`batch_idx` (int): The index into the cache tensor.
 
+        Keyword Args:
+            * :attr:`update_idx` (int): seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.
+
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.update_cache(tensor1, tensor2, batch_idx)
+            >>> cache_tensor = ttnn.from_torch(torch.zeros((4, 1, 128, 64), dtype=torch.bfloat16), device=device)
+            >>> input_tensor = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.fill_cache(cache_tensor, input_tensor, batch_idx=0, update_idx=32)
 
     )doc";
 
     ttnn::bind_function<"fill_cache">(
-        mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
+        mod,
+        doc,
+        &ttnn::fill_cache,
+        nb::arg("cache_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg("batch_idx"),
+        nb::kw_only(),
+        nb::arg("update_idx") = 0);
 }
 
 }  // namespace

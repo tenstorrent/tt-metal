@@ -32,10 +32,6 @@ Usage:
     python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
         --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --no_logits
 
-    # Sharded loss + on-device sampling (all_gather before sample):
-    python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
-        --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --sharded_loss --no_logits
-
     # Batched generation (4 samples per device, 8 total with DP=2):
     python generate.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \\
         --max_tokens 32 --max_seq_len 128 --mesh_shape 2 1 --batch_size 4
@@ -50,18 +46,31 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm
 
 import ttml
+import ttnn
 
-from utils.kv_cache import (
-    KVCache,
-    _to_device_tiled,
-    _causal_mask,
-)
+from ttml.models.qwen3.kv_cache import KVCache
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
     create_input_tensor_from_torch,
     create_input_tensor_dp,
     gather_mesh_to_cpu,
 )
+
+
+def _to_device_tiled(tensor_torch, device, dtype=ttnn.bfloat16):
+    """Host torch tensor -> device tilized ttml tensor (no grad)."""
+    host = ttnn.from_torch(tensor_torch, dtype=dtype)
+    dev = ttnn.to_device(host, device)
+    tiled = ttnn.tilize_with_zero_padding(dev)
+    return ttml.autograd.create_tensor(tiled, requires_grad=False)
+
+
+def _causal_mask(seq_len, device):
+    """Square causal mask ``[1, 1, seq_len, seq_len]`` as a tiled bf16 device tensor."""
+    mask = torch.tril(torch.ones(1, 1, seq_len, seq_len, dtype=torch.bfloat16))
+    return _to_device_tiled(mask, device)
+
 
 create_causal_mask_tensor = _causal_mask  # public alias used by gradients.py
 
@@ -257,7 +266,6 @@ def generate_ttml(
     temperature=0.0,
     collect_logits=False,
     distributed=False,
-    sharded_loss=False,
     dp_size=1,
     tp_size=1,
     kv_cache=False,
@@ -265,9 +273,9 @@ def generate_ttml(
 ):
     """Generate with ttml model.
 
-    When sharded_loss=True, logits arrive vocab-sharded across TP devices.
-    We all_gather them to full vocab before sampling or collection — this
-    is simpler and avoids the distributed argmax+Gumbel approximation.
+    In TP mode logits arrive vocab-sharded across TP devices.  We all_gather
+    them to full vocab before sampling or collection — this is simpler and
+    avoids the distributed argmax+Gumbel approximation.
     """
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
@@ -279,14 +287,11 @@ def generate_ttml(
     per_device_batch = batch_size // dp_size if is_dp else batch_size
 
     orig_vocab = config.vocab_size
-    padded_vocab = ((orig_vocab + 31) // 32) * 32
 
     past_kv = KVCache(config.num_hidden_layers, max_seq_len) if kv_cache else None
     causal_mask = None if kv_cache else _causal_mask(max_seq_len, device)
 
     logits_mask = None
-    if not collect_logits:
-        logits_mask = _sample_logits_mask(orig_vocab, padded_vocab, device)
 
     current_tokens = [list(pt) for pt in all_prompt_tokens]
     generated = [[] for _ in range(batch_size)]
@@ -304,19 +309,17 @@ def generate_ttml(
 
         if is_dp:
             input_tensor = create_input_tensor_dp(padded.numpy(), device)
-            input_ids_np = padded.numpy()
         else:
             input_tensor = create_input_tensor_from_torch(padded, device)
-            input_ids_np = padded.numpy()
 
         # --- forward ---
-        logits = model(input_tensor, attn_mask, past_key_values=past_kv, input_ids_np=input_ids_np)
+        logits = model(input_tensor, attn_mask, past_key_values=past_kv)
 
         if track_memory and step == 0:
             MemoryUsageTracker.snapshot("GENERATION_STEP_0")
 
-        # --- if vocab-sharded, gather to full vocab on device ---
-        if sharded_loss:
+        # --- if vocab-sharded (TP mode), gather to full vocab on device ---
+        if tp_size > 1:
             logits = ttml.ops.distributed.all_gather(logits, dim=3, cluster_axis=1)
 
         # --- sample ---
@@ -335,6 +338,9 @@ def generate_ttml(
                 logits_lists,
             )
         else:
+            if step == 0:
+                # logits is post-all_gather here, so dim 3 is the full padded vocab.
+                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device)
             tokens = _sample_on_device(
                 logits,
                 pred_positions,
@@ -429,7 +435,7 @@ def compare_logits(all_hf_logits, all_ttml_logits, vocab_size, tokenizer):
 
 
 def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
-    """Create ttml model and load HF weights. Returns (model, config, sharded_loss, mode_str)."""
+    """Create ttml model and load HF weights. Returns (model, config, mode_str)."""
     from utils.model_factory import create_ttml_model, load_hf_weights
 
     use_tp = tp_size > 1
@@ -439,9 +445,7 @@ def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
         dp_size=dp_size,
         tp_size=tp_size,
         track_memory=args.track_memory,
-        sharded_loss=args.sharded_loss,
     )
-    sharded_loss = args.sharded_loss and use_tp
     load_hf_weights(
         model,
         hf_state_dict,
@@ -450,7 +454,7 @@ def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
         tp=use_tp,
         shard_dim=shard_dim,
     )
-    return model, config, sharded_loss, mode_str
+    return model, config, mode_str
 
 
 # =====================================================================
@@ -472,12 +476,6 @@ def main():
         default=[1, 1],
         metavar=("ROWS", "COLS"),
         help="Device mesh [rows, cols]. rows=DP, cols=TP. Default: 1 1.",
-    )
-    parser.add_argument(
-        "--sharded_loss",
-        action="store_true",
-        default=False,
-        help="Keep LM head output vocab-sharded; all_gather before sampling.",
     )
     parser.add_argument(
         "--track_memory",
@@ -532,9 +530,7 @@ def main():
         print(f"Prompt[{i}]: {p!r}  ->  {len(all_prompt_tokens[i])} tokens")
 
     # 3. Set up device
-    from utils.device_setup import setup_device
-
-    ctx, device = setup_device(dp_size, tp_size)
+    _ctx, device = setup_device(dp_size, tp_size)
 
     memory_guard = None
     if args.track_memory:
@@ -543,9 +539,7 @@ def main():
         MemoryUsageTracker.snapshot("BEFORE_MODEL_CREATION")
 
     # 4. Create ttml model and load weights
-    model, config, sharded_loss, mode_str = _create_model(
-        hf_model.config, hf_model.state_dict(), args, dp_size, tp_size
-    )
+    model, config, mode_str = _create_model(hf_model.config, hf_model.state_dict(), args, dp_size, tp_size)
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("AFTER_WEIGHT_LOADING")
@@ -583,7 +577,6 @@ def main():
         temperature=args.temperature,
         collect_logits=collect_logits,
         distributed=distributed,
-        sharded_loss=sharded_loss,
         dp_size=dp_size,
         tp_size=tp_size,
         kv_cache=args.kv_cache,
@@ -616,8 +609,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

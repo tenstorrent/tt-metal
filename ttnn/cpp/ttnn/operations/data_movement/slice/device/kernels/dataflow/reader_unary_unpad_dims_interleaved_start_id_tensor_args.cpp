@@ -4,10 +4,13 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_tensor = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_tensor = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
     const uint32_t tile_width = get_compile_time_arg_val(3);
     const uint32_t tile_height = get_compile_time_arg_val(4);
@@ -27,43 +30,57 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    // Create objects for Device 2.0 API
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_tensor(dfb_id_tensor);
+    Noc noc;
+
+    // Get tile size from CB interface
+    const uint32_t tile_size = dfb_in0.get_entry_size();
 
     // Create TensorAccessors for start and end tensors
-    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr, tile_size);
-    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr, tile_size);
+    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr);
+    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr);
 
     // Read start and end indices from tensors using TensorAccessor
     uint32_t start_indices[num_dims];
-    uint32_t end_indices[num_dims];
+    [[maybe_unused]] uint32_t end_indices[num_dims];
 
     // Read start tensor data using separate circular buffer
-    cb_reserve_back(cb_id_tensor, 1);
-    uint32_t start_buffer_l1_addr = get_write_ptr(cb_id_tensor);
-    noc_async_read_tile(0, start_tensor_accessor, start_buffer_l1_addr);
-    noc_async_read_barrier();
+    dfb_tensor.reserve_back(1);
+    uint32_t start_buffer_l1_addr = dfb_tensor.get_write_ptr();
+    noc.async_read(start_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    dfb_tensor.push_back(1);
+    dfb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
         start_indices[i] = start_data[i];
     }
-    cb_pop_front(cb_id_tensor, 1);
+    dfb_tensor.pop_front(1);
 
     // Read end tensor data using separate circular buffer
-    cb_reserve_back(cb_id_tensor, 1);
-    uint32_t end_buffer_l1_addr = get_write_ptr(cb_id_tensor);
-    noc_async_read_tile(0, end_tensor_accessor, end_buffer_l1_addr);
-    noc_async_read_barrier();
+    dfb_tensor.reserve_back(1);
+    uint32_t end_buffer_l1_addr = dfb_tensor.get_write_ptr();
+    noc.async_read(end_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    dfb_tensor.push_back(1);
+    dfb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
         end_indices[i] = end_data[i];
     }
-    cb_pop_front(cb_id_tensor, 1);
+    dfb_tensor.pop_front(1);
 
     uint32_t start_offset = 0;
 
@@ -96,11 +113,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         uint32_t old_src_tile_id = src_tile_id;
 
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        dfb_in0.reserve_back(1);
+        noc.async_read(s0, dfb_in0, tile_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in0.push_back(1);
 
         src_tile_id++;
         for (uint32_t j = 0; j < num_dims; ++j) {

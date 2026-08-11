@@ -263,7 +263,7 @@ In the reader kernel, we specify the DRAM buffer address generators for the inpu
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
-            uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t read_noc_addr = s.get_noc_addr(i_stick);
             // Seed pad value in first word to guarantee padding when writer writes only stick_size_bytes
             *((volatile tt_l1_ptr uint32_t*)l1_write_addr) = packed_pad_value;
             if (read_stick) {
@@ -275,6 +275,10 @@ In the reader kernel, we specify the DRAM buffer address generators for the inpu
                     noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+                    // Drain this loop-back read out of cb_pad_align before the next stick's read-in
+                    // overwrites that shared scratch, else the read-in can land while this read is still
+                    // sourcing from it (WAR on cb_pad_align).
+                    noc_async_read_barrier();
                 } else {
                     noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
                 }
@@ -309,7 +313,7 @@ Using the start and end index, the kernel reads the pad value into the circular 
         cb_wait_front(cb_out0, num_sticks_per_barrier);
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint64_t write_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t write_noc_addr = s.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
             l1_read_addr += stick_size_padded_aligned;
             i_stick += 1;
@@ -324,11 +328,11 @@ Once the reader kernel is finished padding the tensor and storing the new data i
 # Dispatch program to device for execution
 
 ``` cpp
-distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec.data(), false);
-distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
-distributed::EnqueueReadMeshBuffer(cq, dst_buffer, dst_vec.data(), false);
+distributed::EnqueueReadMeshBuffer(cq, dst_buffer, dst_vec.data(), true);
 distributed::Finish(cq);
 /* ... */
 mesh_device->close();

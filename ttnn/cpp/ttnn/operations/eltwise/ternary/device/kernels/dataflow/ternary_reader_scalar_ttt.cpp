@@ -5,13 +5,13 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    // Standard first 5 arguments (same as ternary_reader_nobcast_ttt.cpp)
+    // Standard first 5 arguments (same as ternary_reader_nosubtilebcast_ttt.cpp)
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
     const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true tensor address
     const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // false tensor address
@@ -60,31 +60,31 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_pred(predicate_cb);
-    experimental::CircularBuffer cb_true(true_cb);
-    experimental::CircularBuffer cb_false(false_cb);
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_true(true_cb);
+    CircularBuffer cb_false(false_cb);
 
 #if SRC_SHARDED_A
     cb_pred.reserve_back(src_num_tiles);
     cb_pred.push_back(src_num_tiles);
 #else
-    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
-    const auto s0 = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
+    const auto s0 = TensorAccessor(src0_args, src_addr);
 #endif
 #if SRC_SHARDED_B
     cb_true.reserve_back(true_num_tiles);
     cb_true.push_back(true_num_tiles);
 #else
-    const uint32_t src1_tile_bytes = get_tile_size(true_cb);
-    const auto s1 = TensorAccessor(src1_args, true_addr, src1_tile_bytes);
+    const uint32_t src1_tile_bytes = cb_true.get_tile_size();
+    const auto s1 = TensorAccessor(src1_args, true_addr);
 #endif
 #if SRC_SHARDED_C
     cb_false.reserve_back(false_num_tiles);
     cb_false.push_back(false_num_tiles);
 #else
-    const uint32_t src2_tile_bytes = get_tile_size(false_cb);
-    const auto s2 = TensorAccessor(src2_args, false_addr, src2_tile_bytes);
+    const uint32_t src2_tile_bytes = cb_false.get_tile_size();
+    const auto s2 = TensorAccessor(src2_args, false_addr);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -149,7 +149,7 @@ void kernel_main() {
                     noc.async_read(s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
                     cb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_B
@@ -158,7 +158,7 @@ void kernel_main() {
                     noc.async_read(s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT_B(true_cb);
+                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_true.get_write_ptr());
                     cb_true.push_back(onetile);
 #endif
 
@@ -169,7 +169,7 @@ void kernel_main() {
                     noc.async_read(s2, cb_false, src2_tile_bytes, {.page_id = false_tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT_C(false_cb);
+                    FILL_TILE_WITH_FIRST_ELEMENT_C(cb_false.get_write_ptr());
                     cb_false.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {

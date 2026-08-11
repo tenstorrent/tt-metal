@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     std::uint32_t dram_buffer_src_addr = get_arg_val<uint32_t>(0);
@@ -13,9 +13,9 @@ void kernel_main() {
     std::uint32_t num_loops = get_arg_val<uint32_t>(3);
     std::uint32_t num_bytes = get_arg_val<uint32_t>(4);
 
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> src_dram;
-    experimental::CoreLocalMem<std::uint32_t> dst_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> src_dram;
+    CoreLocalMem<std::uint32_t> dst_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
     // DRAM NOC src address
     for (uint32_t i = 0; i < num_loops; i++) {

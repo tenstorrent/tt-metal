@@ -5,34 +5,45 @@
 #include <cstdint>
 
 #include "api/compute/bcast.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t w = 0;
-    constexpr uint32_t onetile = 1;
-    uint32_t B = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
+    std::uint32_t w = 0;
+    constexpr std::uint32_t onetile = 1;
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    DataflowBuffer dfb_a(dfb::in0);
+    DataflowBuffer dfb_b(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            cb_wait_front(tt::CBIndex::c_1, onetile);
-            for (uint32_t w = 0; w < Wt; w++) {
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+    auto B = get_arg(args::B);
+    auto Ht = get_arg(args::Ht);
+    auto Wt = get_arg(args::Wt);
 
-                acquire_dst();
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+    bcast_init<BCAST_LLKOP, BCAST_DIM>(dfb::in0, dfb::in1);
 
-                cb_wait_front(tt::CBIndex::c_0, onetile);
-                BCAST_OP<BroadcastType::COL>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
-                cb_pop_front(tt::CBIndex::c_0, onetile);
+    for (std::uint32_t b = 0; b < B; b++) {
+        for (std::uint32_t h = 0; h < Ht; h++) {
+            dfb_b.wait_front(onetile);
+            for (std::uint32_t w = 0; w < Wt; w++) {
+                dfb_a.wait_front(onetile);
 
-                release_dst();
+                tile_regs_acquire();
+                BCAST_OP<BroadcastType::COL>(dfb::in0, dfb::in1, 0, 0, 0);
+                tile_regs_commit();
 
-                cb_push_back(tt::CBIndex::c_16, onetile);
+                dfb_a.pop_front(onetile);
+
+                dfb_out.reserve_back(onetile);
+
+                tile_regs_wait();
+                pack_tile(0, dfb::out);
+                tile_regs_release();
+
+                dfb_out.push_back(onetile);
             }
-            cb_pop_front(tt::CBIndex::c_1, onetile);
+            dfb_b.pop_front(onetile);
         }
     }
 }

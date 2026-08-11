@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_core ${LIB_TYPE})
 add_library(TTNN::Ops::Core ALIAS ttnn_op_core)
 
-tt_reuse_precompile_headers(ttnn_op_core TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_core TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_core)
 
 target_sources(
@@ -10,18 +12,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            core.hpp
-            to_dtype/to_dtype_op.hpp
-            to_layout/to_layout_op.hpp
-            compute_kernel/compute_kernel_config.hpp
-            to_memory_config/to_memory_config_op.hpp
+        FILES ${TTNN_OP_CORE_API_HEADERS}
     PRIVATE
-        compute_kernel/compute_kernel_config.cpp
-        core.cpp
-        to_layout/to_layout_op.cpp
-        to_dtype/to_dtype_op.cpp
-        to_memory_config/to_memory_config_op.cpp
+        ${TTNN_OP_CORE_SRCS}
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

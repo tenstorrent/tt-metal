@@ -21,22 +21,21 @@ void kernel_main() {
     // So the tile size in bytes is 32 * 32 * 2 = 2048 bytes.
     // Note that this is the same as the tile size used in the host code
     // when creating the buffers.
-    const uint32_t tile_size_bytes = 32 * 32 * 2;
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr, tile_size_bytes);
+    const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr);
 
     constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
+    const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         // Issue a read to the NoC and write to the L1 buffer. This operation is asynchronous.
         // thus a barrier is needed to ensure that the read is complete before the write.
-        noc_async_read_tile(i, in0, l1_buffer_addr);
+        noc_async_read_page(i, in0, l1_buffer_addr);
         noc_async_read_barrier();
         // Write back the tile to the destination DRAM buffer.
         // Again, this is an asynchronous operation, so we need a barrier to ensure the write
         // is complete before the next iteration.
-        noc_async_write_tile(i, out0, l1_buffer_addr);
+        noc_async_write_page(i, out0, l1_buffer_addr);
         noc_async_write_barrier();
     }
 }

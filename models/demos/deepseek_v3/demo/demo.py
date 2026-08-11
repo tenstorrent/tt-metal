@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from glob import glob
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 )
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 
 def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
@@ -86,6 +88,37 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
+def _resolve_tt_metal_commit() -> str:
+    """Resolve the tt-metal commit used for this run."""
+    repo_root = Path(__file__).resolve().parents[4]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = ""
+
+    return commit or "unknown"
+
+
+def _is_primary_artifact_writer() -> bool:
+    # Prefer global launcher ranks when available; TT_MESH_HOST_RANK is mesh-local
+    # and can repeat across submeshes in a multi-mesh launch.
+    for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK", "TT_MESH_HOST_RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -102,6 +135,9 @@ def _print_performance_metrics(results: dict) -> None:
         trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
         logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+        tt_metal_commit = statistics.get("tt-metal_commit")
+        if tt_metal_commit:
+            logger.info(f"tt-metal commit: {tt_metal_commit}")
 
 
 def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
@@ -203,7 +239,18 @@ def create_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLING_TOP_P,
         help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
     )
-    p.add_argument("--cache-dir", type=str, required=True)
+    p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Optional reference/test cache directory. Also used as the legacy TT weight-cache root when --use-weight-cache is set.",
+    )
+    p.add_argument(
+        "--use-weight-cache",
+        action="store_true",
+        default=False,
+        help="Load a prebuilt current-format legacy TT weight cache from --cache-dir instead of converting DeepSeek weights in memory. Older-format and unversioned caches must be regenerated first.",
+    )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -223,12 +270,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--reference-file",
         type=str,
-        help="Path to reference .pt/.refpt file containing 'reference_tokens' and optional 'top5_tokens'",
-    )
-    p.add_argument(
-        "--tf-prompt-len",
-        type=int,
-        help="Teacher-forcing prompt length in tokens (from reference file). Defaults to half+1 if omitted.",
+        help="Path to multi-prompt teacher-forcing .pt/.refpt reference file",
     )
     p.add_argument(
         "--early_print_first_user",
@@ -296,7 +338,7 @@ def create_parser() -> argparse.ArgumentParser:
         dest="force_recalculate",
         action="store_true",
         default=False,
-        help="Force regeneration of cached TTNN weight files and config.",
+        help="Legacy compatibility flag. The stacked DeepSeek path converts weights directly in memory, so this is ignored there.",
     )
     p.add_argument(
         "--stop-at-eos",
@@ -422,12 +464,12 @@ def run_demo(
     max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
     max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
+    use_weight_cache: bool = False,
     random_weights: bool = False,
     single_layer: str | None = None,
     override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
-    tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = True,
@@ -455,9 +497,12 @@ def run_demo(
         raise SystemExit("Missing model path. Provide --model-path.")
     model_path = Path(model_path)
 
-    if cache_dir is None:
-        raise SystemExit("Missing cache directory. Provide --cache-dir.")
-    cache_dir = Path(cache_dir)
+    cache_dir = None if cache_dir is None else Path(cache_dir)
+
+    if use_weight_cache and cache_dir is None:
+        raise SystemExit("--use-weight-cache requires --cache-dir pointing at the legacy TT weight-cache root.")
+    if use_weight_cache and force_recalculate:
+        raise SystemExit("--use-weight-cache cannot be combined with --force-recalculate.")
 
     if sampling_temperature < 0:
         raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")
@@ -492,23 +537,13 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        # NOTE:
-        # The base trace region size below (~36.3 MiB) was empirically determined from
-        # vLLM decode workloads to be sufficient to keep the trace buffer from
-        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
-        # length, and mesh configuration). We add 20% headroom as a conservative
-        # safety margin to accommodate variability across models / prompts without
-        # repeatedly re-tuning this value.
-        #
-        # If you are optimizing memory usage, this can be reduced after verifying
-        # that tracing completes without buffer exhaustion for your target workload.
-        BASE_TRACE_REGION_BYTES = 38_070_272
-        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
-        if enable_mtp:
-            trace_region_size = max(trace_region_size, 134_217_728)
-        logger.info(f"Trace region size set to {trace_region_size}")
+        # trace_region_size=0 (deepseek-v3 YAML) lets the runtime allocate trace buffers dynamically.
+        trace_open_params = build_trace_device_params("deepseek-v3")
+        logger.info(f"Trace region size set to {trace_open_params['trace_region_size']}")
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+            mesh_shape=mesh_shape,
+            **trace_open_params,
+            dispatch_core_config=dispatch_core_config,
         )
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
@@ -562,31 +597,37 @@ def run_demo(
             # Lazy import to avoid overhead when not used
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
-            token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
+            token_acc = TokenAccuracy(str(reference_file))
         if generator == "bp":
-            gen = DeepseekGeneratorDP(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=cache_dir,
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(
-                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
-                ),
-                single_layer=(single_layer if random_weights else None),
-                enable_trace=enable_trace,
-                enable_mem_profile=enable_mem_profile,
-                signpost=signpost,
-                max_seq_len=max_seq_len,
-                prefill_max_tokens=prefill_max_tokens,
-                force_recalculate=force_recalculate,
-                profile_decode=profile_decode,
-                sample_on_device=sample_on_device,
-                enable_mtp=enable_mtp,
-                batch_size_per_row=max_users_per_row,
-                sampling_params=sampling_params,
-            )
+            try:
+                gen = DeepseekGeneratorDP(
+                    mesh_device=mesh_device,
+                    model_path=model_path,
+                    cache_dir=cache_dir,
+                    use_weight_cache=use_weight_cache,
+                    tokenizer=tokenizer,
+                    random_weights=bool(random_weights),
+                    dense_layers=(1 if random_weights and single_layer else None),
+                    override_num_layers=(
+                        override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                    ),
+                    single_layer=(single_layer if random_weights else None),
+                    enable_trace=enable_trace,
+                    enable_mem_profile=enable_mem_profile,
+                    signpost=signpost,
+                    max_seq_len=max_seq_len,
+                    prefill_max_tokens=prefill_max_tokens,
+                    force_recalculate=force_recalculate,
+                    profile_decode=profile_decode,
+                    sample_on_device=sample_on_device,
+                    enable_mtp=enable_mtp,
+                    batch_size_per_row=max_users_per_row,
+                    sampling_params=sampling_params,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                if use_weight_cache:
+                    raise SystemExit(str(e)) from e
+                raise
         else:
             raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
@@ -595,20 +636,33 @@ def run_demo(
             prompt_list = [""]
         else:
             if token_acc is not None:
-                # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
-                # This ensures the TT model uses the exact same token sequence as the reference.
+                n_entries = token_acc.num_entries
                 if prompts:
                     prompt_list = prompts
+                    if len(prompt_list) != n_entries:
+                        raise SystemExit(
+                            "--token-accuracy expects one prompt per reference entry. "
+                            f"Got {len(prompt_list)} prompt(s) for {n_entries} reference entries."
+                        )
                 else:
-                    # Still need a placeholder prompt for the generator API
-                    prompt_list = [""]
-                pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
-                # If not overridden, ensure we don't decode past the available ground truth
-                max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
+                    # No text prompts: use pre-tokenized reference prompts directly
+                    # and placeholder labels for output/checkpoints.
+                    prompt_list = [f"[teacher_forcing_prompt_{i}]" for i in range(n_entries)]
+                    pre_tokenized_prompts = [token_acc.get_prompt_token_ids(user_idx=i) for i in range(n_entries)]
+                max_new_tokens = min(
+                    max_new_tokens,
+                    min(token_acc.num_gt_tokens(user_idx=i) for i in range(n_entries)),
+                )
             else:
                 if not prompts:
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
+
+        if token_acc is not None and len(prompt_list) > batch_size:
+            raise SystemExit(
+                f"--token-accuracy reference has {len(prompt_list)} prompt(s), "
+                f"but runtime capacity is {batch_size}. Reduce prompts or increase max-users-per-row."
+            )
 
         checkpoint_fh = None
         checkpoint_written: set[int] = set()
@@ -721,36 +775,48 @@ def run_demo(
 
             # Process all generations
             results = []
+            agg_top1_matches = 0
+            agg_top5_matches = 0
+            agg_total_tokens = 0
+            if token_acc is not None and len(generations) != token_acc.num_entries:
+                raise RuntimeError(
+                    "Teacher-forcing generation count mismatch: "
+                    f"generated={len(generations)} reference_entries={token_acc.num_entries}"
+                )
             for i, generation_tokens in enumerate(generations):
                 result = {"tokens": generation_tokens, "text": None}
                 if gen.tokenizer is not None:
                     result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-                if token_acc is not None and i == 0:  # Only compute accuracy for first generation
-                    acc = token_acc.compute_accuracy()
-                    garbage_token_debug = token_acc.format_garbage_token_details(gen.tokenizer)
-                    garbage_token_count = len(garbage_token_debug)
-                    garbage_tokens_checked = token_acc.num_garbage_check_tokens()
-                    garbage_token_topk = token_acc.topk_candidate_k if token_acc.has_garbage_check() else None
-                    if garbage_token_topk is not None:
-                        logger.info(
-                            "Teacher-forcing garbage tokens: {}/{} checked against teacher top-{}",
-                            garbage_token_count,
-                            garbage_tokens_checked,
-                            garbage_token_topk,
+                if token_acc is not None:
+                    acc = token_acc.compute_accuracy(user_idx=i)
+                    result["accuracy_top1"] = acc.get("top1")
+                    result["accuracy_top5"] = acc.get("top5")
+                    result["predicted_tokens"] = token_acc.get_predicted_tokens(user_idx=i)
+                    agg_top1_matches += acc.get("matches_top1", 0)
+                    agg_top5_matches += acc.get("matches_top5", 0)
+                    agg_total_tokens += acc.get("total", 0)
+                    if i == 0:
+                        garbage_token_debug = token_acc.format_garbage_token_details(gen.tokenizer)
+                        garbage_token_count = len(garbage_token_debug)
+                        garbage_tokens_checked = token_acc.num_garbage_check_tokens()
+                        garbage_token_topk = token_acc.topk_candidate_k if token_acc.has_garbage_check() else None
+                        if garbage_token_topk is not None:
+                            logger.info(
+                                "Teacher-forcing garbage tokens: {}/{} checked against teacher top-{}",
+                                garbage_token_count,
+                                garbage_tokens_checked,
+                                garbage_token_topk,
+                            )
+                            for line in garbage_token_debug:
+                                logger.warning(line)
+                        result.update(
+                            {
+                                "garbage_token_count": garbage_token_count,
+                                "garbage_tokens_checked": garbage_tokens_checked,
+                                "garbage_token_topk": garbage_token_topk,
+                                "garbage_token_debug": garbage_token_debug,
+                            }
                         )
-                        for line in garbage_token_debug:
-                            logger.warning(line)
-                    result.update(
-                        {
-                            "accuracy_top1": acc.get("top1"),
-                            "accuracy_top5": acc.get("top5"),
-                            "predicted_tokens": list(token_acc._pred_tokens),
-                            "garbage_token_count": garbage_token_count,
-                            "garbage_tokens_checked": garbage_tokens_checked,
-                            "garbage_token_topk": garbage_token_topk,
-                            "garbage_token_debug": garbage_token_debug,
-                        }
-                    )
                 results.append(result)
 
             if checkpoint_fh is not None:
@@ -766,6 +832,17 @@ def run_demo(
                 checkpoint_fh.flush()
                 os.fsync(checkpoint_fh.fileno())
 
+            if token_acc is not None and agg_total_tokens > 0:
+                statistics["teacher_forcing_top1"] = agg_top1_matches / agg_total_tokens
+                statistics["teacher_forcing_top5"] = agg_top5_matches / agg_total_tokens
+                statistics["teacher_forcing_total_tokens"] = agg_total_tokens
+                logger.info(
+                    "Aggregate teacher-forcing accuracy: {} tokens, top1={:.2%}, top5={:.2%}",
+                    agg_total_tokens,
+                    agg_top1_matches / agg_total_tokens,
+                    agg_top5_matches / agg_total_tokens,
+                )
+            statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
@@ -812,12 +889,12 @@ def main() -> None:
         max_seq_len=args.max_seq_len,
         max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
+        use_weight_cache=bool(args.use_weight_cache),
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
         override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
-        tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
@@ -850,7 +927,7 @@ def main() -> None:
             ),
             random_weights=bool(args.random_weights),
         )
-        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+        if _is_primary_artifact_writer():
             _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before

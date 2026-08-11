@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -45,17 +49,22 @@ void kernel_main() {
 
     constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
+
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t sem_target = 0;
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         const bool do_reduce = i != 0;
-        uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+        CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
 
         uint32_t actual_slice_idx;
         if (direction) {
@@ -93,34 +102,41 @@ void kernel_main() {
                     tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                 }
 
-                cb_reserve_back(cb_in0, tile_granularity);
-                uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                cb_in0.reserve_back(tile_granularity);
+                uint32_t l1_write_offset = 0;
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t input_tile_id = tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(input_tile_id);
-                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                    l1_write_addr += page_size;
+                    noc_obj.async_read(
+                        input_tensor_addrgen,
+                        cb_in0,
+                        page_size,
+                        {.page_id = input_tile_id},
+                        {.offset_bytes = l1_write_offset});
+                    l1_write_offset += page_size;
                 }
 
                 if (do_reduce) {
                     // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, tile_granularity);
-                    uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    cb_intermediate.reserve_back(tile_granularity);
+                    uint32_t intermediate_l1_write_offset = 0;
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id = tile_id_start + tiles_read + j;
-                        uint64_t intermediate_noc_read_addr =
-                            intermediate_tensor_addrgen.get_noc_addr(intermediate_tile_id);
-                        noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
-                        intermediate_l1_write_addr += page_size;
+                        noc_obj.async_read(
+                            intermediate_tensor_addrgen,
+                            cb_intermediate,
+                            page_size,
+                            {.page_id = intermediate_tile_id},
+                            {.offset_bytes = intermediate_l1_write_offset});
+                        intermediate_l1_write_offset += page_size;
                     }
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_intermediate_id, tile_granularity);
+                    noc_obj.async_read_barrier();
+                    cb_intermediate.push_back(tile_granularity);
                 }
 
                 tiles_read += tiles_to_read_in_current_direction;
-                noc_async_read_barrier();
-                cb_push_back(cb_in0, tile_granularity);
+                noc_obj.async_read_barrier();
+                cb_in0.push_back(tile_granularity);
 
                 // Skip the tiles going the other direction
                 tiles_remaining_to_read = tiles_to_read - tiles_read;

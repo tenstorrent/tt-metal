@@ -10,13 +10,15 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+#include "experimental/kernel_args.h"
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -27,66 +29,72 @@ ALWI void REL() {
     tile_regs_release();
 }
 
+// The statistics pass reads either the raw input or the fused a + b result, depending on whether a
+// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
+// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
+#ifdef FUSE_PRE_ADD
+constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
+#else
+constexpr auto dfb_inp_id = dfb::in0;  // just a
+#endif
+
 void kernel_main() {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(2) == 1;
+    const auto NCHt = get_arg(args::NCHt);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto blk = get_arg(args::blk);
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+#ifdef FUSE_PRE_ADD
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
+#else
+    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
+#endif
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
-
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
-
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_x2(dfb::x2);
+    DataflowBuffer dfb_reduce(dfb::reduce);
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_res(dfb::res);  // residual b
+#endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
+        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
+#ifdef FUSE_PRE_ADD
+        pre_add::one_row<true>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+#endif
 
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
+        reconfig_data_format(dfb_inp_id, dfb_inp_id);
+        pack_reconfig_data_format(dfb::x2);
+        mul_init(dfb_inp_id, dfb_inp_id);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_x2, blk);
+            dfb_inp.wait_front(wt + blk);  // cumulative wait
+            dfb_x2.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
+                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
+                pack_tile(wtr, dfb::x2, wt + wtr);
             }
             REL();
-            cb_push_back(cb_x2, blk);
+            dfb_x2.push_back(blk);
         }
 
         /*
          * sum(x**2)
          */
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
-        cb_wait_front(cb_x2, Wt);
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 0);
-        REL();
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_x2, Wt);
-
-        reduce_uninit();
-        cb_pop_front(cb_inp, Wt);
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
+        compute_kernel_lib::reduce<
+            PoolType::AVG,
+            ReduceDim::REDUCE_ROW,
+            dfb::x2,
+            dfb::reduce,
+            dfb::out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        dfb_inp.pop_front(Wt);
     }
-    cb_pop_front(cb_reduce, 1);
+    dfb_reduce.pop_front(1);
 }

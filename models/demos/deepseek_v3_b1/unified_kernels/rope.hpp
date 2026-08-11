@@ -71,7 +71,7 @@ struct Rope {
         uint32_t cos_sin_cb;
         uint32_t cos_tensor_address;
         uint32_t sin_tensor_address;
-        uint32_t position_ids_tensor_address;
+        uint32_t global_pos;
     };
 
     // Writer args (BRISC): none
@@ -101,13 +101,17 @@ struct Rope {
             }
         }
 
+        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t global_pos) {
+#if defined(COMPILE_FOR_NCRISC)
+            args.global_pos = global_pos;
+#endif
+        }
+
     private:
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
 
-            volatile tt_l1_ptr uint32_t* position_ids_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.position_ids_tensor_address);
-            uint32_t position_id = position_ids_ptr[0];
+            uint32_t position_id = args.global_pos;
 
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t page_size = CTArgs::cos_sin_page_size;
@@ -140,7 +144,7 @@ struct Rope {
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;
             // Assumes all intermediate and output CBs are configured the same
-            reconfig_data_format_srcb<false, true>(args.in_cb);
+            reconfig_data_format_srcb</*is_tile_dim_reconfig_en=*/true>(args.in_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
             // ================================================================
@@ -157,8 +161,8 @@ struct Rope {
             // Main loop: process Ht heads, each head consumes Wt tiles
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
-                reconfig_data_format_srca<false, true>(args.trans_mat_cb);
-                mm_init_short(args.in_cb, args.trans_mat_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.trans_mat_cb);
+                matmul_init(args.in_cb, args.trans_mat_cb);
 
                 // Reserve intermediate and output buffers
                 // TODO: If we have bcast with dest reuse, we can get rid of rotated_in_interm_cb
@@ -187,8 +191,8 @@ struct Rope {
                 // ============================================================
                 // Step 2: cos_interm = input * cos (broadcast multiply)
                 // ============================================================
-                reconfig_data_format_srca<false, true>(args.in_cb);
-                mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.in_cb);
+                mul_bcast_rows_init(args.in_cb, args.cos_sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, j, j, j);

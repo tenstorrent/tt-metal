@@ -38,11 +38,18 @@ DispatchSettings::DispatchSettings(
     const CoreType& core_type,
     bool is_galaxy_cluster,
     bool are_cqs_dram_backed,
-    uint32_t l1_alignment) {
+    uint32_t l1_alignment,
+    uint32_t prefetch_q_entry_size_bytes) {
+    TT_FATAL(
+        prefetch_q_entry_size_bytes == 2 || prefetch_q_entry_size_bytes == 4,
+        "prefetch_q_entry_size_bytes must be 2 or 4, got {}",
+        prefetch_q_entry_size_bytes);
+    this->prefetch_q_entry_size_bytes_ = prefetch_q_entry_size_bytes;
     switch (core_type) {
         case CoreType::WORKER:
             init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
             break;
+        case CoreType::DISPATCH: init_dispatch_defaults(num_hw_cqs, are_cqs_dram_backed, l1_alignment); break;
         case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;
         default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
     }
@@ -52,18 +59,10 @@ DispatchSettings::DispatchSettings(
 
 void DispatchSettings::init_worker_defaults(
     uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment) {
-    uint32_t prefetch_q_entries;
-    if (are_cqs_dram_backed) {
-        prefetch_q_entries = 256;
-    } else if (is_galaxy_cluster) {
-        prefetch_q_entries = 1532 / num_hw_cqs;
-    } else {
-        prefetch_q_entries = 1534;
-    }
-
     this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::WORKER)
-        .prefetch_q_entries(prefetch_q_entries)
+        .prefetch_q_entries(
+            get_prefetch_q_entries(CoreType::WORKER, num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed))
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
@@ -78,10 +77,34 @@ void DispatchSettings::init_worker_defaults(
         .build();
 }
 
+void DispatchSettings::init_dispatch_defaults(uint32_t num_hw_cqs, bool are_cqs_dram_backed, uint32_t l1_alignment) {
+    this->num_hw_cqs(num_hw_cqs)
+        .core_type(CoreType::DISPATCH)
+        .prefetch_q_entries(
+            get_prefetch_q_entries(CoreType::DISPATCH, num_hw_cqs, /*is_galaxy_cluster=*/false, are_cqs_dram_backed))
+        .prefetch_max_cmd_size(128_KB)
+        .prefetch_cmddat_q_size(256_KB)
+        .prefetch_scratch_db_size(128_KB)
+        // Quasar currently only has a single dispatch engine, so if there is more than one CQ, they will be placed in
+        // the same dispatch engine. The ringbuffer size of each CQ is lowered to 864 KB so that both CQs can fit in the
+        // same dispatch engine. Once support for multiple dispatch engines is added, this will need to be updated as
+        // each CQ will be placed in a separate dispatch engine.
+        .prefetch_ringbuffer_size(num_hw_cqs > 1 ? 864_KB : 1024_KB)
+        .prefetch_d_buffer_size(256_KB)
+
+        .dispatch_size(512_KB)
+        .dispatch_s_buffer_size(32_KB)
+
+        .with_alignment(l1_alignment)
+
+        .build();
+}
+
 void DispatchSettings::init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment) {
     this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
-        .prefetch_q_entries(128)
+        .prefetch_q_entries(get_prefetch_q_entries(
+            CoreType::ETH, num_hw_cqs, /*is_galaxy_cluster=*/false, /*are_cqs_dram_backed=*/false))
         .prefetch_max_cmd_size(32_KB)
         .prefetch_cmddat_q_size(64_KB)
         .prefetch_scratch_db_size(19_KB)
@@ -94,6 +117,21 @@ void DispatchSettings::init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignm
         .with_alignment(l1_alignment)
 
         .build();
+}
+
+uint32_t DispatchSettings::get_prefetch_q_entries(
+    CoreType core_type, uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed) {
+    uint32_t prefetch_q_entries = 0;
+    if (core_type == CoreType::ETH) {
+        prefetch_q_entries = 128;
+    } else if (are_cqs_dram_backed) {
+        prefetch_q_entries = 64 / num_hw_cqs;
+    } else if (is_galaxy_cluster) {
+        prefetch_q_entries = 1532 / num_hw_cqs;
+    } else {
+        prefetch_q_entries = 1534;
+    }
+    return prefetch_q_entries;
 }
 
 std::vector<std::string> DispatchSettings::get_errors() const {
@@ -139,6 +177,7 @@ bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
            prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
            dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
+           prefetch_q_entry_size_bytes_ == other.prefetch_q_entry_size_bytes_ &&
            prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
            prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
            prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
@@ -189,7 +228,7 @@ DispatchSettings& DispatchSettings::prefetch_ringbuffer_size(uint32_t val) {
 // Setter for prefetch_q_entries and update prefetch_q_size
 DispatchSettings& DispatchSettings::prefetch_q_entries(uint32_t val) {
     this->prefetch_q_entries_ = val;
-    this->prefetch_q_size_ = val * sizeof(prefetch_q_entry_type);
+    this->prefetch_q_size_ = val * this->prefetch_q_entry_size_bytes_;
     return *this;
 }
 

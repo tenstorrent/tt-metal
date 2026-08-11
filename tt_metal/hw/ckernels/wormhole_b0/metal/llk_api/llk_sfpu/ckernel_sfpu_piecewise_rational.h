@@ -13,7 +13,7 @@
  *   - Interleaved Horner: back-to-back SFPMAD on numer/denom hides pipeline latency
  *   - Parity x²-Horner: halves FMA count for odd-num/even-den (atanh, erfinv, erf)
  *   - Deferred reciprocal: ONE sfpu_reciprocal for all segments
- *   - Recursive template unrolling: ALWI prevents spills
+ *   - Recursive template unrolling: sfpi_inline prevents spills
  *   - Range reduction: Cody-Waite for exp/trig, mantissa/exponent for log
  *
  * Usage:
@@ -46,12 +46,12 @@ inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_
     constexpr float NEG_LN2_LO = -3.19461832987e-05f;
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     sfpi::vFloat tmp = x * INV_LN2 + c231;
-    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
     s = (tmp - c231) * NEG_LN2_LO + ((tmp - c231) * NEG_LN2_HI + x);
 }
 
 inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
-    return sfpi::setexp(poly_result, sfpi::exexp_nodebias(poly_result) + k_int);
+    return sfpi::setexp(poly_result, sfpi::exexp(poly_result, sfpi::ExponentMode::Biased) + k_int);
 }
 #endif
 
@@ -62,7 +62,7 @@ inline void piecewise_trig_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& q
     // Compute x / pi and round-to-nearest integer value (c.f. Hacker's Delight)
     sfpi::vFloat tmp = x * FRAC_1_PI + c231;
     sfpi::vFloat q = tmp - c231;
-    q_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    q_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
     constexpr float NEG_PI_HI = -3.140625f;
     constexpr float NEG_PI_LO = -0.00096765358979323846f;
     s = q * NEG_PI_LO + (q * NEG_PI_HI + x);
@@ -70,8 +70,7 @@ inline void piecewise_trig_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& q
 
 inline sfpi::vFloat piecewise_trig_expand(sfpi::vFloat poly_result, sfpi::vInt q_int) {
     // Sign flip via bitwise XOR: (q_int << 31) ^ result
-    poly_result = sfpi::reinterpret<sfpi::vFloat>(
-        (sfpi::reinterpret<sfpi::vUInt>(q_int) << 31) ^ sfpi::reinterpret<sfpi::vUInt>(poly_result));
+    poly_result = sfpi::as<sfpi::vFloat>((sfpi::as<sfpi::vUInt>(q_int) << 31) ^ sfpi::as<sfpi::vUInt>(poly_result));
     return poly_result;
 }
 #endif
@@ -88,9 +87,8 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 #else
     constexpr float EXPAND_C = 0.6931471805599453f;  // ln(2)
 #endif
-    v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
-    v_endif;
-    return sfpi::int32_to_float(e_int, 0) * EXPAND_C + poly_result;
+    auto e_smag = sfpi::convert<sfpi::vSMag>(e_int);
+    return sfpi::convert<sfpi::vFloat>(e_smag, sfpi::RoundMode::Nearest) * EXPAND_C + poly_result;
 }
 #endif
 
@@ -100,7 +98,7 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
-ALWI void piecewise_rational_eval_numer_denom(
+sfpi_inline void piecewise_rational_eval_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
@@ -112,18 +110,18 @@ ALWI void piecewise_rational_eval_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_DEGREE];
 
     if constexpr (NUM_DEGREE > DEN_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = NUM_DEGREE - 1; i >= static_cast<int>(DEN_DEGREE); i--) {
             numer = numer * x + num_coeffs[i];
         }
     } else if constexpr (DEN_DEGREE > NUM_DEGREE) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int i = DEN_DEGREE - 1; i >= static_cast<int>(NUM_DEGREE); i--) {
             denom = denom * x + den_coeffs[i];
         }
     }
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int i = MIN_DEG - 1; i >= 0; i--) {
         numer = numer * x + num_coeffs[i];
         denom = denom * x + den_coeffs[i];
@@ -140,7 +138,7 @@ ALWI void piecewise_rational_eval_numer_denom(
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
-ALWI void piecewise_rational_eval_parity_numer_denom(
+sfpi_inline void piecewise_rational_eval_parity_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
@@ -158,12 +156,12 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     sfpi::vFloat denom = den_coeffs[DEN_TOP];
 
     if constexpr (NUM_STEPS > DEN_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < NUM_STEPS - DEN_STEPS; k++) {
             numer = numer * x2 + num_coeffs[NUM_TOP - 2 * (k + 1)];
         }
     } else if constexpr (DEN_STEPS > NUM_STEPS) {
-#pragma unroll
+#pragma GCC unroll 64
         for (int k = 0; k < DEN_STEPS - NUM_STEPS; k++) {
             denom = denom * x2 + den_coeffs[DEN_TOP - 2 * (k + 1)];
         }
@@ -173,7 +171,7 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
     constexpr int NUM_POS = NUM_TOP - 2 * ((NUM_STEPS > DEN_STEPS) ? (NUM_STEPS - DEN_STEPS) : 0);
     constexpr int DEN_POS = DEN_TOP - 2 * ((DEN_STEPS > NUM_STEPS) ? (DEN_STEPS - NUM_STEPS) : 0);
 
-#pragma unroll
+#pragma GCC unroll 64
     for (int k = 1; k <= MIN_STEPS; k++) {
         numer = numer * x2 + num_coeffs[NUM_POS - 2 * k];
         denom = denom * x2 + den_coeffs[DEN_POS - 2 * k];
@@ -188,14 +186,13 @@ ALWI void piecewise_rational_eval_parity_numer_denom(
 // ============================================================================
 
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, bool USE_PARITY = false>
-ALWI void piecewise_rational_dispatch_numer_denom(
+sfpi_inline void piecewise_rational_dispatch_numer_denom(
     const float* num_coeffs,
     const float* den_coeffs,
     sfpi::vFloat x,
     sfpi::vFloat& out_numer,
     sfpi::vFloat& out_denom,
-    sfpi::vFloat x2 = 0.0f
-) {
+    sfpi::vFloat x2 = 0.0f) {
     if constexpr (USE_PARITY) {
         piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
             num_coeffs, den_coeffs, x, x2, out_numer, out_denom);
@@ -208,36 +205,30 @@ ALWI void piecewise_rational_dispatch_numer_denom(
 // Recursive segment unroller with deferred reciprocal
 // ============================================================================
 
-template <uint32_t SEG, uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE, bool USE_PARITY = false>
-ALWI void piecewise_rational_unroll_segment(
+template <
+    uint32_t SEG,
+    uint32_t NUM_DEGREE,
+    uint32_t DEN_DEGREE,
+    uint32_t NUM_SEGMENTS,
+    uint32_t LUT_SIZE,
+    bool USE_PARITY = false>
+sfpi_inline void piecewise_rational_unroll_segment(
     const std::array<float, LUT_SIZE>& lut,
     sfpi::vFloat x,
     sfpi::vFloat& numer,
     sfpi::vFloat& denom,
-    sfpi::vFloat x2 = 0.0f
-) {
+    sfpi::vFloat x2 = 0.0f) {
     if constexpr (SEG < NUM_SEGMENTS) {
         constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
         constexpr uint32_t CPS = NUM_COEFFS + DEN_DEGREE + 1;
         constexpr uint32_t CO = NUM_SEGMENTS + 1;
         v_if(x >= lut[SEG]) {
             piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE, USE_PARITY>(
-                &lut[CO + SEG * CPS],
-                &lut[CO + SEG * CPS + NUM_COEFFS],
-                x,
-                numer,
-                denom,
-                x2
-            );
+                &lut[CO + SEG * CPS], &lut[CO + SEG * CPS + NUM_COEFFS], x, numer, denom, x2);
         }
         v_endif;
         piecewise_rational_unroll_segment<SEG + 1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE, USE_PARITY>(
-            lut,
-            x,
-            numer,
-            denom,
-            x2
-        );
+            lut, x, numer, denom, x2);
     }
 }
 
@@ -254,7 +245,7 @@ template <
     uint32_t LUT_SIZE,
     bool USE_PARITY = false,
     bool APPROX_RECIP = false>
-ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
 
