@@ -2,9 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TYPE_CHECKING
+
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
+
+if TYPE_CHECKING:
+    from fuser.fuser_config import GlobalConfig
+    from fuser.l1_operation import L1Operation
 
 
 def is_unary_unpacker(compute_node: FpuNode) -> bool:
@@ -14,12 +20,24 @@ def is_unary_unpacker(compute_node: FpuNode) -> bool:
     return isinstance(compute_node.unpacker, (UnpackerA, UnpackerTilizeA))
 
 
+def _is_unary_broadcast_unpacker(compute_node: FpuNode) -> bool:
+    from fuser.quasar.unpacker.unary_broadcast import UnaryBroadcastUnpacker
+
+    return isinstance(compute_node.unpacker, UnaryBroadcastUnpacker)
+
+
 def _emit_configure(
     compute_node: FpuNode,
     dest_acc: str,
     unpack_A_dst: DataFormat,
     unpack_B_dst: DataFormat,
 ) -> str:
+    if _is_unary_broadcast_unpacker(compute_node):
+        desc_b = compute_node.src_b.cpp_desc_name
+        code = f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({desc_b});\n"
+        return code
+
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
     unpack_to_dest = compute_node.unpack_to_dest.value
@@ -75,8 +93,8 @@ def dvalid_init(quasar_use_dvalid: bool = False) -> str:
     return ""
 
 
-def sync_with_packer(needs_pack_sync: bool) -> str:
-    if needs_pack_sync:
+def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if operation.needs_pack_sync:
         return (
             "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::PACK_UNPACK);\n"
             "_llk_sync_get_<>(semaphore::PACK_UNPACK);\n"

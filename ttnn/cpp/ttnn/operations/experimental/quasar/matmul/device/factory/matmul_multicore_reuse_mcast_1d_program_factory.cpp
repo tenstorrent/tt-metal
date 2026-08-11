@@ -2031,7 +2031,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
-    non_idle_cores_vec.reserve(subdevice_cores.ranges().size() * non_idle_cores.ranges().size());
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (intersection.empty()) {
@@ -2214,11 +2213,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
-    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
-    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
-    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -2512,9 +2508,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             uint32_t banks_in_first_col = num_banks / 2;
 
             std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
-            first_col_anchors.reserve(banks_in_first_col);
             std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
-            second_col_anchors.reserve(num_banks - banks_in_first_col);
 
             for (uint32_t bank = 0; bank < num_banks; ++bank) {
                 const auto& core = optimal_dram_workers[bank];
@@ -2563,7 +2557,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
-    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -5276,6 +5269,12 @@ constexpr const char* IN1_RECEIVER_WRITER_KERNEL_PATH =
 constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
     "bmm_large_block_zm_fused_bias_activation_metal2.cpp";
+// No-op kernels for the matmul's idle ("noop") cores, co-located with this op (the old
+// tt_metal/kernels/{dataflow,compute}/blank.cpp were moved to tests/ by #44980 and are not shipped).
+constexpr const char* NOOP_DM_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/blank.cpp";
+constexpr const char* NOOP_COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/blank.cpp";
 
 // std::map<string,string> defines -> Metal 2.0 Defines (Table<string,string>).
 m2::KernelSpec::CompilerOptions::Defines to_m2_defines(const std::map<std::string, std::string>& m) {
@@ -6557,44 +6556,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         in0_CB_tiles = in0_CB_tiles * 2;
     }
 
-    // [#48552 DEBUG -- remove before merge] Dump the in0/out CB geometry so we can see which CB the RBFAIL
-    // (dfb=0 need=224 cap=28) actually is: in0_CB_tiles (this CB) vs per_core_M*per_core_N (the out/interm
-    // shard, = 28). need=224 = in0_block_w*in0_block_h; if in0_CB_tiles != 28 then dfb=0 is NOT cb_in0.
-    log_debug(
-        tt::LogOp,
-        "[QSR-MM-IN1CB #48552] per_core_M={} per_core_N={} K={} in0_block_w={} num_blocks={} in0_block_h={} "
-        "in0_block_tiles={} in0_CB_tiles={} in0_is_sharded={} in0_B={} in1_B={} outblk(MxN)={}",
-        per_core_M,
-        per_core_N,
-        K,
-        in0_block_w,
-        num_blocks,
-        in0_block_h,
-        in0_block_tiles,
-        in0_CB_tiles,
-        in0_is_sharded,
-        in0_B,
-        in1_B,
-        per_core_M * per_core_N);
-    // [#48552 DEBUG -- remove before merge] cb_in0 is borrowed_from RO_IN0_TENSOR, so its runtime capacity is
-    // the ACTUAL shard of `a`, not in0_CB_tiles. cap=28=M*N => the shard width is N not full_K. Dump the real
-    // padded shape vs shard shape of `a` to see if the tensor is allocated [M,N]-sharded or resharded en route.
-    if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-        const auto& ss = a.memory_config().shard_spec().value().shape;
-        log_debug(
-            tt::LogOp,
-            "[QSR-MM-IN1CB2 #48552] in0 `a`: padded=[{}x{}] shard=[{}x{}] (tiles=[{}x{}]) mem_layout={} "
-            "shard_tiles={}",
-            a.padded_shape()[-2],
-            a.padded_shape()[-1],
-            ss[0],
-            ss[1],
-            ss[0] / tt::constants::TILE_HEIGHT,
-            ss[1] / tt::constants::TILE_WIDTH,
-            static_cast<int>(a.memory_config().memory_layout()),
-            (ss[0] / tt::constants::TILE_HEIGHT) * (ss[1] / tt::constants::TILE_WIDTH));
-    }
-
     const auto& a_shape_logical =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
@@ -7252,7 +7213,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         }
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_BRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             .dfb_bindings = std::move(noop_dm_dfb),
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
                 device->arch(),
@@ -7262,7 +7223,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_NCRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             // RISCV_1 + in0_noc (not in1_noc): the BRISC noop above is RISCV_0 + in1_noc (== NOC_0 on WH), so
             // pinning both to in1_noc puts two dedicated-NOC DM kernels on NOC_0 on the same noop core, which
             // the program-spec validator rejects (noc_inserted). in0_noc is the opposite NOC -> distinct.
@@ -7275,7 +7236,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/compute/blank.cpp"),
+            .source = std::filesystem::path(NOOP_COMPUTE_KERNEL_PATH),
             .dfb_bindings = std::move(noop_compute_dfb),
             .hw_config = compute_hw_config,
         });
@@ -7324,63 +7285,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
-
-    // DEBUG (#48552): sliced-stem Program-B assert localization on the 1D mcast_in1 path (mcast_in0=0).
-    // The in0 READER (reader_bmm_tile_layout_in0_sender_padding_metal2.cpp, SKIP_MCAST) is DM2 at fault.
-    // Dumps its full geometry so the next e2e run confirms the degenerate value. Suspect: per_core_M=14
-    // forces a single 14-M-tile in0 block (out_block_h==per_core_M to dodge the multi-M-block output-
-    // transpose bug; num_blocks==1 to dodge the K-spill accumulate) -> trailing-unpacker-pop / large
-    // single-block Quasar trap. Remove once the sliced stem conv is healthy.
-    // NOTE: split into 3 log_debug calls (<=12 args each). A single ~30-arg log_debug overflows tt-logger's
-    // TT_LOG_UNUSED_EACH FOR-EACH macro (~16-arg cap) in the compiled-out path on older pinned tt-logger
-    // versions ("undeclared identifier TT_LOG_FOR_EACH_AGAIN"). Keep each call small so it builds on any pin.
-    log_debug(
-        tt::LogOp,
-        "[QSR-MM-IN1a #48552] mcast_in1 in0-reader geom: arch={} in0_is_sharded={} extract_shard_sub_blocks={} | "
-        "tiles M={} N={} K={} | per_core_M={} per_core_N={} | in0_block_w={} in0_block_h={} "
-        "in0_block_num_tiles(reader=w*h)={}",
-        (int)device->arch(),
-        in0_is_sharded,
-        extract_shard_sub_blocks,
-        M,
-        N,
-        K,
-        per_core_M,
-        per_core_N,
-        in0_block_w,
-        in0_block_h,
-        (uint32_t)(in0_block_w * in0_block_h));
-    log_debug(
-        tt::LogOp,
-        "[QSR-MM-IN1b #48552] in0_block_num_tiles(compute)={} in0_CB_tiles={} | "
-        "num_blocks_inner(K)={} num_blocks_h(M)={} num_blocks_w(N)={} | "
-        "in0_shard_h_tiles={} in0_shard_w_tiles={} in0_last_ktile_w={} in0_last_ktile_h={} | grid=({}x{})",
-        in0_block_num_tiles,
-        in0_CB_tiles,
-        num_blocks,
-        out_num_blocks_y,
-        out_num_blocks_x,
-        in0_shard_height_in_tiles,
-        in0_shard_width_in_tiles,
-        (uint32_t)in0_last_ktile_w,
-        (uint32_t)in0_last_ktile_h,
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y);
-    log_debug(
-        tt::LogOp,
-        "[QSR-MM-IN1c #48552] num_cores={} in1_mcast_receiver_num_cores={} in1_SKIP_MCAST={} | "
-        "bbox_logical=[({},{})..({},{})] in1_mcast_rect_phys=[({},{})..({},{})]",
-        num_cores,
-        in1_mcast_receiver_num_cores,
-        (in1_mcast_receiver_num_cores == 1),
-        top_left_core.x,
-        top_left_core.y,
-        bottom_right_core.x,
-        bottom_right_core.y,
-        start_core_noc.x,
-        start_core_noc.y,
-        end_core_noc.x,
-        end_core_noc.y);
 
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
