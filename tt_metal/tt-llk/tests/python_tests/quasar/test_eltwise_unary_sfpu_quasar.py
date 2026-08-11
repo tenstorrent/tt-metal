@@ -882,7 +882,7 @@ def test_eltwise_unary_sfpu_quasar(
             # the op per element keeps integers intact, and for an element-wise op row-major order
             # already matches the packed result. A non-element-wise integer op would need its own path.
             golden_gen = UnarySFPUGolden()
-            golden_gen.data_format = formats.input_format
+            golden_gen.dst_format = formats.output_format
             ops = golden_gen.ops
             op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
             golden_tensor = torch.tensor(

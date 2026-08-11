@@ -19,8 +19,8 @@
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
-#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
@@ -315,9 +315,9 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             sfpu_format,
             [dst_index](auto fmt_c)
             {
-                constexpr DataFormat FMT = decltype(fmt_c)::value;
-                constexpr bool IS_FLOAT  = FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32;
-                constexpr bool PROMOTE   = is_fp32_dest_acc_en && (FMT == DataFormat::Int8 || FMT == DataFormat::UInt8);
+                constexpr DataFormat FMT           = decltype(fmt_c)::value;
+                constexpr bool IS_FLOAT            = FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32;
+                constexpr bool PROMOTE             = is_fp32_dest_acc_en && (FMT == DataFormat::Int8 || FMT == DataFormat::UInt8);
                 constexpr DataFormat EFFECTIVE_FMT = IS_FLOAT ? DataFormat::Float32 : (PROMOTE ? DataFormat::Int32 : FMT);
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, EFFECTIVE_FMT, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             });

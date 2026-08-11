@@ -75,7 +75,9 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     {"softplus",
-     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x41A00000u);"}}},
+     {{"SFPU_OP_CHAIN_0",
+       "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ "
+       "0x41A00000u);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // fill overwrites the whole tile with a constant, ignoring the input. The 5.0f here must match
     // the constant returned by sfpu_function() for "fill".
