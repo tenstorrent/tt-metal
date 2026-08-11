@@ -309,6 +309,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
     try {
         std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
+        std::erase_if(data->mesh_sockets_data, [](const auto& s) { return s.config_buffer.expired(); });
         const distributed::SocketSenderSize sender_size;
         auto config_buffer = socket->get_config_buffer();
         const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
@@ -327,11 +328,18 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
         for (const auto& conn : socket->get_config().socket_connection_config) {
             const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
+            if (!mesh_device->is_local(local_core.device_coord)) {
+                continue;  // Another rank owns this endpoint and reports it itself.
+            }
+            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            if (local_device == nullptr) {
+                continue;
+            }
             const auto& peer_core = is_sender ? conn.receiver_core : conn.sender_core;
             auto local_node = socket->get_fabric_node_id(local_ep, local_core.device_coord);
             auto peer_node = socket->get_fabric_node_id(peer_ep, peer_core.device_coord);
             auto& c = socket_data.connections.emplace_back();
-            c.local_chip_id = mesh_device->get_device(local_core.device_coord)->id();
+            c.local_chip_id = local_device->id();
             c.local_core_x = local_core.core_coord.x;
             c.local_core_y = local_core.core_coord.y;
             c.local_mesh_id = *local_node.mesh_id;
@@ -340,6 +348,9 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             c.peer_core_y = peer_core.core_coord.y;
             c.peer_mesh_id = *peer_node.mesh_id;
             c.peer_fabric_chip_id = peer_node.chip_id;
+        }
+        if (socket_data.connections.empty()) {
+            return;  // this rank owns no endpoint of this socket
         }
         data->mesh_sockets_data.push_back(std::move(socket_data));
     } catch (const std::exception& e) {
