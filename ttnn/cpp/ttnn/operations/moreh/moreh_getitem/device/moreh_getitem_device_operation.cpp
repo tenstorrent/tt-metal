@@ -23,6 +23,8 @@ void MorehGetItemOperation::validate_inputs(
     auto dtype = input_tensor.dtype();
     TT_FATAL(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
+    const auto input_rank = input_tensor.logical_shape().rank();
+    TT_FATAL(input_rank <= 5, "getitem supports an input of rank 5 or less, got rank {}!", input_rank);
 
     // validate index tensors
     uint32_t index_size = index_tensors[0].logical_shape()[-1];
@@ -45,8 +47,9 @@ void MorehGetItemOperation::validate_inputs(
     }
 
     if (input_layout == Layout::ROW_MAJOR) {
+        const uint32_t dim_offset = 5 - input_rank;
         for (auto dim : operation_attributes.index_dims) {
-            TT_FATAL(dim != 4, "getitem for ROW_MAJOR layout not support W index tensor!");
+            TT_FATAL(dim + dim_offset != 4, "getitem for ROW_MAJOR layout not support W index tensor!");
         }
     }
 
@@ -142,7 +145,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
 
         output_shape = ttnn::Shape(std::move(output_size_vec));
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

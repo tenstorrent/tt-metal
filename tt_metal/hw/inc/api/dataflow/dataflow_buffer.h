@@ -37,19 +37,19 @@
 // The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
-//   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
+//   // (Host code declares "my_dfb_name" as the DFB accessor name for this kernel.)
 //   // In the kernel code:
 //   DataflowBuffer my_dfb(dfb::my_dfb_name);
 //
-// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
+// Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
+struct DFBBindingToken {
+    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // DFBAccessor is backed by a compile-time ID (an implicit CTA).
+    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
     // Implicit conversion to uint32_t:
-    // This lets a Metal 2.0 kernel pass a DFBAccessor directly to Gen1 (WH/BH) LLK
+    // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
     // compute APIs that expect a raw CB id.
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
@@ -69,9 +69,9 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(static_cast<uint16_t>(accessor)) {}
+    DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
+    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -289,8 +289,17 @@ public:
     void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
 #endif
 
+    // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
+    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+
+#ifndef ARCH_QUASAR
+    // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
+    // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
+    void evil_set_write_ptr(uint32_t addr);
+    void evil_set_read_ptr(uint32_t addr);
+#endif
 
     [[nodiscard]] auto scoped_lock() {
         // TODO: Register with the debugger to track the lock
@@ -314,7 +323,7 @@ private:
     void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
-    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
 
     uint32_t prepare_implicit_read();
     void commit_implicit_read();

@@ -306,21 +306,33 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
 
 
 def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
-    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims."""
+    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
+
+    Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf. The op's native
+    decode mode (is_decode_mode=True) hard-requires HEIGHT_SHARDED input + cos/sin, but qwen36's
+    decode attention runs interleaved (q/k are sharded_to_interleaved right after head-split). To
+    avoid the reshards that sharding would add, transpose the interleaved tensor to a prefill-shaped
+    [1, n_heads, B, rope_dim] (batch plays the seq role) and use the interleaved-friendly prefill
+    mode (is_decode_mode=False), then transpose back. Partial: only the first rope_dim is rotated;
+    the tail passes through.
+    """
     hd = x.shape[-1]
     B = batch_size
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
-    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd))
-    r1 = ttnn.slice(x_rope, (0, 0, 0, 0), (1, B, n_heads, rope_dim // 2))
-    r2 = ttnn.slice(x_rope, (0, 0, 0, rope_dim // 2), (1, B, n_heads, rope_dim))
-    x_rot = ttnn.concat([ttnn.neg(r2), r1], dim=-1)
-    ttnn.deallocate(r1)
-    ttnn.deallocate(r2)
-    roped = ttnn.add(ttnn.multiply(x_rope, cos_tt), ttnn.multiply(x_rot, sin_tt))
+    x_rope_t = ttnn.transpose(x_rope, 1, 2)  # [1, n_heads, B, rope_dim]
     ttnn.deallocate(x_rope)
-    ttnn.deallocate(x_rot)
-    roped = ttnn.to_memory_config(roped, ttnn.DRAM_MEMORY_CONFIG)
-    x_pass = ttnn.to_memory_config(x_pass, ttnn.DRAM_MEMORY_CONFIG)
+    # decode cos/sin [1, B, 1, rope_dim] -> prefill [1, 1, B, rope_dim] (broadcast over heads)
+    cos_p = ttnn.reshape(cos_tt, (1, 1, B, rope_dim))
+    sin_p = ttnn.reshape(sin_tt, (1, 1, B, rope_dim))
+    roped_t = ttnn.experimental.rotary_embedding_hf(
+        x_rope_t, cos_p, sin_p, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.deallocate(x_rope_t)
+    roped = ttnn.to_memory_config(ttnn.transpose(roped_t, 1, 2), ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(roped_t)
+    if rope_dim == hd:
+        return roped
+    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
     result = ttnn.concat([roped, x_pass], dim=-1)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)
@@ -328,22 +340,22 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
 
 
 def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
-    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim]."""
+    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
+
+    Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
+    slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
+    """
+    # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
+    _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]
-    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim))
-    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd))
-    r1 = ttnn.slice(x_rope, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim // 2))
-    r2 = ttnn.slice(x_rope, (0, 0, 0, rope_dim // 2), (1, n_heads, seq_len, rope_dim))
-    x_rot = ttnn.concat([ttnn.neg(r2), r1], dim=-1)
-    ttnn.deallocate(r1)
-    ttnn.deallocate(r2)
-    roped = ttnn.add(ttnn.multiply(x_rope, cos_tt), ttnn.multiply(x_rot, sin_tt))
+    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)
+    roped = ttnn.experimental.rotary_embedding_hf(x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
     ttnn.deallocate(x_rope)
-    ttnn.deallocate(x_rot)
-    roped = ttnn.to_memory_config(roped, ttnn.DRAM_MEMORY_CONFIG)
-    x_pass = ttnn.to_memory_config(x_pass, ttnn.DRAM_MEMORY_CONFIG)
-    result = ttnn.concat([roped, x_pass], dim=-1)
+    if rope_dim == hd:
+        return roped
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd), memory_config=_L1)
+    result = ttnn.concat([roped, x_pass], dim=-1, memory_config=_L1)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)
     return result

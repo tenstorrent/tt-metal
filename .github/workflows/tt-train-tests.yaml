@@ -20,7 +20,7 @@ on:
       enabled-skus:
         required: true
         type: string
-        description: "Comma-separated SKUs (e.g. wh_n150_civ2,wh_n300_civ2). Maps to runs_on via .github/sku_config.yaml."
+        description: "Comma-separated SKUs (e.g. bh_p100,bh_p150b_civ2). Maps to runs_on via .github/sku_config.yaml."
       enable-watcher:
         required: false
         type: boolean
@@ -66,7 +66,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
@@ -176,22 +176,13 @@ jobs:
       - name: Install ttml module
         if: ${{ inputs.wheel-artifact-name }}
         timeout-minutes: 10
-        run: |
-          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
-          if [[ -z "$SITE_PACKAGES" ]]; then
-            echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
-            exit 1
-          fi
-          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
-          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
-          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
-          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+        run: bash -c ./tt-train/scripts/setup_pth.sh
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
         run: |
           uv pip list
-          uv pip install "gitpython==3.1.50" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+          uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}

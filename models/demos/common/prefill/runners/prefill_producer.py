@@ -12,11 +12,30 @@ test suite as ProducerConfig data (see tests/test_producer_runner_e2e.py); this 
 
 After pushing, it drains the runner's per-layer LayerAcks and, if asked, reads the resulting KV cache
 back and PCC-checks it against the golden trace. The KV read (read_dram_umd over a bare UMD cluster)
-and the bfp8 decode are BOTH device-less on purpose: touching a real ttnn device here would take the
+and raw cache decode are BOTH device-less on purpose: touching a real ttnn device here would take the
 CHIP_IN_USE lock the runner already holds, and deadlock.
 
 `run_schedule()` takes injectable seams (push_fn / now_fn / sleep_fn / rng) so the scheduling logic
 can be unit-tested with no device and reproduced deterministically.
+
+Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env vars. Point at a
+  manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); main() applies it via setdefault
+  (importing this module applies nothing), so any exported PREFILL_* env var still wins. Typed blocks map to the
+  env vars documented below; a verbatim ``env:`` block passes any raw PREFILL_* key through (and wins
+  over the typed blocks). See producer_manifests/prefill_producer_manifest.example.yaml. Schema:
+    model:     {variant, num_layers, max_seq_len, chunk_size}
+    transport: {sp, tp, h2d_service_id, connect_timeout_s}
+    workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
+                mid_end_prob, seed, check_pcc, trace_dir, slot_prompts}
+    env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
+  Any other top-level block is ignored here and returned by _apply_manifest_env() for another entry point
+  to apply — that is how runners/migration_driver.py picks up ``migration:``.
+
+Multi-rank: launched under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1, one process per pipeline host)
+the same entry point splits by rank — rank 0 is the master (feeds H2D, owns the LayerAck channel) and
+every other rank is a device-less validator that only reads its own host's KV back and PCCs it. The
+roles coordinate over MPI collectives, not files (see the "Multi-rank coordination" section below).
+Standalone (no launcher) it is just the master. Multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1.
 
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
   PREFILL_NUM_USERS              concurrent cache slots (default 1)
@@ -30,12 +49,25 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
   PREFILL_PRODUCER_INTERLEAVE    slot order: "random" (default) | "round_robin"
   PREFILL_PRODUCER_SEED          RNG seed (default 1234)
   PREFILL_PRODUCER_CHECK_PCC     "1" to read KV back and PCC vs golden per slot (default 0)
+  PREFILL_PRODUCER_SLOT_TRACES   per-slot prompts: "dirA,dirB,..." assigns trace i to slot i (cycling by
+                                 slot % count if fewer than num_users). Each slot pushes tokens from — and
+                                 is PCC'd against — its OWN trace, and its depth is derived from that
+                                 prompt's real length (so PREFILL_PRODUCER_CHUNKS/MID_END are ignored per
+                                 slot). Unset (default) => one shared PREFILL_TRACE_DIR + the synthetic
+                                 schedule for all slots.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
+Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
+  KV migration and imports nothing that does. To prefill AND migrate, run runners/migration_driver.py: it
+  reuses the helpers here and adds the migration steps. The dependency runs that way only, never back into
+  this module, so a runner-only run can never pull migration in.
 Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
 Usage:
+    # From a manifest (env still overrides individual knobs):
+    python -m models.demos.common.prefill.runners.prefill_producer \
+      --manifest models/demos/common/prefill/runners/producer_manifests/prefill_producer_manifest.example.yaml
     # 1 user, full depth, with PCC:
     PREFILL_PRODUCER_CHUNKS=11 PREFILL_PRODUCER_CHECK_PCC=1 \
       python -m models.demos.common.prefill.runners.prefill_producer
@@ -46,6 +78,7 @@ Usage:
       python -m models.demos.common.prefill.runners.prefill_producer
 """
 
+import argparse
 import os
 import random
 import struct
@@ -61,17 +94,99 @@ import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
+
+def _apply_manifest_env(manifest_path: str) -> dict:
+    """Populate the PREFILL_* env from a YAML producer manifest and RETURN the parsed manifest (setdefault
+    => an explicitly exported env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim
+    ``env:`` passthrough (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed
+    ``model`` / ``transport`` / ``workload`` blocks mapped to the same env vars _load_env_config() and
+    _config_from_env() read.
+
+    Blocks this module does not model are left untouched and reachable via the return value, so another
+    entry point can apply its own. That is how the migration driver picks up ``migration:`` — this module
+    stays unaware of it.
+
+    Called ONLY from main(), and necessarily before those two reads — see the call site. Deliberately not
+    invoked at import: this is the one function here that mutates os.environ, and a plain
+    ``import prefill_producer`` must not silently apply a manifest just because the env names one."""
+    import yaml
+
+    with open(manifest_path) as f:
+        manifest = yaml.safe_load(f) or {}
+
+    def sd(key, val):  # setdefault, stringified; skips None so an absent field leaves the default
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    def sd_bool(key, val):  # YAML true/false -> the "1"/"0" the env parsing expects
+        if val is not None:
+            os.environ.setdefault(key, "1" if val else "0")
+
+    # 1) verbatim escape hatch first — a raw PREFILL_* key wins over the typed blocks (setdefault:
+    #    first write wins; a shell-exported env var pre-empts both).
+    for key, val in (manifest.get("env") or {}).items():
+        sd(key, val)
+
+    # 2) typed blocks -> PREFILL_* env.
+    model = manifest.get("model") or {}
+    sd("PREFILL_MODEL", model.get("variant"))
+    sd("PREFILL_NUM_LAYERS", model.get("num_layers"))
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_CHUNK_SIZE", model.get("chunk_size"))
+
+    transport = manifest.get("transport") or {}
+    sd("PREFILL_SP", transport.get("sp"))
+    sd("PREFILL_TP", transport.get("tp"))
+    sd("PREFILL_H2D_SERVICE_ID", transport.get("h2d_service_id"))
+    sd("PREFILL_H2D_CONNECT_TIMEOUT", transport.get("connect_timeout_s"))
+
+    workload = manifest.get("workload") or {}
+    sd("PREFILL_NUM_USERS", workload.get("num_users"))
+    sd("PREFILL_PRODUCER_CHUNKS", workload.get("chunks"))
+    sd("PREFILL_PRODUCER_MAX_REQUESTS", workload.get("max_requests"))
+    sd("PREFILL_PRODUCER_DURATION_S", workload.get("duration_s"))
+    sd("PREFILL_PRODUCER_INTERLEAVE", workload.get("interleave"))
+    sd("PREFILL_PRODUCER_P_GAP", workload.get("p_gap"))
+    sd("PREFILL_PRODUCER_P_BURST", workload.get("p_burst"))
+    sd("PREFILL_PRODUCER_MID_END_PROB", workload.get("mid_end_prob"))
+    sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
+    sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
+    sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
+    slot_prompts = workload.get("slot_prompts")  # per-slot prompt trace dirs; index = slot_id
+    if slot_prompts is not None:
+        sd("PREFILL_PRODUCER_SLOT_TRACES", slot_prompts if isinstance(slot_prompts, str) else ",".join(slot_prompts))
+    gap_ms = workload.get("gap_ms")  # accept a "lo,hi" string or a [lo, hi] list
+    if gap_ms is not None:
+        sd("PREFILL_PRODUCER_GAP_MS", gap_ms if isinstance(gap_ms, str) else ",".join(str(x) for x in gap_ms))
+
+    logger.info(f"[producer] applied manifest {manifest_path}")
+    return manifest
+
+
 # PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end].
 METADATA_SIZE_BYTES = 12
 
-SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
-NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+def _load_env_config() -> None:
+    """(Re)bind the transport/model constants below from the CURRENT environment.
+
+    Called once at import so a plain ``import prefill_producer`` still yields usable constants, and again
+    from ``main()`` right after the manifest is applied — the manifest only reaches the env at that point,
+    so the import-time values would otherwise be pre-manifest defaults. Importing this module never
+    MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
+    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
+    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
+    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
+    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
+    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
+    # runner's cache can't hold, and the runner asserts on the overrunning chunk.
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+    ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+
+
+_load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -95,10 +210,32 @@ def _chunk_to_host_array(chunk_token_ids):
 
 
 # ---------------------------------------------------------------------------
-# Device-less helpers: read the KV table / device map, attach the LayerAck channel, decode bfp8.
+# Device-less helpers: read the KV table / device map, attach the LayerAck channel, decode cache data.
 # All device-less on purpose — none may touch a real ttnn device (that would take the CHIP_IN_USE
 # lock the runner holds and deadlock).
 # ---------------------------------------------------------------------------
+
+
+# Per-host filesystems: a table written under one of these by rank 0 is invisible to validators on
+# other hosts, which resolve the same path against their OWN local mount.
+_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
+
+
+def _require_shared_table_path(world_size: int) -> None:
+    """Every validator reads the same serialized table rank 0 writes, so multi-rank requires it on
+    shared storage. Reject the per-host default early and symmetrically — same env + world_size on
+    every rank means all ranks exit together, never half-opening a coordination barrier — instead of
+    letting a remote validator silently read a missing/stale file."""
+    if world_size <= 1:
+        return
+    table_path = os.path.abspath(os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"))
+    if any(table_path == p or table_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES):
+        logger.error(
+            f"[producer] PREFILL_MIGRATION_TABLE_PATH={table_path!r} is on per-host storage; multi-rank "
+            f"(world_size={world_size}) validators on other hosts cannot read rank 0's table. Point it at "
+            "shared/NFS storage (e.g. /data/...)."
+        )
+        sys.exit(1)
 
 
 def _read_kv_chunk_table(timeout_s: int):
@@ -226,6 +363,80 @@ def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(decoded))
 
 
+def _decode_row_major_chunk(raw: bytes, head_dim: int, dtype: torch.dtype) -> torch.Tensor:
+    """Decode 32 native row pages, dropping any physical row padding."""
+    element_size = torch.empty((), dtype=dtype).element_size()
+    if len(raw) % _KV_CHUNK_TOKENS != 0:
+        raise ValueError(f"row-major KV chunk has {len(raw)} bytes, not a multiple of {_KV_CHUNK_TOKENS} rows")
+    row_size_bytes = len(raw) // _KV_CHUNK_TOKENS
+    logical_row_size_bytes = head_dim * element_size
+    if row_size_bytes < logical_row_size_bytes:
+        raise ValueError(f"row-major KV row has {row_size_bytes} bytes, smaller than {head_dim} x {element_size} bytes")
+
+    rows = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(_KV_CHUNK_TOKENS, row_size_bytes)
+    logical = rows[:, :logical_row_size_bytes].contiguous()
+    return logical.view(dtype).reshape(_KV_CHUNK_TOKENS, head_dim).float()
+
+
+_KV_CHUNK_TOKENS = 32
+_BFP8_TILE_BYTES = 1088
+_SCALED_FP8_LATENT_DIM = 512
+_SCALED_FP8_SCALE_BLOCK = 128
+_SCALED_FP8_NUM_SCALES = _SCALED_FP8_LATENT_DIM // _SCALED_FP8_SCALE_BLOCK
+_SCALED_FP8_ROPE_DIM = 64
+_SCALED_FP8_SCALE_OFFSET = _SCALED_FP8_LATENT_DIM
+_SCALED_FP8_ROPE_OFFSET = _SCALED_FP8_SCALE_OFFSET + _SCALED_FP8_NUM_SCALES * 4
+_SCALED_FP8_ROW_BYTES = _SCALED_FP8_ROPE_OFFSET + _SCALED_FP8_ROPE_DIM * 2
+
+
+def _decode_scaled_fp8_kv_rows(rows: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """Reconstruct ``[scaled latent | RoPE]`` from packed mixed-format row bytes."""
+    if head_dim != _SCALED_FP8_LATENT_DIM + _SCALED_FP8_ROPE_DIM:
+        raise ValueError(f"packed scaled-FP8 KV requires head_dim 576, got {head_dim}")
+
+    latent = rows[:, :_SCALED_FP8_SCALE_OFFSET].contiguous().view(torch.float8_e4m3fn).float()
+    scales = (
+        rows[:, _SCALED_FP8_SCALE_OFFSET:_SCALED_FP8_ROPE_OFFSET]
+        .contiguous()
+        .view(torch.float32)
+        .reshape(_KV_CHUNK_TOKENS, _SCALED_FP8_NUM_SCALES)
+    )
+    rope = (
+        rows[:, _SCALED_FP8_ROPE_OFFSET:_SCALED_FP8_ROW_BYTES]
+        .contiguous()
+        .view(torch.bfloat16)
+        .reshape(_KV_CHUNK_TOKENS, _SCALED_FP8_ROPE_DIM)
+        .float()
+    )
+    latent = latent * scales.repeat_interleave(_SCALED_FP8_SCALE_BLOCK, dim=-1)
+    return torch.cat((latent, rope), dim=-1)
+
+
+def _decode_kv_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode one raw 32-token MLA KV chunk by its table-reported physical byte size.
+
+    The deployed 576-wide formats have distinct physical row sizes: tiled bfp8_b, raw row-major
+    fp8_e4m3, packed scaled FP8, and row-major bfloat16. The packed format is reconstructed from its
+    512 E4M3 latent bytes, four FP32 scales, and 64 BF16 RoPE values. Row padding is discarded.
+    """
+    if head_dim % 32 == 0 and len(raw) == (head_dim // 32) * _BFP8_TILE_BYTES:
+        return _decode_bfp8_chunk(raw, head_dim)
+
+    if len(raw) % _KV_CHUNK_TOKENS != 0:
+        raise ValueError(f"unsupported KV chunk size {len(raw)} for head_dim {head_dim}")
+    row_size_bytes = len(raw) // _KV_CHUNK_TOKENS
+    rows = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(_KV_CHUNK_TOKENS, row_size_bytes)
+    if head_dim == 576 and _SCALED_FP8_ROW_BYTES <= row_size_bytes < 2 * head_dim:
+        return _decode_scaled_fp8_kv_rows(rows, head_dim)
+    fp8_fits = row_size_bytes >= head_dim
+    bf16_fits = row_size_bytes >= 2 * head_dim
+    if fp8_fits and not bf16_fits:
+        return _decode_row_major_chunk(raw, head_dim, torch.float8_e4m3fn)
+    if bf16_fits and row_size_bytes == 2 * head_dim:
+        return _decode_row_major_chunk(raw, head_dim, torch.bfloat16)
+    raise ValueError(f"ambiguous or unsupported row-major KV row size {row_size_bytes} bytes for head_dim {head_dim}")
+
+
 def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
     """ASIC unique_id for any replica fabric node present in the device map (replicas hold identical KV,
     and add_device_group sorts the ids so index 0 is not a fixed chip). Raises if none are mapped."""
@@ -259,6 +470,8 @@ class ProducerConfig:
     verify: bool  # read KV back and PCC each resident slot vs golden
     pcc_threshold: float
     interleave: str = "random"  # slot order: "random" | "round_robin" (fair alternation)
+    slot_lengths: dict = None  # per-slot real token count (from per-slot prompts); overrides the random
+    # chunk draw + mid_chunk_end when set (each slot pushes exactly its prompt). None => synthetic depth.
 
 
 def _config_from_env() -> ProducerConfig:
@@ -307,11 +520,20 @@ class _Slot:
 
 
 def _new_request(slot: _Slot, req_id: int, cfg: ProducerConfig, rng: random.Random) -> None:
-    """(Re)assign a fresh request to `slot`: a random chunk count, starting at chunk 0, optionally
-    ending mid-chunk."""
+    """(Re)assign a fresh request to `slot`, starting at chunk 0.
+
+    Per-slot-prompt mode (cfg.slot_lengths set): the slot pushes exactly its assigned prompt — depth is
+    ceil(real_len / CHUNK_SIZE) and actual_isl is the prompt's real token count, so validation covers
+    [0, real_len). The random chunk draw + mid_chunk_end are bypassed (interleave/gaps/bursts still apply).
+    Otherwise (shared-trace mode): a random chunk count, optionally ending mid-chunk."""
     slot.req_id = req_id
-    slot.target_chunks = rng.randint(cfg.chunks_min, cfg.chunks_max)
     slot.next_chunk = 0
+    if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
+        real_len = cfg.slot_lengths[slot.slot_id]
+        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        slot.actual_isl = real_len
+        return
+    slot.target_chunks = rng.randint(cfg.chunks_min, cfg.chunks_max)
     full_tokens = slot.target_chunks * CHUNK_SIZE
     if cfg.mid_chunk_end_prob > 0 and rng.random() < cfg.mid_chunk_end_prob and slot.target_chunks >= 1:
         slot.actual_isl = full_tokens - rng.randint(1, CHUNK_SIZE - 1)
@@ -403,14 +625,17 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
 
 # ---------------------------------------------------------------------------
-# Per-slot KV read-back + PCC (device-less: read_dram_umd over UMD + pure-numpy bfp8 decode)
+# Per-slot KV read-back + PCC (device-less: read_dram_umd over UMD + host cache decode)
 # ---------------------------------------------------------------------------
 
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
     golden trace. Dispatches on the model: MLA (single merged kvpe config) vs M3 (multi-config triple
-    cache). Returns the min PCC across layers."""
+    cache). Returns the min PCC across layers.
+
+    The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
+    a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
@@ -501,10 +726,37 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     return min_pcc
 
 
+def _full_indexer_layer_indices(num_layers: int):
+    """Global layer indices that own a lightning indexer, over layers [0, num_layers).
+
+    GLM-5.2 reuses one ``full`` layer's top-k across the ``shared`` layers that follow, so only full
+    layers write the index cache and config 1 of the merged table is COMPACTED to that count: its layer
+    axis is the full-indexer RANK, not the global layer index. The golden trace's
+    ``dsa/indexer_k_layer_N`` is numbered by GLOBAL layer, so rank -> global has to be mapped before
+    loading it (GLM-5.2 full layers are {0, 1, 2, 6, 10, ... 74}, so rank 3 is global layer 6).
+
+    Returns None when the model has no ``indexer_types`` map (GLM-5.1 / v3.2: every layer is a full
+    indexer owner, so rank == global index and no mapping is needed).
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+
+    hf_config = ADAPTER.load_hf_config()  # host-only attribute config; no device, no weights
+    if not getattr(hf_config, "indexer_types", None):
+        return None
+    return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
+
+
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    """Read slot `slot_id`'s KV over [0, real_len) via the table and PCC-check it against the golden
-    trace (DeepSeek/Kimi MLA merged-kvpe single-config table). Returns the min PCC across layers."""
-    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
+    """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
+    cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
+    (the index-key cache), which is PCC'd vs the golden indexer key. Returns the min PCC across both
+    caches / all layers, or across config 0 alone when the trace carries no indexer-key golden (warned,
+    not fatal — see below). Raises on an index-cache READ failure."""
+    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
+        _load_golden_index_k,
+        _load_golden_kv_post,
+        index_golden_present,
+    )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -514,14 +766,24 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round up to a block
 
     min_pcc = 1.0
+    checked = 0
     for layer in range(NUM_LAYERS):
-        # Read this layer's KV block by block over UMD, decode each bfp8 chunk, concat to [real_len, 576].
+        # A merged multi-rank table spans every host's layers, but this producer's device map holds only
+        # its co-located host's chips, so a layer owned by another rank resolves to no local unique_id.
+        # Skip it: each rank validates exactly the layers physically resident on its own machine.
+        loc0 = table.lookup(layer, 0, slot_id)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+
+        # Read this layer's KV block by block over UMD, decode its physical cache format, and concat.
         decoded_rows = []
         for pos in range(0, read_len, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-            decoded_rows.append(_decode_bfp8_chunk(raw, HEAD_DIM))
+            decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (table un-rotates block-cyclic)
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
@@ -534,19 +796,97 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
+        checked += 1
+        logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
-    logger.info(f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> {min_pcc:.6f}")
+    logger.info(
+        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"{min_pcc:.6f}"
+    )
+    # No local layer resolved to this rank's device map — min_pcc is still its 1.0 init, which would
+    # masquerade as a perfect pass. A rank that was asked to verify but owns no layers of this slot is a
+    # misconfiguration (wrong device map / stage split), so fail loudly instead of returning 1.0.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+
+    # config 1: index cache (sparse/DSA only). Validated the SAME way as config 0 — read block-by-block
+    # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
+    # only the full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS. The index
+    # cache is bf8 TILE, and the golden is already in the device rope frame (no re-interleave, unlike pe).
+    #
+    # A trace can carry the KVPE golden but no indexer-key golden (some vllm dumps store only
+    # dsa/dsa_topk_indices_layer_*). There is then nothing to PCC config 1 against, so warn and return the
+    # config-0 PCC rather than failing the slot: the KVPE result is still a valid check.
+    if table.num_configs() > 1:
+        if not index_golden_present(trace_dir):
+            logger.warning(
+                f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
+                f"indexer-key golden; validating the KVPE cache only (device index cache NOT checked)."
+            )
+            return min_pcc
+
+        index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
+        n_index_layers = table.config(1).num_layers
+        # Config 1's layer axis is the full-indexer RANK (GLM-5.2 compacts the shared layers out of the
+        # cache); the golden is numbered by GLOBAL layer, so map rank -> global before loading it.
+        full_layers = _full_indexer_layer_indices(NUM_LAYERS)
+        assert full_layers is None or len(full_layers) == n_index_layers, (
+            f"config 1 declares {n_index_layers} index-cache layers but layers [0,{NUM_LAYERS}) own only "
+            f"{len(full_layers)} full indexers. The index cache is sized from the model's WHOLE "
+            f"indexer_types map, so ranks {len(full_layers)}..{n_index_layers - 1} are never written by "
+            f"this run and would PCC against unwritten memory. Run the model's full layer count "
+            f"(PREFILL_NUM_LAYERS)."
+        )
+        min_index = 1.0
+        checked_index = 0
+        for rank in range(n_index_layers):
+            # Same host-local filter as config 0: a merged multi-rank table spans every host's layers,
+            # so skip any index layer that resolves to no local unique_id (owned by another rank). Keyed
+            # by the full-indexer RANK (config 1's layer axis) -- same index the lookups below use.
+            loc0 = table.lookup(rank, 0, slot_id, 1)  # config 1 = index cache
+            try:
+                _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+            except KeyError:
+                continue
+
+            decoded_rows = []
+            for pos in range(0, read_len, tokens_per_block):
+                loc = table.lookup(rank, pos, slot_id, 1)  # config 1 = index cache, keyed by full-layer rank
+                unique_id = _resolve_unique_id(
+                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                )
+                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                # Same byte-size-driven dispatch as config 0; a 128-wide bfp8 index chunk is
+                # (128/32) x 1088 = 4352 B, which lands on the bfp8 tile branch.
+                decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
+            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+
+            golden_layer = rank if full_layers is None else full_layers[rank]
+            golden_ik = _load_golden_index_k(trace_dir, golden_layer, real_len)
+            _, pcc_index = comp_pcc(golden_ik, dev_ik)
+            min_index = min(min_index, pcc_index)
+            checked_index += 1
+            logger.info(
+                f"[producer] slot {slot_id} layer {golden_layer:>2} (index rank {rank:>2}) "
+                f"index PCC: {pcc_index:.5f}"
+            )
+
+        logger.info(
+            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+            f"{checked_index}/{n_index_layers} local layers -> {min_index:.6f}"
+        )
+        min_pcc = min(min_pcc, min_index)
+
     return min_pcc
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
-    """PCC-check every slot that holds resident trace-derived KV. Returns True only if at least one slot
-    was checked and all of them met the threshold."""
+def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict) -> bool:
+    """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
+    (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         return False
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
 
     min_pcc_overall = 1.0
     checked = 0
@@ -555,7 +895,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
         real_len = min(chunks_pushed * CHUNK_SIZE, actual_isl)
         if real_len <= 0:
             continue
-        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, trace_dir)
+        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
         if pcc < threshold:
@@ -585,16 +925,208 @@ def _percentile(sorted_values: list, p: float) -> float:
 
 
 def _load_token_pool(trace_dir, num_tokens: int) -> list:
-    """The shared token pool every request replays from chunk 0, padded up to `num_tokens` if the
-    trace is shorter."""
+    """A token pool a request replays from chunk 0, padded up to `num_tokens` if the trace is shorter."""
     pool = load_trace_token_ids(trace_dir, num_tokens)
     if len(pool) < num_tokens:
         pool = pool + [1] * (num_tokens - len(pool))
     return pool[:num_tokens]
 
 
-def main() -> None:
+def _resolve_slot_prompts(cfg: ProducerConfig):
+    """Resolve each slot's prompt (tokens + golden trace) and load the token pool(s).
+
+    Returns ``(slot_traces, slot_lengths, pools_by_trace)``:
+      * slot_traces: {slot_id -> resolved trace Path}. Both the tokens pushed AND the golden PCC'd for a
+        slot come from its trace, so per-slot traces == per-slot prompts + per-slot goldens.
+      * slot_lengths: {slot_id -> real token count} in per-slot-prompt mode, else None (see _new_request).
+      * pools_by_trace: {trace Path -> token pool}, deduped so a trace shared by N slots loads once.
+
+    Single-prompt (default): no PREFILL_PRODUCER_SLOT_TRACES => every slot uses PREFILL_TRACE_DIR (or the
+    adapter default), the synthetic schedule drives depth (slot_lengths=None), one pool sized to chunks_max.
+
+    Multi-prompt: PREFILL_PRODUCER_SLOT_TRACES="dirA,dirB,..." assigns trace i to slot i (cycling by
+    ``slot % len`` if fewer entries than users, so "dirA,dirB" alternates across 8 users). Each slot then
+    pushes exactly its prompt: depth = ceil(real_len/CHUNK_SIZE), clamped to the per-user cache."""
+    default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
+
+    if not spec:
+        trace = resolve_trace_dir(default)
+        slot_traces = {s: trace for s in range(cfg.num_users)}
+        return slot_traces, None, {trace: _load_token_pool(trace, cfg.chunks_max * CHUNK_SIZE)}
+
+    entries = [e.strip() for e in spec.split(",") if e.strip()]
+    resolved = [resolve_trace_dir(e) for e in entries]
+    if len(entries) not in (1, cfg.num_users):
+        logger.warning(
+            f"[producer] {len(entries)} slot prompt(s) for {cfg.num_users} user(s); assigning by slot % {len(entries)}"
+        )
+    slot_traces = {s: resolved[s % len(resolved)] for s in range(cfg.num_users)}
+
+    len_by_trace = {}
+    pools_by_trace = {}
+    for trace in set(slot_traces.values()):
+        real_len = len(load_trace_token_ids(trace))
+        chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        if chunks > max_chunks:
+            logger.warning(
+                f"[producer] prompt {trace} is {real_len} tok ({chunks} chunks) > per-user cache "
+                f"{max_chunks} chunks (MAX_SEQ_LEN={MAX_SEQ_LEN}); clamping to {max_chunks} chunks."
+            )
+            chunks = max_chunks
+            real_len = min(real_len, max_chunks * CHUNK_SIZE)
+        len_by_trace[trace] = real_len
+        pools_by_trace[trace] = _load_token_pool(trace, chunks * CHUNK_SIZE)
+
+    slot_lengths = {s: len_by_trace[t] for s, t in slot_traces.items()}
+    logger.info(
+        "[producer] per-slot prompts: "
+        + ", ".join(f"slot {s}<-{slot_traces[s].name} ({slot_lengths[s]} tok)" for s in sorted(slot_traces))
+    )
+    return slot_traces, slot_lengths, pools_by_trace
+
+
+# Multi-rank coordination (device-less; GO/DONE over MPI collectives, not sync files)
+#
+# Only the barriers are MPI — the merged KV table and the device map are still delivered as files the
+# producer polls; the collectives just replace the old NFS GO/DONE sentinels.
+#
+# One producer runs per host under an MPI launcher (mpirun-ulfm), mirroring the pipeline runner's
+# ranks. rank 0 is the master (co-located with the runner's first rank): it alone feeds tokens over
+# H2D and owns the aggregated LayerAck channel. Every rank reads its OWN host's KV back and PCCs only
+# the layers resident on its machine (the merged table + a host-local device map filter to the local
+# layers automatically). Coordination is two collectives over the distributed context (host-side MPI,
+# NO mesh device): the master broadcasts the resident-slot map once every layer of every chunk has
+# acked — this releases the validators (GO) — then an allgather of each rank's PCC ok-flag both waits
+# for every validator's read-back to finish (DONE) and folds the verdicts, so the master holds the
+# runner's shutdown sentinel until the mesh/DRAM is safe to tear down.
+# ---------------------------------------------------------------------------
+
+
+def _mr_config():
+    """(rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the distributed
+    context and take rank/size from it. Standalone (the single-rank de-risk, no mpirun) skips MPI
+    entirely: 0 / 1, no coordination. rank 0 is the master; every other rank is a validator."""
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) <= 1:
+        return (0, 1)
+    if not ttnn.distributed_context_is_initialized():
+        ttnn.init_distributed_context()
+    rank = int(ttnn.distributed_context_get_rank())
+    size = int(ttnn.distributed_context_get_size())
+    return (rank, size)
+
+
+def _mr_bcast_resident(rank: int, resident: dict) -> dict:
+    """Broadcast the master's resident-slot map (slot_id -> (chunks_pushed, actual_isl)) to every rank
+    via allgather_int — element [0] of each allgather is rank 0's contribution, giving a broadcast built
+    from the only value-carrying collective ttnn exposes (no native broadcast/scatter). Doubles as the
+    GO barrier: a validator blocks in the first
+    allgather until the master arrives (which happens only after it has drained every LayerAck).
+    Non-master ranks pass {} and receive the map. All ranks must issue the same number of allgathers in
+    the same order, so the slot count is broadcast first and then each slot's three ints."""
+    items = sorted(resident.items()) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out: dict = {}
+    for k in range(n):
+        slot_id, chunks, isl = (items[k][0], items[k][1][0], items[k][1][1]) if rank == 0 else (0, 0, 0)
+        slot_id = ttnn.distributed_context_allgather_int(slot_id)[0]
+        chunks = ttnn.distributed_context_allgather_int(chunks)[0]
+        isl = ttnn.distributed_context_allgather_int(isl)[0]
+        out[slot_id] = (chunks, isl)
+    return out
+
+
+def _mr_allgather_verdict(ok: bool) -> list:
+    """Collective: every rank contributes its PCC ok-flag and receives all of them. Doubles as the DONE
+    barrier — the master cannot proceed to the shutdown sentinel until every validator has reached here
+    (i.e. finished its read-back)."""
+    return [bool(v) for v in ttnn.distributed_context_allgather_int(1 if ok else 0)]
+
+
+def _run_validator(rank: int, world_size: int) -> None:
+    """Non-master path: no H2D feed. Read the merged table, wait for the master's GO (the resident-map
+    broadcast), PCC this host's local layers, then join the verdict allgather (the master reads the
+    result). Exits non-zero on PCC failure."""
     cfg = _config_from_env()
+    # A validator's whole job is read-back PCC, and the GO barrier's "every layer is written" guarantee
+    # comes from the master draining LayerAcks — which it only does when verify is on. Both ranks see the
+    # same env, so this exits on every rank symmetrically (before any collective) — no half-open barrier.
+    if not cfg.verify:
+        logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (validators only verify).")
+        sys.exit(1)
+    _require_shared_table_path(world_size)
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    logger.info(f"[producer] validator rank={rank}/{world_size}: read-back only (no H2D feed)")
+
+    # GO before the table read: the master broadcasts the resident map only after draining every
+    # LayerAck, which also means rank 0 finished publishing this run's table. Reading after GO can't
+    # observe a stale prior-run table, and a read failure here still reaches the verdict allgather
+    # (ok=False) — the master already cleared GO, so it can't hang.
+    resident = _mr_bcast_resident(rank, {})
+    logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
+
+    try:
+        kv_table = _read_kv_chunk_table(timeout_s)
+    except Exception as e:
+        logger.error(f"[producer] validator: KV table read raised: {type(e).__name__}: {e}")
+        kv_table = None
+
+    stats = RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    ok = True
+    if kv_table is None:
+        logger.error("[producer] validator: no KV table available; cannot validate.")
+        ok = False
+    else:
+        try:
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+        except Exception as e:
+            logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
+            ok = False
+
+    _mr_allgather_verdict(ok)  # DONE barrier + verdict fold
+    logger.info(f"[producer] validator rank={rank}: DONE ok={ok}")
+    if not ok:
+        sys.exit(1)
+
+
+def main() -> None:
+    # argparse is the SINGLE place argv is read: --manifest defaults to PREFILL_PRODUCER_MANIFEST, so one
+    # parse covers both sources and unknown args still error out.
+    parser = argparse.ArgumentParser(
+        prog="prefill_producer",
+        description="H2D producer for the prefill runner. Config comes from a YAML manifest "
+        "(--manifest / PREFILL_PRODUCER_MANIFEST) mapped to PREFILL_* env vars, with any explicitly "
+        "exported PREFILL_* env var overriding the manifest.",
+    )
+    parser.add_argument(
+        "--manifest",
+        "-m",
+        default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
+        help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
+    )
+    args = parser.parse_args()
+
+    # Apply the manifest HERE, not at import: importing this module must never mutate os.environ. Order
+    # matters — the manifest lands in the env first, then _load_env_config() re-reads the module constants
+    # (bound to pre-manifest defaults at import) and _config_from_env() reads the schedule knobs.
+    if args.manifest:
+        _apply_manifest_env(args.manifest)
+    _load_env_config()
+
+    mr_rank, world_size = _mr_config()
+    if mr_rank != 0:
+        _run_validator(mr_rank, world_size)
+        return
+
+    cfg = _config_from_env()
+    # See _run_validator: multi-rank coordination only holds together when every rank verifies (the GO
+    # barrier depends on the master draining LayerAcks, which is gated on verify). Assert it on the
+    # master too — same env on every rank means this exits symmetrically, never half-opening a barrier.
+    if world_size > 1 and not cfg.verify:
+        logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (all ranks verify).")
+        sys.exit(1)
+    _require_shared_table_path(world_size)
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     logger.info(
@@ -607,15 +1139,30 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    # Read the KV table + attach the LayerAck channel BEFORE pushing (the runner publishes them at setup).
-    kv_table = _read_kv_chunk_table(timeout_s)
-    ack_channel = _connect_layer_ack_channel(timeout_s)
+    # Read the KV table BEFORE pushing (the runner publishes it at setup). Only the read-back needs it,
+    # and a runner that publishes no table (no migration, no PREFILL_MOCK_MIGRATION) would otherwise cost
+    # a full connect timeout of dead air before the first push.
+    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
+    # The LayerAck channel is a shared counter and try_consume_all() REMOVES completions. Draining it
+    # serves ONLY the golden-trace KV read-back below
 
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
-    token_pool = _load_token_pool(trace_dir, cfg.chunks_max * CHUNK_SIZE)
+    # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
+    # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
+    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    if not cfg.verify:
+        logger.info(
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
+            "channel (pure token feeder; the runner's migration self-test owns it)"
+        )
+
+    # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
+    # PREFILL_PRODUCER_SLOT_TRACES every slot shares one trace (PREFILL_TRACE_DIR / the adapter default).
+    slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
+    cfg.slot_lengths = slot_lengths  # None => synthetic schedule depth; else depth per prompt length
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
-        chunk_bytes = _chunk_to_host_array(token_pool[actual_start : actual_start + CHUNK_SIZE])
+        pool = pools_by_trace[slot_traces[slot_id]]
+        chunk_bytes = _chunk_to_host_array(pool[actual_start : actual_start + CHUNK_SIZE])
         assert (
             chunk_bytes.nbytes == payload_bytes
         ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
@@ -636,14 +1183,22 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
+    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. With a
+    # pipeline runner (num_ranks>1) the branch's LayerCompletionRouter funnels every rank's completions
+    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+
+    # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
+    # validators (they PCC their own host's layers) by broadcasting the resident-slot map. Do it BEFORE
+    # the master's own read-back so the reads overlap across hosts; the broadcast is the GO barrier.
+    if world_size > 1:
+        _mr_bcast_resident(mr_rank, stats.resident)
 
     # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False
@@ -651,13 +1206,22 @@ def main() -> None:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
 
+    # Multi-rank: the verdict allgather is the DONE barrier — it can't return until every validator has
+    # finished its read-back, so the shutdown sentinel below won't tear the mesh/DRAM down while one is
+    # still reading. Fold every rank's verdict (including this master's own, contributed as element [0]).
+    if world_size > 1:
+        verdicts = _mr_allgather_verdict(verify_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[producer] rank={r}: ok={v}")
+        verify_ok = all(verdicts)
+
     # Optional graceful shutdown (PR #48718): close the stream with an all -1 PrefillMetadata sentinel so
     # the runner breaks its request loop and tears down cleanly instead of blocking to SIGKILL. Sent LAST,
     # after the KV read, because read_dram_umd needs the mesh/DRAM alive (the runner is idle until now).
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
         assert len(sentinel) == METADATA_SIZE_BYTES
-        sentinel_payload = _chunk_to_host_array(token_pool[:CHUNK_SIZE])  # ignored by the runner; size must match
+        sentinel_payload = _chunk_to_host_array([1] * CHUNK_SIZE)  # contents ignored by the runner; size must match
         assert sentinel_payload.nbytes == payload_bytes
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
         service.forward_to_tensor_bytes(sentinel_payload, metadata=sentinel)

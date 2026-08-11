@@ -7,10 +7,13 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_unary_max_min.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
 enum { Max = true, Min = false };  // Clamp Mode
+
+inline void clamp_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // out = min(max(x, min_val), max_val)
 template <bool APPROXIMATION_MODE, int ITERATIONS>

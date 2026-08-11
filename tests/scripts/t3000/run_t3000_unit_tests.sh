@@ -172,7 +172,7 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_2x4
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
@@ -185,6 +185,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
 run_t3000_grok_tests() {
@@ -225,13 +226,13 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  # 10 iteration trace test with fabric ring (dit_shape now in test_all_gather, no barrier parameters)
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
-  # pytest tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
+  # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_linear-perf-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0]
   # training shapes - Re-enable this test when we have more T3K availability
-  # pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0-1link]
+  # pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0]
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1
@@ -271,6 +272,11 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
+  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D).
+  # Both tests in one pytest invocation so a failure in one doesn't stop the other one from running.
+  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -287,12 +293,6 @@ run_t3000_tt_dit_tests() {
 
   echo "LOG_METAL: Running run_t3000_tt_dit_tests"
 
-  #Timestep Encoding (Currently used in Wan2.2)
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_timestep_encoding ; fail+=$?
-
-  #Wan2.2 Time Text Image Embedding
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "t3k" ; fail+=$?
-
   #T5 Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
 
@@ -308,12 +308,6 @@ run_t3000_tt_dit_tests() {
   #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
 
-  #DITs Wan2.2 VAE
-  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-bf16-chunk_1-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
-
-  #DITs Wan2.2 Transformer
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-short_seq-2x4sp0tp1-True] ; fail+=$?
-
   #Mochi Transformer
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
 
@@ -328,32 +322,6 @@ run_t3000_tt_dit_tests() {
     exit 1
   fi
 
-}
-
-run_t3000_mistral-small-3.1-24b-vision_unit_tests() {
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mistral-small-3.1-24b-vision_unit_tests"
-
-  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
-
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py ; fail+=$?
-
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral-small-3.1-24b-vision_unit_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
 }
 
 run_t3000_tttv2_fast_unit_tests() {

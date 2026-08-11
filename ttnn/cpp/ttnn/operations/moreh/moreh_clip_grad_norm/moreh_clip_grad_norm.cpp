@@ -21,6 +21,7 @@ namespace {
 template <typename OutputDataType, typename InputDataType>
 std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
+    converted_data.reserve(data_to_convert.size());
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
             converted_data.push_back(static_cast<float>(datum));
@@ -73,7 +74,7 @@ Tensor moreh_clip_grad_norm(
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
             tt::tt_metal::TensorLayout(
                 inputs.at(0).dtype(),

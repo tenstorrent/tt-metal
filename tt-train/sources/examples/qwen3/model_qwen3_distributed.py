@@ -9,11 +9,14 @@ TP strategy (Megatron-LM / C++ DistributedLlama):
   - Attention O:         RowParallel    (shard input, all-reduce)
   - MLP gate, up:        ColumnParallel (shard intermediate)
   - MLP down:            RowParallel    (shard input, all-reduce)
-  - Embedding (untied):  Sharded along hidden dim, all-gather after lookup
-  - Embedding (tied):    VocabParallelEmbedding (Megatron-LM style) — each
-                          TP device looks up its local vocab shard, masks
-                          out-of-range tokens, all-reduces hidden vectors.
-                          No weight all-gather; only hidden-dim communication.
+  - Embedding (untied):  ttml.modules.FeatureParallelEmbedding — table sharded
+                          along the hidden dim, all-gather after lookup
+  - Embedding (tied):    ttml.modules.VocabParallelEmbedding (Megatron-LM
+                          style) — each TP device looks up its local vocab
+                          shard, masks out-of-range tokens, all-reduces hidden
+                          vectors.  No weight all-gather; only hidden-dim
+                          communication.  Shares the ColumnParallel LM-head
+                          weight (see DistributedQwen3Model).
   - Norms (QK, layer, final): Replicated
   - LM head:             Always ColumnParallel with vocab-sharded output
                           (paired with vocab_parallel_cross_entropy_loss)
@@ -37,15 +40,17 @@ DP+TP support:
   to average gradients across DP groups.
 
 Usage (TP only):
-    ttml.core.distributed.enable_fabric(tp_size)
-    ctx.open_device([1, tp_size])
+    ttml.open_device_mesh(ttml.Mesh((1, tp_size), ("dp", "tp")))
     model = DistributedQwen3ForCausalLM(config, shard_dim=1)
 
 Usage (DP + TP):
-    ttml.core.distributed.enable_fabric(dp_size * tp_size)
-    ctx.open_device([dp_size, tp_size])
+    ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
     model = DistributedQwen3ForCausalLM(config, shard_dim=1)
     # Data: shard batch along DP (mesh dim 0), replicate along TP (mesh dim 1)
+
+The mesh must be opened via ``ttml.open_device_mesh`` (``utils.device_setup``
+does this) so the ``"tp"`` axis is registered by name — the ``ttml.modules``
+parallel embeddings look their cluster axis up by name, not by index.
 """
 
 from typing import Optional
@@ -53,12 +58,17 @@ import torch
 from tqdm.auto import tqdm
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+from ttml.modules import (
+    AbstractModuleBase,
+    FeatureParallelEmbedding,
+    ModuleList,
+    Parameter,
+    VocabParallelEmbedding,
+)
 
 from ttml.models.qwen3 import (
     Qwen3Config,
     Qwen3RMSNorm,
-    ConcatLastDim,
 )
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
@@ -66,7 +76,9 @@ from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for caller
 from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
+    expected_fused_load_shape,
 )
+from ttml.common.utils import resolve_padded_load_shape
 from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
@@ -74,10 +86,25 @@ from utils.tensor_utils import (
     make_sharded_weight,
     make_sharded_zeros,
     make_replicated_zeros,
+    sharded_weight_init,
 )
-from utils.distributed_ops import (
-    _vocab_parallel_embedding,
-)
+
+
+def tp_padded_vocab_size(vocab_size):
+    """Pad the vocab so each TP shard is whole *and* tile-aligned.
+
+    ColumnParallelLinear and VocabParallelEmbedding both shard dim 2 across the
+    TP axis, so the padded size has to be divisible by ``tp_size`` *and* every
+    resulting shard has to be a multiple of 32 for the tile layout — that is,
+    the padded size must be a multiple of ``32 * tp_size``.
+
+    The trailing padded rows stay on device and are absorbed by
+    ``vocab_parallel_cross_entropy_loss``, so ``config.vocab_size`` itself is
+    free to be arbitrary.
+    """
+    align = 32 * ttml.mesh().axis_size("tp")
+    return ((vocab_size + align - 1) // align) * align
+
 
 # ---------------------------------------------------------------------------
 # ColumnParallelLinear
@@ -189,15 +216,17 @@ class DistributedQwen3Attention(AbstractModuleBase):
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
-        self.k_proj = ColumnParallelLinear(
+        # Fused KV projection (Llama-style), width 2*kv_out. Column-parallel shards
+        # the output rows contiguously across TP, and grouped_heads_creation splits
+        # each device's LOCAL kv width at its midpoint into [K_local | V_local]. For
+        # that to be correct the fused weight rows must be grouped PER SHARD as
+        # [K_shard0 | V_shard0 | K_shard1 | V_shard1 | ...], NOT the naive
+        # [all-K | all-V] (whose global midpoint would not line up with the local
+        # per-device midpoints for tp>1). The distributed loader builds that
+        # per-shard-interleaved layout; see build_weight_mapping_distributed.
+        self.kv_proj = ColumnParallelLinear(
             self.hidden_size,
-            kv_out,
-            has_bias=config.attention_bias,
-            shard_dim=shard_dim,
-        )
-        self.v_proj = ColumnParallelLinear(
-            self.hidden_size,
-            kv_out,
+            2 * kv_out,
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
@@ -235,25 +264,17 @@ class DistributedQwen3Attention(AbstractModuleBase):
         position_offset=0,
     ):
         q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
-
-        q_shape, k_shape = q.shape(), k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_local_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_local_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
-        kvs = ConcatLastDim.apply(k, v)
+        # Single fused KV matmul; already produces the per-device [K_local | V_local]
+        kvs = self.kv_proj(hidden_states)
         (
             query_heads,
             key_heads,
             value_heads,
         ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
+
+        # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
@@ -347,26 +368,40 @@ class DistributedQwen3Model(AbstractModuleBase):
         self.shard_dim = shard_dim
         self.use_checkpoint = use_checkpoint
         self.track_memory = track_memory
-        self.tied_embed_weight = tied_embed_weight
-        vocab_tiled = ((config.vocab_size + 31) // 32) * 32
-        if tied_embed_weight is None:
-            self.embed_tokens = Parameter(make_sharded_weight((1, 1, vocab_tiled, config.hidden_size), 3, shard_dim))
+        # Deliberately not stored on self: AbstractModuleBase.__setattr__ would
+        # register the tied tensor under a third name (``model/tied_embed_weight``)
+        # on top of ``lm_head/weight`` and ``model/embed_tokens/weight``.
+        vocab_tiled = tp_padded_vocab_size(config.vocab_size)
+        if tied_embed_weight is not None:
+            # Megatron-LM VocabParallelEmbedding sharing the ColumnParallel LM-head
+            # weight. ``weight_init`` hands back the LM head's existing tensor so the
+            # constructor never allocates a throwaway [1, 1, V, H] table, and the
+            # assignment right after makes ``embed_tokens.weight`` and
+            # ``lm_head.weight`` the same Parameter object (the tying pattern used by
+            # ttml.models.llama). ModuleBase::parameters() dedupes by tensor address,
+            # so the shared weight is still reported — and optimized — exactly once,
+            # under the ``lm_head/weight`` name that param_utils maps to.
+            self.embed_tokens = VocabParallelEmbedding(
+                vocab_tiled,
+                config.hidden_size,
+                weight_init=lambda shape, mapper=None: tied_embed_weight.tensor,
+                axis_name="tp",
+            )
+            self.embed_tokens.weight = tied_embed_weight
+        else:
+            self.embed_tokens = FeatureParallelEmbedding(
+                vocab_tiled,
+                config.hidden_size,
+                weight_init=sharded_weight_init(3),
+                axis_name="tp",
+            )
         self.layers = ModuleList(
             [DistributedQwen3DecoderLayer(config, i, shard_dim) for i in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
-        if self.tied_embed_weight is not None:
-            h = _vocab_parallel_embedding(
-                input_ids_np,
-                self.tied_embed_weight,
-                self.config.vocab_size,
-                self.shard_dim,
-            )
-        else:
-            h = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-            h = ttml.ops.distributed.all_gather(h, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED)
+    def forward(self, input_ids, attention_mask=None, past_key_values=None):
+        h = self.embed_tokens(input_ids)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
@@ -397,10 +432,9 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
     along dim 3 themselves.
 
     When ``tie_word_embeddings`` is True the same vocab-sharded weight is
-    reused for input embedding (Megatron-LM VocabParallelEmbedding: local
-    lookup → mask → all-reduce) and output projection; callers must pass
-    ``input_ids_np`` (numpy uint32 token IDs) to :meth:`forward` for the
-    vocab-parallel embedding preprocessing.
+    reused for input embedding (``ttml.modules.VocabParallelEmbedding``: local
+    lookup → mask → all-reduce) and output projection. The offset/mask math
+    runs on device, so :meth:`forward` needs only the on-device ``input_ids``.
     """
 
     def __init__(
@@ -418,7 +452,7 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
         self.shard_dim = shard_dim
         self.track_memory = track_memory
 
-        vocab_tiled = ((config.vocab_size + 31) // 32) * 32
+        vocab_tiled = tp_padded_vocab_size(config.vocab_size)
         lm_vocab = vocab_tiled if tie_word_embeddings else config.vocab_size
         self.lm_head = ColumnParallelLinear(
             config.hidden_size,
@@ -432,11 +466,11 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             shard_dim,
             use_checkpoint=use_checkpoint,
             track_memory=track_memory,
-            tied_embed_weight=(self.lm_head.weight.tensor if tie_word_embeddings else None),
+            tied_embed_weight=(self.lm_head.weight if tie_word_embeddings else None),
         )
 
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
-        h = self.model(input_ids, attention_mask, past_key_values, input_ids_np=input_ids_np)
+    def forward(self, input_ids, attention_mask=None, past_key_values=None):
+        h = self.model(input_ids, attention_mask, past_key_values)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
         out = self.lm_head(h)
@@ -490,7 +524,7 @@ def load_weights_from_hf_distributed(
     tp_size = get_tp_size(shard_dim)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
-    def _prepare(hf_name, ttml_name):
+    def _prepare_hf_weights(hf_name, ttml_name):
         """CPU-only prep: returns (weight_np, shard_type) ready for transfer.
 
         Device ops (from_numpy -> tilize / shard onto the mesh) are NOT
@@ -512,31 +546,64 @@ def load_weights_from_hf_distributed(
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
+            elif tr[0] == "combine_kv_tp":
+                # tr = ("combine_kv_tp", num_kv_heads, v_hf_name). Build the fused
+                # kv_proj weight (or bias) for ColumnParallel TP. ColumnParallel
+                # shards the output rows CONTIGUOUSLY across tp devices, and the
+                # on-device head split reads each device's LOCAL kv slice as
+                # [K_local | V_local]. So the global fused rows must be grouped
+                # PER SHARD -- [K_s0, V_s0, K_s1, V_s1, ...] -- NOT [all-K, all-V]:
+                # then contiguous chunk s = [K_shard_s | V_shard_s] lands on device
+                # s as exactly [K_local | V_local]. K carries the RoPE row-permute
+                # (like q_proj/k_proj); V is used as-is. At tp=1 this reduces to the
+                # plain [K | V] concat.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    return None
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                kv_out = k_w.shape[0]
+                assert kv_out % tp_size == 0, f"kv_out {kv_out} not divisible by tp {tp_size}"
+                per = kv_out // tp_size
+                if k_w.dim() == 2:  # weight [kv_out, hidden]
+                    k_blk = k_w.reshape(tp_size, per, k_w.shape[1])
+                    v_blk = v_w.reshape(tp_size, per, v_w.shape[1])
+                    # [tp, 2, per, hidden] -> row-major flatten -> K_s0,V_s0,K_s1,V_s1,...
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out, k_w.shape[1])
+                else:  # bias [kv_out]
+                    k_blk = k_w.reshape(tp_size, per)
+                    v_blk = v_w.reshape(tp_size, per)
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
         ttml_shape = ttml_shapes[ttml_name]
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
 
         if weight.dim() == 2:
-            rows, cols = weight.shape
+            # Reconstruct the GLOBAL tile-padded target (ttml_shape is per-device;
+            # the sharded dim is scaled back up by tp_size). Validate the (global)
+            # checkpoint shape against the config-implied logical shape and pad UP
+            # to the global target -- never crop -- via the shared policy helper.
             tgt_rows, tgt_cols = ttml_shape[2], ttml_shape[3]
             if st == "col_w":
                 tgt_rows *= tp_size
             elif st == "row_w":
                 tgt_cols *= tp_size
+            tgt_rows, tgt_cols = resolve_padded_load_shape(weight.shape, (tgt_rows, tgt_cols), expected, name=hf_name)
+            rows, cols = weight.shape
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
-            dim = weight.shape[0]
             tgt_dim = ttml_shape[-1]
             if st == "col_b":
                 tgt_dim *= tp_size
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (tgt_dim,), expected, name=hf_name)
+            dim = weight.shape[0]
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
         else:
@@ -558,7 +625,9 @@ def load_weights_from_hf_distributed(
     # commit and trips the "Expected Program Binaries to be committed to DRAM"
     # assert).
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
+        futures = [
+            (hf_name, ttml_name, pool.submit(_prepare_hf_weights, hf_name, ttml_name)) for hf_name, ttml_name in items
+        ]
 
         for hf_name, ttml_name, future in tqdm(
             futures,

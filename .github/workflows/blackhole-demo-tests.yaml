@@ -15,7 +15,6 @@ on:
         type: choice
         options:
           - all
-          - mistral-small-3.1-24b
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
@@ -88,7 +87,7 @@ on:
 
 jobs:
   generate-model-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -166,7 +165,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:

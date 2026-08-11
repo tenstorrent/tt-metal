@@ -83,7 +83,7 @@ MorehGroupNormBackwardInputGradOperation::compute_output_specs(
     if (tensor_args.input_grad.has_value()) {
         return {tensor_args.input_grad->tensor_spec()};
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.output_grad.logical_shape(),
         TensorLayout(
             tensor_args.output_grad.dtype(), PageConfig(Layout::TILE), operation_attributes.input_grad_memory_config));

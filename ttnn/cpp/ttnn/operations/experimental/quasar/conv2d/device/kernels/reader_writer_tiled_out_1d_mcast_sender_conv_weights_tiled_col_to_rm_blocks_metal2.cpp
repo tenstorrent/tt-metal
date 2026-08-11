@@ -175,7 +175,7 @@ void kernel_main() {
         if constexpr (split_reader_enabled) {
             if constexpr (activation_reuse_enabled) {
                 l1_write_addr_act = cb_start_addr;
-                get_local_cb_interface(dfb::act_second_reader).fifo_wr_ptr = l1_write_addr_act;
+                cb_act_second_obj.evil_set_write_ptr(l1_write_addr_act);
             }
             reader_offset = act_l1_read_addr;
         }
@@ -253,7 +253,6 @@ void kernel_main() {
                     uint32_t weight_tile_id = weight_row_start_tile_id;
                     // loop over weight block tiles along w
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT("weight_tile_id={}\n", weight_tile_id);
                         noc.async_read(
                             s_weight,
                             cb_weight_obj,

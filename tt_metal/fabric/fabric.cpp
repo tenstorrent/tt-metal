@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -94,6 +95,18 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+std::vector<FabricType> get_all_mgd_fabric_types() {
+    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+    std::vector<FabricType> fabric_types;
+    for (const auto mesh : mgd.all_meshes()) {
+        const auto& instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        fabric_types.push_back(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc));
+    }
+    return fabric_types;
+}
+
 #if defined(TT_METAL_USE_EMULE)
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
@@ -107,7 +120,7 @@ void append_fabric_connection_rt_args(
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
     TT_FATAL(
@@ -231,7 +244,7 @@ void append_fabric_connection_rt_args(
         // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
         ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
-        CoreCoord fabric_router_virtual_core =
+        tt::tt_metal::CoreCoord fabric_router_virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
@@ -283,6 +296,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::vector<eth_chan_directions> directions;
+    directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
         if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
@@ -301,13 +315,14 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     std::vector<FabricNodeId> dst_nodes;
+    dst_nodes.reserve(attempted_directionss.size());
     std::unordered_set<RoutingDirection> used_directions;
     for (auto dir : attempted_directionss) {
         auto routing_direction = control_plane.eth_direction_to_routing_direction(dir);
@@ -379,7 +394,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
     // 1) append tag (like direction) and fabric connection info for each route
@@ -462,7 +477,7 @@ void append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
@@ -585,7 +600,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,
     const uint32_t,
     tt::tt_metal::Program&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     CoreType);
 
@@ -594,7 +609,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     const FabricNodeId&,
     const uint32_t,
     tt::tt_metal::ProgramDescriptor&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     CoreType);
 
@@ -604,7 +619,7 @@ template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::
     const std::vector<uint32_t>&,
     tt::tt_metal::ProgramDescriptor&,
     tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     FabricApiType,
     CoreType);
@@ -615,7 +630,7 @@ template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::
     const std::vector<uint32_t>&,
     tt::tt_metal::Program&,
     tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     FabricApiType,
     CoreType);
@@ -626,7 +641,7 @@ template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Prog
     const std::vector<uint32_t>&,
     tt::tt_metal::ProgramDescriptor&,
     tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     FabricApiType,
     CoreType);
@@ -637,7 +652,7 @@ template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Prog
     const std::vector<uint32_t>&,
     tt::tt_metal::Program&,
     tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&,
     FabricApiType,
     CoreType);
@@ -657,6 +672,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<std::pair<std::string, std::string>> defines;
+    defines.reserve(2);
     switch (api_type) {
         case tt::tt_fabric::FabricApiType::Linear: defines.push_back({"API_TYPE_Linear", "1"}); break;
         case tt::tt_fabric::FabricApiType::Mesh: defines.push_back({"API_TYPE_Mesh", "1"}); break;
@@ -696,6 +712,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
+    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];

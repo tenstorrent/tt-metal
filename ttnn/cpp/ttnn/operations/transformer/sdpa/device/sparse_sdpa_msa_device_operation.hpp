@@ -17,31 +17,10 @@
 
 namespace ttnn::prim {
 
-// Runtime-arg slots patched on cache hits for indexed K/V caches and runtime K/V group strides.
-// Keep these in sync with create_descriptor().
-namespace sparse_sdpa_msa_rt {
-inline constexpr uint32_t kReaderKernelIdx = 0;
-inline constexpr uint32_t kWriterKernelIdx = 1;
-// reader args: {q, k, v, idx, work_start, work_count, k_batch_tile_offset, v_batch_tile_offset,
-//               k_group_tile_stride, v_group_tile_stride}
-inline constexpr uint32_t kReaderKBatchOffsetArg = 6;
-inline constexpr uint32_t kReaderVBatchOffsetArg = 7;
-inline constexpr uint32_t kReaderKGroupStrideArg = 8;
-inline constexpr uint32_t kReaderVGroupStrideArg = 9;
-// Per-device causal chunk_start (chunk_start_idx + rank*S); patched at dispatch when causal masking is on.
-inline constexpr uint32_t kReaderChunkStartArg = 10;
-// writer args: {out, work_start, work_count, k, v, k_batch_tile_offset, v_batch_tile_offset,
-//               k_group_tile_stride, v_group_tile_stride}
-inline constexpr uint32_t kWriterKBatchOffsetArg = 5;
-inline constexpr uint32_t kWriterVBatchOffsetArg = 6;
-inline constexpr uint32_t kWriterKGroupStrideArg = 7;
-inline constexpr uint32_t kWriterVGroupStrideArg = 8;
-}  // namespace sparse_sdpa_msa_rt
-
 struct SparseSDPAMsaOperation {
     using operation_attributes_t = SparseSDPAMsaParams;
     using tensor_args_t = SparseSDPAMsaInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAMsaProgramFactory {
@@ -53,9 +32,48 @@ struct SparseSDPAMsaOperation {
             const tensor_args_t& t,
             tensor_return_value_t& output,
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+
+        // Cache-hit re-apply of all per-dispatch state (buffer addresses, per-core K/V offsets, group strides,
+        // causal chunk_start), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<SparseSDPAMsaProgramFactory>;
+
+    // Runtime-arg slots, named so create_descriptor's emplace order and override_runtime_arguments'
+    // in-place writes reference the same symbols instead of agreeing on bare positions.
+    enum ReaderArg : uint32_t {
+        kReaderQAddr,
+        kReaderKAddr,
+        kReaderVAddr,
+        kReaderIdxAddr,
+        kReaderWorkStart,
+        kReaderWorkCount,
+        kReaderKBatchOffset,
+        kReaderVBatchOffset,
+        kReaderKGroupStride,
+        kReaderVGroupStride,
+        kReaderChunkStart,
+        kReaderArgCount,
+    };
+    enum WriterArg : uint32_t {
+        kWriterOutAddr,
+        kWriterWorkStart,
+        kWriterWorkCount,
+        kWriterKAddr,
+        kWriterVAddr,
+        kWriterKBatchOffset,
+        kWriterVBatchOffset,
+        kWriterKGroupStride,
+        kWriterVGroupStride,
+        kWriterArgCount,
+    };
+    enum ComputeArg : uint32_t { kComputeWorkStart, kComputeWorkCount, kComputeArgCount };
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-checks invariants excluded from the program hash, such as interleaved K/V length and cache_batch_idx.
@@ -65,19 +83,30 @@ struct SparseSDPAMsaOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a
-    // single device or when non-causal). Shared by create_descriptor (miss-bake) and get_dynamic_runtime_args
-    // (hit-patch) so the two paths cannot drift.
+    // single device or when non-causal).
     static uint32_t compute_chunk_start_local(
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    // Patches per-slot K/V tile offsets and runtime K/V group strides on cache hits.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Work split plus every scalar compute_program_hash excludes: interleaved K/V T and batch slots, n_kv,
+    // cache_batch_idx, chunk_start_idx/cluster_axis. Single-sourced so create_descriptor (miss-bake) and
+    // override_runtime_arguments (hit-patch) write the same values and cannot drift.
+    struct DispatchArgs {
+        tt::tt_metal::CoreCoord grid;  // per-core arg order: core i == {i % grid.x, i / grid.x}
+        uint32_t num_cores = 0;
+        uint32_t base_work = 0;  // total_work = S * n_kv over num_cores; the first `extra` cores take one more
+        uint32_t extra = 0;
+        uint32_t k_batch_tile_offset = 0;
+        uint32_t v_batch_tile_offset = 0;
+        uint32_t k_group_tile_stride = 0;
+        uint32_t v_group_tile_stride = 0;
+        uint32_t chunk_start_local = 0;
+    };
+    static DispatchArgs compute_dispatch_args(
         const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const tensor_args_t& t,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 Tensor sparse_sdpa_msa(
@@ -90,6 +119,7 @@ Tensor sparse_sdpa_msa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
 
 }  // namespace ttnn::prim

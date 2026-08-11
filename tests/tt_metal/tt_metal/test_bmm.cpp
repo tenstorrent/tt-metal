@@ -17,6 +17,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -68,12 +69,9 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
     const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
     const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B), TensorTopology{}),
-        MeshTensor::allocate_on_device(
-            mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C), TensorTopology{}),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B)),
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_C)),
     };
 }
 
@@ -201,7 +199,7 @@ bool validate_bmm_result(
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, Bmm) {
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
     IDevice* dev = mesh_device.get_devices()[0];
 
@@ -224,7 +222,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     const experimental::NodeCoord node{0, 0};
     const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
-    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
 
     constexpr uint32_t do_bcast = 0;
     experimental::ProgramRunArgs params;
@@ -255,17 +254,17 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     };
     experimental::SetProgramRunArgs(program, params);
 
+    auto& cq = mesh_device.mesh_command_queue();
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
-    // underlying reference buffer to populate / read back DRAM.
-    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
-    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
+    auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
+    auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
+    enqueue_write_tensor(cq, src0_host, tensors.src0);
+    enqueue_write_tensor(cq, src1_host, tensors.src1);
 
-    detail::LaunchProgram(dev, program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
-    std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
+    auto result_vec = enqueue_read_tensor(cq, tensors.dst).to_vector<uint32_t>();
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);

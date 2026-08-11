@@ -40,6 +40,7 @@ def run_reduce_scatter_impl(
     num_buffers_per_channel=None,
     verify_output=True,
     use_new=False,
+    contiguous_staging=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -71,40 +72,27 @@ def run_reduce_scatter_impl(
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
+    rs_output_shape = rs_input_shape[:]
+    rs_output_shape[dim] //= num_devices
     intermediate_shape = rs_input_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    if use_persistent_buffers:
-        persistent_intermediate_buffers = [
-            ttnn.from_torch(
-                torch.zeros(intermediate_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_intermediate,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
-    rs_output_shape = rs_input_shape[:]
-    rs_output_shape[dim] //= num_devices
-    if use_persistent_buffers:
-        persistent_output_buffers = [
-            ttnn.from_torch(
-                torch.zeros(rs_output_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_rs,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
-
-    logger.info("Done creating persistent buffers")
+    # Ring / scatter-dim != 0 can use the contiguous fast path: the intermediate is a chunk-paged staging
+    # buffer (not input-shaped) and the 2nd-last ring iteration stages one direction's contribution into
+    # a second penult intermediate instead of scatter-writing into the tiled output. Both must be
+    # allocated via the op's own sizing helper; other configs use an input-shaped tiled intermediate and
+    # have no penult intermediate.
+    #
+    # The op picks the path from the intermediate it is handed, so on the ring path a caller may opt into
+    # the tiled layout by passing contiguous_staging=False. Everywhere else the tiled layout is the only
+    # option, and asking for the contiguous one is unsupported.
+    if contiguous_staging is None:
+        contiguous_staging = rs_topology == ttnn.Topology.Ring and dim != 0
+    use_contiguous_staging = contiguous_staging
+    assert not (
+        use_contiguous_staging and not (rs_topology == ttnn.Topology.Ring and dim != 0)
+    ), "contiguous staging requires Ring topology and scatter dim != 0"
 
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
@@ -143,6 +131,44 @@ def run_reduce_scatter_impl(
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    persistent_intermediate_buffers = []
+    persistent_output_buffers = []
+    persistent_penult_intermediate_buffers = []
+    if use_persistent_buffers:
+        for i in range(num_iters):
+            if use_contiguous_staging:
+                (
+                    interm_buf,
+                    penult_interm_buf,
+                ) = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                    tt_input_tensor_mesh_list[i], dim=dim, topology=rs_topology, cluster_axis=cluster_axis
+                )
+            else:
+                interm_buf = ttnn.from_torch(
+                    torch.zeros(intermediate_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_intermediate,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                penult_interm_buf = None
+            persistent_intermediate_buffers.append(interm_buf)
+            persistent_penult_intermediate_buffers.append(penult_interm_buf)
+            persistent_output_buffers.append(
+                ttnn.from_torch(
+                    torch.zeros(rs_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_rs,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            )
+    logger.info("Done creating persistent buffers")
+
     ##### Perform torch ops #####
     torch_reduce_scatter_output_list = []
     for i in range(num_iters):
@@ -171,11 +197,15 @@ def run_reduce_scatter_impl(
             )
         else:
             logger.info(f"Using experimental reduce scatter")
+            if use_persistent_buffers:
+                buffers = [persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+                if persistent_penult_intermediate_buffers[i] is not None:
+                    buffers.append(persistent_penult_intermediate_buffers[i])
+            else:
+                buffers = None
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
                 tt_input_tensor_mesh_list[i],
-                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-                if use_persistent_buffers
-                else None,
+                persistent_output_buffers=buffers,
                 dim=dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
@@ -1436,3 +1466,78 @@ def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     assert torch.allclose(
         torch_reference, torch_output, atol=1e-1, rtol=1e-2
     ), "Output mismatch between torch and ttnn reduce-scatter"
+
+
+# The ring path (scatter dim != 0) supports two intermediate staging layouts, and the op picks between
+# them from the intermediate it is handed: a chunk-paged contiguous staging buffer, or an input-shaped
+# tiled one. With no persistent intermediate the op allocates the contiguous buffer itself. The kernels
+# select the matching addressing scheme through the `contiguous_interm` compile-time arg, so both
+# layouts need coverage to stay correct.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 512, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([2, 1, 256, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ([1, 8, 128, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+    ],
+    ids=["dim3", "dim2", "batch2_dim3", "dim1"],
+)
+@pytest.mark.parametrize(
+    "use_persistent_buffers, contiguous_staging",
+    [
+        (False, None),
+        (True, True),
+        (True, False),
+    ],
+    ids=["no_persistent_interm", "persistent_contiguous_interm", "persistent_tiled_interm"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1540000}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_reduce_scatter_async_ring_intermediate_staging(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    use_persistent_buffers,
+    contiguous_staging,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=False,
+        num_iters=2,
+        use_persistent_buffers=use_persistent_buffers,
+        contiguous_staging=contiguous_staging,
+    )

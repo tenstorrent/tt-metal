@@ -115,8 +115,10 @@ void Device::initialize_smc_dispatch_telemetry_control() {
     }
 
     smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
+    // TODO: When dispatch telemetry is supported on Quasar, we'll need to pass in the command queue id(s) here.
     smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
-        context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        context_->dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
@@ -1005,6 +1007,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
     std::vector<CoreCoord> dram_phy_coords;
+    dram_phy_coords.reserve(num_dram_banks);
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = this->dram_core_from_dram_channel(i, noc);
         if (dram_is_virtualized) {

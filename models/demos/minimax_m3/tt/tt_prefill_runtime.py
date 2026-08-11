@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 single-rank prefill runtime.
+"""MiniMax-M3 prefill runtime (single-rank and pipeline-parallel).
 
 Mirrors the DeepSeek ``TtPrefillRuntime`` contract so the model-agnostic prefill engine
 (``models/demos/common/prefill/runners/prefill_runner.py``) can drive M3 through
 ``MiniMaxM3PrefillAdapter``: build model -> compile(kv_cache) -> prefill_chunk(chunk, kv_cache) per
 chunk. The runtime is STATELESS w.r.t. the KV cache — the engine allocates it (via the adapter's
-``allocate_kv_cache``) and passes it into every call that touches it. Only single-rank prefill is
-wired (no pipeline / D2D). KV-chunk-table migration is supported via ``build_kv_chunk_table`` (a
-multi-config table; see ``tt/runners/kv_chunk_table.py``).
+``allocate_kv_cache``) and passes it into every call that touches it. A runtime owns one rank's layer
+slice (first_layer_idx / is_first_rank / is_last_rank); the config defaults make a single-rank runtime
+own the whole model. For pipeline-parallel prefill the engine ships the cross-rank hidden state over the
+D2D socket: a non-first rank receives an activation (not tokens) and a non-last rank returns its hidden
+state instead of filling the LM head. KV-chunk-table migration is supported (single-rank) via
+``build_kv_chunk_table`` (a multi-config table; see ``tt/runners/kv_chunk_table.py``).
 
 Input convention (shared with the engine's H2D socket): ``make_chunk_input`` returns the chunk's
 token IDs as an SP-sharded uint32 tensor — the SAME per-chip layout the request-mode socket delivers.
@@ -52,13 +55,23 @@ class TtPrefillRuntimeConfig:
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
     cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
-    # Pipeline-parallel rank slicing (single-rank defaults own the whole model). M3 only wires
-    # single-rank prefill today — these exist for engine-contract parity (the engine reads
-    # is_first_rank / is_last_rank / first_layer_idx to drive the chunk schedule) and are asserted
-    # single-rank below.
+    # Pipeline-parallel rank slicing. first_layer_idx is the GLOBAL index of this rank's first layer;
+    # is_first_rank gates the embedding + token input, is_last_rank marks the final stage. The defaults
+    # make a single-rank runtime own the whole model.
     first_layer_idx: int = 0
+    # Explicit global layer indices to build, overriding the contiguous run. Profiling only: lets a
+    # 2-layer run cover one dense and one sparse layer ([0, 3]) instead of the four it takes to reach
+    # the first sparse one. Requires a complete tilized weight cache.
+    layer_indices: Optional[list] = None
     is_first_rank: bool = True
     is_last_rank: bool = True
+    # Emb-axis sharding of the cross-rank D2D hidden state (must match the runner's D2D_MAPPER_CONFIG and
+    # this model's residual layout): True => emb TP-sharded, False => emb replicated across TP. M3's SP
+    # residual is emb-replicated, so its adapter passes False.
+    pipeline_activation_emb_tp_sharded: bool = True
+    # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
+    # ones the D2H service. M3 has no traced path, so it stays False.
+    use_trace: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -80,11 +93,15 @@ class TtPrefillRuntime:
         self.config = config
 
         assert (
-            config.is_first_rank and config.is_last_rank
-        ), "MiniMax-M3 prefill wires single-rank only (no pipeline); is_first_rank and is_last_rank must be True"
-        assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
+        # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
+        # past the per-user cache stride and silently corrupts another slot.
+        assert config.layer_indices is None or len(config.layer_indices) == config.num_layers, (
+            f"layer_indices has {len(config.layer_indices)} entries but num_layers is "
+            f"{config.num_layers}; they size the model and the KV cache respectively and must match"
+        )
 
         self.model_built = False
         self.compiled = False
@@ -112,8 +129,10 @@ class TtPrefillRuntime:
         rows, cols = self.config.mesh_shape
         logger.info(
             f"Building TtPrefillRuntime model: num_layers={self.config.num_layers} "
-            f"max_seq_len={self.config.max_seq_len} chunk_size={self.config.chunk_size} "
-            f"num_users={self.config.num_users} mesh_shape={self.config.mesh_shape}"
+            f"first_layer_idx={self.config.first_layer_idx} is_first_rank={self.config.is_first_rank} "
+            f"is_last_rank={self.config.is_last_rank} max_seq_len={self.config.max_seq_len} "
+            f"chunk_size={self.config.chunk_size} num_users={self.config.num_users} "
+            f"mesh_shape={self.config.mesh_shape}"
         )
         mesh_config = MeshConfig((rows, cols), tp=cols)
         ccl = CCLManager(
@@ -131,6 +150,10 @@ class TtPrefillRuntime:
             use_ep_moe=self.config.use_ep_moe,
             ep_seq_len_per_chip=self.config.chunk_size // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
+            first_layer_idx=self.config.first_layer_idx,
+            layer_indices=self.config.layer_indices,
+            is_first_rank=self.config.is_first_rank,
+            is_last_rank=self.config.is_last_rank,
         )
         self.model_built = True
 
@@ -159,13 +182,40 @@ class TtPrefillRuntime:
         rs = self.model.rope_setup
         self.rope_indexed = [build(rs.cos_matrix_prefill), build(rs.sin_matrix_prefill)]
 
+    def make_placeholder_activation(self) -> ttnn.Tensor:
+        """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
+        backing: global ``[1, 1, chunk_size, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
+        rows and the embedding sharded (or replicated) across the TP cols per
+        ``pipeline_activation_emb_tp_sharded`` — the same layout as the runner's D2D_MAPPER_CONFIG. Warm-up
+        stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
+        run time."""
+        cfg = self.config
+        dims = [None, None]
+        dims[cfg.sp_axis] = 2  # seq across SP rows
+        if cfg.pipeline_activation_emb_tp_sharded:
+            dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
+        zeros = torch.zeros(1, 1, cfg.chunk_size, self.hf_config.hidden_size, dtype=torch.bfloat16)
+        return ttnn.from_torch(
+            zeros,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
+        )
+
     def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
-        """Build one chunk's device input for ``prefill_chunk``: the chunk's token IDs as an SP-sharded
-        uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r holds the
-        contiguous token slice ``[r*s_local : (r+1)*s_local]``, replicated across the TP cols. This is the
-        SAME per-chip layout the request-mode H2D socket delivers, so both paths feed one code path;
-        ``prefill_chunk`` embeds it on device. (M3 uses a contiguous — non-balanced — SP shard, matching
-        ``prepare_inputs_prefill`` and the block-cyclic layout ``_build_indexed_rope`` assumes.)"""
+        """Build one chunk's device input for ``prefill_chunk``. On the first rank: the chunk's token IDs
+        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r
+        holds the contiguous token slice ``[r*s_local : (r+1)*s_local]``, replicated across the TP cols.
+        This is the SAME per-chip layout the request-mode H2D socket delivers, so both paths feed one code
+        path; ``prefill_chunk`` embeds it on device. (M3 uses a contiguous — non-balanced — SP shard,
+        matching ``prepare_inputs_prefill`` and the block-cyclic layout ``_build_indexed_rope`` assumes.)
+
+        On a non-first pipeline rank the input is a hidden-state activation (received over the D2D socket at
+        run time), not token IDs — return a placeholder activation of the right spec for warm-up."""
+        if not self.config.is_first_rank:
+            return self.make_placeholder_activation()
         assert len(token_ids) == self.config.chunk_size, (
             f"chunk input must be exactly chunk_size={self.config.chunk_size} tokens (pad the tail), "
             f"got {len(token_ids)}"
@@ -185,11 +235,11 @@ class TtPrefillRuntime:
         )
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """Embed the SP-sharded token tensor into the bf16 hidden state each layer consumes. The
-        embedding weight is replicated across the mesh, so each chip embeds its own seq shard (rows) with
-        the full embedding dim (cols); this reproduces ``prepare_inputs_prefill``'s SP embedding starting
-        from an already-on-device token tensor. bf16 (not bf8) keeps the residual stream's dynamic range."""
-        x = ttnn.embedding(tokens, self.model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
+        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] — full hidden, TP-replicated (the
+        residual-stream contract); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden
+        by default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
+        x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
@@ -217,6 +267,9 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
+        d2h_service=None,
+        record_dev=None,
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
@@ -233,15 +286,35 @@ class TtPrefillRuntime:
         causality makes the pad tail inert. Call once per chunk, in order — a chunk's KV must be written
         before the next chunk reads it. If a LayerAck channel is registered, the model bumps it per layer.
 
+        On a non-last pipeline rank this returns the slice's output hidden-state activation (which the
+        engine ships to the next rank over the D2D socket); the last/single rank keeps its headless
+        cache-fill contract (returns None under skip_lm_head).
+
         Args:
-            input_tensor: this chunk's SP-sharded uint32 token tensor (make_chunk_input, or the H2D
-                socket). Embedded on device here, then deallocated.
+            input_tensor: on the first rank, this chunk's SP-sharded uint32 token tensor (make_chunk_input
+                or the H2D socket), embedded on device here then deallocated. On a non-first rank, the
+                hidden-state activation handed over the D2D socket — used directly (the first decoder layer
+                consumes/frees it), NOT embedded.
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); this
                 chunk's KV is written into it. The same object is passed on every call.
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real (non-pad) token.
+            request_id: the engine's chunk counter, part of the runner's call contract. Only the
+                pipelined layer-completion sink needs it (to build a globally-dense
+                seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
+                channel carries no payload, so it is accepted and ignored.
+            d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
+                the host callback (set_layer_ack_channel), so a caller asking for the D2H path gets a
+                loud error rather than silently missing acks.
+            record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
+                record the D2H ack would carry).
         """
+        if d2h_service is not None:
+            raise NotImplementedError(
+                "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
+                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
+            )
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         assert (
@@ -251,10 +324,13 @@ class TtPrefillRuntime:
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
-        # Tokens are embedded on device here: make_chunk_input (standalone) and the H2D socket (request)
-        # both deliver raw SP-sharded token ids, so both paths share one code path.
-        x_embd = self._embed_tokens(input_tensor)
-        ttnn.deallocate(input_tensor)
+        # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
+        # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
+        if self.config.is_first_rank:
+            x_embd = self._embed_tokens(input_tensor)
+            ttnn.deallocate(input_tensor)
+        else:
+            x_embd = input_tensor
 
         # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks this chunk's rows
         # on-device from kv_actual_global (= actual_start, threaded via cached_len + indexed_rope=True). No
@@ -272,6 +348,9 @@ class TtPrefillRuntime:
             indexed_rope=True,
             on_layer_complete=self._on_layer_complete,
         )
+        if not self.config.is_last_rank:
+            # Middle rank: hand the slice's output hidden state to the next rank.
+            return out
         if skip_lm_head:
             if out is not None:
                 out.deallocate(True)
@@ -315,11 +394,33 @@ class TtPrefillRuntime:
         index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
         return k, v, index_k
 
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def kv_migration_base_address(self, kv_cache) -> int:
+        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
+        all-gather (it holds the cache but must not introspect its layout). M3's cache is three
+        tensors; the K tensor is the anchor, and since the table build is single-rank the gathered
+        layout is never consumed."""
+        return int(kv_cache.k.buffer_address())
+
+    def build_kv_chunk_table(
+        self,
+        kv_cache,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
         ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
         comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
-        Single-rank only (asserted in __init__)."""
+
+        Single-rank only: this describes the whole-model cache and has no cross-stage merge, so a
+        gathered layout spanning more than this rank's stage is rejected rather than silently dropped."""
+        if stage_layout is not None and len(stage_layout) > 1:
+            raise NotImplementedError(
+                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layout)}-stage layout. "
+                "The multi-config (per head-shard) table has no cross-stage merge."
+            )
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config

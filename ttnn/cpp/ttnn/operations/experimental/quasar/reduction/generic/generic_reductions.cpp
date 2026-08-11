@@ -522,9 +522,9 @@ Tensor reduce(
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     // For INT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value); pass it through
     // PadValue's integer arm so fill_pad reinterprets the bits rather than decoding numerically.
-    const tt::tt_metal::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
-                                                      ? tt::tt_metal::PadValue{std::bit_cast<uint32_t>(pad_value)}
-                                                      : tt::tt_metal::PadValue{pad_value};
+    const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
+                                              ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
+                                              : ttnn::PadValue{pad_value};
     auto input_tensor =
         is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
 
@@ -729,8 +729,7 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool /*use_legacy - deprecated and non-functional, kept for API compatibility*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return operations::experimental::quasar::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -750,8 +749,7 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool /*use_legacy - deprecated and non-functional, kept for API compatibility*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return operations::experimental::quasar::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
