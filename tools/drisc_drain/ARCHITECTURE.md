@@ -17,25 +17,48 @@ So: `ring_ensure_room` / `PROFILER_STALL_ZONE` / `SPSC_STALL_COUNT_0` are about 
 `ring-room waits` and `head`/`tail` are about the **DRAM frame ring**. `reserve_pages` / credit-wait /
 `fifo_pages` are about the **socket FIFO**. `BroadcastRing` / `dropped` is the **host record ring**.
 
-## The four DRISCs
+## The six DRISCs
 
 A DRISC only exists on a DRAM core, and metal exposes exactly ONE per core
 (`bh_hal_dram.cpp` registers a single DM processor class, "DRISC0"; `DramConfig` has no `.processor`).
 
-| DRISC | role | bank | core | NoC row | job |
+| DRISC | role | bank (DRAM view) | core | NoC row | job |
 |---|---|---|---|---|---|
-| 0 | FILLER | 5 | `9-9` | y!=0 | sweep 60 worker cores -> its own DRAM frame ring |
-| 1 | FILLER | 6 | `9-5` | y!=0 | sweep the other 60 -> its own DRAM frame ring |
-| 2 | MOVER | 0 | `0-0` | **y==0** | its DRAM frame ring -> socket FIFO -> host |
-| 3 | MOVER | 3 | `9-0` | **y==0** | its DRAM frame ring -> socket FIFO -> host |
+| 0 | FILLER | 5 | `9-9` | y!=0 | sweep worker cores `[0,30)` -> DRAM frame ring on bank 1 |
+| 1 | FILLER | 6 | `9-5` | y!=0 | sweep `[30,60)` -> ring on bank 2 |
+| 2 | FILLER | 4 | `9-2` | y!=0 | sweep `[60,90)` -> ring on bank 4 |
+| 3 | FILLER | 1 | `0-3` | y!=0 | sweep `[90,120)` -> ring on bank 5 |
+| 4 | MOVER | 0 | `0-0` | **y==0** | rings of fillers **0 and 2** -> socket FIFO 0 -> host |
+| 5 | MOVER | 3 | `9-0` | **y==0** | rings of fillers **1 and 3** -> socket FIFO 1 -> host |
 
-DRAM frame rings are placed on banks 1/2, deliberately off both FILLER and MOVER channels (insurance
-against an untested NIU interaction; NOT measured as necessary -- `TT_METAL_PERF_DEBUG_ROLE_RING_BANKS`
-A/Bs it). MOVERS hold the row-0 cores because only NoC row y==0 is measured safe for HOST-FACING duty
-(FINDINGS N+29: y==0 -> 1/75 failures, y!=0 -> 16/125). Two 25-run blocks on bank 5 -- N+29's worst core
-at 5/25 as a full-job drainer -- then cleared y!=0 for FILLER duty: 0/25 with the NIU merely held in
-stream mode, 0/25 doing filler-only work. Every DRISC needs its NIU in stream mode; in the default
-NOC2AXI mode it cannot initiate NoC at all.
+**Why 4 + 2 and not 4 + 4.** The knee is the FILLER's scan over its slice (FINDINGS §N+28), so fillers are
+the thing to multiply: 4 of them at 30 cores each moved the knee from delay 40-60 to delay 15 (§N+40).
+Movers cannot follow, for two independent reasons: only NoC row y==0 is measured safe for HOST-FACING duty
+(§N+29: y==0 -> 1/75 failures, y!=0 -> 16/125), which is exactly two cores on this part, and the socket
+FIFO's TLB budget is `kNSockets * nwin <= 16` with 12 MiB costing nwin=7. So each mover drains TWO rings
+instead. It has the headroom: a mover is ~97% idle even after doubling (idle sweep 0.6-0.8 us, ~330 busy
+sweeps of ~200,000).
+
+Mover m takes fillers m, m+2 -- **strided, not adjacent**, so each socket carries one low-half slice and
+one high-half slice of the grid rather than both halves of one end.
+
+Two 25-run blocks on bank 5 -- §N+29's worst core at 5/25 as a full-job drainer -- cleared y!=0 for FILLER
+duty: 0/25 with the NIU merely held in stream mode, 0/25 doing filler-only work. Every DRISC needs its NIU
+in stream mode; in the default NOC2AXI mode it cannot initiate NoC at all.
+
+**Ring placement is no longer disjoint from drainer channels, deliberately.** With 6 drainer channels and 4
+rings against 7 allocator banks, the old "a ring shares a channel with no drainer" insurance is unreachable.
+What is kept is the part with evidence: a ring is never on a MOVER bank (0, 3), because host-facing duty is
+where the §N+29 hazard was measured. Rings land on banks 1, 2, 4, 5 -- three of which also host a filler.
+Measured with that overlap in place (25 runs): 0 ring-room waits, 0 impossible-head reads, staged == moved
+on all four rings, and the knee improved. A ring's traffic terminates at its channel's PREFERRED WORKER
+endpoint while a drainer sits on that channel's unused subchannel, so even a shared channel means a
+different core and a different NIU, and ~1.4 GB/s each way is a rounding error against a GDDR channel.
+
+Also enforced now: **two DRISCs must never land on the same core.** `pick_unused_dram_logical_core()` takes
+a DRAM VIEW and knows nothing about other views resolving to the same physical port -- §N+29 records views
+0 and 7 both as NoC core `0-0` -- so `boot_device` `TT_FATAL`s on a duplicate. Two resident kernels sharing
+one L1 would overlap staging, socket config, results and handshake with no counter noticing.
 
 ## Buffer stack and sizes
 
@@ -45,7 +68,7 @@ NOC2AXI mode it cannot initiate NoC at all.
 | control vector | worker L1 | heads + stall counters | 64 words = **256 B** | 1 per core |
 | **span** (unit of transfer) | worker L1 | 64 ctrl + 5 x 512 ring words | 2,624 words = **10,496 B** | 1 per core |
 | **staging slot** (frame) | DRISC L1 | 16-word prefix + span | 2,640 words = **10,560 B** = **165 pages** | **7** per DRISC (73,920 B) |
-| **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (2) |
+| **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (**4**) |
 | **socket FIFO** | host RAM | 64 B page | 196,608 pages = **12 MiB** | 1 per MOVER (2) |
 | host read chunk | host RAM | pooled buffer | <= 1,024 pages = **64 KB** per read | pool <= 4,096 |
 | **host record ring** | host RAM | 24 B `PerfDebugRec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
@@ -64,6 +87,10 @@ Geometry notes that are load-bearing, not incidental:
   occasionally fills (handled by flush-and-continue, never by dropping).
 - The **socket FIFO cannot be enlarged**: it is mapped through device TLB windows,
   `kNSockets * nwin <= 16`, and 12 MiB already uses 14. That is the whole reason staging moved to DRAM.
+- A dual-ring MOVER does **not** split its 7 staging slots between its two rings. It visits them
+  sequentially, each with the whole staging area, separated by the write barrier that staging reuse needed
+  anyway -- so `max batch` stays **7 per peer** (measured on all four peers, every run). Splitting the slots
+  would only pay if the two pushes could overlap, and they cannot: both go into ONE socket.
 
 ## Activity, per role
 
@@ -75,36 +102,58 @@ inspect the control vector, patch the prefix, write the frame into its DRAM fram
 `head` only after a *flushed* barrier. At exit it waits (bounded) until `tail == frames_staged`, so it
 never reports a stale mirror -- `inflight = frames_staged - *hs_tail` IS the ring-room predicate.
 
-**MOVER**: no worker grid at all, hence `proc 0.0 us` in its phase line. NoC-read its FILLER's `head`
-out of that FILLER's L1, pull up to 7 frames from the DRAM frame ring into its own staging, write `tail`
-back to the FILLER's L1 to release ring space, then ship to the socket FIFO in `NOC_MAX_BURST_SIZE`
-chunks. Observed `max batch 7`.
+**MOVER**: no worker grid at all, hence `proc 0.0 us` in its phase line. **For each of its two peers in
+turn**: NoC-read that FILLER's `head` out of that FILLER's L1, pull up to 7 frames from that ring into its
+own staging, write `tail` back to release ring space, ship to the socket FIFO in `NOC_MAX_BURST_SIZE`
+chunks, then one write barrier -- which covers the PCIe push, the tail write, and the reuse of the scratch
+word the next peer's tail write sources from. Per-peer state is strictly separate (`mv_tail`, `mv_moved`,
+`mv_max_n`, `ring_hi`, the probe words and the live head/tail telemetry): one shared `mv_tail` across two
+rings would ack frames on one ring that were only read from the other. Observed `max batch 7` per peer.
 
 ## Measured costs and occupancy
 
-Per 55-60 core sweep, invariant across every run: `read` **3.6 us**, `proc` **12.9 us**. FILLER blocking
-wait **1.0 us** (it was 50-97 us of socket-FIFO credit-wait before the split). MOVERs idle-poll at
-**0.3-0.4 us** and only ~440 sweeps are busy, so the configuration is overwhelmingly idle.
+Per-sweep costs at 120 cores, delay 20, and they halve with the slice as the model predicts (2 fillers at 60
+cores each -> 4 at 30):
 
-DRAM frame ring high-water: **533-1,200 of 6,355 frames (8.4%-18.9%)**, with `ring-room waits 0`
-everywhere -- *including* the saturated delay-20 run (18,426 producer stalls). That is diagnostic: below
-the knee the FILLERs are never blocked by the DRAM frame ring, so what limits delay 20 is the SWEEP
-(read+proc over 60 cores), not absorption and not egress.
+| | 2 fillers x 60 cores | 4 fillers x 30 cores |
+|---|---|---|
+| FILLER idle sweep | 16.7 us | **8.2-8.5 us** |
+| FILLER busy sweep | 27.8-28.0 us | **13.1-14.0 us** |
+| FILLER worst sweep | 39.0-40.3 us | **17.2-19.7 us** |
+| of which `proc` (the scan) | 15.0-15.3 us | **7.5 us** |
+| MOVER idle sweep | 0.3-0.4 us | 0.6-0.8 us (two head reads) |
+| MOVER busy sweep | 5.2-5.5 us x ~515 | 13.5-13.6 us x ~330 |
+| MOVER worst sweep | 33.8-37.5 us | 51.9-52.9 us (credit-wait 28-34) |
+
+FILLER blocking wait is **0.5 us** (it was 50-97 us of socket-FIFO credit-wait before the split). A MOVER is
+still ~97% idle after doubling: 191,357 idle sweeps x 0.8 us = 153 ms of a 161 ms wall.
+
+DRAM frame ring high-water at 5k zones/RISC: **328-770 of 6,355 frames per ring** across all four rings,
+against 73-1,266 for the 2-ring configuration because each ring now carries a quarter of the grid. `ring-room
+waits 0` everywhere, including at delay 5 where producers stall ~11,000 times. That is diagnostic and it is
+the whole basis of the 4-filler change: the FILLERs are never blocked by the DRAM frame ring or by egress,
+so what limits low delays is the SWEEP.
 
 ## DRAM cost, and how big the ring actually needs to be
 
-Measured, not estimated -- see FINDINGS §N+39 for the two sweeps.
+Measured, not estimated -- see FINDINGS §N+39 for the two sweeps and §N+40 for the 4-ring cost.
 
-**The allocator is lock-step**, so the cost is `page_size x num_banks`, NOT `npages x page_size`. Here
-`page_size == ring_bytes` by construction (one ring per page), and bh-26's allocator has **7** DRAM banks
-(8 channels, 1 harvested; confirmed on silicon via the ring-bank validation message). So a 64 MiB ring
-costs **448 MiB of DRAM**, of which 128 MiB is addressed and 320 MiB is pure lock-step waste. The
-runtime log understates this ~4x: it prints `npages x ring_bytes` (191 MiB), which is not what the
-allocator reserves. For scale, the OLD profiler's DRAM region is 4.58 MiB/bank = **32.0 MiB** total, so
-64 MiB puts us at **14x** the profiler we are replacing.
+**The rings live in the HAL's per-bank DRAM PROFILER region** (channel-relative `0x40`), not in a
+`MeshBuffer`. That region is reserved at the same offset in EVERY bank, and
+`get_profiler_dram_bank_size_for_hal_allocation()` sizes it to
+`max(old_profiler_size, perf_debug_dram_region_bytes_per_risc())` -- so `TT_METAL_PERF_DEBUG_ROLE_RING_MB`
+is one knob for both the region and the ring, and the ring adapts to whatever was actually reserved
+(`frames = region_bytes / 10,560`).
 
-Which bank a ring lives in is IRRELEVANT to footprint -- lock-step reserves the same offset in every
-bank regardless, so moving rings onto pages 0-1 saves nothing. The only lever is `page_size`, i.e.
+The consequence that matters: **the cost is per BANK and does not depend on how many rings you place.**
+bh-26 has **7** allocator DRAM banks (8 channels, 1 harvested; confirmed on silicon via the ring-bank
+validation message), so a 64 MiB setting reserves **448 MiB** whether 1 ring or 7 rings sit in it. Going from
+2 rings to 4 therefore cost **zero additional DRAM** -- it moved 128 MiB of the reservation from "region no
+ring uses" to "region carrying a ring", nothing more. There are still 3 unused banks, so a 5th, 6th and 7th
+ring would also be free. For scale, the OLD profiler's region is 4.58 MiB/bank = **32.0 MiB** total, so 64
+MiB puts us at **14x** the profiler we are replacing.
+
+Which bank a ring lives in is IRRELEVANT to footprint. The only lever is
 `TT_METAL_PERF_DEBUG_ROLE_RING_MB` itself.
 
 **The earlier claim here -- that the ring "should come down a long way" because under a fifth is ever
@@ -130,9 +179,15 @@ the env var as the escape hatch for high-volume runs. Undersizing costs producer
 correctness: every size down to 6 MiB dropped **zero** records with **zero** timestamp regressions,
 because the ring fills, the filler waits for room, and the producers stall. Nothing is lost.
 
-Two structural notes for anyone tuning this. The two lanes are **asymmetric** -- filler 1 fills first in
+Two structural notes for anyone tuning this. The lanes are **asymmetric** -- filler 1 fills first in
 every undersized run while filler 0 sometimes never fills at all (at 8 MiB: 794/794 with 36 ring-room
-waits vs 648/794 with 0), so the required size is set by the slower mover, and balancing the two buys
+waits vs 648/794 with 0), so the required size is set by the slowest lane, and balancing them buys
 more than any sizing change. And a bigger ring cannot rescue a long capture: the host record ring is the
 real volume ceiling (drops begin at 15k zones/RISC, one sweep point BEFORE producers stall), so doubling
 the ring just doubles the runway.
+
+**Not re-measured at 4 rings:** the sizing table above (12 MiB smallest stall-free at 5k zones/RISC, and the
+20k zones/RISC volume knee) was taken with 2 rings. Four rings each carry a quarter of the grid, so per-ring
+high-water roughly halved at 5k zones -- which suggests the same total runway spread over twice as many
+rings, i.e. a smaller per-ring minimum. That is an inference, not a measurement; re-run §N+39's Sweep A
+before lowering `ROLE_RING_MB` on the 4-ring configuration.

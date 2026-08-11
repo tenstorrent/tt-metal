@@ -3470,3 +3470,173 @@ lane** -- evening the two out would buy more headroom than any sizing change.
 - Sweep B ran without tracy-capture attached (24 runs). Justified by the 50k pair showing the sink barely
   moves producer stalls (152,196 without Tracy vs 153,924 with), but the knee at 2000 iters has NOT been
   re-verified with Tracy attached.
+
+## §N+40 — 4 FILLERS + 2 DUAL-RING MOVERS: the knee moves 60 -> 15 (4x), and `max batch` does NOT halve (bh-26, 2026-08-11)
+
+The role split now runs **six** DRISCs: 4 fillers at 30 worker cores each, and 2 movers each draining TWO
+DRAM frame rings into its own socket. Every number below is 120 cores, slow dispatch, `--iters 500`
+(5,000 zones/RISC, 6.0 M markers), full decode + publish, 4 warm reps per point. No JIT-cold run is in any
+table -- the cache was warm throughout, verified by rep 0 matching reps 1-3 at every delay (so the usual
+"discard run 1" did not bite here; it still applies to a cold key).
+
+### The knee: delay 60 -> 15
+
+Producer stalls from the L1 counters, one row per delay, all 4 reps shown because stalls are bimodal:
+
+| delay | 2 fillers x 60 cores | 4 fillers x 30 cores |
+|---|---|---|
+| 5 | -- | 10,704 / 11,118 / 11,302 / 10,719 |
+| 8 | -- | 2,210 / 2,149 / 2,148 / 2,245 |
+| 10 | -- | 701 / 778 / 683 / 797 |
+| 12 | -- | 163 / 136 / 25 / 66 |
+| 13 | -- | 0 / 0 / **6** / 0 |
+| **15** | -- | **0 / 0 / 0 / 0** |
+| 20 | 18,553 / 18,305 / 18,458 / 18,512 | **0 / 0 / 0 / 0** |
+| 25 | 15,609 / 15,168 / 15,254 / 14,979 | **0 / 0 / 0 / 0** |
+| 40 | 9 / 2 / 0 / 0 | **0 / 0 / 0 / 0** |
+| **60** | **0 / 0 / 0 / 0** | 0 / 0 / 0 / 0 |
+
+Knee, defined as the first delay clean in 4/4 reps: **60 -> 15, a 4.0x improvement.** On the looser
+"first delay that is ever clean" definition it is 40 -> 13, 3.1x. The delay-20 and delay-25 points are the
+sharpest statement: 18,500 and 15,200 stalls become **exactly zero**, three and four sweep points below
+where the 2-filler configuration first stops stalling.
+
+Control, same binary, role split OFF (2 full-job drainers) at delay 40: **9,604 stalls across 120/120
+cores.** So the ladder at delay 40 is 9,604 (no split) -> 0-9 (2 fillers) -> 0 (4 fillers).
+
+### Why: the scan halved, exactly as the model predicted
+
+The knee is the FILLER's SCAN over its slice (§N+28), and halving the slice halved every filler cost. Per
+sweep at delay 20:
+
+| | 2 fillers x 60 | 4 fillers x 30 | ratio |
+|---|---|---|---|
+| FILLER idle sweep | 16.7 us | 8.2-8.5 us | 2.0x |
+| FILLER busy sweep | 27.8-28.0 us | 13.1-14.0 us | 2.0x |
+| FILLER worst sweep | 39.0-40.3 us | 17.2-19.7 us | 2.1x |
+| of which `proc` (the scan) | 15.0-15.3 us | **7.5 us** | 2.0x |
+| of which `read` | 3.8 us | 2.1 us | 1.8x |
+| FILLER worst credit-wait | 0.1 us | 0.1 us | -- |
+
+Clean 2.0x on the thing being halved. Note the knee moved **4x** on a **2x** cost reduction -- the same
+super-linear behaviour §N+34 saw going 1 -> 2 drainers, and for the same reason: below the knee a filler
+falls into a feedback loop (producers stall -> rings pin -> spans arrive fuller but later -> sweeps cost
+more) that a faster filler stays out of entirely.
+
+### `max batch` stays 7 per peer -- the main a-priori risk did NOT materialise
+
+The stated risk was that a mover's 7 staging slots split across two rings would drop `max batch` to 3-4 and
+raise per-frame egress overhead exactly where the credit-wait knee lives. It does not happen, because the
+peers are visited **sequentially, each with the whole staging area**, separated by the write barrier that
+staging reuse already required. **`max batch 7` on all four peers, in all 4 sweep points and all 25
+stability runs.** Splitting the slots would have bought nothing anyway: both peers push into ONE socket, so
+their egress could never have overlapped.
+
+Push counts confirm it. Per mover at delay 40: **608 / 623** pushes with one ring each, **656 / 659** with
+two rings each -- +7% for twice the rings, not +100%.
+
+### What it cost
+
+| | 2 fillers | 4 fillers | delta |
+|---|---|---|---|
+| MOVER idle sweep | 0.3-0.4 us | 0.6-0.8 us | 2x (two head reads/sweep) |
+| MOVER busy sweep | 5.2-5.5 us x ~515 | 13.5-13.6 us x ~330 | total busy 2.8 ms -> 4.5 ms |
+| MOVER worst sweep | 33.8-37.5 us | 51.9-52.9 us | +40% |
+| host bytes @ delay 40 | 71.9 MB | 79.3 MB | **+10.2%** |
+| host bytes @ delay 60 | 79.5 MB | 81.1 MB | **+2.0%** |
+| DRAM reserved | 448 MiB | **448 MiB** | **0** |
+
+A mover is still ~97% idle after doubling: 191,357 idle sweeps x 0.8 us = 153 ms of a 161 ms wall. Its worst
+sweep is 52 us of which 28-34 us is socket credit-wait -- i.e. the mover's worst case is still the HOST, not
+the second ring.
+
+**Egress bytes went UP and the knee still improved 4x.** That is direct confirmation that the knee is not
+egress-bound: 4 fillers ship 2-10% more bytes for the same 6.0 M markers (quarter-grid sweeps complete
+sooner, so spans come back marginally less full) and stalls still went 18,500 -> 0. Compare only clean runs
+here -- the delay-20 frame counts look like +40% but that is the 2-filler baseline being stalled, and a
+stalled producer yields fewer, fuller spans.
+
+**The four rings are free.** The rings live in the HAL per-bank DRAM PROFILER region (`a0eef213134`), which
+is reserved at the same offset in all 7 allocator banks whether 1 or 7 rings sit in it. Going 2 -> 4 rings
+moved 128 MiB of the 448 MiB reservation from "region no ring uses" to "region carrying a ring". Three banks
+are still unused, so rings 5-7 would also be free.
+
+### Stability: 25/25 clean
+
+25 consecutive runs at the reference config (delay 40, 120 cores, slow dispatch, 6 DRISCs, 4 rings):
+
+- **0 producer stalls** in all 25
+- **`frames staged == frames moved` per ring** in all 25 x 4 rings (e.g. 1884/1884, 1860/1860, 1899/1899, 1863/1863)
+- **`hs_bad` 0**, `ring-room waits` 0, `credit timeouts` 0, no `FAILED TO START`, no failed handshake, no undrained ring at teardown
+- host record ring **dropped 0**; **regressions 0 at publish and 0 at consume** in all 25
+- records **exactly 6,001,200** in all 25 (the nominal count -- any stall would add markers)
+- `max batch 7` on all 4 peers in all 25
+- per-ring high-water **433-730 of 6,355 frames** (328-770 across the whole delay sweep), against **73-1,266** for the 2-ring configuration
+
+Fast dispatch (110 cores, non-divisible by 4) also checked: slices come out 27/28/27/28 and the run is
+clean. The role-split-OFF path is untouched -- still 2 drainers over `[0,60)`/`[60,120)`.
+
+### Refutations and things deliberately given up
+
+- **REFUTED: "a dual-ring mover halves its batch."** 7 per peer, measured (see above). The barrier that
+  makes sequential peers safe was already there for staging reuse, so it is not even a new cost.
+- **REFUTED: "the knee needs more egress."** More bytes, better knee.
+- **GIVEN UP: rings on channels no drainer occupies.** 6 drainer channels + 4 rings = 10 against 7 allocator
+  banks, so the old insurance is unreachable. Rings now sit on banks 1, 2, 4, 5 -- three of which also host a
+  filler. Kept: no ring on a MOVER bank (0, 3), because host-facing duty is where §N+29's hazard was
+  measured. 25 runs with the overlap in place show no penalty (0 ring-room waits, 0 hs_bad, staged == moved).
+  A ring terminates at its channel's PREFERRED WORKER endpoint while a drainer sits on the unused
+  subchannel, so a shared channel still means a different core and a different NIU.
+- **NOT RE-MEASURED at 4 rings:** §N+39's ring-sizing table (12 MiB smallest stall-free at 5k zones/RISC) and
+  the 20k zones/RISC volume knee. Per-ring high-water roughly halved, which *suggests* a smaller per-ring
+  minimum, but that is inference. Re-run Sweep A before lowering `ROLE_RING_MB` here.
+- **NOT re-verified with tracy-capture attached.** All 4-filler runs above are decode+publish to the
+  BroadcastRing with no Tracy sink attached, the same regime §N+39's Sweep B used.
+
+### Two hazards found and closed while extending the roster
+
+Neither was hit on silicon -- both are failure modes the 2-DRISC roster could not express, found by reading
+what the new one makes possible.
+
+1. **Two DRISCs on one core.** `pick_unused_dram_logical_core()` takes a DRAM VIEW and reserves that view's
+   worker/eth endpoints; it has no idea another view may resolve to the SAME physical port. §N+29's own
+   table records views 0 and 7 both as NoC core `0-0`. At two DRISCs the roster was hardcoded `{0, 3}` and
+   this could not arise; with six banks in play and a filler-bank env override it can, and the result is two
+   resident kernels overlapping one L1's staging, socket config, results and handshake -- with no counter
+   that would notice. `boot_device` now `TT_FATAL`s on duplicate cores. (This is also why filler 3 sits on
+   view 1 and not view 7.)
+2. **One magic for four fillers proves nothing.** The bring-up probe planted a single
+   `kProbeFillerMagic` in every filler, so an echo only proved the mover read SOME filler's probe word -- a
+   mover whose peer-1 coordinate named the wrong filler would have passed, and then one ring would be drained
+   twice while another was never drained at all, back-pressuring a lossless producer into wedging the
+   workload. Magics are now per-peer: the host plants `kProbeFillerMagic + <filler index>` and checks the
+   echo against the index it MEANT, and the mover writes back `kProbeMoverMagic + <peer slot>`.
+
+### Implementation notes worth keeping
+
+- **Per-peer state must be strictly separate**: `mv_tail`, `mv_moved`, `mv_max_n`, `ring_hi`, the probe
+  words and the live head/tail telemetry are all `[2]` arrays. One shared `mv_tail` across two rings would
+  ack frames on ring A that were only read from ring B -- handing a filler room it does not have, which is
+  the same silent-corruption shape as the `hs_bad` bug.
+- **The ordered quiesce is now per PEER RING, not per mover.** Phase 2 waits for `tail >= head` on each of a
+  mover's rings; a mover caught up on ring 0 can still owe hundreds of frames on ring 1, and that loss is
+  invisible in every host counter because the records were simply never sent.
+- **The ring's bank-relative address is per-filler now.** It used to be one compile arg guarded by a
+  `TT_FATAL` demanding every ring bank have the same `get_bank_offset` -- fine at 2 rings on a part where
+  every offset is 0, but at 4 rings that FATAL would kill capture on any part where they differ, for no
+  reason: each filler already carries its own `(bank, addr)` and a mover gets its peers' pairs explicitly.
+- **The slice denominator is no longer `kNSockets`.** Fillers divide the grid `kNFillers` ways while sockets
+  stay at 2. Getting that wrong yields a build that works perfectly and simply does not improve.
+- The results block is now FULL: `out[0..63]`, with peer 1's counters at `out[58..63]`. A third ring per
+  mover would need it widened (and `kMiscBytes`/`hs_addr` re-laid out with it).
+- Per-DRISC L1 telemetry behind `done` is now 13 words (52 B of the 64 B pad): 5 shared + 4 per peer.
+
+### Measurement gotchas
+
+- **One log line PER RING, never per DRISC.** A dual-ring mover with one healthy ring and one short one has
+  to be visible at a glance, so the mover's role-split line is printed once per peer slot and names the
+  filler. §N+39 already lost a baseline to a `grep | tail -1` over a 4-DRISC log; at 6 DRISCs and 8 ring
+  lines that is worse, not better.
+- **`grep -o 'L1 STALL COUNTERS -- [0-9]* producer stalls' | grep -o '[0-9]*' | head -1` returns 1** -- the
+  "1" in "L1". Every stall figure in the first pass of this session read `stalls=1`. Parse with `sed -n
+  's/...\([0-9]*\) producer stalls.../\1/p'` instead.
