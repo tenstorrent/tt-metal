@@ -28,33 +28,43 @@ was rejected, the numbers behind both, and the traps that cost real time.
 ## Where the remaining headroom is
 
 Read this before hunting for optimizations, because most of the obvious surface is already closed
-and the notes below say why. **RTF is ~0.64-0.69, ~51 ms/frame**, split roughly:
+and the notes below say why. **On the p150: 27.7 ms/frame, RTF 0.365** (STATUS.md §6.67), split:
 
 | | ms/frame | state |
 |---|---|---|
-| Block 1, decode | ~26 | six linears **at the 194 GB/s DRAM ceiling**; dtype is the only lever and it is spent |
-| Block 2, 7 Euler steps | ~20 | five weight matmuls **at their 13.4 ms weight-read floor** |
-| Block 2, rest | ~2 | semantic head 1.25, host FSQ tail 0.7 |
+| Block 1, decode | ~15.9 | six linears, bandwidth-bound; a frame uses **49% of the p150's 367 GB/s** (§6.53) |
+| Block 2, 7 Euler steps + head | ~15.0 | five weight matmuls at their weight-read floor |
+| host | ~2 | embed gather, FSQ tail, the copies the trace cannot absorb |
 | Block 3, codec | ~0.2 | 0.4% of wall warm; effectively closed |
+
+> The table above USED to read ~51 ms/frame, RTF 0.64-0.69, Block 1 ~26 / Block 2 ~20, against a
+> **194 GB/s** ceiling. Those are N150 numbers and that ceiling is not this chip's. Kept only as
+> this warning, because anyone reading here is about to choose what to optimise next.
 
 **Three levers are genuinely open, all structural:**
 
-1. **Euler steps 7 → 5** ([flow-01]) removes 28% of Block 2's solve outright — the largest single
-   win left anywhere, ~5.7 ms/frame. It changes what the model *produces*, so it needs a listening
-   pass, not a metric. This is a product call more than an engineering one.
+1. **Euler steps 7 → 5** ([flow-01]) removes 2 of 7 solve steps — roughly 3-4 ms/frame at the
+   current split. It changes what the model *produces*, so it needs a listening pass, not a
+   metric. This is a product call more than an engineering one.
 2. **Concurrent requests.** Block 2's 3-token sequence uses 6 of 32 tile rows and nothing inside one
    utterance can fill them (steps are sequential, frames autoregressive). Throughput only — it will
    not move single-utterance RTF.
 3. **Two upstream ttnn bugs** worth reporting, neither fixable here: `nlp_create_qkv_heads` has a
    ~97-122 µs floor at 16 GB/s on pure data movement ([flow-10]), worth ~2.5 ms/frame if fixed; and
-   the `halo_gather` out-of-range NOC write ([codec-22], [pipe-02]) is still live in ttnn — we only
+   the `halo_gather` out-of-range NOC write ([codec-17], [pipe-02]) is still live in ttnn — we only
    stopped calling it.
 
-**Closed by measurement — do not retry without reading the note.** Device tracing (both blocks,
-+0.16-6 ms), sdpa in Block 2 (1.147x for 3x the code errors, rejected twice), BFP4 weights (1.139x
+**Closed by measurement — do not retry without reading the note.** sdpa in Block 2 (1.147x for 3x
+the code errors, rejected twice), BFP4 weights (1.139x
 for 8.4x the errors *and* only 12% of the time for 47% fewer bytes), lower math fidelity, w1+w3
 fusion, DRAM-sharded matmul, L1-resident weights, per-stage codec slab, `nlp_create_qkv_heads`
-alternatives, and the CFG-combine / inplace-norm micro-fusions.
+alternatives, and the CFG-combine / inplace-norm micro-fusions. The fused KV write, the hand-rolled
+head split and the DRAM-sharded matmul were each re-opened in §6.68 and each stayed rejected.
+
+**Device tracing was on that list and is now the single biggest win on the branch** — §6.65 traces
+the whole frame for **−4.244 ms/frame**, and it then reversed five other rejections whose reasoning
+rested on per-op launch cost ([gpt-28] is one). A rejection is stale when its premise is a cost and
+someone has since removed that cost; that is the rule this list exists to survive.
 
 **Two rules of thumb this port learned the hard way, both of which paid three times each:**
 
@@ -62,7 +72,7 @@ alternatives, and the CFG-combine / inplace-norm micro-fusions.
   same 0.38 ms as a six-row slice. A 4 KB slice costs 170 µs. Count launches, not bytes — except in
   Block 1 decode, where bytes really are the speed.
 - **Shift the NARROW side.** When you must both shuffle and shrink, shrink first: the codec's output
-  projection ([codec-22]), its reflected prefix ([codec-08]), and Block 2's `_trunk` ([flow-14]) all
+  projection ([codec-17]), its reflected prefix ([codec-08]), and Block 2's `_trunk` ([flow-14]) all
   won this way, 2-85x less data moved for the same answer.
 
 And a measurement rule, because it has bitten repeatedly: **the decode gate's prompt-to-prompt spread
@@ -261,8 +271,10 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 
 ### [gpt-04] `module level` — the decode RMSNorm is NOT sharded on Blackhole (p150 fork)
 
-**THIS ENTRY REVERSED ON BLACKHOLE. STATUS.md §6.39 is the current answer; everything below it
-is the N150 record, kept because the contrast is the finding.**
+**REVERSED TWICE. [gpt-28] / STATUS.md §6.67 is the current answer and the code matches IT: the
+decode norm IS width-sharded. §6.39, which this entry used to name as current, was itself reversed
+once §6.65's trace removed the reshard's launch cost. Everything below is the N150 record, kept
+because the contrast is the finding — but do not act on it.**
 
 On this p150 the decode norm is the plain interleaved `_norm`, the same op prefill uses.
 `_NORM_SHARD`, `_NORM_PRG`, the three `_NORM_GRID_*` constants and `_norm_dec` are deleted.
@@ -839,8 +851,10 @@ schedule is fixed, so `_schedule()` builds its projections once and caches them 
 
 ### [flow-07] `module level` — the norm is NOT sharded on Blackhole (p150 fork)
 
-**REVERSED ON BLACKHOLE, exactly as [gpt-04] did. STATUS.md §6.40 is the current answer; the
-N150 record is kept below because the contrast is the finding.**
+**REVERSED TWICE, exactly as [gpt-04] did. [gpt-28] / STATUS.md §6.67 is the current answer and the
+code matches IT: Block 2's `_norm` calls the shared `sharded_norm`, so this norm IS width-sharded.
+§6.40, which this entry used to name as current, was itself reversed once §6.65's trace removed the
+reshard's launch cost. The N150 record below is kept for the contrast — do not act on it.**
 
 Width-sharding this norm is worth **−4.5 ms/frame** here over its 49 calls, against +1.46x on
 the N150. And it is **closer to fp32 truth, not further** — 8 real prompts, vs the fp32 CPU

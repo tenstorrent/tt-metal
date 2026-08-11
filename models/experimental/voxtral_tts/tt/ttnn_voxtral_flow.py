@@ -59,10 +59,8 @@ WEIGHT_DTYPE = ttnn.bfloat8_b
 # NOTES.md [flow-06] -- The SEMANTIC head is the one thing here that is not...
 SEMANTIC_DTYPE = ttnn.float32
 
-# NOTES.md [flow-07] -- the norm is NOT width-sharded on Blackhole, for the same reason Block 1's
-# is not (STATUS.md 6.39/6.40): the reshard is the tax, and the p150's interleaved kernel made
-# the reduction cheap enough that the tax stops paying for itself. Worth 4.5 ms/frame over the
-# 49 calls, and it is CLOSER to fp32 truth, not further.
+# The norm IS width-sharded -- _norm below calls Block 1's shared `sharded_norm`. NOTES.md
+# [gpt-28] / STATUS.md 6.67 is the current answer; [flow-07] is the superseded N150 record.
 
 
 class TtVoxtralFlow:

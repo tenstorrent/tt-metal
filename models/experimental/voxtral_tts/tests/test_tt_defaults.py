@@ -116,13 +116,13 @@ if __name__ == "__main__":
 # p150 REVERSALS. Each of these was the SHIPPED choice on the N150 and is wrong here.
 # ---------------------------------------------------------------------------------------
 def test_sharded_norm_is_decode_only_and_legally_shaped():
-    """The decode RMSNorm is width-sharded AGAIN, worth +5.693 ms/frame. 6.39/6.40 rejected it at
+    """The decode RMSNorm is width-sharded AGAIN, worth +5.399 ms/frame. 6.39/6.40 rejected it at
     +4.4 ms WORSE, and were right eagerly: the cost was the RESHARD, which 6.65's trace removed.
     Fifth stale rejection of the same kind. STATUS.md 6.67.
 
     Two invariants, both load-bearing:
-      * DECODE ONLY. The shard spec fixes the height at one tile, so prefill -- [1, Sp, 3072] with
-        Sp up to 1024 -- fails outright with "Shard height 32 must match physical height 384".
+      * DECODE ONLY. The shard spec fixes the height at one tile, so prefill -- [1, Sp, 3072] for
+        any Sp -- fails outright with "Shard height 32 must match physical height 384".
         sharded_norm falls back to interleaved above one tile of rows.
       * cores * block_w == 96. 3072 wide is 96 tiles and a tile is indivisible (6.39's rule, which
         is a property of the TENSOR and did not change)."""

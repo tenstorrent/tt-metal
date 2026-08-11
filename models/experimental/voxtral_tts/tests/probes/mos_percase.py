@@ -1,7 +1,7 @@
 """Per-case DistillMOS for the sampler clips, so a listener knows what the predictor thought."""
 import json, os, glob
 import numpy as np, soundfile as sf, torch, torchaudio, distillmos
-V = "/localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts"
+V = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GEN = os.path.join(V, "generated")
 m = distillmos.ConvTransformerSQAModel(); m.eval()
 def score(p):
