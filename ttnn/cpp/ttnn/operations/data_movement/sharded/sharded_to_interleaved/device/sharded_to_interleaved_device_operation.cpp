@@ -48,6 +48,16 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
         if (output_tensor.layout() != input_tensor.layout()) {
             return {false, "Output tensor layout must match input tensor layout"};
         }
+        if (output_tensor.layout() == Layout::ROW_MAJOR &&
+            output_tensor.padded_shape() != output_tensor.logical_shape()) {
+            return {
+                false,
+                fmt::format(
+                    "Preallocated row-major output must be unpadded, got logical {} and padded {}; the writer fills "
+                    "only the logical row and would leave the rest of each page stale",
+                    output_tensor.logical_shape(),
+                    output_tensor.padded_shape())};
+        }
     }
     if (args.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         return {false, "Output memory config must be Interleaved"};
@@ -102,10 +112,15 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // Propagate the input's padded_shape so the destination DRAM tensor has matching stick stride.
-    // Without this, when the source shard width exceeds the destination's logical width, the writer
-    // kernel writes more bytes per stick than the destination tensor's stick page can hold, causing
-    // inter-stick byte overlap and data corruption.
+    // An interleaved row-major page is one logical row, so the output must not inherit the input's
+    // shard width: consumers size their per-row copy from the page. Tile padding is intrinsic and stays.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return tt::tt_metal::TensorSpec(
+            input_tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+    }
+
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(

@@ -2669,3 +2669,28 @@ def test_to_memory_config_tile_interleaved_l1_dram(device, src_buffer, dst_buffe
     assert output_tensor.memory_config().buffer_type == dst_buffer
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+# The ND shard row is 128 B while the interleaved row is 2*width B. On WH an interleaved row-major
+# page is padded to 32 B, so the slack after each row is align(2*width, 32) - 2*width: 0 B at
+# width=48 but 16 B at width=56. If something copies the whole 128 B shard row into the narrower
+# interleaved row, only the widths whose slack is smaller than the overrun corrupt the next row.
+@pytest.mark.parametrize("width", [64, 56, 48, 40])
+def test_to_memory_config_nd_sharded_rm_shard_wider_than_row(device, width):
+    torch.manual_seed(0)
+    shape = [1, 1, 32, width]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    grid = ttnn.num_cores_to_corerangeset(4, ttnn.CoreCoord(8, 8), row_wise=True)
+    src_mem_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(ttnn.Shape([1, 1, 8, 64]), grid, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=src_mem_config
+    )
+
+    output_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert list(output_tensor.padded_shape) == shape
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
