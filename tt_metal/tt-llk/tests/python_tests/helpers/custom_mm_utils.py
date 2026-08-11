@@ -115,3 +115,61 @@ def sdpa_dest_tile_golden(out, torch_format):
             for n in range(nt_dim)
         ]
     )
+
+
+def matmul_lofi_golden(in0, in1, formats, in0_dimensions, in1_dimensions):
+    """Row-major LoFi matmul golden, shape (in0_rows, ct_dim*32).
+
+    MatmulGolden rather than a raw torch matmul because the FPU runs LoFi here: it truncates the
+    SrcA/SrcB mantissas before multiplying, which biases a K-deep sum of positive values low by ~2%
+    -- far outside atol if the golden multiplies at full bf16 precision. Instantiated directly rather
+    than through `get_golden_generator`: the harness swaps in a DummyGoldenGenerator during
+    compile-producer, whose zeros(1024) would break the reshape for these narrow outputs.
+    """
+    from .golden_generators import MatmulGolden
+    from .llk_params import MathFidelity
+
+    return MatmulGolden()(
+        in0,
+        in1,
+        formats.output_format,
+        MathFidelity.LoFi,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
+        tilize=False,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    ).reshape(in0_dimensions[0], in1_dimensions[1])
+
+
+def dense_result_rowmajor(res_tensor, ct_dim, in0_rows):
+    """Readback for the dense 2-face layout -> row-major (in0_rows, ct_dim*32).
+
+    The device packs ct_dim tiles; within a tile the two 16-column faces (in0_rows x FACE_C_DIM,
+    row-major) sit contiguously, then padding out to the full L1 tile. Drop the per-tile padding and
+    reorder. Same reduction as the silicon-validated `compressed_utils.run_compressed`.
+    """
+    faces_per_tile = 32 // FACE_C_DIM
+    per_tile = res_tensor.reshape(ct_dim, -1)[:, : in0_rows * 32]
+    return (
+        per_tile.reshape(ct_dim, faces_per_tile, in0_rows, FACE_C_DIM)
+        .permute(2, 0, 1, 3)
+        .reshape(in0_rows, ct_dim * 32)
+    )
+
+
+def face_result_leading(res_tensor, tile_cnt):
+    """Readback for the single-16x16-face layout: keep the leading face of each L1 tile.
+
+    Used by the two sdpa matmuls, whose output tile is one 16x16 DEST face written at the start of a
+    full 32x32 L1 tile. StimuliConfig's num_faces would narrow the readback for us, but it narrows the
+    buffer_A / buffer_B *writes* too, which would truncate the operands.
+    """
+    face_datums = FACE_R_DIM * FACE_C_DIM
+    tile_datums = len(res_tensor) // tile_cnt
+    return torch.cat(
+        [
+            res_tensor[n * tile_datums : n * tile_datums + face_datums]
+            for n in range(tile_cnt)
+        ]
+    )

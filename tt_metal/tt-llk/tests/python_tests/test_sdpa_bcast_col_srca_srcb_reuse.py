@@ -45,7 +45,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import MATH_NUM_FACES, NUM_FACES, TILE_COUNT
 from helpers.utils import passed_test
 
 # LoFi-only, bf16-natural path. Keep the grid tiny for the advance test.
@@ -97,6 +97,11 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
     configuration = TestConfig(
         "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
         formats,
+        templates=[
+            # 2 is the mop's inner-loop count (the two 8-row ELWMUL chunks covering the tile's 16 dest rows),
+            # deliberately NOT NUM_FACES_HOST -- the unpack/pack side sees a single 16x16 face.
+            MATH_NUM_FACES(2),
+        ],
         runtimes=[
             NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
             TILE_COUNT(tile_cnt),

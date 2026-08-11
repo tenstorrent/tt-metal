@@ -58,7 +58,8 @@ static constexpr std::uint32_t DST_INDEX = 0;
 
 // num_faces MUST be a compile-time constant on the math thread: the SDPA addrmod config feeds an integer into a
 // SETC16 whose immediate takes the "n" (integer-constant) asm constraint. The 8x32 tile is always 2 faces.
-static constexpr std::uint32_t NUM_FACES_CT = 2;
+// MATH_NUM_FACES comes from the MATH_NUM_FACES TemplateParameter in the generated build header, so the
+// value lives in python only (see helpers/test_variant_parameters.py:MATH_NUM_FACES).
 
 // MUL (softmax-scale) instantiation, LoFi fidelity for the small bf16 grid.
 static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
@@ -113,7 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // P1 goes to DEST[SRC_INDEX] (the preamble MOVD2Bs its rows 0-7 into SrcB rows 0-7) and P2 to
     // DEST[SRC_INDEX + 1] (the preamble's third/fourth MOVD2B read DEST rows 64-71, i.e. the first
     // 8 rows of the next 32x32 DEST tile, into SrcB rows 8-15).
-    _llk_unpack_A_init_<BroadcastType::NONE>(0, 0, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[1]), formats.unpack_A_src, formats.unpack_A_dst);
 
@@ -177,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
     //   execute   -> DEST[DST_INDEX] = SrcA(operand) * broadcast_col(scale).
     //   postamble -> SETRWC CLR_B (release the reused SrcB).
-    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(NUM_FACES_CT, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
     _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
     _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();

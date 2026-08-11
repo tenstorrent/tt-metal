@@ -70,6 +70,28 @@ class RuntimeParameter(ABC):
 
 
 @dataclass
+class MATH_NUM_FACES(TemplateParameter):
+    """Compile-time face count for MATH-thread MOP/addrmod configuration.
+
+    Some MOP and addrmod helpers feed the face count into a SETC16 whose immediate takes the "n"
+    (integer-constant) asm constraint, so a runtime `params.num_faces` trips "impossible constraint in
+    'asm'". Kernels used to work around that by redeclaring a local `static constexpr NUM_FACES_CT`,
+    which left the value duplicated between the .cpp and the python NUM_FACES; this makes python the
+    single source of truth.
+
+    Deliberately NOT named NUM_FACES: it is the count the MATH mop needs, which is not always the
+    host/pack face count. sdpa_bcast_col_srca_srcb_reuse, for instance, drives a single 16x16 face on the
+    unpack/pack side (num_faces == 1) while its mop still requires 2 -- there, 2 is the inner-loop count
+    for the two 8-row ELWMUL chunks that cover the tile's 16 dest rows.
+    """
+
+    num_faces: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t MATH_NUM_FACES = {self.num_faces};"
+
+
+@dataclass
 class THROTTLE_LEVEL(TemplateParameter):
     throttle_level: int = 0
 
