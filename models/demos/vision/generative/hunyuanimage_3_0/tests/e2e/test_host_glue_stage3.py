@@ -1,23 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Stage-3 gate for the host-glue port: the FULLY-ON-DEVICE per-step velocity
-(patch_embed + on-device sequence assembly + hidden-on-device + final_layer, all TT)
-vs the existing TT path (host patch_embed/final_layer, per-step round-trip).
-
-Both share the SAME TT decoder layers, so this isolates the head-glue move:
-
-    velocity PCC(existing-TT-path, stage3-on-device) >= 0.99
-
-(PatchEmbedTT/FinalLayerTT are each already PCC 0.9997 standalone; this checks the
-composed on-device path incl. the ROW_MAJOR concat sequence assembly + image-block slice.)
-
-Runs on the full mesh (TP=8 stubs) at reduced depth (default 2 layers) for speed.
-
-Run:  ./python_env/bin/python -m pytest \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_host_glue_stage3.py -s
-Env:  HUNYUAN_GENIMG_NUM_LAYERS (default 2), HUNYUAN_HG3_PCC (default 0.99)
-"""
+"""PCC: fully on-device head-glue text->image step (hidden resident on mesh) vs host."""
 from __future__ import annotations
 
 import os

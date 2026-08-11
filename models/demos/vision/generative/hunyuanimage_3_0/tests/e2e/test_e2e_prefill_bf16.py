@@ -2,43 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""VALID (standard-conformant) correctness test for the HunyuanImage-3.0 TTNN
-port — bf16 production reference, not fp32.
-
-Why this exists (see also HUNYUAN3_PERF_KNOBS.md): the sibling test
-`test_e2e_prefill.py` compares the port's raw last_hidden_state against an fp32
-HF reference at PCC>=0.95. That gate is INVALID for this model — HunyuanImage-3.0
-is numerically ill-conditioned at depth (massive activations amplify per-layer
-bf16 rounding), so the model's OWN bf16 forward only reaches PCC 0.92 vs its own
-fp32 at 32 layers. Demanding the bf16 port beat 0.95-vs-fp32 asks it to be more
-faithful to fp32 than the model is to itself.
-
-This test follows the established TTNN standard for bf16 models. The ONLY hard
-gate is per-layer PCC (DeepSeek per-component standard); the full-depth
-functional metrics are REPORTED context, because at full prefill depth they are
-dominated by the model's intrinsic bf16 depth-sensitivity, not the port:
-
-  * GATE — per-layer teacher-forced PCC (DeepSeek per-component standard): feed
-    the HF-bf16 layer input into the port's layer i and compare outputs; assert
-    every layer >= 0.99. Accumulation-immune, prompt/dtype-robust -> the
-    definitive proof the port is numerically correct op-by-op. (Observed ~0.998.)
-  * REPORT — token agreement (top-1/top-5) and logit/hidden PCC vs HF-bf16 after
-    applying the real `ln_f`+`lm_head`. At 32 layers these collapse (e.g. hidden
-    ~0.49, top-5 ~12% on a sensitive prompt) because HunyuanImage-3.0 amplifies
-    tiny per-layer bf16 rounding over depth — HF's OWN bf16 vs its own fp32 only
-    reaches PCC 0.92 @32L. So these are NOT port gates. The valid FUNCTIONAL
-    token-agreement gate (Llama-70B-galaxy standard, top-1>=91/top-5>=99) is on
-    confident DECODE tokens and requires the decode loop (KV cache) — TODO once
-    the decode path exists; prefill-position token agreement is not a valid gate.
-
-The final norm + head are applied on the host to BOTH sides because the HF model
-skips ln_f inside `HunyuanImage3Model.forward` (applied only in the gen_text
-branch of the CausalMM wrapper) and the TTNN pipeline stops at the last decoder
-layer.
-
-Run:  ./python_env/bin/python -m pytest -o timeout=0 \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_e2e_prefill_bf16.py -s
-"""
+"""Transformer gate: per-layer teacher-forced PCC >= 0.99 across all decoder layers vs HF-bf16."""
 
 from __future__ import annotations
 

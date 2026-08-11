@@ -1,28 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Stage-1 PCC gate for the host-glue TT port: `final_layer` (velocity head) on TT vs host.
-
-HunyuanImage-3.0's hybrid gen_image path currently runs `final_layer` (a UNetUp:
-ResBlock(4096->1024) + GroupNorm/SiLU/conv(1024->32)) on the HOST CPU each diffusion
-step, and round-trips the [1,4116,4096] hidden device<->host. Porting it to TTNN
-(host_glue_tt.FinalLayerTT) lets the transformer hidden stay ON-DEVICE and downloads
-only the small velocity [1,32,64,64] — the #1 perf lever (~57% "other").
-
-This gate feeds an identical random post-ln_f image hidden [1, H*W, 4096] + timestep
-embedding into the host torch `final_layer` and the TTNN `FinalLayerTT`, and asserts:
-
-    velocity PCC(host, TT) >= 0.99   (VAE-resnet reference bar; bf8_b conv weights + bf16 acts)
-
-Only `final_layer` + `time_embed_2` weights matter here, so load at reduced depth.
-Runs on a single chip by default (port is replicated / single-device-equivalent) for
-fast iteration; set HUNYUAN_HG_MESH="4,8" to validate on the full mesh.
-
-Run:  ./python_env/bin/python -m pytest \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_host_glue_pcc.py -s
-Env:  HUNYUAN_HG_MESH (default "1,1"), HUNYUAN_GENIMG_NUM_LAYERS (default 2),
-      HUNYUAN_HG_TIMESTEP (default 500), HUNYUAN_HG_PCC (default 0.99)
-"""
+"""PCC: TTNN patch-embed + velocity head (final_layer) vs host."""
 from __future__ import annotations
 
 import os

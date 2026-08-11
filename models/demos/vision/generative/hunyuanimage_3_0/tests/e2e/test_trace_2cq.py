@@ -2,21 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Command 3 — trace+2CQ contract + fully-on-device selftests for
-`tencent/HunyuanImage-3.0`.
-
-  * host_op_selftest  — authoritative fully-on-device check: the model math
-    (embed -> decoder layers -> output) fires ZERO host aten ops.
-  * trace_capture_selftest — each PIPELINE_STAGE (prefill, decode) captures one
-    host-free step in begin/end_trace_capture, execute_trace, and matches the
-    eager step by PCC.
-
-Both obtain the resident pipeline through the SAME `build_pipeline` factory the
-perf/2CQ harness uses.
-
-Run:  ./python_env/bin/python -m pytest \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_trace_2cq.py -s
-"""
+"""Contract: trace replay matches eager (PCC) per stage + host-op purity (zero host aten ops)."""
 
 from __future__ import annotations
 

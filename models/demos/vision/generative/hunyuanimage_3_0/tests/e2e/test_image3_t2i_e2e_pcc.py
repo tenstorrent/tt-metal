@@ -2,33 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end prompt->IMAGE PCC gate for the HunyuanImage-3.0 hybrid path.
-
-Runs the WHOLE real image path -- prompt -> diffusion loop (CFG + FlowMatch
-scheduler) -> VAE decode -> pixels -- TWICE: once with the pure-host HF decoder
-layers, once with the TT decoder layers, from the same seed/inputs. Gates on:
-
-  * final-latent PCC(host, TT)  >= 0.95   (the whole-trajectory correctness signal)
-  * decoded-image PCC(host, TT) >= 0.95
-  * step-0 velocity PCC         >= 0.95   (block-level, identical start)
-  * TT image finite + non-degenerate (std > 0)
-
-This is distinct from test_image3_gen_step_pcc.py (which checks ONE step at reduced
-depth): here the ENTIRE image path (loop + scheduler + VAE) is exercised.
-
-FULL-DEPTH note: a full-32-layer HOST golden image is infeasible (80B MoE on CPU,
-~4096 tokens x N steps x 2 CFG = many hours), so the routine gate runs at REDUCED
-depth (HUNYUAN_GENIMG_NUM_LAYERS, default 2) where the host trajectory is tractable
-while still exercising the full image path. Full-DEPTH correctness rests on:
-  (a) per-block PCC >= 0.997 (test_e2e_prefill.py / per-component tests),
-  (b) THIS reduced-depth full-image-path gate,
-  (c) the full-depth render sanity/latency test (test_image3_t2i_perf.py).
-Set HUNYUAN_GENIMG_NUM_LAYERS=32 to run full depth (slow: host trajectory dominates).
-
-Run:  ./python_env/bin/python -m pytest \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_image3_t2i_e2e_pcc.py -s
-Env:  HUNYUAN_GENIMG_NUM_LAYERS (2), HUNYUAN_GENIMG_STEPS (8), HUNYUAN_GENIMG_SIZE (1024,1024)
-"""
+"""End-to-end PCC: prompt->image (diffusion loop + scheduler + VAE), host vs TT decoder layers."""
 
 from __future__ import annotations
 

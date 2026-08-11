@@ -1,15 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Single-chip PCC ladder for the on-device HunyuanImage-3.0 VAE decode.
-
-Validates each tt primitive (and the full tiny-latent decoder) against the REAL HF
-``AutoencoderKLConv3D`` reference modules (random-init) at factor=1, fabric disabled.
-
-Run (on box):
-  ./python_env/bin/python -m pytest -o timeout=0 -s \
-    models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_vae_decode_pcc.py \
-    -k conv_in            # or resnet / attn / upsample_temporal / upsample_spatial / decoder_tiny
-"""
+"""PCC: on-device VAE decoder (mesh conv3d + distributed GroupNorm) vs HF AutoencoderKLConv3D."""
 from __future__ import annotations
 
 import glob

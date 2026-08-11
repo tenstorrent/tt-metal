@@ -1,17 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Stage-3 host-glue PERF: full-depth (32-layer) 50-step e2e render with the
-fully-on-device head-glue (hidden stays on device). Emits
-ONDEVICE_E2E_TOTAL_LATENCY_S=<s> to compare vs the hybrid baseline (406.8s:
-loop 370.0 @7401ms/step + vae 36.3s). Same banked wins (vae_bf16 + ccl_links2)
-+ red-panda prompt for an apples-to-apples number isolating the host-glue win.
-
-Run:  HUNYUAN_VAE_AUTOCAST=bf16 HUNYUAN_CCL_LINKS=2 ./python_env/bin/python -m pytest \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_host_glue_stage3_perf.py -s
-Env:  HUNYUAN_STAGE3_STEPS (default 50), HUNYUAN_STAGE3_NUM_LAYERS (default 32),
-      HUNYUAN_STAGE3_OUT, HUNYUAN_STAGE3_PROMPT
-"""
+"""Performance: shipped on-device text->image render; emits ONDEVICE_E2E_TOTAL_LATENCY_S (~29.8s warm @1024^2/50-step)."""
 from __future__ import annotations
 
 import os

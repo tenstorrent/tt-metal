@@ -2,20 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decode-path test for HunyuanImage-3.0: real incremental-KV autoregressive
-decode (KV cache + causal single-token attention).
-
-  * CORRECTNESS — greedy-decode N tokens with the TTNN incremental-KV loop and
-    compare token-for-token against a CAUSAL HF reference (growing-prefix causal
-    forward = the ground truth for cached decode), at the SAME layer count and
-    bf16. Decode tokens are confident, so exact/near-exact token agreement is the
-    valid functional bar (unlike accumulated prefill positions).
-  * PERF — median per-step transformer decode time -> per-user decode t/s/u
-    (batch=1), the metric directly comparable to Llama-70B-galaxy's 71 t/s/u.
-
-Run:  HUNYUAN_E2E_NUM_LAYERS=32 ./python_env/bin/python -m pytest -o timeout=0 \
-        models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_decode.py -s
-"""
+"""Decode: incremental-KV autoregressive decode — token agreement vs causal HF + per-user t/s/u."""
 from __future__ import annotations
 
 import os
