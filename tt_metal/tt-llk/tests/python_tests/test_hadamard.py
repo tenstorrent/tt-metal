@@ -110,9 +110,7 @@ def _config(
         "sources/hadamard_test.cpp",
         formats,
         templates=[
-            HADAMARD(
-                hadamard_normalize=normalize, h16_tile_index=h16_tile_index
-            ),
+            HADAMARD(hadamard_normalize=normalize, h16_tile_index=h16_tile_index),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(dest_sync),
         ],
