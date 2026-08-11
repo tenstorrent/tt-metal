@@ -37,12 +37,11 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
 )
 
 # Prefill (full 256-token chunk, M=256=8 tiles) 2D-mcast block-sharded matmul configs.  The prefill
-# path ran every LM matmul on auto, which picks in0_block_w=1 / out_subblock 1x1 for these compute-
-# bound M=256 shapes (down 256x8960x1536 sat at 10.7% BW / 18% FLOPs).  A block-sharded config with a
-# proper K-stream + subblock is BYTE-IDENTICAL — fp32_dest_acc keeps the full-K reduction in fp32, so
-# the tiling change doesn't touch the math (maxabsdiff==0 vs auto, verified per shape) — and 1.5-3.2x
-# faster.  Gated strictly on S==256 (per_core_M=1 needs exactly 8 M-tiles); the partial tail chunk and
-# single-shot S<256 fall back to auto.
+# path otherwise runs every LM matmul on auto, which picks in0_block_w=1 / out_subblock 1x1 for these
+# compute-bound M=256 shapes.  A block-sharded config with a proper K-stream + subblock is
+# BYTE-IDENTICAL — fp32_dest_acc keeps the full-K reduction in fp32, so the tiling change doesn't touch
+# the math.  Gated strictly on S==256 (per_core_M=1 needs exactly 8 M-tiles); the partial tail chunk
+# and single-shot S<256 fall back to auto.
 _PREFILL_S = 256
 
 
@@ -59,10 +58,10 @@ def _mm2d_prefill(gx, gy, ibw, sw, pN):
     )
 
 
-_PREFILL_WQKV_PROGCFG = _mm2d_prefill(8, 8, 6, 2, 8)  # 256x1536x2048  60 -> 40 us (1.49x)
-_PREFILL_WO_PROGCFG = _mm2d_prefill(6, 8, 6, 2, 8)  # 256x1536x1536  64 -> 40 us (1.61x)
-_PREFILL_GATEUP_PROGCFG = _mm2d_prefill(10, 8, 12, 2, 28)  # 256x1536x8960 153 -> 98 us (1.56x)
-_PREFILL_DOWN_PROGCFG = _mm2d_prefill(8, 8, 14, 2, 6)  # 256x8960x1536 350 -> 109 us (3.22x)
+_PREFILL_WQKV_PROGCFG = _mm2d_prefill(8, 8, 6, 2, 8)  # 256x1536x2048
+_PREFILL_WO_PROGCFG = _mm2d_prefill(6, 8, 6, 2, 8)  # 256x1536x1536
+_PREFILL_GATEUP_PROGCFG = _mm2d_prefill(10, 8, 12, 2, 28)  # 256x1536x8960
+_PREFILL_DOWN_PROGCFG = _mm2d_prefill(8, 8, 14, 2, 6)  # 256x8960x1536
 
 # Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead
 # of separate wq (1536x1536) + wkv (1536x512).  Byte-identical: the fused output [q|k|v] equals the
@@ -598,11 +597,10 @@ def _apply_rope_interleaved_ttnn(
     decode and prefill shape); the surrounding fp32 mul/add/typecasts match _apply_rope_ttnn op for
     op.  Used by prefill, which therefore keeps its fp32 RoPE numerics.
     """
-    # Leading BF16->FP32 widen and trailing FP32->BF16 narrow are folded away (byte-identical,
-    # maxabsdiff==0): mul(bf16, fp32)->fp32 upcasts losslessly, the matmul against the
-    # signed-permutation trans_mat reproduces the rotate exactly for bf16-valued x (dtype=fp32
-    # out), and add(dtype=bf16) packs with the same round-to-nearest-even the dropped typecast
-    # applied.  Same fold proven exact in _apply_rope_b2.
+    # Leading BF16->FP32 widen and trailing FP32->BF16 narrow are folded away (byte-identical):
+    # mul(bf16, fp32)->fp32 upcasts losslessly, the matmul against the signed-permutation trans_mat
+    # reproduces the rotate exactly for bf16-valued x (dtype=fp32 out), and add(dtype=bf16) packs with
+    # the same round-to-nearest-even the dropped typecast applied.  Same fold as _apply_rope_b2.
     return ttnn.add(
         ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
         ttnn.mul(
@@ -1071,14 +1069,15 @@ class TTVibeVoiceLM:
                 k_src, v_src = k, v
 
             # GQA without materializing the KV heads.  Instead of replicating each of the n_kv KV heads
-            # `repeat` times into a [B, n_heads, S_total, hd] tensor (n_kv slices + a 12-way concat, per
-            # k and v), bound the cache prefix to [B, n_kv, S_total, hd] and fold q's n_heads into the seq
-            # axis as (n_kv groups × repeat): reshape q to [B, n_kv, repeat*S, hd] so the QKᵀ/PV matmuls
-            # batch over the n_kv groups and read each KV head exactly once.  The head↔seq reshapes are
-            # free views (head-major tiles are contiguous) and q/k/v stay bf16 into the fp32-accumulating
-            # HiFi4 matmuls.  Byte-identical (maxabsdiff==0) to the materialized path — the QKᵀ/PV
-            # reductions are over hd regardless of how the heads are batched, and scores are reshaped back
-            # to [B, n_heads, S, S_total] so the causal mask / softmax are untouched.
+            # `repeat` times into a [B, n_heads, S_total, hd] tensor (n_kv slices + an n_heads-way concat,
+            # per k and v), bound the cache prefix to [B, n_kv, S_total, hd] and fold q's n_heads into the
+            # seq axis as (n_kv groups × repeat): reshape q to [B, n_kv, repeat*S, hd] so the QKᵀ/PV
+            # matmuls batch over the n_kv groups and read each KV head exactly once.  Scores are reshaped
+            # back to [B, n_heads, S, S_total] so the causal mask / softmax are untouched, and q/k/v stay
+            # bf16 into the fp32-accumulating HiFi4 matmuls.  Byte-identical to the materialized path: the
+            # QKᵀ/PV reductions are over hd regardless of head batching.  For a tile-aligned S the
+            # head↔seq reshapes are free views (head-major tiles are contiguous); a non-32-aligned tail
+            # chunk falls back to a value-preserving re-tile (still exact, not a view).
             repeat = n_heads // n_kv
             k_g = ttnn.slice(k_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             v_g = ttnn.slice(v_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
