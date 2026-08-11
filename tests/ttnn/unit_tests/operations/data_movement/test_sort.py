@@ -113,8 +113,7 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
 
 @pytest.mark.parametrize("shape", ([1, 1, 32, 288], [1, 1, 32, 544]))
 @pytest.mark.parametrize("descending", [False, True])
-@pytest.mark.xfail(reason="Known raw uint16 sort index corruption past the 256-element boundary; tracked separately from stable tie ordering")
-def test_sort_stable_uint16_boundary_regression(shape, descending, device):
+def test_sort_stable_auto_promoted_boundary_regression(shape, descending, device):
     input = torch.zeros(shape, dtype=torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
@@ -123,6 +122,31 @@ def test_sort_stable_uint16_boundary_regression(shape, descending, device):
 
     assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
     assert_equal(torch_sort_indices.to(torch.int64), ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64))
+
+@pytest.mark.parametrize("width", [288, 544])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_uint16_input_with_preallocated_outputs(width, descending, device):
+    torch.manual_seed(0)
+    input = torch.randint(0, 4, (1, 1, 32, width), dtype=torch.uint16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+
+    ttnn.sort(
+        ttnn_input,
+        dim=-1,
+        descending=descending,
+        stable=True,
+        out=(ttnn_sort_values, ttnn_sort_indices),
+    )
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch.uint16))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
+    )
 
 
 @pytest.mark.parametrize(

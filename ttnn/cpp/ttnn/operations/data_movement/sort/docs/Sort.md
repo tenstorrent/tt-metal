@@ -17,7 +17,7 @@ The operation returns both the sorted tensor and the indices representing the or
 - input_tensor (Tensor): The input tensor to be sorted.
 - dim (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
 - descending (bool, optional): If True, sorts in descending order. Defaults to False.
-- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements). Defaults to False. Note: Currently not supported.
+- stable (bool, optional): If True, preserves the order of equal elements. Defaults to False.
 - memory_config (MemoryConfig, optional): Specifies memory configuration for the output tensor. Defaults to None.
 - out (tuple of Tensors, optional): Preallocated tensors for the sorted values and indices. Defaults to None.
 
@@ -33,7 +33,7 @@ requires; users do not need to pre-format inputs.
 | Tensor   | Supported dtypes              |
 | -------- | ----------------------------- |
 | Values   | `bfloat16`, `float32`, `uint16` |
-| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535) |
+| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim > 256) |
 
 #### Supported layouts
 
@@ -83,8 +83,7 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `descending` (bool): ascending (default) or descending order.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
-- `stable` (bool): **not supported** in this implementation. Passing
-  `stable=True` raises a `TT_FATAL` error.
+- `stable` (bool): If True, preserves the original order of equal elements. Defaults to False.
 
 ## Tensor Transformations
 

@@ -38,7 +38,7 @@ void bind_sort_operation(nb::module_& mod) {
             List of ttnn.Tensor: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
 
         Additional info:
-            * For now the `stable` argument is not supported.
+            * The `stable` argument preserves the original order of equal elements.
 
         Note:
 
