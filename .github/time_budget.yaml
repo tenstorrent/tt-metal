@@ -225,8 +225,6 @@ scaleout:
     bh_galaxy: 60
     bh_sc1: 20 # single galaxy
     bh_sc4: 90
-    bh_sc4-blitz: 90 #blitz specific mgd sku
-    bh_sc4-mgd: 90 #general mgd sku
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -314,8 +312,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 765
-    wh_n300: 765
+    wh_n150: 408
+    wh_n300: 390
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -337,10 +335,13 @@ models:
     bh_quietbox_2: 195
     bh_galaxy: 78
     bh_sc1: 140
-    bh_sc4-mgd: 120
+    # Consumed by WAN 2.2 multihost
+    # quad e2e: T2V(40) + I2V(80) = 120 in models_e2e_tests.yaml.
+    bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 30
+    wh_n150: 41
+    wh_n300: 6
     bh_p150: 26
     bh_p300: 42
     bh_quietbox_2: 186
@@ -350,9 +351,9 @@ models:
     wh_n300: 60
     bh_p150: 7
     bh_p300: 8
-    bh_quietbox_2: 30
+    bh_quietbox_2: 42
   unit:
-    wh_llmbox: 100
+    wh_llmbox: 80
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
@@ -365,14 +366,19 @@ models:
     bh_quietbox_2: 260
     bh_galaxy: 75
     bh_sc1: 75
-    bh_sc4-mgd: 50
+    # Renamed from bh_sc4-mgd (SKU consolidation). Consumed by WAN 2.2
+    # transformer-block multihost quad unit (timeout 40 + headroom) in
+    # models_unit_tests.yaml.
+    bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 55
+    wh_n150: 67
+    wh_n300: 30
     bh_p150: 20
     bh_quietbox_2: 50
   unit_tier3:
+    wh_llmbox: 20
     wh_llmbox_perf: 58
     wh_n150: 41
     wh_n300: 33
@@ -409,7 +415,7 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 280
+    bh_quietbox_2: 270
   sweep_tier1:
     wh_n150: 30
     wh_galaxy: 30

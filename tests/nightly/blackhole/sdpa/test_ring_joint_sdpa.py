@@ -4783,6 +4783,26 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
+# Kimi-K3 MLA: K2.6's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
+# nhq pinned to the production 96 / TP=4 = 24 -- no galaxy split, unlike CHUNKED_PREFILL_HEADS_PER_RING.
+KIMI_K3_HEADS_PER_DEVICE = 24
+RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
+    name="kimi_k3",
+    nhq=KIMI_K3_HEADS_PER_DEVICE,
+    nhk=1,
+    nhv=KIMI_K3_HEADS_PER_DEVICE,
+    d_q=576,
+    d_k=576,
+    d_v=RING_MLA_CHUNKED_LATENT_D_V,
+    is_causal=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[32],
+    # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
+    k_chunk_sizes=[512, 640],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+)
+
 # Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
 # heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
 # TP scaling produces 64Q/4KV globally on Galaxy and still exercises one-KV-head GQA locally.
@@ -5319,6 +5339,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     )
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
@@ -5680,7 +5701,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
-# Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
+# Profiles each ring_mla model's 50k+5k chunk (final, most compute-bound chunk of its chunked
 # prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
@@ -5688,12 +5709,18 @@ if MESH_CONFIG.is_galaxy:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
+        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
+        ("kimi_k3", 32, 640, 8, 61.03),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
+        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
+        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
+        ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
 

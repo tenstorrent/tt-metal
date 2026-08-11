@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, LoRAColParallelLinear
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, maybe_cast_activation, resolve_output_dtype
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -17,6 +19,14 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+from .quant_config import LtxQuantProfile
+
+# to_gate_logits and to_q/to_qkv are both ColParallelLinear fed the SAME activation, and each fuses
+# its own TP all-gather of it (all_gather_minimal_matmul_async) — the activation crosses the fabric
+# twice. The fused gather barely overlaps its matmul, so gathering once explicitly and running both
+# projections as plain matmuls on the gathered tensor is the same math for one gather less.
+# Set to 0 to restore the double gather for an A/B.
+LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "true", "True")
 
 
 class LTXAttention(Module):
@@ -26,6 +36,17 @@ class LTXAttention(Module):
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
         (True, 8, 4): (128, 512),
+    }
+
+    # V2A cross ring-SDPA q_chunk = the per-device audio Q (audio_N / sp_factor), keyed by
+    # (is_blackhole, sp, tp); assumes audio_N=256. A q_chunk wider than the Q shard pads the
+    # query rows and burns ~2x SDPA compute, so it must track sp, not be fixed per model.
+    # k_chunk reuses the self-attn ring value; misses fall back to the self-attn ring q_chunk.
+    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
+    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
+    cross_ring_sdpa_q_chunk_map = {
+        (True, 4, 2): 64,  # BH 2x4
+        (True, 8, 4): 32,  # BH 4x8
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -45,16 +66,6 @@ class LTXAttention(Module):
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
     }
 
-    # V2A cross ring-SDPA q_chunk (per-device audio Q = audio_N / sp_factor), keyed by
-    # (is_blackhole, sp, tp); assumes audio_N=256. k_chunk reuses the self-attn ring value; misses
-    # fall back to the self-attn ring q_chunk.
-    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
-    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
-    cross_ring_sdpa_q_chunk_map = {
-        (True, 4, 2): 64,  # BH 2x4
-        (True, 8, 4): 32,  # BH 4x8
-    }
-
     def __init__(
         self,
         *,
@@ -71,6 +82,7 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
+        quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -116,15 +128,22 @@ class LTXAttention(Module):
 
         self.kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
 
+        # Per-linear precision comes entirely from the quant profile (None => bf16 everywhere, matching
+        # the unquantized model). The profile owns the to_out carve-out and the LTX_QUANT_ACTIVATIONS
+        # gating; here each role's linear just spreads the kwargs the profile hands it.
+        def qk(role):
+            return quant_config.linear_kwargs(role) if quant_config is not None else {}
+
         # Fuse-mode LoRA lives in weight.data, so the chunked (to_qkv/to_kv) and
-        # fused-addcmul (to_out) paths work unchanged; runtime mode is unsupported here.
+        # fused-addcmul (to_out) paths work unchanged; runtime mode is unsupported here. The quant
+        # kwargs forward through LoRAColParallelLinear's **kwargs to the base linear.
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
         if is_self:
-            self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
+            self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs, **qk("qkv"))
         else:
-            self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs)
-            self.to_kv = ColCls(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
+            self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs, **qk("q"))
+            self.to_kv = ColCls(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs, **qk("kv"))
 
         self.to_out = ColCls(
             dim,
@@ -134,6 +153,7 @@ class LTXAttention(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            **qk("out"),
         )
 
         # Per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16 matches the
@@ -142,6 +162,8 @@ class LTXAttention(Module):
         # ×2 stays a separate multiply (2·sigmoid is nonlinear, can't fold).
         self.apply_gated_attention = apply_gated_attention
         if apply_gated_attention:
+            # Gate weight stays bf16 (runs in the model's working dtype), but it consumes the shared
+            # bf8 activation, so its output is pinned back to bf16 like the quantized projections.
             self.to_gate_logits = ColParallelLinear(
                 in_features=self.query_input_dim,
                 out_features=self.num_heads,
@@ -150,6 +172,7 @@ class LTXAttention(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                **qk("gate"),
             )
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
@@ -234,6 +257,16 @@ class LTXAttention(Module):
             packer_l1_acc=True,
         )
 
+        # Under a quant preset, override the attention compute configs to the profile's fidelity.
+        # Self-attn additionally swaps in the ring-SDPA compute and narrows its SDPA inputs; cross-attn
+        # leaves SDPA and _sdpa_input_dtype unset, so forward's getattr(self, "_sdpa_input_dtype", None)
+        # keeps cross SDPA at bf16.
+        if quant_config is not None:
+            arch = self.mesh_device.arch()
+            self.mm_compute_kernel_config = quant_config.mm_compute_config(arch)
+            if self.is_self:
+                self.sdpa_compute_kernel_config, self._sdpa_input_dtype = quant_config.sdpa_self_config(arch)
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
         rename_substate(state, "q_norm", "norm_q")
@@ -312,6 +345,13 @@ class LTXAttention(Module):
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
+        # to_out inlines the AG-matmul rather than calling ColParallelLinear.forward, so it has to
+        # honour the activation cast itself. The addcmul residual/gate stay bf16 — the kernel ties
+        # their tile size to the weight's, not the activation's — and the output is the residual
+        # stream, so it must be pinned back to bf16 rather than inheriting the bf8 activation.
+        x = maybe_cast_activation(x, to_out.activation_dtype)
+        if to_out.pin_output_bf16:
+            dtype = resolve_output_dtype(dtype, x)
 
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
@@ -372,11 +412,15 @@ class LTXAttention(Module):
             )
         return output
 
+    def _gate_is_live(self) -> bool:
+        """True when the gate projection will actually run (and so will gather its input)."""
+        return self.apply_gated_attention and self.to_gate_logits.weight._data is not None
+
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
     ) -> ttnn.Tensor | None:
         """Per-head gate 2 * sigmoid(to_gate_logits(x)); returns (B, H_local, N, 1) or None."""
-        if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
+        if not self._gate_is_live():
             return None
 
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
@@ -414,12 +458,25 @@ class LTXAttention(Module):
         use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
             self.parallel_config.tensor_parallel.factor > 1
         )
-        if use_nonfused_agmm:
+        # With the gate on, the gate and Q/QKV projections would each fuse a gather of the same
+        # activation; hoisting one explicit gather feeds both and halves the fabric traffic here.
+        dedup_gate_gather = (
+            LTX_DEDUP_GATE_GATHER
+            and not use_nonfused_agmm
+            and self._gate_is_live()
+            and self.parallel_config.tensor_parallel.factor > 1
+        )
+        if use_nonfused_agmm or dedup_gate_gather:
+            # Cast BEFORE the gather, not inside the linears downstream of it: this path hoists the
+            # gather out so Q/QKV (and the gate) can share it, so the fabric payload is this tensor.
+            # Casting it at the linear would happen on the already-gathered result and shrink nothing.
+            qkv_linear = self.to_qkv if self.is_self else self.to_q
+            spatial_1BND = maybe_cast_activation(spatial_1BND, qkv_linear.activation_dtype)
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        qkv_parallel_config = None if use_nonfused_agmm else self.parallel_config
+        qkv_parallel_config = None if (use_nonfused_agmm or dedup_gate_gather) else self.parallel_config
 
         # Per-head gate, computed before QKV consumes spatial_1BND.
         gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
@@ -498,6 +555,19 @@ class LTXAttention(Module):
                 k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
             )
 
+        # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the
+        # ring paths K/V are the fabric payload (SDPA fuses their SP gather), so this shrinks a
+        # collective as well as the QK^T/PV matmuls; dummy_joint is a real SDPA input and must carry
+        # the same dtype. Kept separate from the linear activation cast: SDPA inputs have the widest
+        # dynamic range in the block and are the likeliest place for bf8 to break accuracy.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        dummy_joint = self.dummy_joint_input
+        if sdpa_input_dtype is not None:
+            q_BHNE = maybe_cast_activation(q_BHNE, sdpa_input_dtype)
+            k_BHNE = maybe_cast_activation(k_BHNE, sdpa_input_dtype)
+            v_BHNE = maybe_cast_activation(v_BHNE, sdpa_input_dtype)
+            dummy_joint = maybe_cast_activation(dummy_joint, sdpa_input_dtype)
+
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
             spatial_BHNE = v_BHNE
@@ -507,14 +577,16 @@ class LTXAttention(Module):
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
+                    dummy_joint,
+                    dummy_joint,
+                    dummy_joint,
+                    # The gather buffer must be allocated at the gathered tensor's dtype: the fabric
+                    # writes raw tiles into it, so a dtype mismatch is silent corruption, not a cast.
                     persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.get_dtype()
                     ),
                     persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.get_dtype()
                     ),
                     joint_strategy="rear",
                     logical_n=N,
@@ -564,11 +636,15 @@ class LTXAttention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, sp_mesh_axis),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, sp_mesh_axis),
+                dummy_joint,
+                dummy_joint,
+                dummy_joint,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                    k_BHNE.shape, 2, sp_mesh_axis, dtype=k_BHNE.get_dtype()
+                ),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                    v_BHNE.shape, 2, sp_mesh_axis, dtype=v_BHNE.get_dtype()
+                ),
                 joint_strategy="rear",
                 logical_n=kv_logical_n,
                 is_cross=True,
@@ -607,6 +683,8 @@ class LTXAttention(Module):
         addcmul_fused = addcmul_residual is not None and addcmul_gate is not None
         to_out_explicit_ag = self.parallel_config.tensor_parallel.factor > 1 and use_nonfused_agmm
         if to_out_explicit_ag:
+            # Same ordering rule as the QKV gather above: shrink the tensor before it crosses.
+            spatial_1BND = maybe_cast_activation(spatial_1BND, self.to_out.activation_dtype)
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )

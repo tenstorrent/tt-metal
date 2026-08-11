@@ -254,6 +254,15 @@ namespace efib = tt::tt_metal::emule_fiber;
 extern "C" void __emule_fiber_lock(void) { efib::FiberScheduler::instance().lock(); }
 extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().unlock(); }
 extern "C" void __emule_fiber_park_locked(const void* key) { efib::FiberScheduler::instance().park_locked(key); }
+extern "C" void __emule_fiber_park_locked_socket(const void* key) {
+    efib::FiberScheduler::instance().park_locked_socket(key);
+}
+extern "C" void __emule_fiber_note_socket_poll_wait(int waiting, int host_fed) {
+    efib::FiberScheduler::instance().note_socket_poll_wait(waiting != 0, host_fed != 0);
+}
+extern "C" void __emule_fiber_note_cb_poll_wait(unsigned cb_id, unsigned n) {
+    efib::FiberScheduler::instance().note_cb_poll_wait(cb_id, n);
+}
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
 extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
@@ -310,6 +319,24 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
         return it->second->role() == tt_emule::CoreRole::DRAM;
     }
     return false;
+}
+
+// True only when (noc_x,noc_y) maps to a WORKER core in this chip's core_map.
+// Used by the mcast semaphore walk to tell an *expected grid gap* (an ARC/DRAM/eth
+// node with no worker NIU — false here) from a *genuine* worker-resolve miss.
+// On the unharvested BH grid the worker columns are non-contiguous (ARC=x8,
+// DRAM=x9), so a full-grid mcast bbox legitimately straddles non-worker nodes;
+// silicon simply has no worker semaphore there. Mirrors __emule_noc_addr_is_dram.
+extern "C" bool __emule_noc_addr_is_worker(uint64_t noc_addr) {
+    emule_require_self(__func__);
+    if (!__emule_self->core_map) {
+        return false;
+    }
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+    auto it = __emule_self->core_map->find(key);
+    return it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER;
 }
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
@@ -1073,12 +1100,20 @@ static std::function<void()> jit_compile_kernel(
     }
     std::string abs_kernel = std::filesystem::absolute(kernel_src_path).string();
 
-    // 2. Create temp directory
-    char tmpdir[] = "/tmp/tt_emule_jit_XXXXXX";
-    if (!mkdtemp(tmpdir)) {
+    // 2. Create temp directory. Honor $TMPDIR so the JIT scratch can be placed on a
+    // reaper-safe filesystem (a /tmp cleanup reaper wiping these dirs mid-compile
+    // causes "named_args_generated.h not found" / "ld: cannot open output" failures).
+    std::string tmpl = (std::getenv("TMPDIR") ? std::string(std::getenv("TMPDIR")) : std::string("/tmp"));
+    if (!tmpl.empty() && tmpl.back() == '/') {
+        tmpl.pop_back();
+    }
+    tmpl += "/tt_emule_jit_XXXXXX";
+    std::vector<char> tmpdir(tmpl.begin(), tmpl.end());
+    tmpdir.push_back('\0');
+    if (!mkdtemp(tmpdir.data())) {
         throw std::runtime_error("jit_compile_kernel: mkdtemp failed");
     }
-    std::string dir(tmpdir);
+    std::string dir(tmpdir.data());
 
     // 2b. Preprocess the kernel source for x86: rewrite RISC-V inline asm
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
@@ -2379,8 +2414,14 @@ struct ConnRoute {
 };
 static std::mutex g_conn_route_mu;
 // Keyed by SRC CHIP only (line direction is a per-chip property; the connection-owner core can differ from
-// the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
-// See tt-emule docs/fabric-ccl-emulation.md.
+// the sender, so a per-core key would miss). Deduped by direction and kept sorted by RoutingDirection
+// (N=0,E=1,S=2,W=3,Z=4), i.e. COMPASS order — which is the order the kernel's own connection open sequence
+// walks the active directions, so the sender's per-fiber open-sequence index (ConnRoute::dir_index below)
+// selects the direction it actually opened. Sorted, NOT append order: many fibers on one src chip record
+// concurrently at TT_EMULE_FIBER_WORKERS > 1, so append order is a race — whichever fiber won put its
+// direction at index 0, flipping fwd/bwd for every sender that indexes by open-sequence and teleporting
+// whole slices to the wrong chip (nondeterministic CCL PCC; invisible at K=1, where append order is the
+// deterministic fiber order). See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
@@ -2407,12 +2448,18 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
     auto& v = g_conn_route[src];
-    for (const auto& c : v) {
-        if (c.dir == dir) {
+    // Insert in compass order (see g_conn_route's comment): the position must be a function of `dir`
+    // alone, never of which fiber recorded first.
+    auto at = v.begin();
+    for (; at != v.end(); ++at) {
+        if (at->dir == dir) {
             return;  // already recorded this direction for src
         }
+        if (at->dir > dir) {
+            break;
+        }
     }
-    v.push_back(ConnRoute{dir, neighbor});
+    v.insert(at, ConnRoute{dir, neighbor});
 }
 
 // Ordered ring members at distance 1,2,... from `src` starting in `start_dir`, by chaining the per-chip
@@ -2765,6 +2812,52 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             }
         }
     }
+    // EMULE_FABRIC_XFER=<file>: one compact line per payload-carrying send — the SOURCE L1
+    // offset (bridge_l1-relative, so it is directly comparable to a kernel's get_write_ptr),
+    // the sending core, each destination chip + destination L1 offset, and the payload's first
+    // word. Enough to reconstruct a whole CCL's wiring offline and diff it against the ring the
+    // op intends, which is how a misrouting bug gets localized without a device.
+    //
+    // Deliberately much cheaper than EMULE_FABRIC_DEBUG: that one is too verbose to leave on
+    // without perturbing the very race under study.
+    //
+    // Caveat: the fopen/fprintf/fclose widens the window between reading the payload word and
+    // the delivery memcpy, so under an active race the logged first word can disagree with the
+    // bytes actually delivered. Trust the addresses and targets from this trace; get delivered
+    // contents from a tensor dump.
+    if (payload != nullptr && size > 0) {
+        static const char* xfer_path = std::getenv("EMULE_FABRIC_XFER");
+        if (xfer_path != nullptr) {
+            const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+            const uint64_t src_off =
+                static_cast<uint64_t>(reinterpret_cast<const uint8_t*>(payload) - __emule_self->bridge_l1);
+            uint32_t w0 = 0;
+            std::memcpy(&w0, payload, sizeof(uint32_t));
+            std::string ts;
+            for (auto t : targets) {
+                ts += " " + std::to_string(t);
+            }
+            static std::mutex xfer_mu;
+            std::lock_guard<std::mutex> lk(xfer_mu);
+            FILE* fp = std::fopen(xfer_path, "a");
+            if (fp != nullptr) {
+                std::fprintf(
+                    fp,
+                    "[XFER] src_chip=%u core=(%u,%u) proc=%u src_off=0x%llx size=%u "
+                    "dst_noc=0x%llx w0=0x%08x targets=[%s ]\n",
+                    src_chip,
+                    (unsigned)__emule_self->core->logical_x,
+                    (unsigned)__emule_self->core->logical_y,
+                    (unsigned)__emule_self->processor_id,
+                    (unsigned long long)src_off,
+                    size,
+                    (unsigned long long)noc_address,
+                    w0,
+                    ts.c_str());
+                std::fclose(fp);
+            }
+        }
+    }
     // One target for unicast; the line members for a multicast. Replay the terminal NOC op to each.
     for (uint32_t dst_chip : targets) {
         __emule_fabric_deliver(dst_chip, h, payload, size, noc_send_type, dbg);
@@ -2822,7 +2915,8 @@ extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
-// Initialize CB-sync state on a core from the program's circular buffer list.
+// Initialize a core's CB-sync state: configure each cb_id from the CB that owns
+// it locally (a CB whose core_ranges() contain this core).
 static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
@@ -2830,9 +2924,8 @@ static void init_core_cb_sync(
     std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
-    // exempts the kernel's writes anywhere in them (see §12). Its own pass — not folded
-    // into the configure lambda below, which also walks remote pass-2 CBs — to keep the
-    // exempt set exactly the local ones.
+    // exempts kernel writes anywhere in them (§12). Separate pass so the exempt set
+    // stays exactly the local CBs.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
             uint32_t start = cb_impl->address();
@@ -2850,7 +2943,16 @@ static void init_core_cb_sync(
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
+            // Carry the faced-tile geometry silicon's pack/unpack init reads off the
+            // CB when the config sets it, else the full-tile default (16/4).
+            uint32_t cb_face_r_dim = 16, cb_num_faces = 4;
+            const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
+            if (cb_fg.has_value()) {
+                cb_face_r_dim = cb_fg->face_r_dim;
+                cb_num_faces = cb_fg->num_faces;
+            }
+            core->init_cb_sync(
+                idx, base, page_size, num_pages, cb_impl->globally_allocated(), cb_face_r_dim, cb_num_faces);
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -2864,16 +2966,10 @@ static void init_core_cb_sync(
                 (void*)base);
         }
     };
-    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    // core_ranges-scoped, no global fill: blaze shares one cb_id across CBs on disjoint
+    // grids, so binding a CB whose grid excludes this core would install the wrong
+    // (addr, num_pages) for that shared cb_id.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        configure(cb_impl, logical_core);
-    }
-    // Pass 2: register the remaining program CBs at their global L1 address so a
-    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
-    // addresses are program-global). Needed for multi-core topk, where local cores
-    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
-    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
-    for (auto& cb_impl : impl.circular_buffers()) {
         configure(cb_impl, logical_core);
     }
 }
@@ -2968,8 +3064,21 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
-        if (dfb_id < EMULE_NUM_CBS) {
-            core->init_cb_sync(static_cast<uint8_t>(dfb_id), base, cfg.entry_size, cfg.num_entries);
+        // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
+        if (device_slot < EMULE_NUM_CBS) {
+            uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
+            if (cfg.unpack_face_geometry.has_value()) {
+                dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
+                dfb_num_faces = cfg.unpack_face_geometry->num_faces;
+            }
+            core->init_cb_sync(
+                static_cast<uint8_t>(device_slot),
+                base,
+                cfg.entry_size,
+                cfg.num_entries,
+                /*globally_allocated=*/false,
+                dfb_face_r_dim,
+                dfb_num_faces);
         }
 
         // Initialize tile counters for this DFB.
@@ -3308,7 +3417,74 @@ struct EmuleSigfpeGuard {
 // execute_program_emulated REGISTERS its fibers (spawn, no run); run_mesh_dispatch then drives ONE
 // run_until_idle so all chips' fibers run concurrently. See tt-emule docs/fiber-engine.md.
 static bool g_emule_mesh_defer = false;
-static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>> g_mesh_dfb_keep;
+// Tagged with the dispatch's spawn generation; untagged, RSS grows monotonically with dispatch count.
+using MeshDfbKeep = std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>;
+static std::vector<std::pair<uint64_t, MeshDfbKeep>> g_mesh_dfb_keep;
+// [MESH] ASAN snapshot keepalive. In defer mode the deferred fibers read the per-launch
+// live-range snapshot (via oob.state's pointers) only later, in run_mesh_dispatch — long
+// after dispatch_to_device's local OobStateOwner would have been destroyed. Without this
+// the range pointers dangle and the checks read freed/reused heap (the all_reduce global-
+// semaphore OOB false positive). Holds each device's OobStateOwner alive until the run
+// completes; cleared alongside g_mesh_dfb_keep. std::move preserves the heap buffers the
+// pointers reference, so the captured views stay valid across the vector's own growth.
+static std::vector<std::pair<uint64_t, tt::tt_metal::emule::OobStateOwner>> g_mesh_oob_keep;
+
+// Per generation, not "older than the oldest live": a parked relay pins any age bound for the sequence.
+static uint64_t g_mesh_keep_gen = 0;
+static void reclaim_dead_mesh_keepalives() {
+    // ONE registry scan: the per-candidate query is quadratic in a full mesh's cores x RISCs fibers.
+    const auto live_gens = tt::tt_metal::emule_fiber::FiberScheduler::instance().live_spawn_generations();
+    const std::unordered_set<uint64_t> live(live_gens.begin(), live_gens.end());
+    auto dead = [&live](const auto& kv) { return live.count(kv.first) == 0; };
+    g_mesh_dfb_keep.erase(std::remove_if(g_mesh_dfb_keep.begin(), g_mesh_dfb_keep.end(), dead), g_mesh_dfb_keep.end());
+    g_mesh_oob_keep.erase(std::remove_if(g_mesh_oob_keep.begin(), g_mesh_oob_keep.end(), dead), g_mesh_oob_keep.end());
+}
+
+// Whose programs are in the registry, so one mesh's Finish cannot spend its budget on another's run.
+static std::mutex g_emule_run_device_ids_mu;
+static std::unordered_set<int> g_emule_run_device_ids;
+static void run_device_ids_insert(int id) {
+    std::lock_guard<std::mutex> g(g_emule_run_device_ids_mu);
+    g_emule_run_device_ids.insert(id);
+}
+static void run_device_ids_erase(int id) {
+    std::lock_guard<std::mutex> g(g_emule_run_device_ids_mu);
+    g_emule_run_device_ids.erase(id);
+}
+static void run_device_ids_clear() {
+    std::lock_guard<std::mutex> g(g_emule_run_device_ids_mu);
+    g_emule_run_device_ids.clear();
+}
+// True when the set is empty, or when any of `ids` is in it (i.e. this caller owns the parked run).
+static bool run_device_ids_owns(const std::vector<int>& ids) {
+    std::lock_guard<std::mutex> g(g_emule_run_device_ids_mu);
+    if (g_emule_run_device_ids.empty()) {
+        return true;
+    }
+    for (int id : ids) {
+        if (g_emule_run_device_ids.count(id) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Process-lifetime storage for FiberIdentity::kernel_src; node-based, so addresses survive rehash.
+static const char* intern_kernel_name(const std::string& name) {
+    if (name.empty()) {
+        return nullptr;
+    }
+    static std::mutex mu;
+    static std::unordered_set<std::string> table;
+    std::lock_guard<std::mutex> g(mu);
+    return table.insert(name).first->c_str();
+}
+
+// [HOST-INTERLEAVED SOCKET] Parked on host socket I/O, fibers alive; pump_device() drives it, the last pump clears it.
+static std::atomic<bool> g_emule_host_wait{false};
+
+// Serializes worker-pool drivers: pump_device() + MeshDispatchLock; run_persistent() returns at quiescence.
+static std::mutex g_emule_run_mu;
 
 // Resolved-program cache — emule's analogue of silicon's is_compiled(): collect + JIT compile + resolve
 // run ONCE per program (keyed by ProgramId); every device dispatches against the shared read-only result.
@@ -3320,7 +3496,8 @@ struct ResolvedProgram {
     std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
     uint32_t emule_sem_base = 0;
 };
-static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
+// shared_ptr: every fiber holds a ref, so LRU eviction must drop only the CACHE's or a KernelInfo* dangles.
+static std::unordered_map<ProgramId, std::shared_ptr<ResolvedProgram>> g_resolved_programs;
 static std::deque<ProgramId> g_resolved_lru;
 static constexpr size_t kMaxResolvedPrograms = 256;
 
@@ -3330,7 +3507,9 @@ static void launch_cores(
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
     ChipId device_id,
     bool defer_run,
-    const EmuleOobTensorState& oob_state) {
+    const EmuleOobTensorState& oob_state,
+    // What the CoreSetups' KernelInfo pointers point into; each fiber below captures a copy of the owner.
+    const std::shared_ptr<ResolvedProgram>& resolved_owner) {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;
 #endif
@@ -3433,7 +3612,8 @@ static void launch_cores(
             id.logical_x = lx;
             id.logical_y = ly;
             id.proc_id = ki.processor_id;
-            id.kernel_src = nullptr;
+            // Interned, not ki.kernel_name.c_str(): the hang dump reads this after the closure is gone.
+            id.kernel_src = intern_kernel_name(ki.kernel_name);
 
             // The fiber entry is the kernel body. __emule_self is set by the scheduler
             // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
@@ -3456,6 +3636,8 @@ static void launch_cores(
                  l1_data,
                  intent_tracker,
                  oob_state,
+                 // ki_ptr points into it, and the LRU can evict it while this fiber is parked.
+                 resolved_owner,
                  sem_base = cs.sem_base,
                  sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
@@ -3517,7 +3699,7 @@ static void launch_cores(
         // borrow alive until run_mesh_dispatch (the spawned ctx is already owned by the
         // scheduler; core_kernels is kept by execute_program_emulated). The SIGFPE guard
         // above is a no-op here since no kernel runs; run_mesh_dispatch installs its own.
-        g_mesh_dfb_keep.push_back(std::move(dfb_keepalive));
+        g_mesh_dfb_keep.emplace_back(g_mesh_keep_gen, std::move(dfb_keepalive));
         return;
     }
 
@@ -3531,7 +3713,7 @@ static void launch_cores(
 // ProgramId — emule's analogue of silicon's CompileProgram. The first mesh device resolves; the rest
 // reuse, taking its (homogeneous-chip-identical) compile defines. See tt-emule docs/metal-integration.md.
 // ---------------------------------------------------------------------------
-static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
+static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program& program) {
     // Single-writer invariant for g_resolved_programs/g_resolved_lru: this runs only on the
     // sequential dispatch thread (register phase), never inside a fiber. __emule_self is the
     // running fiber (set on worker threads, null on the dispatch thread), so off-fiber == null.
@@ -3609,13 +3791,23 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
         pid,
         resolved.core_kernels.size());
 
-    // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
+    // Capture once, keyed by pid: on first resolve the globals still hold what record_conn recorded for this
+    // program. A later re-resolve (cache-hit, construction skipped) finds the entry present and keeps it.
+    {
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        if (g_program_routes.find(pid) == g_program_routes.end()) {
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_mux_dir};
+        }
+    }
+
+    // LRU-bound the cache; erasing drops only the cache's ref, so a parked run's entry survives eviction.
     if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
         g_resolved_programs.erase(g_resolved_lru.front());
         g_resolved_lru.pop_front();
     }
     g_resolved_lru.push_back(pid);
-    return g_resolved_programs.emplace(pid, std::move(resolved)).first->second;
+    auto entry = std::make_shared<ResolvedProgram>(std::move(resolved));
+    return g_resolved_programs.emplace(pid, std::move(entry)).first->second;
 }
 
 // ---------------------------------------------------------------------------
@@ -3623,7 +3815,9 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
 // emule's analogue of dispatching the already-compiled program to one chip. dram_core (the
 // chip's DRAM backing) and the bank-table globals are per device.
 // ---------------------------------------------------------------------------
-static void dispatch_to_device(IDevice* device, Program& program, ResolvedProgram& resolved, bool defer_run) {
+static void dispatch_to_device(
+    IDevice* device, Program& program, const std::shared_ptr<ResolvedProgram>& resolved_owner, bool defer_run) {
+    ResolvedProgram& resolved = *resolved_owner;
     auto& impl = program.impl();
     auto device_id = device->id();
     auto* sw_emu = get_sw_emulated_chip(device_id);
@@ -3640,7 +3834,12 @@ static void dispatch_to_device(IDevice* device, Program& program, ResolvedProgra
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
-    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state);
+    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state, resolved_owner);
+    if (defer_run) {
+        // Deferred fibers run later (run_mesh_dispatch); keep the snapshot vectors that
+        // oob.state's ASAN range pointers reference alive until then. See g_mesh_oob_keep.
+        g_mesh_oob_keep.emplace_back(g_mesh_keep_gen, std::move(oob));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3655,9 +3854,21 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // routes stay scoped to the current op (this op's builds already recorded before this launch).
     g_conn_route_dirty.store(true, std::memory_order_relaxed);
 
-    ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
+    std::shared_ptr<ResolvedProgram> resolved = prepare_program(device, program);  // compile-once (memoized)
 
     const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
+    // Remember whose fibers are in the registry, so a later Finish knows if the run is its own.
+    run_device_ids_insert(static_cast<int>(device_id));
+    // The non-deferred path finishes inside dispatch_to_device, so its id must not outlive the call.
+    struct DeviceIdScope {
+        int id;
+        bool armed;
+        ~DeviceIdScope() {
+            if (armed) {
+                run_device_ids_erase(id);
+            }
+        }
+    } id_scope{static_cast<int>(device_id), !defer};
     dispatch_to_device(device, program, resolved, defer);
 
     if (defer) {
@@ -3671,26 +3882,177 @@ void execute_program_emulated(IDevice* device, Program& program) {
 // Mesh register/run split (see header). begin_mesh_dispatch puts execute_program_emulated
 // into defer mode; run_mesh_dispatch drives the single concurrent run + frees kept state.
 // ---------------------------------------------------------------------------
+MeshDispatchLock::MeshDispatchLock() { g_emule_run_mu.lock(); }
+MeshDispatchLock::~MeshDispatchLock() { g_emule_run_mu.unlock(); }
+
 void begin_mesh_dispatch() {
     g_emule_mesh_defer = true;
+    // Tag FROM the scheduler (a parallel counter drifts): a blanket clear frees arrays under live fibers.
+    g_mesh_keep_gen = tt::tt_metal::emule_fiber::FiberScheduler::instance().begin_spawn_generation();
+    reclaim_dead_mesh_keepalives();
+    // Ids from a register phase that threw before launch belong to no run; a parked one keeps its ids.
+    if (!g_emule_host_wait) {
+        run_device_ids_clear();
+    }
+}
+
+// Drop a parked run's state; pre: the registry is gone. A stale flag lets a feeder kill the next dispatch.
+static void clear_host_interleaved_state() {
+    g_emule_host_wait = false;
+    g_emule_mesh_defer = false;
     g_mesh_dfb_keep.clear();
+    g_mesh_oob_keep.clear();
+    run_device_ids_clear();
 }
 
 void run_mesh_dispatch() {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
 #endif
-    // Reset defer + free the kept per-device state even if the run throws.
+    // Reset defer + free the kept per-device state even if the run throws. Disarmed on the
+    // host-wait path, which keeps the state alive across the return to the host.
     struct Cleanup {
+        bool armed = true;
         ~Cleanup() {
-            g_emule_mesh_defer = false;
-            g_mesh_dfb_keep.clear();
+            if (armed) {
+                clear_host_interleaved_state();
+            }
         }
     } cleanup;
-    // All devices' fibers were registered (spawned) during the per-device register phase;
-    // run them concurrently on the worker pool in one pass. Each fiber's ctx carries its
-    // device's core_map/bridge_dram, so cross-chip NOC resolution stays correct.
-    tt::tt_metal::emule_fiber::FiberScheduler::instance().run_until_idle();
+    // All devices' fibers were registered (spawned) during the per-device register phase; run them
+    // concurrently on the worker pool in one pass. Each fiber's ctx carries its device's
+    // core_map/bridge_dram, so cross-chip NOC resolution stays correct. run_persistent (vs
+    // run_until_idle) lets a host-interleaved socket program quiesce back to the host mid-run. On a
+    // throw the RAII Cleanup above frees the kept state during unwind.
+    tt::tt_metal::emule_fiber::RunOutcome oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().run_persistent();
+    if (oc == tt::tt_metal::emule_fiber::RunOutcome::HostWait) {
+        // A kernel is parked on a host-fed socket wait. Keep the kept state + the scheduler's fibers
+        // ALIVE and return to the host; it streams socket tokens and pump_device() drives the run to
+        // completion (which runs the cleanup, see pump_device()).
+        cleanup.armed = false;
+        g_emule_host_wait = true;
+        return;
+    }
+    // Completed synchronously (no host-fed socket wait): the RAII Cleanup frees the kept state.
+}
+
+// pre: g_emule_run_mu held. See pump_device().
+static void pump_device_locked() {
+    if (!g_emule_host_wait) {
+        return;
+    }
+#if defined(__x86_64__) && defined(__linux__)
+    // pump() re-enters kernel bodies; run_mesh_dispatch's guard was destroyed at its HostWait return,
+    // so reinstall the SIGFPE->RISC-V divide/overflow handler for the resumed execution.
+    EmuleSigfpeGuard sigfpe_guard;
+#endif
+    try {
+        auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
+        if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
+            clear_host_interleaved_state();
+        }
+    } catch (...) {
+        // pump() threw (kernel exception / host-wait stall deadlock) — the scheduler registry is torn
+        // down; drop the mesh keepalives + host-wait/defer flags so a later dispatch starts clean.
+        clear_host_interleaved_state();
+        throw;
+    }
+}
+
+void pump_device() {
+    // One scheduler quantum. pump() re-polls: the host's credit store was a raw L1 write with no wake.
+    std::lock_guard<std::mutex> g(g_emule_run_mu);
+    pump_device_locked();
+}
+
+// Drain backstop, defaulted above the engine's bound so a wedged run escalates there first. 0 = unbounded.
+static uint64_t drain_max_pumps() {
+    // Strict: strtoull's unsigned wrap would turn "-1" into ~1.8e19 pumps inside Finish().
+    auto parse_u64 = [](const char* name, uint64_t fallback, bool* present) -> uint64_t {
+        const char* v = std::getenv(name);
+        if (present != nullptr) {
+            *present = (v != nullptr && v[0] != '\0');
+        }
+        if (v == nullptr || v[0] == '\0') {
+            return fallback;
+        }
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long n = std::strtoull(v, &end, 10);
+        if (end == v || *end != '\0' || errno == ERANGE || std::strchr(v, '-') != nullptr) {
+            log_warning(tt::LogMetal, "{}='{}' is not a non-negative integer; using {}", name, v, fallback);
+            if (present != nullptr) {
+                *present = false;
+            }
+            return fallback;
+        }
+        return static_cast<uint64_t>(n);
+    };
+
+    // From the engine, not a re-parse: env_size and parse_u64 disagree on 0 and on trailing garbage.
+    const uint64_t engine_limit = tt::tt_metal::emule_fiber::FiberScheduler::host_wait_stall_limit();
+    // Saturating: a wrapping `engine_limit + 64` inverts the floor and abandons a healthy run.
+    const uint64_t floor_pumps = engine_limit > UINT64_MAX - 64 ? UINT64_MAX : engine_limit + 64;
+
+    bool present = false;
+    const uint64_t n = parse_u64("TT_EMULE_DRAIN_MAX_PUMPS", floor_pumps, &present);
+    if (!present) {
+        return floor_pumps;
+    }
+    if (n == 0) {
+        return UINT64_MAX;  // explicit "unbounded" — the engine's own limits still terminate it
+    }
+    if (n < floor_pumps) {
+        log_warning(
+            tt::LogMetal,
+            "TT_EMULE_DRAIN_MAX_PUMPS={} is below the engine's host-wait stall limit ({}), so a "
+            "wedged run will be abandoned still-parked instead of escalating; using it anyway",
+            n,
+            engine_limit);
+    }
+    return n;
+}
+
+void drain_device(const std::vector<int>& device_ids) {
+    if (!g_emule_host_wait) {
+        return;
+    }
+    // Finish means idle on return, and a run past its termination signal has no credit loop driving it.
+    static const uint64_t max_pumps = drain_max_pumps();
+    for (uint64_t i = 0; i < max_pumps; ++i) {
+        // Re-read every pass under the pumping lock: the run can complete and another mesh park a new one.
+        std::lock_guard<std::mutex> g(g_emule_run_mu);
+        if (!g_emule_host_wait) {
+            break;
+        }
+        if (!device_ids.empty() && !run_device_ids_owns(device_ids)) {
+            return;  // not ours (any more) — leave it to its own Finish
+        }
+        pump_device_locked();
+    }
+    // Bound hit, run still parked: hand it to the engine. Locked — this tears down the pump's registry.
+    std::lock_guard<std::mutex> g(g_emule_run_mu);
+    if (!g_emule_host_wait) {
+        return;
+    }
+    try {
+        tt::tt_metal::emule_fiber::FiberScheduler::instance().abandon_host_wait(fmt::format(
+            "EMULE fiber engine: drain_device gave up after {} pumps with the run still parked. "
+            "The engine's host-wait liveness bound ({} no-progress pumps) never escalated, so some "
+            "global progress kept resetting it while the awaited socket never advanced. The usual "
+            "cause is host ordering: a Finish/synchronize_device or a device read issued BEFORE the "
+            "socket data the parked kernels are waiting for was streamed. On silicon that ordering "
+            "hangs; here it is bounded and reported. If the feed is merely slow, raise "
+            "TT_EMULE_DRAIN_MAX_PUMPS; to get the engine's own escalation (and its dump) first, "
+            "lower TT_EMULE_HOST_WAIT_STALL_LIMIT.",
+            max_pumps,
+            tt::tt_metal::emule_fiber::FiberScheduler::host_wait_stall_limit()));
+    } catch (...) {
+        clear_host_interleaved_state();
+        throw;
+    }
+    // abandon_host_wait found no registry to tear down, so the flags outlived the run they described.
+    clear_host_interleaved_state();
 }
 
 }  // namespace tt::tt_metal::emule
