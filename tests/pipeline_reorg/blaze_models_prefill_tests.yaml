@@ -594,8 +594,7 @@
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     # This launcher runs on the GH runner pod, whose TT_METAL_HOME holds build
     # artifacts only -- full source reaches the galaxy workers via `mpirun --pernode`
-    # but never this pod. ttrun.py, the rank-binding, and the binding's
-    # TT_METAL_HOME-relative mesh_graph_desc_path all resolve against source here, so
+    # but never this pod. ttrun.py and the MGD resolve against source here, so
     # overlay it from the pod-local /ci checkout without clobbering the build.
     if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
@@ -607,10 +606,19 @@
     mkdir -p "${PIPELINE_DIR}"
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
+    # The producer (raw mpirun) needs an explicit slotted host list; the runner
+    # goes through tt-run automapper, which discovers rank->mesh placement from the
+    # MGD and takes the plain comma-separated host list.
     HOSTS=$(awk 'NF {printf "%s:1,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    # tt-run Phase 1 (generate_rank_bindings) writes generated/ttrun/ under the
+    # launch cwd; keep it on shared NFS so the runner pod can read rank-0 outputs.
+    TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
+    mkdir -p "${TTRUN_CWD}"
 
     MR_DIR=$(mktemp -d "${PIPELINE_DIR}/prefill_ci_mr.XXXXXX")
-    export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"   # ttrun expandvars this into the committed binding's global_env
+    export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 
     # The runner idles owning the 4-galaxy allocation until the producer's shutdown
     # sentinel; on any early exit (table-publish timeout, producer failure) it must be
@@ -625,12 +633,34 @@
     }
     trap cleanup EXIT
 
+    # tt-run automapper: --mesh-graph-descriptor + --hosts generate the rank
+    # binding by discovery, so no static binding is committed. tt-run forwards only
+    # the device vars it owns (TT_MESH_*) plus its ENV_PASSTHROUGH_PREFIXES; PREFILL_*
+    # fall outside that set, so -- exactly as the producer launch below does --
+    # export them inside a per-rank bash -lc rather than relying on tt-run to carry
+    # them. Launch from TTRUN_CWD so Phase 1 caches on shared NFS; RUNNER_PID stays
+    # ttrun.py's pid so cleanup()'s kill still tears the remote ranks down.
+    cd "${TTRUN_CWD}"
     python3 "${TTRUN_PY}" \
+      --skip-executable-check \
       --tcp-interface ens5f0np0 \
-      --rank-binding models/demos/common/prefill/runners/topology_configuration/prefill_ci_4galaxy_mr_binding.yaml \
-      --mpi-args "--host ${HOSTS} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
-      python3 -m models.demos.common.prefill.runners.prefill_runner &
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} -x PATH -x LD_LIBRARY_PATH" \
+      bash -lc "cd '${TT_METAL_HOME}'; \
+        export PYTHONPATH='${TT_METAL_HOME}'; \
+        export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
+        export MESH_DEVICE=TG; \
+        export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
+        export PREFILL_FABRIC_MODE=2d; \
+        export PREFILL_MAX_SEQ_LEN=56320; \
+        export PREFILL_ENABLE_MIGRATION=1; \
+        export PREFILL_MOCK_MIGRATION=1; \
+        export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+        export LOGURU_LEVEL=INFO; \
+        exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
     RUNNER_PID=$!
+    cd "${TT_METAL_HOME}"
 
     for i in $(seq 1 360); do
       [ -f "${TABLE_PATH}" ] && break
