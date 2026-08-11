@@ -1215,6 +1215,38 @@ targets:
               decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
             accuracy: {}
+      # bh_quietbox_2 normalizes to canonical p300x2 (2x P300 = 4 dies, labeled P150x4).
+      # The TTTv2 qwen25_coder_32b demo is T3K-only, so this SKU runs the TTTv1
+      # simple_text_demo legs (same arrangement as qwen3-32b on Blackhole).
+      # Both entries were measured from those exact legs with
+      # ModelOptimizations.performance (bfp4 FF1/FF3, bfp8 attention + KV cache).
+      bh_quietbox_2:
+        entries:
+          # performance-ci-token-matching leg. Teacher-forced against the committed
+          # reference logits; measured Top1 95.60% / Top5 99.60% identically on two
+          # runs. Targets held at the wh_llmbox_perf values (conservative top5).
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96
+              top5: 99
+          # performance-ci-eval-32 leg (3 repeat batches). Medians of 4 runs:
+          # TTFT 83.23/83.29/83.32/83.48 ms, decode 20.80-20.81 t/s/u,
+          # 665.7-666.0 t/s. Spread is 0.30% on TTFT and 0.05% on decode; the 0.2
+          # tolerance from wh_llmbox_perf is kept because CI hosts are noisier
+          # than an idle dev box (see issue #46214 for this model's swing).
+          - batch_size: 32
+            seq_len: 1024
+            status: active
+            perf:
+              decode_t/s: 665.9
+              decode_t/s/u: 20.81
+              decode_t_s_u_tolerance: 0.2
+              prefill_time_to_first_token: 83.3
+              prefill_time_to_first_token_tolerance: 0.2
+            accuracy: {}
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:

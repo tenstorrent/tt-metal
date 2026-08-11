@@ -2417,6 +2417,11 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                # Same architecture as Qwen2.5-32B (5120 hidden, 64 layers, 40q/8kv heads),
+                # so it reuses that model's P150x4 chunk size; validated with a full 32768-token
+                # single-chunk prefill. Only P150x4 is listed because that is the only device
+                # measured; other devices keep the existing safe fallback of 4.
+                "Qwen2.5-Coder-32B": {"P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
