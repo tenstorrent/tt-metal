@@ -76,8 +76,8 @@ SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
 # the asserts below pin them so an added arg fails loudly at program build
 # instead of silently shifting a peer's args.
 # --------------------------------------------------------------------------
-READER_ACCESSOR_CT_BASE = 8  # rms_norm_reader.cpp: TensorAccessorArgs<8>
-WRITER_MCAST_CT_BASE = 6  # rms_norm_writer.cpp: MCAST_CT_BASE
+READER_ACCESSOR_CT_BASE = 9  # rms_norm_reader.cpp: TensorAccessorArgs<9>
+WRITER_MCAST_CT_BASE = 7  # rms_norm_writer.cpp: MCAST_CT_BASE
 WRITER_MCAST_RT_BASE = 16  # rms_norm_writer.cpp: MCAST_RT_BASE
 _READER_NUM_ARGS = 17  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..16)
 _COMPUTE_NUM_ARGS = 6  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..5)
@@ -136,6 +136,24 @@ _DEPTH_LADDER = (
     (INPUT_CB_DEPTH, 1),
     (1, 1),
 )
+
+# Hidden-axis chunking (op_design.md regime R3), the residency knob of LAST resort
+# for a resident shard. `w_chunk_tiles` (WC) is the block extent along `hidden` of
+# every CB that only STREAMS over that axis — cb_gamma_tiles, cb_normed,
+# cb_output_*, cb_input_rm — so their footprint becomes O(WC) instead of O(C).
+# The block itself stays whole-resident in cb_input_tiles, which is what keeps the
+# input to ONE crossing: R3's cost in the traffic ranking was a second whole-tensor
+# READ for the apply pass, and there is none here (the shard is already in L1 and
+# the block is never re-fetched).
+#
+# It is tried only after the depth ladder above has failed at WC == C, so every
+# geometry that fits today keeps its byte-identical single-chunk schedule, and the
+# COARSEST chunk that fits is taken (block-size fidelity: a finer chunk repays the
+# per-chunk phase-boundary reconfig and one extra stat column per chunk for no
+# extra work).
+#
+# `w_chunk_tiles=None` everywhere below means "one chunk" (WC == C) — the value
+# every interleaved geometry and every currently-fitting shard keeps.
 
 TILE_HW = 32
 FP32_TILE_BYTES = 4096
@@ -260,6 +278,19 @@ class _Geometry:
             self.is_rm_gamma = False
 
 
+def _stat_cols(C, WC, has_tail):
+    """Stat columns per tile-row of `cb_stat_sq` — ONE per hidden chunk, plus the tail's.
+
+    `reduce_stat_block` already folds a tile-row's columns together, so a chunked
+    `sumsq_block` packs each chunk's partial `Σ x²` into its own column instead of
+    accumulating through L1. Unchunked this is the Phase 0 expression `1 + has_tail`,
+    which the kernel reproduces exactly (`bulk_cols = ceil(c_full / WC)`).
+    """
+    if WC >= C:
+        return 1 + has_tail
+    return _div_up(max(C - has_tail, 0), WC) + has_tail
+
+
 def _cb_specs(
     geo,
     C,
@@ -271,6 +302,7 @@ def _cb_specs(
     rm_cb_depth=RM_CB_DEPTH,
     pin_in=False,
     pin_out=False,
+    w_chunk_tiles=None,
 ):
     """THE statement of this op's CB inventory — `(index, num_pages, page_size, format)`.
 
@@ -297,7 +329,14 @@ def _cb_specs(
     # The output CBs carry T_in / the input dtype: create_program_descriptor
     # asserts the output dtype matches the input's, so they are the same format.
     in_dtype = geo.in_dtype
-    nc_max = 1 + has_tail  # cb_stat_sq columns per tile-row
+    # WC = the hidden extent of every CB that only STREAMS over that axis. WC == C
+    # (one chunk) is the default and makes every expression below the Phase 0 one.
+    WC = C if w_chunk_tiles is None else w_chunk_tiles
+    # The block width the CHUNKED buffers actually span: chunks are a uniform
+    # quantum, so a WC that does not divide C carries `NUM_CHUNKS*WC - C` pad
+    # columns — the same pad the ragged hidden split already carries.
+    C_pad = _div_up(C, WC) * WC
+    nc_max = _stat_cols(C, WC, has_tail)  # cb_stat_sq columns per tile-row
 
     specs = [
         (CB_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
@@ -310,26 +349,29 @@ def _cb_specs(
         (CB_RSTD, R, FP32_TILE_BYTES, ttnn.float32),
     ]
     if not pin_in:
-        specs.append((CB_INPUT_TILES, input_cb_depth * R * C, T_in, in_dtype))
+        # The whole block stays resident here (both passes read it), so this CB is
+        # sized on the block width, never on the chunk. On the ROW_MAJOR leg tilize
+        # fills it chunk by chunk, hence C_pad.
+        specs.append((CB_INPUT_TILES, input_cb_depth * R * (C_pad if geo.is_rm_in else C), T_in, in_dtype))
     if not pin_out:
-        # RM output needs the whole block resident before untilize runs (both are
+        # RM output needs the whole CHUNK resident before untilize runs (both are
         # compute-side, so they cannot pipeline); the tiled path streams.
-        specs.append((CB_OUTPUT_TILES, (R * C) if is_rm_out else (OUTPUT_CB_DEPTH * C), T_in, in_dtype))
+        specs.append((CB_OUTPUT_TILES, (R * WC) if is_rm_out else (OUTPUT_CB_DEPTH * WC), T_in, in_dtype))
     if has_tail:
         specs.append((CB_WMASK, 1, BF16_TILE_BYTES, ttnn.bfloat16))
     if geo.is_rm_in:
-        specs.append((CB_INPUT_RM, rm_cb_depth * C, T_in, in_dtype))
+        specs.append((CB_INPUT_RM, rm_cb_depth * WC, T_in, in_dtype))
     if is_rm_out:
-        specs.append((CB_OUTPUT_RM, rm_cb_depth * C, T_in, in_dtype))
+        specs.append((CB_OUTPUT_RM, rm_cb_depth * WC, T_in, in_dtype))
     if geo.has_gamma:
-        specs.append((CB_GAMMA_TILES, C, geo.gamma_tile_bytes, geo.gamma_dtype))
-        specs.append((CB_NORMED, R * C, T_in, in_dtype))
-        if geo.is_rm_gamma and not _gamma_rm_aliases_input_rm(geo):
-            specs.append((CB_GAMMA_RM, C, geo.gamma_tile_bytes, geo.gamma_dtype))
+        specs.append((CB_GAMMA_TILES, WC, geo.gamma_tile_bytes, geo.gamma_dtype))
+        specs.append((CB_NORMED, R * WC, T_in, in_dtype))
+        if geo.is_rm_gamma and not _gamma_rm_aliases_input_rm(geo, WC >= C):
+            specs.append((CB_GAMMA_RM, WC, geo.gamma_tile_bytes, geo.gamma_dtype))
     return specs
 
 
-def _gamma_rm_aliases_input_rm(geo):
+def _gamma_rm_aliases_input_rm(geo, unchunked=True):
     """Can the ROW_MAJOR gamma stick be staged in `cb_input_rm` instead of its own CB?
 
     Reuse pattern 3 (alias disjoint lifetimes, `l1-footprint-discipline.md`):
@@ -343,9 +385,13 @@ def _gamma_rm_aliases_input_rm(geo):
 
     Gated on identical page FORMAT: one CB index carries one data format, so a
     mixed-precision gamma (bf16 activations x fp32 weights) keeps its own buffer.
+    Also gated on the UNCHUNKED schedule: once the hidden axis is chunked, gamma is
+    re-fed per chunk from inside the block loop, so the two lifetimes interleave
+    instead of being disjoint.
     """
     return (
-        geo.has_gamma
+        unchunked
+        and geo.has_gamma
         and geo.is_rm_gamma
         and geo.is_rm_in
         and geo.gamma_dtype == geo.in_dtype
@@ -353,7 +399,7 @@ def _gamma_rm_aliases_input_rm(geo):
     )
 
 
-def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False):
+def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False, w_chunk_tiles=None):
     """`(fixed_bytes, per_row_bytes)` of the per-core CB footprint at `(C, G)`.
 
     DERIVED from `_cb_specs` — never restated — by differencing the inventory at
@@ -375,6 +421,7 @@ def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=Fa
                 rm_cb_depth=depths[1],
                 pin_in=pin_in,
                 pin_out=pin_out,
+                w_chunk_tiles=w_chunk_tiles,
             )
         )
 
@@ -384,14 +431,24 @@ def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=Fa
 
 
 def _max_block_row_tiles(
-    geo, C, G, core_row_tiles, is_rm_out, has_tail, budget, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False
+    geo,
+    C,
+    G,
+    core_row_tiles,
+    is_rm_out,
+    has_tail,
+    budget,
+    depths=_DEPTH_LADDER[0],
+    pin_in=False,
+    pin_out=False,
+    w_chunk_tiles=None,
 ):
     """Closed-form L1 residency solve (a single expression, not a search).
 
     Returns 0 when even R == 1 does not fit.
     """
     fixed_bytes, per_row_bytes = _cb_bytes(
-        geo, C, G, is_rm_out, has_tail, depths=depths, pin_in=pin_in, pin_out=pin_out
+        geo, C, G, is_rm_out, has_tail, depths=depths, pin_in=pin_in, pin_out=pin_out, w_chunk_tiles=w_chunk_tiles
     )
     if fixed_bytes + per_row_bytes > budget:
         return 0
@@ -632,6 +689,28 @@ def _sharded_groups(sv, infos):
     return groups
 
 
+def _chunking_supported(groups, pin_in, pin_out):
+    """May the hidden axis be chunked for this (sharded) geometry?
+
+    Two structural preconditions, both cheap to state and both load-bearing:
+
+    1. The per-core hidden geometry must be UNIFORM across the program. The chunk
+       count sets `cb_stat_sq`'s column stride and every chunked CB's push/pop
+       quantum, and a CB's capacity must be an exact multiple of that quantum
+       (dataflow_api.h:216-221) on every core that shares the L1 map. A HEIGHT
+       shard — the case this exists for — gives every core the tensor's whole
+       hidden slice, so it is uniform by construction.
+    2. Input and output must be BOTH pinned or BOTH staged. A pinned block CB is
+       the shard's own row-major-C buffer, which the apply writes at a strided
+       offset; a staged one is filled chunk-major by tilize. Mixing the two would
+       need the apply to read one layout and write the other in the same pass.
+    """
+    if pin_in != pin_out:
+        return False
+    widths = {(m["core_w"], m["w_elems"] % TILE_HW) for g in groups for m in g["members"]}
+    return len(widths) == 1
+
+
 def _sharded_cb(index, tensor, core_ranges):
     """A CB pinned ZERO-COPY over `tensor`'s resident L1 shard.
 
@@ -763,6 +842,10 @@ def create_program_descriptor(
         has_tail_global = 1 if geo.partial_w != 0 else 0
         max_row_count = rows_per_group + (1 if rows_extra else 0)
         depths = _DEPTH_LADDER[0]
+        # An interleaved geometry never chunks: `_select_regime` still has the
+        # w_group_size knob, which shrinks C itself (and chunking a DRAM-fed input
+        # would not be free — see the R3 note above).
+        W_CHUNK = C
 
         groups = []
         for gi in range(active_row_groups):
@@ -825,10 +908,11 @@ def create_program_descriptor(
                 )
         has_tail_global = 1 if any(m["w_elems"] % TILE_HW for g in groups for m in g["members"]) else 0
         max_row_count = max(g["row_count"] for g in groups)
-        # The shard spec pins G and C, so `R` and the BUFFER DEPTHS are the only
-        # residency knobs left. Walk the depth ladder: full depth first, and give up
-        # overlap only when the working set does not otherwise fit at all.
-        R, depths = 0, _DEPTH_LADDER[-1]
+        # The shard spec pins G and C, so `R`, the BUFFER DEPTHS and the HIDDEN
+        # CHUNK are the only residency knobs left. Walk the depth ladder first at
+        # WC == C (so every geometry that fits today keeps its byte-identical
+        # single-chunk schedule), and only then chunk the hidden axis.
+        R, depths, W_CHUNK = 0, _DEPTH_LADDER[-1], C
         for candidate_depths in _DEPTH_LADDER:
             R = _max_block_row_tiles(
                 geo,
@@ -845,11 +929,37 @@ def create_program_descriptor(
             if R:
                 depths = candidate_depths
                 break
+        if R == 0 and _chunking_supported(groups, pin_in, pin_out):
+            # HIDDEN-AXIS CHUNKING (op_design.md R3). Take the COARSEST chunk that
+            # fits, at full buffer depth; only if no chunk fits at that depth does
+            # the depth ladder come back into play.
+            for candidate_depths in _DEPTH_LADDER:
+                for wc in range(C - 1, 0, -1):
+                    R = _max_block_row_tiles(
+                        geo,
+                        C,
+                        G,
+                        max_row_count,
+                        is_rm_out,
+                        has_tail_global,
+                        budget,
+                        depths=candidate_depths,
+                        pin_in=pin_in,
+                        pin_out=pin_out,
+                        w_chunk_tiles=wc,
+                    )
+                    if R:
+                        depths, W_CHUNK = candidate_depths, wc
+                        break
+                if R:
+                    break
         if R == 0:
             raise RuntimeError(
                 f"rms_norm: the per-core CB working set for shard spec {sv_in.shard_h}x{sv_in.shard_w} on "
-                f"{len(sv_in.cores)} cores does not fit L1 (C={C} hidden tiles, w_group_size={G}); the shard "
-                f"spec pins both, so there is no split left to shrink the working set with."
+                f"{len(sv_in.cores)} cores does not fit L1 (C={C} hidden tiles, w_group_size={G}), even with the "
+                f"hidden axis chunked to a single tile; the shard spec pins both, and the two resident shards "
+                f"alone take {(sv_in.bank_bytes + (sv_out.bank_bytes if sv_out is not None else 0))} bytes of the "
+                f"{_l1_cb_budget()}-byte budget."
             )
 
     all_cores = []
@@ -908,6 +1018,9 @@ def create_program_descriptor(
     # knob (the conservative value), so this only ever lowers the footprint and
     # never changes the chosen (G, C, R) geometry.
     input_cb_depth = depths[0] if max_row_count > R else 1
+    # Single source of truth for the hidden chunking: the CB page counts below, the
+    # kernels' CT arg and the gamma-alias decision all read THIS value.
+    alias_gamma_rm = _gamma_rm_aliases_input_rm(geo, W_CHUNK >= C)
 
     cbs = [
         _cb(index, all_core_ranges, num_pages, page_size, data_format)
@@ -922,6 +1035,7 @@ def create_program_descriptor(
             rm_cb_depth=depths[1],
             pin_in=pin_in,
             pin_out=pin_out,
+            w_chunk_tiles=W_CHUNK,
         )
     ]
     if pin_in:
@@ -1088,7 +1202,8 @@ def create_program_descriptor(
         1 if geo.is_rm_gamma else 0,
         has_tail_global,
         1 if sv_in is not None else 0,
-        1 if _gamma_rm_aliases_input_rm(geo) else 0,
+        1 if alias_gamma_rm else 0,
+        W_CHUNK,
     ]
     # Same contract as the writer's runtime args: the reader reads its
     # TensorAccessorArgs from a hardcoded CT offset.
@@ -1114,6 +1229,7 @@ def create_program_descriptor(
         G,
         SEM_GATHER,
         1 if sv_out is not None else 0,
+        W_CHUNK,
     ]
     assert len(writer_ct) == WRITER_MCAST_CT_BASE, (
         f"rms_norm: writer compile-time-arg layout drifted ({len(writer_ct)} own args); "
@@ -1131,7 +1247,8 @@ def create_program_descriptor(
         inv_w_bits,
         eps_bits,
         1 if geo.is_rm_gamma else 0,
-        1 if _gamma_rm_aliases_input_rm(geo) else 0,
+        1 if alias_gamma_rm else 0,
+        W_CHUNK,
     ]
 
     kernels = [

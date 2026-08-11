@@ -146,9 +146,11 @@ struct LocalShardAccessor {
 // (`cb_w_tiles` tile-sized pages), laying each stick at the block's uniform L1
 // row stride. The trailing (cb_w_tiles*32*elem - slice_bytes) pad bytes of each
 // row are ZEROED (see zero_l1_bytes) — free when the slice fills the block row,
-// which is every tile-aligned case. Stale rows of a ragged 32-row group are left
-// untouched: every math phase over this block is row-independent, so their
-// garbage cannot migrate into a valid row, and the writer never stores them.
+// which is every tile-aligned case. `slice_bytes == 0` (a hidden chunk entirely
+// past this core's valid slice) degenerates to an all-zero row, no NoC read.
+// Stale rows of a ragged 32-row group are left untouched: every math phase over
+// this block is row-independent, so their garbage cannot migrate into a valid
+// row, and the writer never stores them.
 template <uint32_t cb_id, uint32_t cb_w_tiles, typename Accessor>
 FORCE_INLINE void read_slice_rows(
     const Accessor& acc, uint32_t rows, uint32_t slice_bytes, uint32_t start_page, uint32_t byte_offset) {
@@ -158,7 +160,9 @@ FORCE_INLINE void read_slice_rows(
     cb_reserve_back(cb_id, cb_w_tiles);
     uint32_t l1_addr = get_write_ptr(cb_id);
     for (uint32_t r = 0; r < rows; ++r) {
-        noc_async_read(acc.get_noc_addr(start_page + r, byte_offset), l1_addr, slice_bytes);
+        if (slice_bytes) {
+            noc_async_read(acc.get_noc_addr(start_page + r, byte_offset), l1_addr, slice_bytes);
+        }
         zero_l1_bytes(l1_addr + slice_bytes, pad_bytes);
         l1_addr += block_row_bytes;
     }
@@ -175,17 +179,25 @@ FORCE_INLINE void read_slice_rows(
 // of 32; otherwise it falls back to the per-stick body above.
 template <uint32_t cb_id, uint32_t cb_w_tiles>
 FORCE_INLINE void read_shard_rows(
-    uint32_t base, uint32_t shard_row_bytes, uint32_t rows, uint32_t slice_bytes, uint32_t start_page) {
+    uint32_t base,
+    uint32_t shard_row_bytes,
+    uint32_t rows,
+    uint32_t slice_bytes,
+    uint32_t start_page,
+    uint32_t byte_offset) {
     constexpr uint32_t block_row_bytes = (get_tile_size(cb_id) / TILE_HW_DIM) * cb_w_tiles;
     if (slice_bytes == block_row_bytes && shard_row_bytes == block_row_bytes) {
         cb_reserve_back(cb_id, cb_w_tiles);
         noc_async_read(
-            ::get_noc_addr(base + start_page * shard_row_bytes), get_write_ptr(cb_id), rows * block_row_bytes);
+            ::get_noc_addr(base + start_page * shard_row_bytes + byte_offset),
+            get_write_ptr(cb_id),
+            rows * block_row_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_id, cb_w_tiles);
         return;
     }
-    read_slice_rows<cb_id, cb_w_tiles>(LocalShardAccessor{base, shard_row_bytes}, rows, slice_bytes, start_page, 0);
+    read_slice_rows<cb_id, cb_w_tiles>(
+        LocalShardAccessor{base, shard_row_bytes}, rows, slice_bytes, start_page, byte_offset);
 }
 }  // namespace
 
@@ -203,7 +215,14 @@ void kernel_main() {
     // tilize), so one buffer serves both lifetimes. Saves C tiles.
     constexpr bool ALIAS_GAMMA_RM = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t cb_gamma_stage = ALIAS_GAMMA_RM ? cb_input_rm : cb_gamma_rm;
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    // Block extent along `hidden` of the streaming CBs (cb_input_rm, cb_gamma_*).
+    // Equal to CB_W_TILES — one chunk, the unchunked schedule — unless a resident
+    // shard pinned a hidden slice too wide to hold. See the compute kernel's
+    // "HIDDEN-AXIS CHUNKING" note.
+    constexpr uint32_t CB_CHUNK_TILES = get_compile_time_arg_val(8);
+    constexpr uint32_t NUM_CHUNKS = (CB_W_TILES + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
+    constexpr bool CHUNKED = NUM_CHUNKS > 1;
+    constexpr auto src_args = TensorAccessorArgs<9>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -260,14 +279,27 @@ void kernel_main() {
         cb_push_back(cb_zero_tile, 1);
     }
 
-    // ---------------- load_gamma_slice (once per kernel) -----------------
-    if constexpr (HAS_GAMMA) {
+    // ---------------- load_gamma_slice -----------------------------------
+    // One CHUNK of this core's gamma slice. Unchunked (NUM_CHUNKS == 1) this is
+    // the whole slice, loaded once before the block loop and resident for the
+    // kernel's lifetime — gamma crosses DRAM once per core. Chunked, only one
+    // chunk fits L1 at a time, so it is re-fed per chunk inside the block loop
+    // (W bytes per block, against a slice that would not fit at all).
+    auto load_gamma_chunk = [&]([[maybe_unused]] uint32_t k) {
         if constexpr (IS_RM_GAMMA) {
             // One stick; compute tilizes it into the row-0-valid tile form that
             // TILE gamma already has.
+            constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_stage) / TILE_HW_DIM) * CB_CHUNK_TILES;
+            const uint32_t chunk_off = k * block_row_bytes;
+            const uint32_t chunk_bytes =
+                (gamma_slice_bytes > chunk_off)
+                    ? ((gamma_slice_bytes - chunk_off < block_row_bytes) ? gamma_slice_bytes - chunk_off
+                                                                         : block_row_bytes)
+                    : 0;
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr);
             if (gamma_lead_bytes == 0) {
-                read_slice_rows<cb_gamma_stage, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_read_offset);
+                read_slice_rows<cb_gamma_stage, CB_CHUNK_TILES>(
+                    gamma_acc, 1, chunk_bytes, 0, gamma_read_offset + chunk_off);
             } else {
                 // This core's gamma slice does NOT start on a DRAM-aligned boundary.
                 // A ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1 alignment
@@ -278,86 +310,101 @@ void kernel_main() {
                 // alignment, silently returning a neighbouring slice, so: fetch the
                 // ALIGNED span into scratch past the gamma row, then shift it down by
                 // `lead` with the CPU (the one transfer whose source alignment is not
-                // ours to choose — see copy_l1_bytes).
-                constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_stage) / TILE_HW_DIM) * CB_W_TILES;
-                cb_reserve_back(cb_gamma_stage, CB_W_TILES);
+                // ours to choose — see copy_l1_bytes). `chunk_off` is a whole number
+                // of 32-column tiles, so it never disturbs `lead`.
+                cb_reserve_back(cb_gamma_stage, CB_CHUNK_TILES);
                 const uint32_t row = get_write_ptr(cb_gamma_stage);
                 // Scratch lives in tile-rows 1.. of the same CB block, which tilize
                 // does copy into the gamma tile's rows 1..31 — harmless, because
                 // gamma_block consumes row 0 only (BroadcastDim::Row).
                 const uint32_t scratch = row + block_row_bytes;
-                noc_async_read(
-                    gamma_acc.get_noc_addr(0, gamma_read_offset), scratch, gamma_lead_bytes + gamma_slice_bytes);
-                noc_async_read_barrier();
-                copy_l1_bytes(row, scratch + gamma_lead_bytes, gamma_slice_bytes);
-                zero_l1_bytes(row + gamma_slice_bytes, block_row_bytes - gamma_slice_bytes);
-                cb_push_back(cb_gamma_stage, CB_W_TILES);
+                if (chunk_bytes) {
+                    noc_async_read(
+                        gamma_acc.get_noc_addr(0, gamma_read_offset + chunk_off),
+                        scratch,
+                        gamma_lead_bytes + chunk_bytes);
+                    noc_async_read_barrier();
+                    copy_l1_bytes(row, scratch + gamma_lead_bytes, chunk_bytes);
+                }
+                zero_l1_bytes(row + chunk_bytes, block_row_bytes - chunk_bytes);
+                cb_push_back(cb_gamma_stage, CB_CHUNK_TILES);
             }
         } else {
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
-            cb_reserve_back(cb_gamma_tiles, CB_W_TILES);
+            const uint32_t chunk_base = k * CB_CHUNK_TILES;
+            const uint32_t chunk_tiles =
+                (core_w > chunk_base) ? ((core_w - chunk_base < CB_CHUNK_TILES) ? core_w - chunk_base : CB_CHUNK_TILES)
+                                      : 0;
+            cb_reserve_back(cb_gamma_tiles, CB_CHUNK_TILES);
             const uint32_t dst = get_write_ptr(cb_gamma_tiles);
-            for (uint32_t c = 0; c < core_w; ++c) {
-                noc_async_read_tile(w_tile_start + c, gamma_acc, dst + c * gamma_tile_bytes);
+            for (uint32_t c = 0; c < chunk_tiles; ++c) {
+                noc_async_read_tile(w_tile_start + chunk_base + c, gamma_acc, dst + c * gamma_tile_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_gamma_tiles, CB_W_TILES);
+            cb_push_back(cb_gamma_tiles, CB_CHUNK_TILES);
         }
+    };
+
+    if constexpr (HAS_GAMMA && !CHUNKED) {
+        load_gamma_chunk(0);
     }
 
     // ---------------- load_block (per block) -----------------------------
-    if constexpr (IS_RM_IN && IS_SHARDED_IN) {
-        // Resident ROW_MAJOR shard: no DRAM leg. The shard's stick stride is its own
-        // width, not the group-uniform tile-row stride tilize<CB_W_TILES> consumes,
-        // so the sticks are re-strided CORE-LOCALLY (L1 -> L1) instead of being
-        // pinned. `stick_start` is 0 — a core addresses its own shard's page 0.
-        uint32_t sticks_done = 0;
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                uint32_t sticks_this = TILE_HW_DIM;
-                if (sticks_this > num_sticks - sticks_done) {
-                    sticks_this = num_sticks - sticks_done;
+    // The hidden axis is walked in NUM_CHUNKS chunks of CB_CHUNK_TILES; at
+    // NUM_CHUNKS == 1 every loop below runs once and this is the Phase 0 schedule.
+    // A TILE input needs no chunking at all — the block is either already resident
+    // (pinned shard) or read straight into its row-major place.
+    [[maybe_unused]] const auto acc_sticks = TensorAccessor(src_args, src_addr);
+    [[maybe_unused]] const auto acc_tiles = TensorAccessor(src_args, src_addr, get_tile_size(cb_input_tiles));
+    uint32_t sticks_done = 0;
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+
+        if constexpr (IS_RM_IN) {
+            constexpr uint32_t in_chunk_bytes = (get_tile_size(cb_input_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
+            // ROW_MAJOR input, resident shard or DRAM: `rows_t` 32-row groups of
+            // one hidden chunk each, re-strided into the group-uniform tile-row
+            // stride tilize<CB_CHUNK_TILES> consumes. The sharded leg is a
+            // core-local L1 -> L1 transfer (no DRAM crossing); the interleaved leg
+            // reads DRAM through the accessor.
+            for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
+                const uint32_t chunk_off = k * in_chunk_bytes;
+                const uint32_t chunk_bytes =
+                    (in_slice_bytes > chunk_off)
+                        ? ((in_slice_bytes - chunk_off < in_chunk_bytes) ? in_slice_bytes - chunk_off : in_chunk_bytes)
+                        : 0;
+                uint32_t done = sticks_done;
+                for (uint32_t r = 0; r < rows_t; ++r) {
+                    uint32_t sticks_this = TILE_HW_DIM;
+                    if (sticks_this > num_sticks - done) {
+                        sticks_this = num_sticks - done;
+                    }
+                    if constexpr (IS_SHARDED_IN) {
+                        read_shard_rows<cb_input_rm, CB_CHUNK_TILES>(
+                            src_addr, shard_row_bytes, sticks_this, chunk_bytes, stick_start + done, chunk_off);
+                    } else {
+                        read_slice_rows<cb_input_rm, CB_CHUNK_TILES>(
+                            acc_sticks, sticks_this, chunk_bytes, stick_start + done, in_byte_offset + chunk_off);
+                    }
+                    done += sticks_this;
                 }
-                read_shard_rows<cb_input_rm, CB_W_TILES>(
-                    src_addr, shard_row_bytes, sticks_this, in_slice_bytes, stick_start + sticks_done);
-                sticks_done += sticks_this;
             }
-        }
-    } else if constexpr (IS_SHARDED_IN) {
-        // Resident TILE shard: cb_input_tiles is PINNED zero-copy over it, so the
-        // block is already in place and "load_block" is the CB handshake alone —
-        // zero NoC traffic. The shard's pages are tile-row-major at row stride
-        // CB_W_TILES, exactly the block layout compute expects, and the shard holds
-        // >= the whole row assignment, so the per-block push walks straight through
-        // it and never wraps.
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+            // Every chunk re-walked the same 32-row groups; advance past them once.
+            const uint32_t block_sticks = rows_t * TILE_HW_DIM;
+            sticks_done += (block_sticks > num_sticks - sticks_done) ? (num_sticks - sticks_done) : block_sticks;
+        } else if constexpr (IS_SHARDED_IN) {
+            // Resident TILE shard: cb_input_tiles is PINNED zero-copy over it, so the
+            // block is already in place and "load_block" is the CB handshake alone —
+            // zero NoC traffic. The shard's pages are tile-row-major at row stride
+            // CB_W_TILES, exactly the block layout compute expects, and the shard holds
+            // >= the whole row assignment, so the per-block push walks straight through
+            // it and never wraps.
             const uint32_t pages = rows_t * CB_W_TILES;
             cb_reserve_back(cb_input_tiles, pages);
             cb_push_back(cb_input_tiles, pages);
-        }
-    } else if constexpr (IS_RM_IN) {
-        const auto acc = TensorAccessor(src_args, src_addr);
-        uint32_t sticks_done = 0;
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                uint32_t sticks_this = TILE_HW_DIM;
-                if (sticks_this > num_sticks - sticks_done) {
-                    sticks_this = num_sticks - sticks_done;
-                }
-                read_slice_rows<cb_input_rm, CB_W_TILES>(
-                    acc, sticks_this, in_slice_bytes, stick_start + sticks_done, in_byte_offset);
-                sticks_done += sticks_this;
-            }
-        }
-    } else {
-        const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
-        const auto acc = TensorAccessor(src_args, src_addr, tile_bytes);
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+        } else {
+            const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
             const uint32_t pages = rows_t * CB_W_TILES;
             cb_reserve_back(cb_input_tiles, pages);
             const uint32_t dst = get_write_ptr(cb_input_tiles);
@@ -365,12 +412,20 @@ void kernel_main() {
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
                 for (uint32_t c = 0; c < core_w; ++c) {
-                    noc_async_read_tile(base + c, acc, dst + (r * CB_W_TILES + c) * tile_bytes);
+                    noc_async_read_tile(base + c, acc_tiles, dst + (r * CB_W_TILES + c) * tile_bytes);
                 }
             }
             // The whole block behind one barrier — never one barrier per tile.
             noc_async_read_barrier();
             cb_push_back(cb_input_tiles, pages);
+        }
+
+        // Chunked gamma is consumed by the apply pass of THIS block, after every
+        // input chunk — the same order the reader pushes them in.
+        if constexpr (HAS_GAMMA && CHUNKED) {
+            for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
+                load_gamma_chunk(k);
+            }
         }
     }
 }

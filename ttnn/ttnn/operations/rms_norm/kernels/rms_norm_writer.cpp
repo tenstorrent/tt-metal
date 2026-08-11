@@ -86,7 +86,12 @@ FORCE_INLINE void write_slice_rows(
     cb_wait_front(cb_id, cb_w_tiles);
     uint32_t l1_addr = get_read_ptr(cb_id);
     for (uint32_t r = 0; r < rows; ++r) {
-        noc_async_write(l1_addr, acc.get_noc_addr(start_page + r, byte_offset), slice_bytes);
+        // `slice_bytes == 0`: a hidden chunk entirely past this core's valid
+        // slice. Its pages are still consumed (the quantum is uniform), just
+        // never stored.
+        if (slice_bytes) {
+            noc_async_write(l1_addr, acc.get_noc_addr(start_page + r, byte_offset), slice_bytes);
+        }
         l1_addr += block_row_bytes;
     }
     // One barrier per 32-row block == cb_w_tiles tiles per barrier.
@@ -100,17 +105,25 @@ FORCE_INLINE void write_slice_rows(
 // goes out as ONE transfer instead of 32.
 template <uint32_t cb_id, uint32_t cb_w_tiles>
 FORCE_INLINE void write_shard_rows(
-    uint32_t base, uint32_t shard_row_bytes, uint32_t rows, uint32_t slice_bytes, uint32_t start_page) {
+    uint32_t base,
+    uint32_t shard_row_bytes,
+    uint32_t rows,
+    uint32_t slice_bytes,
+    uint32_t start_page,
+    uint32_t byte_offset) {
     constexpr uint32_t block_row_bytes = (get_tile_size(cb_id) / TILE_HW_DIM) * cb_w_tiles;
     if (slice_bytes == block_row_bytes && shard_row_bytes == block_row_bytes) {
         cb_wait_front(cb_id, cb_w_tiles);
         noc_async_write(
-            get_read_ptr(cb_id), ::get_noc_addr(base + start_page * shard_row_bytes), rows * block_row_bytes);
+            get_read_ptr(cb_id),
+            ::get_noc_addr(base + start_page * shard_row_bytes + byte_offset),
+            rows * block_row_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_id, cb_w_tiles);
         return;
     }
-    write_slice_rows<cb_id, cb_w_tiles>(LocalShardAccessor{base, shard_row_bytes}, rows, slice_bytes, start_page, 0);
+    write_slice_rows<cb_id, cb_w_tiles>(
+        LocalShardAccessor{base, shard_row_bytes}, rows, slice_bytes, start_page, byte_offset);
 }
 }  // namespace
 
@@ -123,7 +136,13 @@ void kernel_main() {
     constexpr uint32_t W_GROUP_SIZE = get_compile_time_arg_val(3);
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(4);
     constexpr bool IS_SHARDED_OUT = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t MCAST_CT_BASE = 6;
+    // Block extent along `hidden` of the streaming CBs (cb_output_rm, and
+    // cb_output_tiles on the interleaved leg). Equal to CB_W_TILES — one chunk,
+    // the unchunked schedule — unless a resident shard pinned a hidden slice too
+    // wide to hold. See the compute kernel's "HIDDEN-AXIS CHUNKING" note.
+    constexpr uint32_t CB_CHUNK_TILES = get_compile_time_arg_val(6);
+    constexpr uint32_t NUM_CHUNKS = (CB_W_TILES + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
+    constexpr uint32_t MCAST_CT_BASE = 7;
     constexpr uint32_t MCAST_RT_BASE = 16;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
@@ -172,21 +191,45 @@ void kernel_main() {
     [[maybe_unused]] const auto out_acc = TensorAccessor(dst_args, dst_addr);
 
     // --- store_block: drain one output block to DRAM -------------------------
+    // The hidden axis is drained in NUM_CHUNKS chunks of CB_CHUNK_TILES, in the
+    // order compute produces them; at NUM_CHUNKS == 1 every loop runs once and this
+    // is the Phase 0 schedule. A TILE output needs no chunking — it is either the
+    // pinned shard (compute packed straight into it) or written from a whole-block
+    // CB the interleaved leg never chunks.
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
-        if constexpr (IS_RM_OUT && IS_SHARDED_OUT) {
-            // Resident ROW_MAJOR output shard: no DRAM leg. untilize emits the
-            // group-uniform tile-row stride, which is not the shard's stick stride,
-            // so the sticks are re-strided CORE-LOCALLY into this core's own shard.
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                uint32_t sticks_this = TILE_HW_DIM;
-                if (sticks_this > num_sticks - sticks_done) {
-                    sticks_this = num_sticks - sticks_done;
+        if constexpr (IS_RM_OUT) {
+            constexpr uint32_t out_chunk_bytes = (get_tile_size(cb_output_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
+            // ROW_MAJOR output, resident shard or DRAM. untilize emits the
+            // group-uniform tile-row stride, which is neither the shard's stick
+            // stride nor the DRAM row, so both legs re-stride the sticks — the
+            // sharded one core-locally (L1 -> L1, no DRAM crossing).
+            for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
+                const uint32_t chunk_off = k * out_chunk_bytes;
+                const uint32_t chunk_bytes =
+                    (out_slice_bytes > chunk_off)
+                        ? ((out_slice_bytes - chunk_off < out_chunk_bytes) ? out_slice_bytes - chunk_off
+                                                                           : out_chunk_bytes)
+                        : 0;
+                uint32_t done = sticks_done;
+                for (uint32_t r = 0; r < rows_t; ++r) {
+                    uint32_t sticks_this = TILE_HW_DIM;
+                    if (sticks_this > num_sticks - done) {
+                        sticks_this = num_sticks - done;
+                    }
+                    if constexpr (IS_SHARDED_OUT) {
+                        write_shard_rows<cb_output_rm, CB_CHUNK_TILES>(
+                            dst_addr, shard_row_bytes, sticks_this, chunk_bytes, stick_start + done, chunk_off);
+                    } else {
+                        write_slice_rows<cb_output_rm, CB_CHUNK_TILES>(
+                            out_acc, sticks_this, chunk_bytes, stick_start + done, out_byte_offset + chunk_off);
+                    }
+                    done += sticks_this;
                 }
-                write_shard_rows<cb_output_rm, CB_W_TILES>(
-                    dst_addr, shard_row_bytes, sticks_this, out_slice_bytes, stick_start + sticks_done);
-                sticks_done += sticks_this;
             }
+            // Every chunk re-walked the same 32-row groups; advance past them once.
+            const uint32_t block_sticks = rows_t * TILE_HW_DIM;
+            sticks_done += (block_sticks > num_sticks - sticks_done) ? (num_sticks - sticks_done) : block_sticks;
         } else if constexpr (IS_SHARDED_OUT) {
             // Resident TILE output shard: cb_output_tiles is PINNED zero-copy over
             // it, so compute packed the block straight into its final home and
@@ -195,16 +238,6 @@ void kernel_main() {
             // padding, which is outside the logical tensor and never read back.
             cb_wait_front(cb_output_tiles, rows_t * CB_W_TILES);
             cb_pop_front(cb_output_tiles, rows_t * CB_W_TILES);
-        } else if constexpr (IS_RM_OUT) {
-            for (uint32_t r = 0; r < rows_t; ++r) {
-                uint32_t sticks_this = TILE_HW_DIM;
-                if (sticks_this > num_sticks - sticks_done) {
-                    sticks_this = num_sticks - sticks_done;
-                }
-                write_slice_rows<cb_output_rm, CB_W_TILES>(
-                    out_acc, sticks_this, out_slice_bytes, stick_start + sticks_done, out_byte_offset);
-                sticks_done += sticks_this;
-            }
         } else {
             for (uint32_t r = 0; r < rows_t; ++r) {
                 cb_wait_front(cb_output_tiles, CB_W_TILES);

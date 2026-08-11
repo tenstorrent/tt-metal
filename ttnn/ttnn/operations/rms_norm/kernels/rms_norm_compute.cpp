@@ -34,6 +34,30 @@
 // apply phases DO cover the pad columns (uniform, contiguous, no stride) — their
 // output is simply never written to DRAM by the writer.
 //
+// HIDDEN-AXIS CHUNKING (op_design.md regime R3, Refinement 2b). CB_CHUNK_TILES
+// (WC) is the block extent along `hidden` of every buffer that only STREAMS over
+// it — cb_gamma_tiles, cb_normed, cb_output_*, cb_input_rm. At WC == CB_W_TILES
+// (NUM_CHUNKS == 1, the default for every interleaved geometry) the loops below
+// run exactly once and this file is the unchunked schedule. When a resident
+// shard PINS both G and C — a HEIGHT shard hands one core the tensor's whole
+// hidden slice — those buffers are what overruns L1, so the schedule walks the
+// hidden axis in NUM_CHUNKS = ceil(C / WC) chunks instead:
+//   * sumsq_block runs once per chunk and packs that chunk's partial Sum x^2
+//     into its OWN stat column, so reduce_stat_block (which already sums the
+//     `nc` columns of a tile-row) folds them together for free — no L1
+//     read-modify-write accumulator, and no change to the combine.
+//   * the apply pass runs once per chunk against the chunk's gamma slice.
+// The input block stays whole-resident either way (that is what keeps the input
+// to one crossing), so chunking never re-reads it.
+//
+// BLOCK LAYOUT of cb_input_tiles. A TILE input — interleaved (reader-written) or
+// a pinned shard — is row-major at row stride CB_W_TILES. A ROW_MAJOR input is
+// staged by `tilize<CB_CHUNK_TILES>` per chunk, which emits chunks
+// back-to-back, so it is CHUNK-major: tile (r, g) sits at
+// (g / WC) * rows * WC + r * WC + g % WC. `in_ref()` is the one place that knows
+// which; every phase addresses the block through it. The two coincide at
+// NUM_CHUNKS == 1.
+//
 // Helper substitutions: none. Every phase is a kernel_lib helper call
 // (eltwise_chain / eltwise_convenience / reduce / tilize / untilize). The
 // caller-managed (None, None) CB policies on sumsq_block and mask_tail_block are
@@ -89,6 +113,17 @@ void kernel_main() {
     // two CBs share a page format (disjoint lifetimes, same producer + consumer).
     constexpr bool ALIAS_GAMMA_RM = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t cb_gamma_stage = ALIAS_GAMMA_RM ? cb_input_rm : cb_gamma_rm;
+    // Block extent along `hidden` of the buffers that only STREAM over it. Equal
+    // to CB_W_TILES (one chunk) unless a resident shard pinned C too wide to fit.
+    constexpr uint32_t CB_CHUNK_TILES = get_compile_time_arg_val(9);
+    constexpr uint32_t NUM_CHUNKS = (CB_W_TILES + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
+    constexpr bool CHUNKED = NUM_CHUNKS > 1;
+    // The only chunked configuration with a TILE output is a PINNED output shard
+    // (the host gates chunking on a resident, uniform-width shard), whose layout
+    // is the shard's own row-major-C one. The apply therefore packs into it at a
+    // strided offset under a caller-managed reserve/push, instead of streaming
+    // chunk-major pages the writer would then have to un-permute.
+    constexpr bool OUT_STRIDED = CHUNKED && !IS_RM_OUT;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(1);
@@ -108,15 +143,33 @@ void kernel_main() {
     }
 
     // Hidden tiles handled by the bulk accumulation, and the stat-column layout.
+    // ONE stat column per bulk chunk (plus the tail's): reduce_stat_block already
+    // sums a tile-row's `nc` columns, so the per-chunk partials fold there instead
+    // of through an L1 read-modify-write accumulator. Unchunked this is the
+    // Phase 0 expression (bulk_cols = c_full > 0).
     const uint32_t c_full = core_w - has_tail;
-    const uint32_t bulk_cols = (c_full > 0) ? 1u : 0u;
+    const uint32_t bulk_cols = (c_full + CB_CHUNK_TILES - 1) / CB_CHUNK_TILES;
     const uint32_t nc = bulk_cols + has_tail;  // stat columns per tile-row
     const uint32_t tail_col = bulk_cols;
 
-    // ---- gamma is resident for the whole kernel: tilize it once (RM gamma) ----
-    if constexpr (HAS_GAMMA && IS_RM_GAMMA) {
-        // Converts the single stick to the row-0-valid tile form; TILE gamma
-        // already arrives in that form from the reader.
+    // Tile (r, g) of the resident input block, as (base, row_stride) — the ONE
+    // place that knows whether the block is row-major (TILE input, stride
+    // CB_W_TILES) or chunk-major (ROW_MAJOR input, staged chunk by chunk by
+    // tilize<CB_CHUNK_TILES>). Identical at NUM_CHUNKS == 1.
+    auto in_ref = [](uint32_t g, uint32_t rows_t) -> ckl::StridedTileRange {
+        if constexpr (IS_RM_IN) {
+            const uint32_t k = g / CB_CHUNK_TILES;
+            return ckl::StridedTileRange{k * rows_t * CB_CHUNK_TILES + (g - k * CB_CHUNK_TILES), CB_CHUNK_TILES};
+        } else {
+            return ckl::StridedTileRange{g, CB_W_TILES};
+        }
+    };
+
+    // ---- gamma (RM): tilize the stick into the row-0-valid tile form ----
+    // Unchunked, gamma is read ONCE for the whole kernel and never popped. Chunked,
+    // one chunk's slice is resident at a time, so the reader re-feeds it per chunk
+    // inside the block loop and `apply_chunk` pops it there.
+    if constexpr (HAS_GAMMA && IS_RM_GAMMA && !CHUNKED) {
         ckl::tilize<CB_W_TILES, cb_gamma_stage, cb_gamma_tiles>(1);
     }
 
@@ -124,19 +177,28 @@ void kernel_main() {
         const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
         // ---------------- tilize_in_block (RM input only) ----------------
+        // One tilize per chunk: cb_input_rm holds one chunk's width, and the
+        // chunks land back-to-back in cb_input_tiles (the chunk-major layout
+        // `in_ref` decodes). NUM_CHUNKS == 1 is the single unchunked call.
         if constexpr (IS_RM_IN) {
-            ckl::tilize<CB_W_TILES, cb_input_rm, cb_input_tiles>(rows_t);
+            for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
+                ckl::tilize<CB_CHUNK_TILES, cb_input_rm, cb_input_tiles>(rows_t);
+            }
         }
 
-        // The block stays resident: waited here, waited again by scale_block,
-        // popped exactly once (by scale_block) at the end.
-        cb_wait_front(cb_input_tiles, rows_t * CB_W_TILES);
+        // The whole block stays resident: waited here, read again by every apply
+        // chunk, popped exactly once at the end of the block.
+        const uint32_t in_block_pages = rows_t * (IS_RM_IN ? (NUM_CHUNKS * CB_CHUNK_TILES) : CB_W_TILES);
+        cb_wait_front(cb_input_tiles, in_block_pages);
 
         // ---------------- sumsq_block + mask_tail_block ----------------
         cb_reserve_back(cb_stat_sq, rows_t * nc);
-        if (c_full > 0) {
+        for (uint32_t k = 0; k < bulk_cols; ++k) {
+            const uint32_t chunk_base = k * CB_CHUNK_TILES;
+            const uint32_t cols = (c_full - chunk_base < CB_CHUNK_TILES) ? (c_full - chunk_base) : CB_CHUNK_TILES;
+            const ckl::StridedTileRange src = in_ref(chunk_base, rows_t);
             ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows_t, c_full),
+                ckl::EltwiseShape::grid(rows_t, cols),
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_input_tiles,
@@ -155,8 +217,7 @@ void kernel_main() {
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None,
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::PerRow>{
-                    ckl::StridedTileRange{0, CB_W_TILES}, ckl::StridedTileRange{0, CB_W_TILES}},
+                    ckl::DestAccumulation::PerRow>{src, src},
                 ckl::PackTile<ckl::output(
                     cb_stat_sq,
                     ckl::ReservePolicy::None,
@@ -165,7 +226,7 @@ void kernel_main() {
                     ckl::PackRelu::Disabled,
                     ckl::L1Accumulation::Disabled,
                     ckl::DestAccumulation::PerRow,
-                    ckl::TileOffset::Strided)>{ckl::StridedTileRange{0, nc}});
+                    ckl::TileOffset::Strided)>{ckl::StridedTileRange{k, nc}});
         }
         if (has_tail) {
             ckl::eltwise_chain(
@@ -182,7 +243,7 @@ void kernel_main() {
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Row,
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::Disabled>{ckl::StridedTileRange{core_w - 1, CB_W_TILES}},
+                    ckl::DestAccumulation::Disabled>{in_ref(core_w - 1, rows_t)},
                 ckl::Square<>{},
                 ckl::PackTile<ckl::output(
                     cb_stat_sq,
@@ -243,32 +304,102 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(cb_rstd_send)>{});
         }
 
-        // ---------------- scale_block (+ gamma_block) ----------------
+        // ---------------- scale_block (+ gamma_block), once per chunk ---------
         // cb_rstd is filled by THIS core's writer (multicast landing buffer on
-        // every group member, root included via INCLUDE_SRC loopback).
-        if constexpr (HAS_GAMMA) {
-            ckl::mul<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_rstd, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
-                ckl::output(cb_normed),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
-
-            ckl::mul<
-                ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
-                ckl::output(cb_output_tiles),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
-        } else {
-            ckl::mul<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_rstd, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
-                ckl::output(cb_output_tiles),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
+        // every group member, root included via INCLUDE_SRC loopback). It and the
+        // resident input block serve EVERY chunk, so both are caller-managed here:
+        // waited once, popped once, after the last chunk.
+        cb_wait_front(cb_rstd, rows_t);
+        if constexpr (OUT_STRIDED) {
+            cb_reserve_back(cb_output_tiles, rows_t * CB_W_TILES);
         }
+        for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
+            const uint32_t chunk_base = k * CB_CHUNK_TILES;
+            // A strided pack into the row-major output block must stop at column
+            // CB_W_TILES or it would spill into the next tile-row; a chunk-major
+            // streaming output carries the pad columns of the last chunk, exactly
+            // as the unchunked apply carries `CB_W_TILES - core_w`.
+            const uint32_t cols =
+                OUT_STRIDED ? ((CB_W_TILES - chunk_base < CB_CHUNK_TILES) ? (CB_W_TILES - chunk_base) : CB_CHUNK_TILES)
+                            : CB_CHUNK_TILES;
+            const ckl::StridedTileRange src = in_ref(chunk_base, rows_t);
+            constexpr auto in_spec = ckl::input(
+                cb_input_tiles,
+                ckl::WaitPolicy::None,
+                ckl::PopPolicy::None,
+                ckl::OperandKind::Block,
+                ckl::DataFormatReconfig::Enabled,
+                ckl::TileOffset::Strided);
+            constexpr auto rstd_spec =
+                ckl::input(cb_rstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Col);
+            constexpr auto gamma_spec =
+                ckl::input(cb_gamma_tiles, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row);
+            constexpr auto out_strided = ckl::output(
+                cb_output_tiles,
+                ckl::ReservePolicy::None,
+                ckl::PushPolicy::None,
+                ckl::DataFormatReconfig::Enabled,
+                ckl::PackRelu::Disabled,
+                ckl::L1Accumulation::Disabled,
+                ckl::DestAccumulation::Disabled,
+                ckl::TileOffset::Strided);
 
-        // ---------------- untilize_out_block (RM output only) ----------------
-        if constexpr (IS_RM_OUT) {
-            ckl::untilize<CB_W_TILES, cb_output_tiles, cb_output_rm>(rows_t);
+            if constexpr (HAS_GAMMA) {
+                if constexpr (IS_RM_GAMMA && CHUNKED) {
+                    // This chunk's gamma slice, re-fed by the reader per chunk.
+                    ckl::tilize<CB_CHUNK_TILES, cb_gamma_stage, cb_gamma_tiles>(1);
+                }
+                cb_wait_front(cb_gamma_tiles, CB_CHUNK_TILES);
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
+                    ckl::PackTile<ckl::output(cb_normed)>{});
+
+                if constexpr (OUT_STRIDED) {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::BinaryFpu<
+                            ckl::input(
+                                cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                            gamma_spec,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row>{},
+                        ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(rows_t, cols),
+                        ckl::BinaryFpu<
+                            ckl::input(
+                                cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                            gamma_spec,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row>{},
+                        ckl::PackTile<ckl::output(cb_output_tiles)>{});
+                }
+                if constexpr (CHUNKED) {
+                    cb_pop_front(cb_gamma_tiles, CB_CHUNK_TILES);
+                }
+            } else if constexpr (OUT_STRIDED) {
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
+                    ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
+            } else {
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::BinaryFpu<in_spec, rstd_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col>{src},
+                    ckl::PackTile<ckl::output(cb_output_tiles)>{});
+            }
+
+            // ---------------- untilize_out_block (RM output only) ------------
+            if constexpr (IS_RM_OUT) {
+                ckl::untilize<CB_CHUNK_TILES, cb_output_tiles, cb_output_rm>(rows_t);
+            }
         }
+        if constexpr (OUT_STRIDED) {
+            cb_push_back(cb_output_tiles, rows_t * CB_W_TILES);
+        }
+        cb_pop_front(cb_rstd, rows_t);
+        cb_pop_front(cb_input_tiles, in_block_pages);
     }
 }
