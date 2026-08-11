@@ -216,3 +216,28 @@ notification with code 144 (`128 + SIGTERM`).
 **Note for the next watch stand-up:** the watch has **no stop sentinel** — the only ways out are `MAX_TICKS` and a
 signal, while the drivers it monitors both take one (`.challenger-STOP`). Give it a `.watch-a-STOP` check in the
 `CHECK_EVERY` sleep loop so pausing the run and pausing its monitor are the same gesture.
+
+## RESUMED (dense only) then RE-PAUSED — 2026-08-11 10:59 / 11:10 UTC
+
+Relaunched `run_dense.sh` for the three cells left behind the pause; `.challenger-STOP` deliberately left in place
+so the 11 challenger cells stay held. Re-placed `.dense-STOP` at 11:10 so the driver finishes **phi-exp17** and
+then holds before llama31-8b.
+
+**Prerequisites that had to be fixed first, and they matter for the record:**
+
+| | |
+|---|---|
+| llama-3.2-1B-Instruct weights | **absent from the host entirely** — fetched, 2.31 GiB |
+| llama-3.1-8B-Instruct weights | **present as a 20 KB config stub only** — fetched, 14.97 GiB |
+| both repos | gated; the container's `HF_TOKEN` has access (verified 200 on both `config.json`) |
+| snapshots | all four present under `/home/mvasiljevic/.agentic-research-ro`; my first check looked in the wrong root and reported all four missing |
+| watch | restarted (`INTERVAL=1800 PUBLISH=1 PUBLISH_BOARD=1`), pid recorded in `.watch-a.pid` |
+
+**The run is against the completely unmodified v3 stage.** Verified: `SKILL_BR` =
+`mvasiljevic/qb2/skillexp/challenger-skill-v3` = `4ea2fb1fb7d` = `advchal-v3/stage-frozen^{}`; no commits of mine
+outside the docs branch; no fix branches pushed; every experiment worktree removed; the one modified file in the
+tree (`phi.../tt/optimized_decoder.py`) is **phi-exp17's own work in progress** and contains none of my markers.
+**Neither model fix and none of the gate changes were applied** — deliberately, so the control calibrates v3 as it
+actually ran.
+
+Predictions written down before the results: `skillexp/ADVCHAL-V3-DENSE-PREREG.md`.

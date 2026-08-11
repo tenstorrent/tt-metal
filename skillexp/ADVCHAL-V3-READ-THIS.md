@@ -36,6 +36,11 @@ taken until now to write v3's.
 | the oracle is exactly deterministic — 16 digits across a week and a different device | incumbent re-measure |
 | phi is **dense** and its drop is a **third cause** — v3's rope code. v2's implementation is free (−5.2 %, bit-identical PCC) and porting it recovers **−1,285 µs** | phi oracle, both trees, plus a transplant |
 | north-mini's win **stands** — its divergence *shrinks* with cache depth | prefill sweep, knob genuinely toggled |
+| **decode-only gating is not the defect** — a decode-only knob is unsafe **iff its output flows into the KV cache write**. Classifies all 7 audited knobs correctly | qwen ships a decode-only MLP knob, **bit-identical PCC on both kinds** with a real −1.0 % |
+| `full_attention`'s 740× lower sensitivity is **boundary luck, not structural** — same 0.015625 gap, perturbation also exceeds it, but the crossing permutes two *already-selected* experts instead of changing membership | router dumped for both kinds |
+| phi's defect is a **coupled pair** that cannot be split — interleaved RoPE arithmetic *requires* the value conversion; v2's sharded form is bit-identical and 5.2 % faster | 4-variant bisect |
+| **no `ladder_88` artefact exists at any point in either branch's history**, while the README and `legal_ladder` both claim it ran | full history search |
+| `gemma-4-12B exp11` shipped **−11.5 µs on a 62 ms model (0.018 %)** with `oracle_pcc: None` — a *shipped non-result* | its own `final.json` |
 
 ## What is still open — the honest register
 
@@ -43,8 +48,8 @@ taken until now to write v3's.
 
 | # | item | why it matters |
 |---|---|---|
-| 1 | **qwen3.6 `nofuse-noadvise` (−1,130 µs) has never been audited** | 17 % of everything v3 shipped, no phase/knob analysis done |
-| 2 | the 4 paused dense cells — gemma-4-12B `exp11`, llama-3.1-8B `exp17` (**the negative control**), llama-3.2-1B `exp17`, phi `exp17` | the control has never run in v3; without it there is no zero point |
+| ~~1~~ | ~~qwen3.6 never audited~~ — **done, clean**: decode-only but MLP-only, bit-identical PCC both kinds | closed |
+| 2 | the dense cells — `exp11` **done (−11.5 µs)**; phi `exp17` **in flight**; llama-3.1-8B `exp17` (**the control**) and llama-3.2-1B `exp17` queued behind a re-placed sentinel | predictions pre-registered in [`DENSE-PREREG`](ADVCHAL-V3-DENSE-PREREG.md) |
 | 3 | phi `-onA` (−1,254 µs) and north-mini `fuse-noadvise` (−351 µs) audited structurally, never measured | same pattern class |
 | 4 | **the two fixes have not been re-run through their cells** | staged, then paused for the frame question — see below |
 
@@ -52,14 +57,15 @@ taken until now to write v3's.
 
 | # | item |
 |---|---|
-| 5 | `full_attention`'s router logit gap was never dumped, so *why* it is 740× less sensitive is inferred, not measured |
+| ~~5~~ | ~~full_attention's logit gap never dumped~~ — **done**: same gap, perturbation also exceeds it, crossing is *inside* the selected set. Boundary luck, so its −1,198 µs is not structurally safe |
 | 6 | why the gemma perturbation **grows** with prefill length (measured; my prediction had the sign backwards) |
-| 7 | phi's defect is not isolated to a line — the transplant works, the bisect was not done |
+| ~~7~~ | ~~phi's defect not isolated~~ — **bisected**: a coupled pair (interleaved arithmetic + value conversion) that cannot be split; the structure is the cause, not any line |
 | 8 | my phi re-run reads **0.9849539** where the cell recorded **0.9173130**; both fail, neither explains the other |
-| 9 | gemma's README claims a `ladder_88` run with **no measurement file** — the run's two records disagree |
+| ~~9~~ | ~~ladder_88 contradiction~~ — **resolved as far as artefacts allow**: zero `ladder_88` files at any commit in either branch's history |
 | 10 | **P3**: v2 and v3 report 0.99931 vs 0.99469 for the same g26B pair; unresolved since the run |
 | 11 | whether `drop_index=1` holds at production prefill (1024). Tested to 64; beyond that the fixture leaves its supported regime |
-| 12 | gemma-4-26B real weights are **absent from this host** (28 KB, config only) while every gemma cell reports `oracle_weights: real`; the layer-0 tensors are range-fetchable, so the string is unverified rather than false |
+| 12 | gemma-4-26B real weights are **absent from this host** (28 KB, config only) while every gemma cell reports `oracle_weights: real`; layer-0 tensors are range-fetchable, so the string is unverified rather than false |
+| 12b | **llama-3.1-8B's weights were a 20 KB config stub and llama-3.2-1B's were absent entirely** until fetched at 11:05 on 2026-08-11, yet v2's `exp17` cell records `oracle_weights: real`. Its `oracle_scope` says *"unchanged frozen incumbent"*, i.e. it cited the incumbent's existing artefact rather than running one — defensible for a cell that shipped nothing, but the `real` string is still unverified |
 
 **Stage changes designed, not implemented**
 
