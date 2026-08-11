@@ -527,6 +527,8 @@ verdict, so you can jump rather than read 3,900 lines.
 - **§6.68** — the stale-rejection sweep comes back EMPTY, and that is the useful result
 - **§6.69** — there is no prefill length limit; utterance length is `max_seq_len` and costs DRAM,
   not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
+- **§6.70** — runs on tt-metal main +777 commits with **no source changes** and the same speed;
+  acoustic codes 45→40 (kernel rounding, toward the reference)
 
 **Shipped, in order of size:** §6.65 traced frame loop (−4.2 ms), §6.67 sharded decode
 norm (−5.4), §6.52 matmul program configs (−4.2), §6.62 residual-as-bias (−1.9, block only),
@@ -4394,6 +4396,52 @@ frame *uniformly and independently of position* — which is exactly what a hard
 would also look like. Idle the box before timing anything on this fork. This is the third time a
 headline number on this branch has been contaminated by something outside the model (§6.21's
 warmup case in the mean, §6.63's compare-against-a-recorded-number).
+
+### 6.70 — the port runs on tt-metal main 777 commits newer, unchanged, at the same speed
+
+Our merge-base is `3e153a8842` (2026-07-21); main is `8474cb022b` (2026-08-11). **777 commits** of
+drift. Tested in a separate worktree with its own build (`/localdev/.../tt-metal-latest`), so the
+validated tree was never at risk.
+
+**Why this was cheap and safe, and worth checking before any future rebase:** our 157 commits touch
+**only** `models/experimental/voxtral_tts/`, and main has touched that directory **0 times**. The
+histories are disjoint, so there is nothing to conflict. The test applied our directory verbatim on
+top of main rather than replaying 157 commits — same delta, less to go wrong.
+
+| | ours (HEAD) | main +777 |
+|---|---|---|
+| build | — | clean, **18 min** (ccache, 8 cores) |
+| source changes needed | — | **none** |
+| 132 tests | pass | **pass** |
+| long-form ms/frame (cases 2/3/10) | 27.824 | **27.749** |
+| long-form WER | 0 of 298 | **0 of 298** |
+| `[END_AUDIO]` | 15/15 | **15/15** |
+| acoustic codes vs fp32 ref | 45/864 | **40/864** |
+| semantic codes | 0 mismatches | **0 mismatches** |
+| short-form WER | 4 of 42 | 7 of 42 |
+
+**None of the 67 ttnn symbols `tt/` uses was renamed or removed.** The commits touching our hot-path
+ops (`rotary_embedding_hf`, `paged_update_cache`, `nlp_create_qkv_heads_decode`) are the tensor
+namespace migration (#50642) and a runtime-args change (#50345) — internal, no signature change.
+
+**Speed is unchanged.** 27.749 vs 27.824 is 0.075 ms against §6.63's 0.390 ms repeatability floor,
+and a warm three-config A/B run back to back read 28.27 vs 28.02. Measured on an idle box, both
+arms in one session — §6.69's contamination lesson applies with force here.
+
+**The one real difference is the acoustic codes, 45 → 40.** Deterministic, every diff off-by-one,
+semantic tokens bit-identical, and in the direction of the fp32 reference. That is a kernel rounding
+change, not a structural one.
+
+**The short-form 4 → 7 is NOT a regression and should not be read as one.** The two builds produce
+*different audio*: 1754 vs 1771 total frames, and case 10 is 184 frames against 237. Once the code
+trajectory diverges the utterances are different samples, so 42 words compares two different
+generations rather than the same one degraded. §6.7 already classes that bucket as seed noise.
+Resolving it needs ≥3 seeds, which is the gate to run **if we decide to migrate** — not evidence
+against migrating.
+
+**Do not quote the scorer's own "mean gen ms/frame" line** (35.50 / 36.63 here). It includes case 0,
+which carries kernel compilation and which ONBOARDING §4 says must be excluded. The comparable
+numbers are the cases-2/3/10 means above.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
