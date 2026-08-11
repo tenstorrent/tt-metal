@@ -28,15 +28,80 @@ using ttnn::operations::data_movement::squeeze_or_unsqueeze_shape_to_ND;
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
-ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
-    ttsl::SmallVector<uint32_t> updated_shape;
-    size_t input_rank = input_shape.rank();
-    for (size_t i = 0; i < input_rank - 2; i++) {
-        updated_shape.push_back(input_shape[i]);
+ttnn::Shape compute_padded_logical_shape(const ttnn::Shape& input_shape, const ttsl::SmallVector<PadSpecDim>& padding) {
+    ttsl::SmallVector<uint32_t> output_shape(input_shape.rank());
+    for (size_t i = 0; i < input_shape.rank(); i++) {
+        output_shape[i] = padding[i].before_elements + input_shape[i] + padding[i].after_elements;
     }
-    updated_shape.push_back(padded_shape[-2]);
-    updated_shape.push_back(padded_shape[-1]);
-    return ttnn::Shape(std::move(updated_shape));
+    return ttnn::Shape(std::move(output_shape));
+}
+
+// For rank > 4, leading dimensions [0, rank-3) are merged into a single axis by squeeze_from_ND_to_4D and
+// cannot be padded through the 4D kernel directly. Reshape to 4D, pad the collapsed axis, reshape back.
+ttnn::Tensor pad_leading_dimension_via_reshape(
+    const ttnn::Tensor& input_tensor,
+    int dim,
+    const PadSpecDim& pad_spec,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto& shape = input_tensor.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    TT_FATAL(
+        rank > 4 && dim >= 0 && dim < rank - 3,
+        "pad_leading_dimension_via_reshape: expected dim in [0, rank-3), got dim {} for rank {}",
+        dim,
+        rank);
+
+    uint32_t before = 1;
+    for (int i = 0; i < dim; i++) {
+        before *= shape[i];
+    }
+
+    uint32_t middle = 1;
+    for (int i = dim; i < rank - 2; i++) {
+        middle *= shape[i];
+    }
+
+    auto reshaped = ttnn::operations::experimental::quasar::reshape(
+        input_tensor, ttnn::Shape({before, middle, shape[-2], shape[-1]}));
+
+    uint32_t inner_extent = 1;
+    for (int i = dim + 1; i < rank - 2; i++) {
+        inner_extent *= shape[i];
+    }
+
+    ttsl::SmallVector<PadSpecDim> padding_4d = {
+        {0, 0}, {pad_spec.before_elements * inner_extent, pad_spec.after_elements * inner_extent}, {0, 0}, {0, 0}};
+
+    auto padded = ttnn::operations::experimental::quasar::pad(
+        reshaped, padding_4d, value, use_multicore, memory_config_arg, sub_core_grids);
+
+    ttsl::SmallVector<uint32_t> output_shape(shape.view().begin(), shape.view().end());
+    output_shape[dim] += pad_spec.before_elements + pad_spec.after_elements;
+    return ttnn::operations::experimental::quasar::reshape(padded, ttnn::Shape(output_shape));
+}
+
+ttnn::Tensor pad_leading_dimensions(
+    const ttnn::Tensor& input_tensor,
+    ttsl::SmallVector<PadSpecDim>& padding,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto result = input_tensor;
+    const int rank = static_cast<int>(input_tensor.logical_shape().rank());
+    const int leading_dims_end = rank - 3;
+    for (int dim = 0; dim < leading_dims_end; dim++) {
+        if (padding[dim].before_elements == 0 && padding[dim].after_elements == 0) {
+            continue;
+        }
+        result = pad_leading_dimension_via_reshape(
+            result, dim, padding[dim], value, use_multicore, memory_config_arg, sub_core_grids);
+        padding[dim] = {0, 0};
+    }
+    return result;
 }
 
 ttnn::Tensor pad_impl(
@@ -272,8 +337,10 @@ ttnn::Tensor invoke_rm(
             output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
-        output_tensor = ttnn::operations::experimental::quasar::reshape(
-            output_tensor, update_original_shape(output_tensor.padded_shape(), input_tensor.logical_shape()));
+        const auto output_logical_shape = compute_padded_logical_shape(input_tensor.logical_shape(), padding_vec);
+        const auto output_padded_shape = compute_padded_logical_shape(input_tensor.padded_shape(), padding_vec);
+        output_tensor =
+            ttnn::operations::experimental::quasar::reshape(output_tensor, output_logical_shape, output_padded_shape);
     }
     return output_tensor;
 }
@@ -388,23 +455,23 @@ ttnn::Tensor pad(
         return input_tensor;
     }
 
+    ttnn::Tensor working_tensor = input_tensor;
     if (original_rank > 4) {
-        const auto first_pad_idx =
-            std::find_if(
-                working_padding.begin(), working_padding.end(), [](auto& p) { return p.after_elements != 0; }) -
-            working_padding.begin();
-        TT_FATAL(
-            first_pad_idx >= original_rank - 3,
-            "ttnn::pad only supports padding on the lowest 3 dimensions for tensors with rank > 4 {}",
-            first_pad_idx);
+        working_tensor = operations::experimental::quasar::detail::pad_leading_dimensions(
+            working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
+        if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
+                return p.before_elements == 0 && p.after_elements == 0;
+            })) {
+            return working_tensor;
+        }
     }
 
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+    if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
         return operations::experimental::quasar::detail::invoke_tile(
-            input_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
+            working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
     }
     return operations::experimental::quasar::detail::invoke_rm(
-        input_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
+        working_tensor, working_padding, value, use_multicore, memory_config_arg, sub_core_grids);
 }
 
 ttnn::Tensor pad(

@@ -665,9 +665,7 @@ def _unsqueeze(smaller, larger, fill):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.bfloat8_b])
 def test_pad_tile(shape, padding, dtype, device):
-    if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
-        pytest.xfail("Can't pad upper dims with rank>4")
-
+    # Padding upper dims of a rank>4 tensor used to xfail; supported since issue #38144.
     if len(shape) < len(padding):
         shape = _unsqueeze(shape, padding, 1)
     elif len(padding) < len(shape):
@@ -1336,3 +1334,214 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype, e
             use_multicore=True,
             memory_config=output_memory_config,
         )
+
+
+def _ttnn_padding_to_torch(padding):
+    """Convert ttnn per-dim (before, after) padding to torch.nn.functional.pad format."""
+    return tuple(v for i in reversed(range(len(padding))) for v in padding[i])
+
+
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Issue #38144 repro: rank 5, pad dim 1 (reshape path)
+        ((1, 4, 4, 4, 128), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0))),
+        # Rank 5: leading dims (reshape path)
+        ((2, 4, 4, 4, 128), ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        # Rank 5: dim rank-3 is the first dim surviving squeeze-to-4D; the old shape
+        # restoration dropped padding on every dim above the last two.
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (1, 2), (0, 0), (0, 0))),
+        # Rank 5: trailing dims (squeeze-to-4D path)
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 3))),
+        # Rank 6: leading dims (reshape path)
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        # Rank 6: trailing dims (squeeze-to-4D path)
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1))),
+        # Several dims at once: each leading dim is padded by its own reshape pass,
+        # so later passes must see the shape produced by the earlier ones.
+        ((2, 4, 4, 4, 128), ((1, 1), (0, 2), (0, 0), (0, 0), (0, 0))),
+        ((2, 3, 4, 5, 8), ((1, 1), (0, 1), (2, 0), (0, 2), (1, 1))),
+        ((2, 2, 3, 4, 4, 16), ((0, 1), (0, 0), (1, 0), (0, 0), (0, 0), (0, 2))),
+        # Rank 7/8, and shapes that are not tile/page aligned.
+        ((2, 2, 2, 2, 2, 4, 16), ((0, 0), (0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
+        ((3, 3, 5, 7, 13), ((0, 0), (1, 2), (0, 0), (0, 0), (0, 0))),
+    ],
+    ids=[
+        "rank5_dim1_issue38144",
+        "rank5_dim0",
+        "rank5_dim1_after_only",
+        "rank5_dim2",
+        "rank5_dim3",
+        "rank5_dim4",
+        "rank6_dim1",
+        "rank6_dim2",
+        "rank6_dim3",
+        "rank6_dim4",
+        "rank6_dim5",
+        "rank5_dim0_and_dim1",
+        "rank5_all_dims",
+        "rank6_dim0_dim2_dim5",
+        "rank7_dim2",
+        "rank8_dim1",
+        "rank8_dim5",
+        "rank5_unaligned",
+    ],
+)
+@pytest.mark.parametrize("value", [0.0, 3.5])
+def test_pad_rank_gt4_all_dimensions(device, shape, padding, value):
+    """Regression test for issue #38144: ttnn.pad must support padding across ranks > 4."""
+    torch.manual_seed(0)
+
+    torch_padding = _ttnn_padding_to_torch(padding)
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    output_tensor = ttnn.pad(input_tensor, padding, value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Leading dims (reshape path). Tile layout has no front-padding support on device,
+        # so these only exercise back padding.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))),
+        ((2, 4, 4, 32, 128), ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 32, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        # dim rank-3 (squeeze-to-4D path) and a combination across both paths.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0))),
+        ((2, 4, 4, 32, 128), ((0, 1), (0, 2), (0, 1), (0, 0), (0, 0))),
+        # Height/width padding must stay tile aligned.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 32), (0, 64))),
+    ],
+    ids=[
+        "rank5_dim1",
+        "rank5_dim0",
+        "rank6_dim2",
+        "rank5_dim2",
+        "rank5_dim0_dim1_dim2",
+        "rank5_dim1_with_hw",
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rank_gt4_tile_layout(device, shape, padding, dtype):
+    """Issue #38144 for tile layout: rank > 4 upper dims must round-trip through the 4D kernel."""
+    torch.manual_seed(0)
+    value = 0.0
+
+    torch_padding = _ttnn_padding_to_torch(padding)
+    if dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(-100, 100, shape, dtype=torch.int32)
+    else:
+        torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, value))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.int32, ttnn.uint32])
+def test_pad_rank_gt4_row_major_integer_dtypes(device, dtype):
+    """Leading-dim padding of a rank > 4 tensor must not depend on the element type."""
+    torch.manual_seed(0)
+    shape = (2, 4, 4, 4, 128)
+    padding = ((1, 0), (1, 1), (0, 0), (0, 0), (0, 2))
+
+    torch_input_tensor = torch.randint(0, 100, shape, dtype=torch.int32)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0)).to(torch.int32)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "padding", [((0, 0), (0, 1), (0, 0), (0, 0), (0, 0)), ((0, 0), (0, 0), (0, 1), (0, 0), (0, 0))]
+)
+def test_pad_rank_gt4_tile_bfloat8_b(device, padding):
+    """bfloat8_b is padded via a bfloat16 round trip; make sure the rank > 4 path preserves that."""
+    torch.manual_seed(0)
+    shape = (1, 4, 4, 32, 128)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor.float(), output_tensor.float(), 0.999)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_pad_rank_gt4_memory_config(device, layout, memory_config):
+    """The requested output memory config must survive the reshape/pad/reshape round trip."""
+    torch.manual_seed(0)
+    shape = (1, 4, 4, 32, 128)
+    # Tile layout does not support front padding on device.
+    padding = ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    output = ttnn.pad(input_tensor, padding, 0.0, memory_config=memory_config)
+
+    assert output.memory_config().buffer_type == memory_config.buffer_type
+    output_tensor = ttnn.to_torch(output)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+def test_pad_rank_gt4_padding_shorter_than_rank(device):
+    """A padding spec shorter than the rank is left-filled with zeros, as for rank <= 4."""
+    torch.manual_seed(0)
+    shape = (1, 4, 4, 4, 128)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    full_padding = ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(full_padding), value=0.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, [(0, 2), (0, 0), (0, 0)], 0.0))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "padding",
+    [
+        ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0)),
+        ((0, 0), (1, 0), (0, 0), (0, 0), (0, 0)),
+        ((0, 0), (0, 0), (1, 0), (0, 0), (0, 0)),
+    ],
+    ids=["dim0", "dim1", "dim2"],
+)
+def test_pad_rank_gt4_tile_front_padding_not_supported(device, padding, expect_error):
+    """Front padding stays unsupported in tile layout, on upper dims of rank > 4 as well."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((2, 4, 4, 32, 128), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
+        ttnn.pad(input_tensor, padding, 0.0)
