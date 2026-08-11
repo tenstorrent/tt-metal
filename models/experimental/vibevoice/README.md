@@ -35,7 +35,7 @@ what makes ~90-minute single-pass renders feasible.
 | Diffusion | DPM-Solver++ multistep, **10 steps**, CFG scale **1.3** — both are the paper's stated inference settings. Note `config.json`'s `ddpm_num_inference_steps: 20` is *not* what inference uses |
 | Diffusion head | 4 × (adaLN + SwiGLU FFN), ffn_ratio 3.0, latent_size 64, `v_prediction`, cosine beta schedule (~123M params) |
 | Batch | 1 script per `generate()` call |
-| Precision | bf16 weights/activations on the LM & tokenizers; fp32 for RoPE rows, latent inverse-normalization and scheduler coefficients |
+| Precision | bf16 activations throughout; the large DRAM-bound SwiGLU FFN weight matrices (LM gate/up/down, diffusion-head gate/up, and the deep tokenizer FFNs) are stored **bf8b** to halve their weight read, while attention and all other weights stay bf16; fp32 for RoPE rows, latent inverse-normalization and scheduler coefficients |
 
 Speakers are addressed in the text itself (`Speaker 1:` / `Speaker 2:` …); each speaker can be
 bound to a reference WAV for voice cloning, which is encoded on device during prefill.
@@ -150,8 +150,8 @@ models/experimental/vibevoice/
 │   ├── schedule/dpm_solver.py    # DPM-Solver++ multistep
 │   └── lm_runner.py              # ours: CPU fp32 LM swap-in for PCC tests
 ├── resources/                    # auto-downloaded demo assets (content gitignored)
-│   ├── text/                     # 1p/2p/3p/4p demo scripts
-│   └── voices/                   # 9 reference speaker WAVs
+│   ├── text/                     # demo scripts — 10 upstream, 7 via the rate-limited fallback
+│   └── voices/                   # reference voice WAVs — 9 upstream, 4 via the rate-limited fallback
 ├── weights/VibeVoice-1.5B/       # auto-downloaded HF checkpoint (content gitignored)
 ├── output/{demo_id}/             # demo artifacts
 ├── tests/
@@ -171,7 +171,12 @@ Weights and demo assets are **not** vendored. On first run, demos and tests down
   the location with `export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B`.
 - **Demo text + voices** → `resources/` from
   [vibevoice-community/VibeVoice](https://github.com/vibevoice-community/VibeVoice/tree/main/demo).
-  Branch-tracked at `main`, **not commit-pinned** — upstream edits change the demo inputs.
+  Branch-tracked at `main`, **not commit-pinned** — upstream edits change the demo inputs. A full
+  GitHub Contents-API sync pulls every upstream `.txt` (10 scripts) and `.wav` (9 voices); when that
+  API is unauthenticated-rate-limited (HTTP 403/429) the download falls back to a fixed subset —
+  **7 scripts + 4 English voices** (the `_FALLBACK_TEXT_FILES` / `_FALLBACK_VOICE_FILES` lists in
+  [common/resource_utils.py](common/resource_utils.py)). Set `GH_TOKEN`/`GITHUB_TOKEN` for the full
+  authenticated sync. (Streaming `.pt` voice presets are only fetched with `include_streaming_voices=True`.)
 - The WER / SIM tests additionally pull `openai/whisper-medium` and `microsoft/wavlm-base-plus-sv`.
 
 Two environment notes (these apply to the reference too, not just the TT path):
@@ -201,22 +206,27 @@ python models/experimental/vibevoice/demo/demo.py
 
 Inputs are plain-text scripts using `Speaker N:` line prefixes, one turn per line. Un-prefixed free
 text is also accepted and is read as a single speaker (the default script is written this way).
-Bundled scripts live in `resources/text/` and are addressable by id (`--demo <id>`):
+Scripts are synced into `resources/text/` from upstream `demo/text_examples` (tracks `main`, not
+commit-pinned) and are addressable by id (`--demo <id>`):
 
 | `--demo` id | Speaker ids | Turns | Size | Content |
 |-------------|-------------|------:|-----:|---------|
 | `1p_vibevoice` (default) | *none — free text* | — | 625 B | Short English intro to VibeVoice |
 | `1p_abs` | 1 | 2 | 1.1 KB | The VibeVoice paper abstract, read aloud (English) |
 | `1p_Ch2EN` | 1 | 10 | 1.8 KB | English host explaining Chinese expressions — **mixed English + Chinese** text (8 lines contain CJK) |
-| `2p_short` | 1–2 | 2 | 238 B | 2-turn dialogue — fastest multi-speaker smoke test |
-| `2p_yayi` | 1–2 | 3 | 238 B | **Chinese** dialogue (colloquial / dialect-heavy) |
-| `2p_music` | 1–2 | 14 | 1.0 KB | Dialogue that includes a **sung** excerpt |
+| `2p_short` † | 1–2 | 2 | 238 B | 2-turn dialogue — fastest multi-speaker smoke test |
+| `2p_yayi` † | 1–2 | 3 | 238 B | **Chinese** dialogue (colloquial / dialect-heavy) |
+| `2p_music` † | 1–2 | 14 | 1.0 KB | Dialogue that includes a **sung** excerpt |
 | `2p_goat` | 1–2 | 22 | 3.5 KB | Sports-debate podcast (English) |
 | `3p_gpt5` | 1–3 | 47 | 13 KB | 3-way tech panel discussion |
 | `4p_climate_45min` | 1–4 | 211 | 60 KB | ~45-min 4-speaker podcast |
 | `4p_climate_100min` | 1–4 | 363 | 107 KB | ~100-min 4-speaker podcast (~23k prefill tokens) — the perf/CI workload |
 
 Only English and Chinese are supported upstream, which is why the bundled set covers just those two.
+
+† Present only after a full (authenticated / non-rate-limited) GitHub sync. The rate-limited fallback
+fetches just the seven unmarked ids (`_FALLBACK_TEXT_FILES`); supply any missing script yourself with
+`--text <path>`.
 
 `resources/text/2p_short.txt`:
 
@@ -330,10 +340,14 @@ caution there.)
 
 ### Environment variables
 
-The validated decode path — split-capture, CFG batch-2, fused frame output, device-side noise, and
-device-side voice-clone encode audio/latents — is unconditional and has no switch. What remains
-below either selects a path still under evaluation or configures a test. Values are `1`/`0` unless
-stated.
+The validated decode **structure** — split-capture, CFG batch-2, fused frame output, device-side
+noise, and device-side voice-clone encode audio/latents — is unconditional and has no switch. Layered
+on top are a set of **on-by-default device-perf optimizations** for the decode / audio path; each is
+individually toggleable (mainly for A/B and regression bisection), and leaving every one at its
+default is the supported configuration. The rest of the variables either select an experimental path,
+drive profiling, or configure a test. Values are `1`/`0` unless stated.
+
+**Runtime & model**
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -343,11 +357,40 @@ stated.
 | `VV_TRACE_SEGMENT` | `0` in the generator; `1` in the ISL-sweep test | Whole-segment fused decode trace. The demo always sets it explicitly from `--trace` (default on) / `--no-trace`, so the generator's `0` default only applies to callers that set neither |
 | `VV_FUSED_ROPE` | `1` (on) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the per-position fp32 RoPE rows (3.97 ms → 0.31 ms per frame). Was off after a 100-min run showed the speaking rate accelerating (median 208 wpm vs 153) with every energy/spectral gate passing; re-validated on the current frame — 42,498 AR tokens (same as the pacing-safe reference), 93.04 min, whisper pacing 169/173/195 wpm early/mid/late (median 173, natural 150-190). Permutes `wq`/`wk` at load, so its default must match `resolve_weight_cache`'s `rope{0,1}` key |
 | `VV_TTNN_RANDN` | `0` (off) | Draw diffusion init noise and the acoustic fix-std jitter with `ttnn.randn` on device instead of torch. Off by default: it is a different generator, so renders stop matching the torch reference and PCC comparison against it is no longer meaningful |
+
+**Decode / audio-path optimizations** — on by default; toggle off only to A/B or bisect a regression.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VV_BF8B_FFN` | `1` (on) | Store the deep tokenizer SwiGLU FFN weights (dim 2048/1024, ≥ 2M elems, inside the audio-decode path) as bfloat8_b — halves the DRAM read on those matmuls. `0` restores bf16 (bit-exact, slower); the cache filename carries the dtype, so both settings keep their own cached weights. Not bit-exact. (The LM and diffusion-head FFN bf8b weights are hard-wired, **not** gated by this var) |
+| `VV_POST_UNPAD_SHARD` | `1` (on) | Shard the TILE→ROW_MAJOR untilize of the post streaming-conv tensors so it parallelizes over shards instead of tile-rows. Pure data movement — byte-identical |
+| `VV_POST_L2_PROGCFG` | `1` (on) | Tuned 1D matmul program configs for the deepest tokenizer FFN down-proj (dim 2048/1024, T ≤ 32) instead of the auto config. Byte-identical |
+| `VV_DW1_MULREDUCE` | `1` (on) | Run depthwise (`groups == in == out`) streaming convs as an explicit multiply-reduce instead of dense `conv2d`. `0` restores `conv2d` |
+| `VV_CONV_SINGLE_BLOCK` | `1` (on) | Force cached grouped / depthwise streaming convs onto a single-block schedule |
+| `VV_CONV_HS` | `1` (on) | Height-shard streaming convs whose output width is within `[VV_CONV_HS_MIN_OUTW, VV_CONV_HS_MAX_OUTW]`; `0` falls back to the `act_block_h_override` pin |
+| `VV_CONV_SB_CAP`, `VV_CONV_HS_MIN_OUTW`, `VV_CONV_HS_MAX_OUTW`, `VV_POST_SCALE_FOLD` | 1600 / 128 / 0 (no cap) / off | Micro-tuning for the conv / post path; leave at defaults. `VV_POST_SCALE_FOLD` is experimental (off) and, like `VV_FUSED_ROPE`, participates in the weight-cache key |
+
+**Profiling & diagnostics** — off by default; for perf capture and debugging only.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VV_DEBUG` | `0` | Verbose per-AR-step token + phase logs (set by `--debug`) |
+| `VV_PROFILE` | `0` | Device-synced wall-clock timing breakdown per phase (set by `--debug`) |
+| `VV_PROFILE_PREFILL` / `VV_PROFILE_PREFILL_EXIT` | `0` | Tracy `start`/`stop` signposts around LM prefill; `_EXIT` returns from `generate()` right after prefill (no AR) |
+| `VV_PROFILE_DIFFUSION=<n>` / `VV_PROFILE_DIFFUSION_EXIT` | `0` | Tracy signposts around the n-th eager diffusion call (needs `VV_TRACE_SEGMENT=0`); `_EXIT` returns right after it |
+| `VV_PROFILE_SPEECH_FRAME=<n>` / `VV_PROFILE_SPEECH_FRAME_EXIT` | `0` | Tracy signposts around the n-th eager speech-diffusion frame; `_EXIT` returns right after it |
+| `VV_TRACE_NOCAPTURE` | `0` | Run the fused frame graph eagerly with no ttnn trace capture (isolates capture vs replay) |
+| `VV_LOG_TRAJ=<path>` | unset | Append per-frame loop-state diagnostics to this CSV path |
+
+**Test & perf-sweep knobs**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
 | `VV_PREFILL_ISL_SWEEP` | full sweep | Comma list to shorten `test_prefill.py`'s ISL sweep |
-| `VV_ISL_SWEEP`, `VV_ISL_SWEEP_MAX_ISL`, `VV_ISL_WARMUP_TOKENS` | see perf section | ISL-sweep perf overrides |
+| `VV_ISL_SWEEP`, `VV_ISL_SWEEP_MAX_ISL`, `VV_ISL_WARMUP_TOKENS`, `VV_ISL_MAX_LENGTH_TIMES` | see perf section / — / 32 / 2.0 | ISL-sweep perf overrides: ISL list, max-ISL cap, warmup AR steps, AR-budget multiplier |
 | `VV_WER_MAX_NEW_TOKENS`, `VV_WER_THRESHOLD` | 512 / 0.05 | WER test cap and gate |
 | `VV_SIM_MAX_NEW_TOKENS`, `VV_SIM_TARGET_FLOOR`, `VV_SIM_MARGIN` | 200 / 0.5 / 0.05 | SIM test AR cap (≈20–25 s of audio) and the two gates |
-| `VV_SIM_TEXT_ID`, `VV_SIM_TARGET_VOICE`, `VV_SIM_REUSE_TT` | `1p_abs` / `en-Carter_man.wav` / off | SIM test script, cloned target voice, and reuse of previously saved TT wavs for a rescore-only run |
+| `VV_SIM_TEXT_ID`, `VV_SIM_TARGET_VOICE`, `VV_SIM_REUSE_TT`, `VV_SIM_OUT_TAG` | `1p_abs` / `en-Carter_man.wav` / off / empty | SIM test script, cloned target voice, reuse of previously saved TT wavs for a rescore-only run, and a filename tag for the saved wavs |
 | `VV_PREFILL_PERF_SEQ_LEN`, `VV_PREFILL_PERF_START_POS`, `VV_DECODE_PERF_WARMUP_TOKENS` | 256 / 0 / 32 | Single-step perf-dump shapes |
 
 ## Test cases
@@ -435,7 +478,7 @@ pytest models/experimental/vibevoice/tests/pcc/test_safe_paths.py -v
 | Quantity | Gate |
 |----------|------|
 | Component PCC (connectors, scheduler, LM head, tokenizers) | ≥ 0.99 |
-| Diffusion head PCC | ≥ 0.995 (secondary: relative Frobenius ≤ 0.10, plus an allclose check). Lower gate than the other components because its SwiGLU FFN defaults to bf8b weights (`VV_BF8B_FFN`), not bit-exact vs bf16 |
+| Diffusion head PCC | ≥ 0.995 (secondary: relative Frobenius ≤ 0.10, plus an allclose check). Lower gate than the other components because its SwiGLU FFN gate/up projections are stored bf8b (unconditional — `_DIFF_FFN_DTYPE`, not gated by `VV_BF8B_FFN`; the down-proj stays bf16), which is not bit-exact vs bf16 |
 | Decoder-layer decode min PCC | ≥ 0.9975 (secondary: relative Frobenius ≤ 0.07) |
 | Prefill: speech embeds, KV cache | ≥ 0.99 |
 | Prefill: LM hidden | per-position **median** ≥ 0.96 (flattened PCC is pulled down by a few text-token outliers) |
