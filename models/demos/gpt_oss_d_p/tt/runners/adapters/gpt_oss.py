@@ -121,6 +121,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
         each call."""
+        from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
         runtime_config = TtPrefillRuntimeConfig(
@@ -146,10 +147,18 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         # P5: the runner's request-mode H2D supplies SP-sharded uint32 token IDs to prefill_chunk,
         # which today expects embedded activations (make_chunk_input / trace mode); the request path
         # needs an in-runtime embed. The validated harness path uses trace mode, so it is unaffected.
+
+        if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
+            state_dict = {}
+        else:
+            model_args = ModelArgs(mesh_device=mesh_device)
+            logger.info("Loading real bf16 gpt-oss weights (slow: safetensors read)...")
+            state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+
         return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
-            state_dict={},
+            state_dict=state_dict,
             config=runtime_config,
         )
 
