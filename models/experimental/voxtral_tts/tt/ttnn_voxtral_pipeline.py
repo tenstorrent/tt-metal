@@ -96,16 +96,17 @@ class TtVoxtralPipeline:
             lg, xr = graph()
         finally:
             ttnn.end_trace_capture(dev, tid, cq_id=0)   # never leave a capture open -- [pipe-05]
+        # registered immediately so a failure past this point still has something to release
+        self._tr = (tid, buf, lg, xr)
         ttnn.synchronize_device(dev)
         bb.pos = pos0
-        self._tr = (tid, buf, lg, xr)
 
     def _trace_release(self):
         if self._tr is not None:
             ttnn.release_trace(self.device, self._tr[0])
             self._tr = None
 
-    def _traced_frame(self, codes, cfg_alpha):
+    def _traced_frame(self, codes):
         """One frame through the trace. NOTHING here may allocate -- NOTES.md [pipe-05]."""
         import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
         from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM, HEAD_DIM
@@ -150,9 +151,17 @@ class TtVoxtralPipeline:
         stopped = False
         # NOTES.md [pipe-05] -- frame 0 is EAGER and must come BEFORE the capture
         codes = self.flow(h[:, 0], cfg_alpha=cfg_alpha)
-        traced = TRACE_REGION_SIZE > 0
-        if traced:
-            self._trace_capture(cfg_alpha, N_DECODING_STEPS)
+        # NOTES.md [pipe-05] -- try to trace, fall back to eager. The decision cannot come from
+        # TRACE_REGION_SIZE: a caller may have opened the device with a different one.
+        traced = False
+        if TRACE_REGION_SIZE > 0:
+            try:
+                self._trace_capture(cfg_alpha, N_DECODING_STEPS)
+                traced = True
+            except Exception as exc:
+                self._trace_release()
+                if verbose:
+                    print(f"[pipeline] trace capture failed ({type(exc).__name__}), running eager")
         try:
             for i in range(max_frames):
                 if int(codes[0, 0]) == END_AUDIO_ID:
@@ -161,8 +170,10 @@ class TtVoxtralPipeline:
                     stopped = True
                     break
                 frames.append(codes)
+                if i + 1 == max_frames:
+                    break                       # the next frame could never be appended
                 if traced:
-                    codes = self._traced_frame(codes[0], cfg_alpha)
+                    codes = self._traced_frame(codes[0])
                 else:
                     h = self.backbone.step(
                         backbone.embed_frame(self.wb, codes[0])).reshape(1, 1, -1)

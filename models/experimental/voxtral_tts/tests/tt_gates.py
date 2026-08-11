@@ -266,11 +266,8 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
     print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} "
           f"({ac_bad/max(total_ac,1)*100:.1f}%)")
-    # STATUS.md 6.54 -- the COUNT alone reads as alarming and has repeatedly been misread as one.
-    # An FSQ axis has 21 levels, so |delta|=1 is the smallest difference representable: it means
-    # the device landed within one quantisation step, i.e. a bin-boundary flip rather than an
-    # error. On real prompts every single differing code is off by one. Print the distribution so
-    # nobody has to take that on faith.
+    # STATUS.md 6.54 -- the count alone gets misread. |delta|=1 on a 21-level FSQ axis is the
+    # smallest difference representable, so print the distribution rather than just the count.
     if deltas:
         off1 = deltas.get(1, 0)
         print(f"     |delta| histogram { {k: deltas[k] for k in sorted(deltas)} }   "
