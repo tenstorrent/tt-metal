@@ -62,8 +62,18 @@ class EagerQwen3_32BExecutor:
 class TracedQwen3_32BExecutor:
     """Traced path; same surface as ``EagerQwen3_32BExecutor``."""
 
-    def __init__(self, model: Qwen3_32B, mesh_device: ttnn.MeshDevice):
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_qwen3_32b_executor_named_modules)
+    def __init__(
+        self,
+        model: Qwen3_32B,
+        mesh_device: ttnn.MeshDevice,
+        ondevice_decode_loop: bool = False,
+    ):
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_qwen3_32b_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+        )
 
     @property
     def model(self) -> Qwen3_32B:

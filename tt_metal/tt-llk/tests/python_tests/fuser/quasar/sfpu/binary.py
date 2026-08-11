@@ -5,15 +5,11 @@
 from typing import List
 
 import torch
+from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
-from fuser.fused_operation import FusedOperation
-from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
-from helpers.golden_generators import (
-    BinarySFPUGolden,
-    get_golden_generator,
-)
 from helpers.llk_params import (
     ApproximationMode,
     MathOperation,
@@ -51,32 +47,19 @@ class BinarySfpu(Sfpu):
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = config.sentinel.golden_math_format
-
-        generate_binary_golden = get_golden_generator(BinarySFPUGolden)
-        golden_tensor = generate_binary_golden(
-            self.operation,
-            tensor,
-            self.dst_index_in0,
-            self.dst_index_in1,
-            self.dst_index_out,
-            self.iterations,
-            batch_dims,
-            math_format,
-            skip_tilize=True,
+        return self.binary_sfpu_golden(
+            tensor, config, operation, compute_unit, batch_dims
         )
-
-        return golden_tensor
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,
@@ -92,7 +75,7 @@ class BinarySfpu(Sfpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,
@@ -100,15 +83,16 @@ class BinarySfpu(Sfpu):
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        quasar_iterations = self.iterations // 4
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
         dst = self.dst_index_out
+        data_format = config.sentinel._math_format.cpp_enum_value
 
         return (
-            f"    test_utils::call_binary_sfpu_operation_quasar<"
-            f"{op}, {dest_sync}, {en_32bit_dest}, {self.iterations}"
-            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, "
-            f"{config.sentinel.math_format});\n"
+            f"test_utils::call_binary_sfpu_operation_quasar<"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {quasar_iterations}"
+            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 
     def __str__(self) -> str:

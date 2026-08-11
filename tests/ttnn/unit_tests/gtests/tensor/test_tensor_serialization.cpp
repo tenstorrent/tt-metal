@@ -68,6 +68,18 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     }
 
     {
+        TemporaryFile test_file("int8.tensorbin");
+        std::vector<int8_t> test_data{-128, -1, 0, 1, 42, 127};
+        Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 3}, DataType::INT8));
+
+        dump_tensor_flatbuffer(test_file.string(), original_tensor);
+        Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+        EXPECT_EQ(loaded_tensor.dtype(), DataType::INT8);
+        EXPECT_THAT(loaded_tensor.to_vector<int8_t>(), Pointwise(testing::Eq(), test_data));
+    }
+
+    {
         TemporaryFile test_file("bfloat16.tensorbin");
         std::vector<bfloat16> test_data{bfloat16(1.5f), bfloat16(2.5f), bfloat16(-3.5f), bfloat16(4.5f)};
         Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 4}, DataType::BFLOAT16));

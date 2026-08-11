@@ -72,6 +72,12 @@ class PrefillRunParams:
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
+    # Capture the per-chunk forward as a (segmented) ttnn trace and replay it every chunk, instead of
+    # re-dispatching op-by-op. Requires the mesh opened with a trace_region_size > 0. See prefill_runner.
+    use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
+    # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
+    overlap_shared_expert_with_dispatch: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -259,6 +265,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
+    "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

@@ -59,7 +59,7 @@ public:
     /**
      * Allocate a MeshTensor on the given device with the given spec.
      */
-    static MeshTensor allocate_on_device(distributed::MeshDevice& mesh_device, const TensorSpec& spec);
+    static MeshTensor allocate_on_device(distributed::MeshDevice& mesh_device, TensorSpec spec);
 
     /**
      * Construct a MeshTensor that takes ownership of an already-allocated MeshBuffer.

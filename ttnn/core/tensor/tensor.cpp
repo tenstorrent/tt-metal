@@ -181,7 +181,11 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    // TODO(#38947): tile parameter should be removed.
+    TT_FATAL(
+        !tile.has_value() || *tile == Tile{},
+        "Configuring borrowed data with a custom tile configuration is not supported.");
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin));
     return Tensor(std::move(host_tensor));
 }
 
@@ -227,6 +231,12 @@ template Tensor Tensor::from_span<int32_t>(
     tt::tt_metal::distributed::MeshDevice* device,
     std::optional<QueueId> cq_id,
     int32_t pad_value);
+template Tensor Tensor::from_span<int8_t>(
+    ttsl::Span<const int8_t> buffer,
+    const TensorSpec& spec,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<QueueId> cq_id,
+    int8_t pad_value);
 template Tensor Tensor::from_span<uint8_t>(
     ttsl::Span<const uint8_t> buffer,
     const TensorSpec& spec,
@@ -257,6 +267,11 @@ template Tensor Tensor::from_borrowed_data<bfloat16>(
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<int32_t>(
     ttsl::Span<int32_t> buffer,
+    const tt::tt_metal::Shape& shape,
+    tt::tt_metal::MemoryPin buffer_pin,
+    const std::optional<Tile>& tile);
+template Tensor Tensor::from_borrowed_data<int8_t>(
+    ttsl::Span<int8_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
@@ -293,6 +308,12 @@ template Tensor Tensor::from_vector<int32_t>(
     tt::tt_metal::distributed::MeshDevice* device,
     std::optional<QueueId> cq_id,
     int32_t pad_value);
+template Tensor Tensor::from_vector<int8_t>(
+    std::vector<int8_t>&& buffer,
+    const TensorSpec& spec,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<QueueId> cq_id,
+    int8_t pad_value);
 template Tensor Tensor::from_vector<uint8_t>(
     std::vector<uint8_t>&& buffer,
     const TensorSpec& spec,
@@ -318,6 +339,7 @@ template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<QueueId> 
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<QueueId> cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<QueueId> cq_id) const;
+template std::vector<int8_t> Tensor::to_vector<int8_t>(std::optional<QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
@@ -370,6 +392,7 @@ uint32_t Tensor::element_size() const {
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");

@@ -52,6 +52,9 @@ private:
     tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
     tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
     uint32_t current_pair_idx;
+    // Highest pair index programmed to HW since last reset (0 if none yet).
+    // Updated by set_pair_high_watermark(); teardown clears [0, pair_high_watermark_].
+    uint32_t pair_high_watermark_ = 0;
 
 public:
     /**
@@ -86,6 +89,21 @@ public:
      * @return Current pair index
      */
     uint32_t get_pair_index() const { return current_pair_idx; }
+
+    /**
+     * @brief Reset the configured-pair high watermark
+     */
+    void reset_pair_high_watermark() { pair_high_watermark_ = 0; }
+
+    /**
+     * @brief Set the configured-pair high watermark after a bulk remapper init loop.
+     *
+     * @param pair_idx Largest pair index programmed (0-63); teardown clears [0, pair_idx].
+     */
+    void set_pair_high_watermark(uint32_t pair_idx) {
+        ASSERT(pair_idx < REMAP_NUM_PAIRS);
+        pair_high_watermark_ = pair_idx;
+    }
 
     // ========================================================================
     // ClientR Configuration Methods
@@ -455,6 +473,22 @@ public:
     }
 
     /**
+     * @brief Read ClientL valid bits [11:8] from remapper hardware for a specific pair.
+     *
+     * Used by remapped DFB producers to wait until DM1 has programmed this pair's ClientL
+     * register (valid mask non-zero) before resetting the producer TC and publishing ready.
+     *
+     * @param pair_idx Pair index (0-63)
+     * @return Valid bits value (0-15), read from live hardware
+     */
+    static uint32_t get_clientL_valid_hw(uint32_t pair_idx) {
+        if (pair_idx >= REMAP_NUM_PAIRS) {
+            return 0;
+        }
+        return (READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx)) >> 8u) & 0xFu;
+    }
+
+    /**
      * @brief Set ClientL producer/consumer mode (uses current pair)
      *
      * @param is_producer 1 if ClientL is producer, 0 if consumer
@@ -543,6 +577,26 @@ public:
 
         // Write back modified value
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), modified_val);
+    }
+
+    // ClientL.f.valid occupies bits [11:8]; bit (8 + slot) enables ClientR slot `slot`.
+    static constexpr uint32_t CLIENTL_VALID_FIELD_LSB = 8u;
+
+    /**
+     * @brief Clear ClientL valid bits [11:8] on every configured pair (hardware RMW).
+     *
+     * Iterates pairs [0, pair_high_watermark_] inclusive — skips unconfigured pairs above.
+     * Preserves id_L, cnt_sel_L, and control flags; disables all ClientR slot routing.
+     */
+    void clear_clientL_valid_up_to_high_watermark_hw() {
+        constexpr uint32_t valid_field_mask = 0xFu << CLIENTL_VALID_FIELD_LSB;
+        const uint32_t limit = (pair_high_watermark_ + 1u < REMAP_NUM_PAIRS)
+                                   ? pair_high_watermark_ + 1u
+                                   : REMAP_NUM_PAIRS;
+        for (uint32_t pair_idx = 0; pair_idx < limit; pair_idx++) {
+            const uint32_t addr = REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx);
+            WRITE_REG32(addr, READ_REG32(addr) & ~valid_field_mask);
+        }
     }
 
     /**

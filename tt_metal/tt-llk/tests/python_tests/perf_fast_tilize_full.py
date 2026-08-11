@@ -84,7 +84,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(4),
+            LOOP_FACTOR(32),
             NUM_FACES(4),
         ],
         variant_stimuli=StimuliConfig(

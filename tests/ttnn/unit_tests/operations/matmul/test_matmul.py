@@ -3391,6 +3391,183 @@ def test_matmul_height_sharded_input_with_padding(device):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
+# Shared-exponent (block-float) K-tile padding regression tests.
+#
+# pad_last_ktile()/pad_last_transposed_ktile() zero matmul's last K-tile padding when K is not a
+# multiple of 32; they previously no-op'd for every dtype but Float32/Float16_b, so block-float
+# inputs multiplied stale L1 garbage into the accumulator.
+#
+# Each test poisons the padding with -42 so a leak is an unmissable blowup rather than a silent
+# read of already-zeroed L1.
+_BLOCK_FLOAT_PAD_DTYPES = [
+    (ttnn.bfloat8_b, 0.99),
+    (ttnn.bfloat4_b, 0.94),
+]
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize(
+    "K",
+    [
+        80,  # last K-tile has 16 valid columns: padding starts on a face-row (16-col) boundary
+        96,  # multiple of 32: no padding at all (control)
+        100,  # last K-tile has 4 valid columns: padding starts on a byte boundary for bfloat4_b
+        99,  # 3 valid columns: for bfloat4_b the first padded element shares a byte with the
+        # last valid one, so masking must preserve the neighbouring nibble
+    ],
+    ids=["k_16_aligned", "k_no_padding", "k_byte_aligned", "k_shared_byte"],
+)
+def test_matmul_block_float_ktile_padding(device, dtype, pcc, K):
+    """Core regression: block-float matmul with a non-tile-aligned K must ignore tile padding."""
+    torch.manual_seed(0)
+    M, N = 64, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+def test_matmul_block_float_ktile_padding_preserves_shared_byte(device, dtype, pcc):
+    """K=99 makes bfloat4_b's first padded element share a byte with the last valid one, so masking
+    must preserve that neighbour. All signal sits on that column to make a clobber unmissable;
+    bfloat8_b is a control (one element per byte, never masks)."""
+    torch.manual_seed(0)
+    M, K, N = 64, 99, 64
+
+    torch_input_a = torch.zeros(M, K, dtype=torch.float32)
+    torch_input_a[:, -1] = 1.0  # only the byte-sharing boundary column carries signal
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -1)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -1)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+def test_matmul_block_float_ktile_padding_transpose_a(device, dtype, pcc):
+    """transpose_a maps K to tile height, exercising pad_last_transposed_ktile's row path."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(K, M, dtype=torch.float32)  # transposed: K is the outer dim
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a.T @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=True))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize("out_subblock_h", [1, 2], ids=["subblock_h1", "subblock_h2"])
+def test_matmul_2d_mcast_block_float_ktile_padding_subblock_h(device, out_subblock_h, dtype, pcc):
+    """The fill runs in the reader, before matmul_block's row striding, so out_subblock_h > 1 works too."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 32
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=1,
+        out_block_h=2,
+        out_block_w=1,
+        per_core_M=2,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype,pcc", _BLOCK_FLOAT_PAD_DTYPES)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
+def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en, dtype, pcc):
+    """The padding fill is independent of DEST accumulation precision; both settings must be clean."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b, compute_kernel_config=compute_kernel_config))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_matmul_ktile_padding_non_block_float(device, dtype):
+    """Control: the Float32/Float16_b padding paths this change also touches must not regress."""
+    torch.manual_seed(0)
+    M, K, N = 64, 100, 64
+
+    torch_input_a = torch.randn(M, K, dtype=torch.float32)
+    torch_input_b = torch.randn(K, N, dtype=torch.float32)
+    torch_output = torch_input_a @ torch_input_b
+
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    output = ttnn.to_torch(ttnn.matmul(ttnn_input_a, ttnn_input_b))
+    assert not torch.isnan(output).any(), "matmul output contains NaN"
+    assert not torch.isinf(output).any(), "matmul output contains Inf"
+    assert_with_pcc(torch_output, output, pcc=0.999)
+
+
 @pytest.mark.parametrize(
     "batch_size, m_size, k_size, n_size, num_cores_height, per_core_height, use_user_core_grid",
     [

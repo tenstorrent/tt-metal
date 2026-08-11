@@ -88,8 +88,8 @@ void kernel_main() {
         // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
         // slot 0, so it reads the arg here only for alignment.
         (void)get_arg_val<uint32_t>(arg_idx++);
-        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix (must match
-        // the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
+        // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix (must
+        // match the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
         // (full input) leaves the range unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         if (valid_pages < input_tile_id_end[input_idx]) {
@@ -266,9 +266,8 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     // Write the unicast packet. num_hops=1 is correct under both topologies: 1D ring-AG always
     // targets the immediate neighbor; 2D ignores num_hops (HybridMesh::to_chip_unicast is a no-op
