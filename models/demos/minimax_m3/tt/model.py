@@ -108,7 +108,6 @@ class Model:
         mesh_config=None,
         max_local_batch_size=1,
         users_row_sharded=False,
-        use_throughput_experts=False,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         expert_weight_dtype=ttnn.bfloat4_b,

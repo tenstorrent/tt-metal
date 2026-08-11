@@ -14,7 +14,6 @@ Inputs are scaled past ±limit so the clamp path is actually exercised. Depends 
 (no HuggingFace / checkpoint), random inputs — runs on a single Wormhole/Blackhole card.
 """
 
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -90,10 +89,9 @@ def test_swiglu_fused_vs_chain(mesh_device, device_params, alpha, limit, m, widt
     """``apply_swiglu_fused`` (ONE multiply with activation spans) vs the 7-op ``apply_swiglu`` chain
     vs an fp32 torch reference.
 
-    This is the activation identity the shared-expert/dispatch overlap depends on: the chain's two
-    ``ttnn.clamp`` calls accept no ``sub_core_grids``, so they cannot be confined to a sub-device,
-    while the fused form can. Verifying it standalone — at the real per-device shape — comes BEFORE
-    wiring any of the overlap, because an op-level mistake here is far cheaper to find now.
+    This pins the algebraic identity the fused form relies on — silu(alpha*g)/alpha in place of
+    g*sigmoid(alpha*g), since no SFPU op does swish-with-beta. Verifying it standalone at the real
+    per-device shape is far cheaper than chasing a model-level PCC drift back to here.
 
     Expect the fused form to match the fp32 reference at least as well as the chain: it keeps the
     intermediates in the SFPU instead of round-tripping each of 7 steps through bf16 DRAM.
@@ -128,92 +126,3 @@ def test_swiglu_fused_vs_chain(mesh_device, device_params, alpha, limit, m, widt
     )
     assert ok_ref, f"fused swiglu vs fp32 reference PCC fail: {pcc_ref}"
     assert ok_chain, f"fused swiglu vs the 7-op chain PCC fail: {pcc_chain}"
-
-
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_swiglu_fused_is_confinable(mesh_device, device_params, reset_seeds):
-    """PROVE that ``sub_core_grids`` actually confines the fused activation's program.
-
-    This matters because the shared-expert/dispatch overlap is only real if the two ops land on
-    DISJOINT cores, and the failure mode is SILENT: a program spanning both sub-devices still passes
-    the sub-device assert (its cores are covered by the union) and still returns the right answer — it
-    is merely tracked on both and stops overlapping. That is what sank the previous attempt.
-
-    Two things are checked, under a manager whose only sub-device is rows 1..N (row 0 excluded):
-
-      1. correctness — the confined activation still matches an fp32 reference;
-      2. that the argument CHANGES THE PROGRAM — the same tensors and math confined to ONE core must
-         be dramatically slower than on the full sub-grid.
-
-    Runtime is the discriminator rather than an expected exception, because neither correctness nor
-    "it didn't crash" separates the cases: ttnn eltwise auto-restricts to the active sub-device, so an
-    unconfined multiply runs fine here too (measured — an earlier version of this test wrongly assumed
-    it would fault). The rigorous alternative is the profiler's CORE COUNT column; this is the cheap
-    version that can live in a unit test.
-    """
-    grid = mesh_device.compute_with_storage_grid_size()
-    assert grid.y >= 2, f"need >= 2 worker rows to exclude row 0, got {grid.y}"
-    confined_cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-    )  # rows 1..N-1 — row 0 deliberately left OUT of every sub-device
-
-    m, width = 640, 768
-    alpha, limit = 1.702, 7.0
-    config = SimpleNamespace(swiglu_limit=limit, alpha=alpha)
-    gate = torch.randn(1, 1, m, width) * 3.0
-    up = torch.randn(1, 1, m, width) * 3.0
-    ref = _torch_swiglu(gate, up, alpha, limit)
-
-    def _to_tt(t):
-        return ttnn.from_torch(
-            t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([confined_cores])], 0)
-    try:
-        mesh_device.load_sub_device_manager(mgr)
-
-        # (1) CONFINED — must run and be correct.
-        out_tt = apply_swiglu_fused(_to_tt(gate), _to_tt(up), config, sub_core_grids=confined_cores)
-        out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, 1, m, width).float()
-        passing, pcc = comp_pcc(ref, out, 0.999)
-        logger.info(f"fused swiglu CONFINED to rows 1..{grid.y - 1}: pcc={pcc}")
-        assert passing, f"confined fused swiglu PCC fail: {pcc}"
-
-        # (2) Does sub_core_grids actually change the PROGRAM, or is it accepted and ignored?
-        # "It didn't crash" proves nothing: an op that ignores the argument still returns the right
-        # answer, and ttnn eltwise auto-restricts to the active sub-device anyway. So compare RUNTIME
-        # between the full shared sub-grid and a deliberately tiny one-core grid. Same math, same
-        # tensors; if the argument is honoured, one core must be dramatically slower than 13x9=117.
-        one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))})
-        g_tt, u_tt = _to_tt(gate), _to_tt(up)
-
-        def _timed(cores, iters=20):
-            apply_swiglu_fused(u_tt, g_tt, config, sub_core_grids=cores)  # warm up / compile
-            ttnn.synchronize_device(mesh_device)
-            t0 = time.perf_counter()
-            for _ in range(iters):
-                apply_swiglu_fused(u_tt, g_tt, config, sub_core_grids=cores)
-            ttnn.synchronize_device(mesh_device)
-            return (time.perf_counter() - t0) / iters * 1e6  # us/call
-
-        many_us = _timed(confined_cores)
-        one_us = _timed(one_core)
-        ratio = one_us / many_us
-        logger.info(
-            f"fused swiglu: {grid.x * (grid.y - 1)}-core sub-grid {many_us:.1f} us/call vs "
-            f"1-core sub-grid {one_us:.1f} us/call -> {ratio:.1f}x"
-        )
-        assert ratio > 5.0, (
-            f"confining to ONE core was only {ratio:.1f}x slower than the full {grid.x * (grid.y - 1)}-core "
-            f"sub-grid, so sub_core_grids looks accepted-but-ignored. The overlap cannot rely on it; "
-            f"verify placement with the profiler CORE COUNT column before proceeding."
-        )
-    finally:
-        mesh_device.clear_loaded_sub_device_manager()
-        mesh_device.remove_sub_device_manager(mgr)

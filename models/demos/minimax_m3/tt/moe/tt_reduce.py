@@ -7,16 +7,14 @@ M3's own copy of DeepSeek's TtReduceModule (deepseek_v3_d_p/tt/moe/tt_reduce.py)
 modify. The compute half is identical — the same shared `deepseek_prefill.post_combine_reduce` kernel.
 The difference is the collective:
 
-  DeepSeek  ttnn.reduce_scatter                    -- the plain prim: no barrier semaphore, no
-                                                      subdevice id, no keepalive discipline
+  DeepSeek  ttnn.reduce_scatter                    -- the plain prim, with no barrier semaphore
   here      caller-supplied reduce_scatter_fn      -- M3 passes MeshConfig.reduce_scatter, i.e.
                                                       reduce_scatter_minimal_async with the ping-pong
                                                       + barrier semaphores every other M3 collective
                                                       already uses (tt/config.py)
 
-Why bother, given both reduce over the same axis and measure the same ~145 us of work: the prim cannot
-join a sub-device overlap and has no keepalive, so it blocks the shared-expert-parallel-dispatch work.
-Consistency also matters for debugging — the shared expert's reduce-scatter and the MoE's were
+Why bother, given both reduce over the same axis and measure the same ~145 us of work: consistency.
+Every M3 collective now goes through one managed path, which matters for debugging — the shared expert's reduce-scatter and the MoE's were
 different ops with different semaphore machinery, which makes a CCL hang or a nondeterministic-PCC
 bisect read as an M3-vs-M3 difference when it is really prim-vs-async.
 

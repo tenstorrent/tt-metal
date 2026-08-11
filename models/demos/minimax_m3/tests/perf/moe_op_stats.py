@@ -270,7 +270,8 @@ def print_table(rows, work_wait):
     )
     if work_wait:
         cw = sum(r["wait_us"] for r in rows if r["collective"])
-        print(f"{'collective barrier wait':<34} {'':<32} {'':>2} {'':>3} {cw:>9.1f} us  ({100*cw/tot:.0f}% of total)")
+        share = f"{100 * cw / tot:.0f}% of total" if tot else "no qualifying rows"
+        print(f"{'collective barrier wait':<34} {'':<32} {'':>2} {'':>3} {cw:>9.1f} us  ({share})")
         print("\nwork = min across chips (the chip that arrived last, so it waited on nobody)")
         print("wait = median - min.  '-' means the op is per-chip independent, where min32 would be")
         print("       load imbalance rather than wait -- use --imbalance for those.")

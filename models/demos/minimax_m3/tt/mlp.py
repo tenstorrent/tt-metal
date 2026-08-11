@@ -149,8 +149,8 @@ class MLP:
         )
         # The MoE's closing TP reduce-scatter. Routed through MeshConfig so it uses
         # reduce_scatter_minimal_async with the same ping-pong + barrier semaphores as every other M3
-        # collective, instead of the plain `ttnn.reduce_scatter` prim (no barrier, no subdevice id, no
-        # keepalive — none of which it can stay without once the shared expert overlaps dispatch).
+        # collective, instead of the plain `ttnn.reduce_scatter` prim (which carries no barrier
+        # semaphore), so every M3 collective goes through one managed path.
         # Contract: reduce over the TP axis, scatter on the last dim.
         # dim is resolved from the tensor's rank rather than passed as -1: MeshConfig.reduce_scatter
         # forwards straight to reduce_scatter_minimal_async, which (unlike the ttnn.reduce_scatter
@@ -215,7 +215,7 @@ class MLP:
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
         padding_config = self.router.build_padding_config(actual_isl)
         with zone("router_topk"):
-            idx, wts = self.router(hidden_states, True, padding_config=padding_config)  # per-row top-k
+            idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(
             x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config

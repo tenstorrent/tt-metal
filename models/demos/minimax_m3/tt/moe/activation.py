@@ -10,13 +10,9 @@ Anchor: transformers gpt_oss modeling_gpt_oss.py lines 119-122.
 
 Two implementations of the same math:
 
-  * ``apply_swiglu``       — the readable 7-op chain. Cannot be confined to a core sub-grid: the two
-                             ``ttnn.clamp`` calls take no ``sub_core_grids`` argument, so under a
-                             loaded sub-device manager they span the whole worker grid.
+  * ``apply_swiglu``       — the readable 7-op chain.
   * ``apply_swiglu_fused`` — ONE ``ttnn.multiply`` with the whole activation folded into its two
-                             per-operand activation spans. Accepts ``sub_core_grids``, so it is
-                             placeable — which is what the shared-expert/dispatch overlap needs — and
-                             it collapses 7 device ops into 1 regardless.
+                             per-operand activation spans, collapsing 7 device ops into 1.
 """
 
 import os
@@ -30,8 +26,8 @@ import ttnn
 _NO_LOWER_BOUND = -1.0e30
 
 # The fused single-op form is the default: 7 device ops -> 1 on every dense MLP and every shared
-# expert (60 calls per chunk, so ~360 fewer op launches), and it is the ONLY form that can be confined
-# to a core sub-grid. M3_FUSED_SWIGLU=0 restores the chain so a numerics question stays bisectable.
+# expert (60 calls per chunk, so ~360 fewer op launches). M3_FUSED_SWIGLU=0 restores the chain so a
+# numerics question stays bisectable; the two agree to ~2e-6 of PCC (tests/unit/test_swiglu_vs_ref.py).
 DEFAULT_USE_FUSED_SWIGLU = True
 
 _swiglu_path_logged = False
@@ -45,7 +41,7 @@ def use_fused_swiglu() -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
-def swiglu(gate, up, config, sub_core_grids=None):
+def swiglu(gate, up, config):
     """M3's clamped swigluoai by whichever implementation is selected; logs the choice once.
 
     CONSUMES both ``gate`` and ``up`` — the caller must treat them as dead and free only the result.
@@ -58,17 +54,8 @@ def swiglu(gate, up, config, sub_core_grids=None):
         _swiglu_path_logged = True
         logger.info(f"[swiglu] clamped swigluoai via the {'FUSED single multiply' if fused else 'LEGACY 7-op chain'}")
     if not fused:
-        if sub_core_grids is not None:
-            # The chain's two ttnn.clamp calls take no sub_core_grids, so they would span the whole
-            # worker grid and silently destroy sub-device disjointness — the exact silent failure the
-            # overlap must avoid. Refuse rather than quietly de-optimize.
-            raise ValueError(
-                "M3_FUSED_SWIGLU=0 was requested together with sub_core_grids, but the 7-op chain "
-                "cannot be confined to a sub-grid (ttnn.clamp takes no sub_core_grids). The shared "
-                "expert would silently stop overlapping dispatch. Use the fused path when confining."
-            )
         return apply_swiglu(gate, up, config)
-    out = apply_swiglu_fused(gate, up, config, sub_core_grids=sub_core_grids)
+    out = apply_swiglu_fused(gate, up, config)
     gate.deallocate(True)
     up.deallocate(True)
     return out
@@ -103,8 +90,8 @@ def swiglu_activation_spans(config):
     return up_spans, gate_spans
 
 
-def apply_swiglu_fused(gate, up, config, sub_core_grids=None, memory_config=None):
-    """Clamped swigluoai as ONE device op, optionally confined to ``sub_core_grids``.
+def apply_swiglu_fused(gate, up, config, memory_config=None):
+    """Clamped swigluoai as ONE device op.
 
     Numerically equivalent to ``apply_swiglu``: measured against an fp32 reference at the real
     per-device shape (640 x 768), fused 0.9999927 vs chain 0.9999949, and fused-vs-chain 0.9999917
@@ -116,8 +103,6 @@ def apply_swiglu_fused(gate, up, config, sub_core_grids=None, memory_config=None
     """
     up_spans, gate_spans = swiglu_activation_spans(config)
     kwargs = {"input_tensor_a_activations": up_spans, "input_tensor_b_activations": gate_spans}
-    if sub_core_grids is not None:
-        kwargs["sub_core_grids"] = sub_core_grids
     if memory_config is not None:
         kwargs["memory_config"] = memory_config
     return ttnn.multiply(up, gate, **kwargs)
