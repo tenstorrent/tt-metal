@@ -175,4 +175,21 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
 }  // namespace non_uniform_data_movement
 
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+namespace host_buffer {
+
+// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+HostBuffer get_host_buffer(const HostTensor& tensor);
+
+template <typename T>
+ttsl::Span<const T> get_as(const HostTensor& tensor);
+
+template <typename T>
+ttsl::Span<T> get_as(HostTensor& tensor);
+
+}  // namespace host_buffer
+
 }  // namespace tt::tt_metal

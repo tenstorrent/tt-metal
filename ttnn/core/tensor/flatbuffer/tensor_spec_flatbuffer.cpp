@@ -14,7 +14,8 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
-            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
+            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()},
+            tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
     return CoreRangeSet{std::move(ranges)};
 }
