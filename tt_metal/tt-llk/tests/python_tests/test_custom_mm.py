@@ -96,7 +96,7 @@ def test_custom_mm(
         in0, in1, formats, in0_dimensions, in1_dimensions
     )
 
-    in0_faces = pack_in0_faces(in0, kt_dim, torch_format)
+    in0_faces = pack_in0_faces(in0, kt_dim, formats.input_format)
     tilized_B = tilize_block(
         src_B, dimensions=in1_dimensions, stimuli_format=formats.input_format
     )
