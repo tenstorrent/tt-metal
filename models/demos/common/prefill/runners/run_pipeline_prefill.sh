@@ -60,8 +60,11 @@ FWD_ENV=""
 # -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
 # would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
 # host's PATH works only because every host's venv sits at the identical clone path.
+# `--` terminates ttrun's own option parsing so the target's `python3 -m <module>` reaches the program
+# verbatim; without it ttrun's -m (--mesh-graph-descriptor) short flag swallows the module name and trips
+# the mesh-graph/rank-binding mutual-exclusion check.
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \
   --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH${FWD_ENV}" \
-  python3 -m models.demos.common.prefill.runners.prefill_runner
+  -- python3 -m models.demos.common.prefill.runners.prefill_runner
