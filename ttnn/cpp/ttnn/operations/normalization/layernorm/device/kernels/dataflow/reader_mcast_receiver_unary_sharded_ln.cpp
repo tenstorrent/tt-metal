@@ -89,7 +89,12 @@ void kernel_main() {
     UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
-    const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    // Sizing reference for one partial-reduction tile. RMSNorm only allocates cb_ex_partial2
+    // (the host skips cb_ex_partial), so pick whichever buffer exists in the current mode. The
+    // selected buffer is also the one the reduce lambda below is invoked with, so this object
+    // never binds a buffer the kernel would not otherwise touch.
+    DataflowBuffer dfb_partial_size_ref(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
 
     // Compute the NOC coordinates for remote cores that interact with this core
     constexpr df::NumNocAddrs num_remote_noc_addrs_first_stage = is_all_to_all_worker ? num_blocks_first_stage : 1;
