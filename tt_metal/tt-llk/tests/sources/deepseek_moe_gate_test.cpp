@@ -134,6 +134,9 @@ using namespace ckernel;
 // I know this looks awful.
 // It's temporary (and so is the harness change that puts ttnn experimental on
 // the include path) until this kernel is moved into Metal's experimental dir (#52837).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 #ifdef ARCH_BLACKHOLE
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_deepseek_moe_gate_eltwise_binary.h"
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_deepseek_moe_gate_transpose_dest_single_face.h"
@@ -143,6 +146,7 @@ using namespace ckernel;
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_deepseek_moe_gate_transpose_dest_single_face.h"
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_deepseek_moe_gate_topk_single_face.h"
 #endif
+#pragma GCC diagnostic pop
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
