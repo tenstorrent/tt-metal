@@ -1,0 +1,16 @@
+/goal Use $vae-port and $tt-device-usage for the $DIFFUSION_MODEL audio VAE under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the audio-vae state for the repo-local tt_dit diffusion pipeline. Work only on the audio/1D VAE under models/tt_dit/models/audio_vae/decoder_<model>.py with a test under models/tt_dit/tests/models/<model>/; do not begin scheduler, multichip, or pipeline work in this goal. If $DIFFUSION_MODEL has NO audio branch, do not fabricate one: record in doc/audio_vae/work_log.md that the model is video/image-only, mark this stage not-applicable, run $stage-review to confirm the no-op, and complete.
+
+Goal completion requirements (when an audio branch exists):
+- models/tt_dit/models/audio_vae/decoder_<model>.py implements the 1D-conv encoder + vocoder decoder (DAC/BigVGAN style: latents -> waveform), subclassing layers.module.Module with a state-dict adapter. Reuse the audio_vae templates and layers/audio_ops.py, layers/audio_resample.py, layers/normalization.py. 1D convs port via audio_ops.Conv1dViaConv3d / _AlignedOutConv1d / ConvTranspose1dViaConv3d; Snake/SnakeBeta via ttnn.snake_beta (fp32 on Blackhole) or the decomposed audio_ops.Snake.
+- weight_norm is folded at load time: w = weight_g * weight_v / ||weight_v|| over the norm dims (dim=0 -> norm over (1,2) for Conv1d/ConvTranspose1d); verify the fold matches torch._weight_norm. Drop stored *.filter buffers only when regenerated kaiser-sinc taps match them exactly.
+- Full audio-decoder reconstruction PCC vs the diffusers reference on REAL weights (local partial-load), plus per-primitive micro-tests at PCC >= 0.999. Default bar PCC >= 0.99 (relative_rmse <= 0.05); where a documented device numerics floor applies (e.g. a low-channel audio velocity subspace amplified by a final high-gain block, or the single-device wide-channel anti-alias gap), record the floor with evidence (depth sweep, standalone op check, byte calc) and treat non-degenerate audio reconstruction as the real gate rather than faking a pass or silently lowering the bar.
+- Known single-device gap: audio_resample.Activation1d's HEIGHT_SHARDED depthwise conv1d anti-alias filter overflows L1 for wide channels on 1 device — for fixed kaiser-sinc taps use the bit-equivalent shift-and-add workaround (strided slice + scalar mul/add). Record which path was exercised.
+- capability_contract.json records audio sample rate, latent shape, and any hard-limit reduction with evidence. doc/audio_vae/DESIGN.md and work_log.md record commands, reconstruction PCC/RMSE, the weight_norm fold check, precision recipe, op fallbacks, and exact artifacts. Reference tests SKIP when diffusers is unimportable.
+- Runtime is free of torch, ttnn.from_torch, ttnn.to_torch, or host fallback outside from_state_dict/setup and the test boundary. Watcher-clean evidence (or a documented false-positive).
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

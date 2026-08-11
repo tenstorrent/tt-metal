@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diffusion Qualitative Check"
+  short_description: "Non-degeneracy + quality gate for diffusion output"
+  default_prompt: "Use $diffusion-qualitative-check to gate a TTNN diffusion pipeline's output — verify frames aren't black/NaN/frozen (real motion), audio isn't silent/NaN, latents track a reference where feasible, and separate true degeneracy (fail) from expected low fidelity at tiny configs (report)."
+
+policy:
+  allow_implicit_invocation: true

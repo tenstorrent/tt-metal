@@ -1,0 +1,17 @@
+/goal Use $diffusion-model-bringup and $tt-device-usage for the $DIFFUSION_MODEL full DiT assembly in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the full-dit state for the repo-local tt_dit diffusion pipeline. Start from the completed functional DiT block and assemble the whole config-driven DiT under models/tt_dit/models/transformers/<model>/; do not begin text-encoder, VAE, scheduler, multichip, or pipeline work in this goal. Reduced layer counts on a 1x1 mesh are acceptable if the real model exceeds one device's DRAM — record it.
+
+Goal completion requirements:
+- models/tt_dit/models/transformers/<model>/transformer_<model>.py assembles the full DiT config-driven: input/patch projections, context embedder, refiner layers, the N transformer blocks, the shared AdaLN table/timestep path, and the output norm + dual/again output heads. Weight loading reuses the functional block's _prepare_torch_state and partial-safetensors path.
+- The assembly honors the reference mixed-precision contract: fp32-pinned modules (input/output projections, time embedder) stay fp32; the block stack runs bf16 with fp32 accumulation (HiFi4, fp32_dest_acc_en). Record the per-module dtype/fidelity map in doc/full_dit/DESIGN.md.
+- One full denoise-step velocity PCC >= 0.99 (relative_rmse <= 0.15, the tt_dit full-model bar) vs the diffusers DiT forward on real config shapes, via utils.check.assert_quality, with a real-weight run plus a synthetic-weight CI variant. A degeneracy check (no NaN/Inf in the predicted velocity) passes.
+- The shared AdaLN table is built once and gathered per row; verify the output-norm (per-timestep, not per-modality) gather matches the reference. The multi-axis position_ids / timestep_indices / adaln_indices host layout for a full sequence is validated against the reference packing.
+- Update models/tt_dit/models/transformers/<model>/doc/capability_contract.json: resolution, num_frames, fps, audio rate, latent shapes, denoise steps, block/layer counts actually instantiated, and any hard-limit reduction (reduced layers, smaller latent) with byte/probe evidence and the largest feasible value.
+- doc/full_dit/DESIGN.md and work_log.md record the assembly, the mixed-precision map, per-step velocity PCC/RMSE, peak DRAM/ASIC, reduced-config rationale, commands, and exact artifacts.
+- Runtime is free of torch, ttnn.from_torch, ttnn.to_torch, or host fallback outside from_state_dict/setup and the test boundary. Reference-dependent tests SKIP when diffusers is unimportable; do NOT upgrade the shared diffusers pin. Watcher-clean evidence (or a documented false-positive).
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

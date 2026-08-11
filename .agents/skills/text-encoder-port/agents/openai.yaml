@@ -1,0 +1,7 @@
+interface:
+  display_name: "Text Encoder Port"
+  short_description: "Port a diffusion conditioning text encoder to TTNN"
+  default_prompt: "Use $text-encoder-port to bring up a diffusion model's conditioning text encoder in tt_dit (reusing an existing clip/t5/gemma/qwen encoder where possible), tapping the correct intermediate hidden-state layer, threading size-specific rope/head_dim config, and validating hidden-state PCC >= 0.99 vs the transformers reference on the target mesh."
+
+policy:
+  allow_implicit_invocation: true

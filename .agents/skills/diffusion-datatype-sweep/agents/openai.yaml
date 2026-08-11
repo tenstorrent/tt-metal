@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diffusion Datatype Sweep"
+  short_description: "Pick fastest per-module precision holding diffusion quality"
+  default_prompt: "Use $diffusion-datatype-sweep to choose the fastest weight/activation/accumulation dtype policy per module for a TTNN diffusion model that still meets latent/reconstruction PCC and perceptual-quality bars, respecting fp32-pinned modules and L1/DRAM limits, and write a selected_precision_config.json with justifying metrics."
+
+policy:
+  allow_implicit_invocation: true

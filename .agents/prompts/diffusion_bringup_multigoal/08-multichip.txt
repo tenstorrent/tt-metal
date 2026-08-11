@@ -1,0 +1,17 @@
+/goal Use $multichip and $tt-device-usage for the $DIFFUSION_MODEL DiT under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the multichip state for the repo-local tt_dit diffusion pipeline. Start from the single-device DiT (and, where large, the text encoder) and shard them across the available mesh under models/tt_dit/models/transformers/<model>/ (a distributed variant) plus tests and docs; do not begin optimize or datatype-sweep work in this goal. Target the best possible use of the mesh available on this machine; the code need not support smaller mesh configs. This is often the FIRST run of the real full-size model.
+
+Goal completion requirements:
+- A distributed DiT variant shards the real full-size DiT across the mesh (tensor-parallel over the block stack, sharded AdaLN table on D, matching CCL for attention/FFN reductions), reusing the single-device module as the correctness baseline. If the text encoder is large, it is sharded on the same persistent mesh with its TP (+ optional FSDP) config using init_device_compute_kernel_config(arch(), ...).
+- Choose the mesh/parallel strategy before coding the final path. Record in doc/multichip/DESIGN.md the tensor/activation/AdaLN-table/collective strategy with calculated per-device shapes, shard specs, padding, and rejected alternatives. Load-time padding is acceptable when it enables better parallelism.
+- Multichip correctness vs the single-device TTNN baseline: per-step velocity PCC >= 0.99 (relative_rmse <= 0.15) on real config shapes, plus the isolated block-kind PCC checks on the mesh. A degeneracy check (no NaN/Inf) passes. Reference/baseline tests SKIP when their dependency is unimportable.
+- Report peak DRAM/ASIC on the mesh and confirm the real full-size model (no reduced layers) now fits; if a hard physical limit still forces a reduction, record the evidence and largest feasible value in capability_contract.json.
+- Warmed single-device baseline latency and multichip per-step latency, speedup, and efficiency are reported, with tt-perf-report human-readable tables plus CSV/provenance logs; use them to check communication, DRAM, compute, CCL, and data movement before accepting the path.
+- Runtime fallback audit is clean (no torch/from_torch/to_torch or host fallback in a measured per-step forward); determinism/stress coverage matches the implementation risk; watcher-clean evidence (or a documented false-positive) exists.
+- doc/multichip/DESIGN.md and work_log.md record the mesh plan, per-device shapes, PCC, peak DRAM/ASIC, perf/speedup, commands, limitations, and exact artifacts.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
