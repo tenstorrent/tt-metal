@@ -15,14 +15,31 @@ will not ship — and it is why the timing data below exists at all.
 
 ## 2. When a grid produces a bad PCC, is another grid tried?
 
-**Not reliably — and on the cell where it mattered most, no.** gemma-4-26B `-onA` tried **one** rung on the
-`sliding_attention` kind: 1 → 11 cores, PCC 0.99457, `rejected_correctness`. It then stopped searching that
-kind and shipped nothing there — while v2 had shipped **88 cores on that same kind for −12.98 %**, and 88 was
-**never tried**. On the `full_attention` kind the same cell went on to try 8 cores and kept it.
+**No — and the reason is worse than "it stopped looking".** ⚠ An earlier revision of this section said
+gemma-4-26B `-onA` *"tried one rung and stopped searching that kind"*. **That is wrong.** Reading all 33
+measurement files shows the sliding ladder was **fully swept**: rungs 2, 4, 8, 11, 22, 44, plus 7 single-norm
+ablations and the advised plan verbatim — **17 sliding measurements**.
 
-So a correctness rejection at one rung terminated the ladder for that kind. That is a **more precise
-explanation of g26onA's miss** than the oracle-clause defect: the rule that vetoes is one thing, and stopping
-the search on a veto is another. Both need fixing, and the skill says nothing about the second.
+What happened is narrower and more expensive. All 17 carry `verdict = rejected_kind_by_absolute_oracle`, and
+**sixteen of them carry, verbatim:**
+
+```
+"oracle_pcc": "not_retested; sliding kind vetoed at its best measured rung"
+```
+
+Exactly one has a number: `ladder_11_sliding`, the kind's fastest at 1.581980 ms, at **PCC 0.99457296** against a
+0.995 bar. So:
+
+> the oracle was built on the kind's **best** rung → it missed the bar by **0.0003** → **the verdict was
+> generalised to the entire layer kind**, and sixteen configurations were rejected without being tested.
+
+**The performance search was complete and correct; the correctness verdict was extrapolated.** Two of the
+untested rungs (8 and 22) are within 0.25 % of the tested one. And **88 — the advised grid and v2's winner — is
+not on the ladder at all**, which stops at 44.
+
+Cost: 1.581980 vs 1.824205 = **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198.
+**73 % of the entire v3-vs-v2 gap across all five comparable cells, from one untested inference.**
+[`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §1.3–1.5 has the full ladder and the layouts.
 
 ## 3. Do we have every case collected? Not yet, and the reason is a gate of mine
 
@@ -71,9 +88,14 @@ norm**, which points at that path's input — mask, shape or dtype — rather th
 result that depends on the *core count* of a reduction, non-monotonically, is the shard-spec bug signature the
 corpus described.
 
+**And v2's number for the same kind is now precise: PCC 0.998993 at 88 cores**, from its own `final.json`
+(real-weight HF layer reference). So 88 passes at 0.9990 while 11 fails at 0.9946 on the same op, model, kind and
+host — if that holds, PCC is **non-monotonic in a reduction's core count**, which is a tt-metal shard-spec
+question rather than a stage question.
+
 **What is needed to file it**, and none of it is expensive: an isolated single-op test of gemma-4-26B's
-sliding-attention `rms_norm` at 1, 11, 22, 44 and 88 cores against a fixed reference, on this host, with the
-shard shape from `final_ir.mlir`. If 11 and 22 degrade while 1 and 88 do not, it is a tt-metal report with a
+sliding-attention `rms_norm` at 1, **8**, 11, 22, 44 and **88** cores against a fixed reference, on this host,
+with the shard shape from `final_ir.mlir` — 8 and 88 added because they are the two grids that decide it. If 11 and 22 degrade while 1 and 88 do not, it is a tt-metal report with a
 reproduction. If all of them degrade, then **v2's 0.999629 is the number in question** and the −12.98 % it
 shipped needs re-examining.
 
@@ -109,8 +131,11 @@ filing rather than writing off as a tight bar.
 
 1. **`op_under_test` and `oracle_pcc` CRITICAL per screened candidate** — without them this document cannot be
    built from the artefacts, and I had to reconstruct it from a different file.
-2. **A correctness rejection must not end the ladder for that kind.** Record the remaining rungs as
-   `not_screened_after_correctness_rejection` so the gap is visible; g26onA never tried the grid v2 shipped.
+2. **A correctness rejection must not propagate to configurations that were never tested.** The ladder is
+   swept; the oracle is not. Test the rungs, or record them as `not_screened_after_correctness_rejection` so the
+   gap is visible. Worth ~6,055 µs/model on g26onA alone.
+2b. **Put the advised grid and the previous version's shipped grid on the ladder.** 88 was the one rung never
+   measured, and both open questions here turn on it.
 3. **Isolated single-op test** for §4, on this host, at 1/11/22/44/88 cores.
 4. Until §4 is settled, gemma-4-26B's sliding-attention norm results — v2's and v3's — are **mutually
    inconsistent**, and neither should be quoted as settled.

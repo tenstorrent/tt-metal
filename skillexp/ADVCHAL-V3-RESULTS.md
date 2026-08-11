@@ -1,165 +1,195 @@
-# advchal-v3 — results: 11 cells, expected against measured
+# advchal-v3 — results: did v3 beat v2?
 
-Stage frozen at `advchal-v3/stage-frozen` = `4ea2fb1fb7d`. All 11 challenger cells ran against that tree, in
-one queue, on one host, each from an incumbent pinned by SHA. `run_dense.sh`'s four cells are paused after
+**No. On the same 11 cells v3 delivered −6,769 µs/model against v2's −15,177 µs — 45 %.** It is better than v2
+at *measuring*, and worse at *acting on what it measured*.
+
+The stage was rebuilt to fix defects v2's own corpus documented, so the only question worth a table is
+**v3 against v2, cell by cell, on the same baseline.** That is this file. Op-level and layout-level detail for
+the three cells that lost the most is in [`OP-BY-OP-VS-V2`](ADVCHAL-V3-OP-BY-OP-VS-V2.md); why the predictions
+missed is in [`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md).
+
+Stage frozen at `advchal-v3/stage-frozen` = `4ea2fb1fb7d`. All 11 challenger cells ran against that tree, in one
+queue, on one host, each from an incumbent pinned by SHA. `run_dense.sh`'s four cells are **paused** after
 `gemma4-12b` pending a decision on the oracle rule ([`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §3.1).
 
-Expectations are from [`EXPECTATIONS`](ADVCHAL-V3-EXPECTATIONS.md); v2 figures are that corpus's own results
-table. Δ is per layer on the cell's dominant kind; µs/model is the cell's own `model_estimate` delta.
+**Every v2 and v3 figure below is `model_estimate.before_us − after_us` from that cell's own published
+`final.json`** — not from either corpus's summary table, which disagreed with the artefacts on three of five
+cells (§5).
 
-## 1. Every cell
+---
 
-| cell | v2 | expected | **measured** | µs/model | band | established? |
-|---|---|---|---|---:|---:|---|
-| gemma-4-26B `-onA` | −12.98 % *(cell-wide; **−7,105 µs**)* | ~1.2 % ⚠⚠ *(refuted pre-run — §1b)* | **−12.10 % on `full_attention` (5 L); `sliding` +0.00 %** | −1198 | 334 | yes |
-| phi-3.5 `-onA` (phiA) | −8.75 % | ~1.5 % | **−5.97 %** | −1254 | 30 | yes |
-| north-mini `-onA` | **0.0 %** | ~0.5 % | **−3.94 %** | −1400 | 47 | yes |
-| gemma-4-26B `fuse-noadvise` | −2.04 % | unknown | **−2.16 % sliding (25 L), −4.04 % full (5 L)** | −986 | 64 | yes |
-| north-mini `fuse-noadvise` | −10.23 % *(void)* | −1.76 % *(measured in shakedown)* | **−1.69 %** | −351 | 42 | yes |
-| phi-3.5 `fuse-noadvise` | −4.91 % | ~2.8 % | **−1.08 %** | −278 | 31 | yes |
-| qwen3.6 `nofuse-noadvise` | **0.0 %** | ~0.02 % | **−0.12 % on `linear_attention` (48 L), −1.16 % full (16 L)** | −1130 | 372 | yes |
-| north-mini `nofuse-noadvise` | **0.0 %** | ~0.1 % | **−0.59 %** | −171 | 116 | yes |
-| gemma-4-26B `nofuse-noadvise` | −0.34 % | uncalibrated | **`measured_zero`** | 0 | 26 | — |
-| phi-3.5 `nofuse-noadvise` (phiB) | −5.74 % | ~1.3 % | **`no_change`** | 0 | 12 | — |
-| qwen3.6 `fuse-noadvise` | inside band | ~0.4 % | **`no_change`** | 0 | 385 | — |
+# 1. v3 against v2, all 11 cells
 
-**8 of 11 shipped a change, and all 8 are outside their own uncertainty band.** Corpus total
-**−6,769.6 µs/model ≈ 6.8 ms**.
+`µs/model` is the only kind-weighted, comparable quantity; per-layer percentages are per *layer kind* and the
+cells improved different kinds, so they are not comparable across versions (§5).
 
-## 1a. ⚠ CORRECTION — the percentage column is not comparable to v2's, and one row was wrong
+| cell | v2 µs/model | v3 µs/model | v3 / v2 | verdict | why |
+|---|---:|---:|---:|:--|---|
+| **gemma-4-26B `-onA`** | **−7,105.4** | −1,198.3 | **17 %** | 🔴 **much worse** | swept a better ladder than v2 and found better grids on **both** kinds — then vetoed all 17 sliding measurements from **one** untested PCC inference. **−6,055 µs on one decision.** [OP-BY-OP §1.4](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
+| **north-mini `fuse-noadvise`** | −2,551.3 ⚠ | −351.3 | 14 % | 🔴 worse | v2's cell is the one its own driver marked `CONTAMINATED`, untagged, and step 0 could not reproduce its window. **The 14 % is against a number that was never checkable** |
+| **phi-3.5 `-onA`** | −1,594.1 | −1,254.4 | 79 % | 🟠 slightly worse | closest reproduction of a v2 win in the run; the residue is two clause-2 oracle artefacts at PCC gaps of 10⁻⁷ (§3) |
+| **phi-3.5 `nofuse-noadvise`** | −1,284.9 | **0** | **0 %** | 🔴 **total loss** | **same idea, different code.** v3 substituted an interleaved geometry where v2 kept the arithmetic sharded, and returned the key in the query's layout → **PCC 0.917 vs v2's 0.9990.** Two lines. [OP-BY-OP §2](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
+| **phi-3.5 `fuse-noadvise`** | −1,267.5 | −278.2 | 22 % | 🔴 worse | **could not express** v2's change — the capture substitutes `_decode_rope` — so it shipped a smaller one. A capability gap, not a decision defect. [OP-BY-OP §3](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
+| **qwen3.6 `fuse-noadvise`** | −434.0 | **0** | **0 %** | 🔴 loss | `no_change`: nothing measured faster. Its 97 %-of-model kind is **still unmeasured**, so the cell is uninformative in both versions |
+| **gemma-4-26B `nofuse-noadvise`** | −147.9 ⚠ | **0** | **0 %** | 🟠 disputed | `measured_zero`. Found a **−12.4 %** candidate v2 never screened, then rejected it at PCC 0.99469 vs a 0.995 bar. v2's artefacts report **0.99931** for the same pair — contradiction, **unresolved (P3)** |
+| **gemma-4-26B `fuse-noadvise`** | −791.7 | **−986.4** | **125 %** | 🟢 **better** | beat v2 outright, same baseline |
+| **north-mini `-onA`** | **0.0** | **−1,400.0** | new | 🟢 **new** | v2 saw nothing here: the sparse-MoE kind never captured. v3's tracer handlers made it visible |
+| **qwen3.6 `nofuse-noadvise`** | **0.0** | **−1,129.8** | new | 🟢 **new** | same mechanism; its dominant kind now captures |
+| **north-mini `nofuse-noadvise`** | **0.0** | **−171.2** | new | 🟢 **new** | same mechanism |
+| **TOTAL** | **−15,176.8** | **−6,769.3** | **45 %** | | |
 
-An earlier revision of this table put v2 at −12.98 %, an expectation of ~1.2 % and a measured −11.91 % on the
-same row for gemma-4-26B `-onA`, and called it *"reproduces v2"*. **All three numbers are on different footings
-and the verdict was false.** Corrected here.
+⚠ `nmFN` and `g26B` carry **no v2 `done` tag** — both were "complete, untagged". Their v2 figures are
+transcript-derived, and `nmFN`'s is the one the v2 corpus itself treats as void.
 
-**The percentages are per *kind*, and cells improved different kinds.** For that cell:
+## 1.1 Split by where v3's output came from
 
-**v2 improved *both* kinds** — from its `model_estimate.per_kind`, not from its percentage column:
+| | v2 | v3 | |
+|---|---:|---:|---|
+| **the 8 cells v2 won** | **−15,176.8** | **−4,068.3** | **27 %** |
+| **the 3 cells v2 scored 0.0** | 0.0 | **−2,701.0** | value v2 could not see at all |
+| **all 11** | −15,176.8 | −6,769.3 | 45 % |
 
-| kind | layers | v2 `after_us` | v3 `after_us` | v2 Δ | v3 Δ |
-|---|---:|---:|---:|---|---|
-| `sliding_attention` | **25** | 38,809.3 | **44,728.3 — unchanged** | **−5,919.0 µs (−13.23 %)** | **0 — nothing** |
-| `full_attention` | 5 | 8,718.9 | **8,707.0** | −1,186.3 µs (−11.98 %) | **−1,198.3 µs (−12.10 %)** |
-| | | | | **−7,105.4** | **−1,198.3** |
+**40 % of everything v3 shipped comes from cells v2 was blind to**, and on the cells where both versions could
+see the work v3 shipped **a quarter** of what v2 did. That is the run's result, and it is the opposite shape from
+what was predicted.
 
-Both start from the identical `before_us` (44,728.325 / 9,905.275), so these are the same measurement twice.
-Two things follow, and the first was not visible in the percentage column at all:
+## 1.2 Where the 8,407 µs went — three cells are 98 % of it
 
-- **on `full_attention`, v3 reproduces v2 to 0.14 %** — 8,707.0 against 8,718.9. That is the strongest
-  cross-version agreement in the run, and it is what makes the other row a finding rather than noise.
-- **on `sliding_attention`, v3 got nothing where v2 got −5,919 µs**, on the kind carrying five times more layers.
-  Why: it tried **one** rung (1 → 11 cores), hit PCC 0.99457 against a 0.995 bar, and stopped searching that
-  kind — never trying the 88 cores v2 shipped. [`PCC-BY-GRID`](ADVCHAL-V3-PCC-BY-GRID.md) §2,
-  [`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §3.2a.
+| loss | µs | category |
+|---|---:|---|
+| g26onA sliding: 17 measurements vetoed from 1 PCC sample | **−5,907** | **decision, taken against data in hand** |
+| phiB: v3's own substituted geometry is slower **and** PCC 0.917 | **−1,285** | **implementation, two lines** |
+| phiFN: rope placement inexpressible (capture substitution) | **−989** | **capability** |
+| phiA residue: clause-2 oracle artefacts at 10⁻⁷ | −340 | decision |
+| qwenFN, g26B, nmFN (void) | −582 | mixed / not comparable |
+| g26FN: v3 ahead | **+195** | — |
 
-At model scope: **−1,198 µs against v2's −7,105 µs — 17 %.** "Reproduces v2" was true of one kind and false of
-the cell, and I produced it by comparing a v3 headline percentage against a v2 percentage without checking they
-described the same layer kind — the error v2's own corpus warns about twice (*"state the scope on every
-number"*, *"per-layer ranking picks the wrong candidate across kinds"*).
+**Two of the three biggest losses are decisions or implementation errors made against measurements v3 already
+held.** Not one is a case of v2 finding something v3 could not find.
 
-**Only `µs/model` is kind-weighted and therefore comparable.** On that basis, for the four cells where v2's
-control and layer counts are both recorded:
+---
 
-| cell | v2 µs/model | v3 µs/model | v3 as % of v2 | baselines agree? |
-|---|---:|---:|---:|---|
-| gemma-4-26B `-onA` | **−7,105.4** | −1,198.3 | **17 %** | **exactly** — `before_us` 54,633.6 both |
-| phi-3.5 `-onA` | −1,594.1 | −1,254.4 | 79 % | 18,210.9 vs 18,268.3 (+0.3 %) |
-| phi-3.5 `fuse-noadvise` | −1,267.5 | −278.2 | 22 % | 23,205.6 vs 23,162.7 (−0.2 %) |
-| phi-3.5 `nofuse-noadvise` | −1,284.9 | **0** | **0 %** | 22,392.6 vs 22,302.8 (−0.4 %) |
-| gemma-4-26B `fuse-noadvise` | −791.7 | **−986.4** | **125 %** | 38,887.6 vs 39,227.3 (+0.9 %) |
-| **those five** | **−12,043.6** | **−3,717.3** | **31 %** |  |
+# 2. Expectations — every one was stated on the wrong basis
 
-Against that, the three cells v2 scored 0.0 % give v3 **−2,701 µs/model**. So the honest summary is:
-**v3 recovers about a third of what v2 delivered on the cells v2 won — beating it on one — and adds roughly the
-same amount again from cells v2 could not see at all.** It is a more trustworthy 6.8 ms, not a larger one.
+The expectations were supposed to answer *"how much does v3 improve on v2?"* Every published number instead
+answered *"what is this cell's total addressable pool?"* — a different question, computed from v2's own
+reconciliation artefacts, and **never once compared against what v2 had already delivered.**
 
-**Three corrections inside this table itself,** all from re-reading v2's `final.json` rather than its results
-table: g26onA's v2 figure was the **sliding-only** −5,919 µs where the cell shipped **both** kinds for −7,105 µs;
-phiA was −1,840 (should be −1,594.1) and phiB −1,449 (should be −1,284.9); and **g26FN was omitted although it
-is comparable — and it is the cell where v3 beat v2.** Every v2 number here is now
-`model_estimate.before_us − after_us` from that cell's own published `final.json`.
+| cell | v2 delivered | **v3 expected** | v3 measured | was the expectation even ≥ v2? |
+|---|---:|---:|---:|:--|
+| gemma-4-26B `-onA` | **−13.01 %** | **~1.2 %** | −12.10 % (full kind only) | ❌ **refuted before the run — §2.1** |
+| phi-3.5 `-onA` | −7.58 % | ~1.5 % | −5.97 % | ❌ below v2 |
+| phi-3.5 `nofuse-noadvise` | −5.09 % | ~1.3 % | 0 | ❌ below v2 |
+| phi-3.5 `fuse-noadvise` | −4.91 % | ~2.8 % | −1.08 % | ❌ below v2 |
+| north-mini `fuse-noadvise` | −9.26 % (void) | −1.76 % | −1.69 % | ✅ the one honest row — it was **measured** in the shakedown, not modelled |
+| **corpus total** | **−15,177 µs** | **"of order 1 ms"** | **−6,769 µs** | ❌ **off by 15× against banked results** |
 
-## 1b. ⚠⚠ And the ~1.2 % expectation should never have been published — it was refuted by v2's own data
+**Five of six expectations sat below what that cell had already been measured to deliver.** That is not
+pessimism — it is a formula that was never checked against its own inputs. The one row that held is the one
+that came from a measurement instead of the formula.
 
-Asked plainly: *why would we ever expect less than v2 got?* We would not, and there is no defence.
+## 2.1 ⚠⚠ The refutation, on the largest cell
 
-**v2's `final.json` for this cell: `before_us` 54,633.6 → `after_us` 47,528.2 = −7,105.4 µs = −13.01 %,
-shipped, fresh-process confirmed, real-weight oracle passed. v3's incumbent profiles the same cell at
-`before_us` 54,633.6 — the identical number.** Same baseline, same host, same frozen incumbent. So a
-**~1.2 % expectation sat below a 13.0 % result already on file from the same starting point**, and the 9.6 %
-figure I called an *upper bound* was **below a delivered measurement**. A bound that excludes an observation
-drawn from its own source data is refuted on sight — no device time required.
+| | |
+|---|---|
+| v2's `final.json` | `before_us` **54,633.6** → `after_us` **47,528.2** = **−7,105.4 µs = −13.01 %**, shipped, fresh-process confirmed, real-weight oracle passed |
+| v3's incumbent | `before_us` **54,633.6** — the identical number |
+| published as the **upper bound** | **9.6 %** |
+| published as the expectation | **~1.2 %** |
 
-**Why the pool came out that small, which is the mechanism:** `flagged` is the **advisor-attributable** share of
-the profile window, and this cell's v2 reconciliation reports a **0.000 µs advisor-attributable ceiling** with
-**64.7 % of the sliding window untraced**. The capacity metric therefore inherited the exact attribution defect
-the cliff check was built to bypass — and
-[`EXPECTATIONS`](ADVCHAL-V3-EXPECTATIONS.md) states the caveat two paragraphs above the table that uses it.
+Same baseline, same host, same frozen incumbent. **An upper bound below a delivered measurement on the same
+baseline is refuted on sight** — no device time required.
 
-**The check that was missing is one comparison per row:** *is this estimate at least what the cell has already
-been measured to deliver from the same baseline?* If not, the formula is refuted for that cell, not the floor.
-Applied corpus-wide it kills the headline too: "of order 1 ms" against **12.0 ms** banked across v2's five
-comparable cells.
+**Why the pool came out that small**, now mechanical rather than inferred. `flagged` counts only the
+**advisor-attributable** share of the profile window, and this cell's v2 reconciliation reports a **0.000 µs
+advisor-attributable ceiling** with 64.7 % of the sliding window untraced. The reason:
+**v2's committed per-op CSVs for this cell hold 25 and 30 rows totalling 138.8 and 303.8 µs of a 1,789 and
+1,981 µs layer — and not one `LayerNorm` row**, i.e. no trace of the op v2 shipped
+([`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §1.6). So the capacity metric inherited exactly the attribution
+defect the cliff check exists to bypass — and [`EXPECTATIONS`](ADVCHAL-V3-EXPECTATIONS.md) states that caveat
+two paragraphs above the table that used it.
 
-There is a *separate*, smaller error underneath it — the open question for this cell was the **44-vs-88
-increment** (≈0.1 pp), and a total-pool number cannot answer an increment question at all. But that one is
-cosmetic next to publishing a bound below a known result.
+**The missing check is one comparison per row:** *is this estimate at least what the cell has already been
+measured to deliver from the same baseline?* If not, the formula is refuted for that cell, not the floor.
 
-For scale: v2 claimed "≈9.2 ms/model still on the table"; my revised expectation was "of order 1 ms"; **12.0 ms
-was already delivered and 6.8 ms was measured.** Both predictions were wrong and **the revision was the worse
-of the two** — [`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §2.0.
+A smaller, separate error sits underneath: the open question for this cell was the **44-vs-88 increment**
+(≈0.1 pp), and a total-pool number cannot answer an increment question at all. Cosmetic next to publishing a
+bound below a known result. → [`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §2.0.
 
-## 2. The three coverage zeros, which are the clean win
+---
 
-| cell | v2 | v3 | mechanism |
-|---|---|---|---|
-| north-mini `-onA` | 0.0 % | **−1400 µs/model** | tracer handlers: the sparse-MoE kind became visible |
-| qwen3.6 `nofuse-noadvise` | 0.0 % | **−1130 µs/model** | same; its dominant kind now captures |
-| north-mini `nofuse-noadvise` | 0.0 % | **−171 µs/model** | same |
+# 3. Shipped against each cell's own best measurement
 
-**2.7 ms/model — 40 % of the run's total — comes from three cells that previously reported nothing.** This is
-the one prediction that held in kind and beat its size, and it is the coverage argument, not the placement
-argument: these cells were not screened badly, the advisor was never shown the layer.
-
-## 3. Shipped against each cell's own best measurement
-
-The question the stage exists to answer is *"did it ship the best thing it measured?"*
+The question the stage exists to answer: *did it ship the best thing it measured?*
 
 | cell | shipped | best measured | left on the table | why not shipped |
 |---|---:|---:|---:|---|
-| gemma-4-26B `nofuse-noadvise` | 1.257985 | **1.101676** | **−12.43 %** | absolute oracle, 0.99469 vs 0.995 bar — **disputed**, P3 |
-| gemma-4-26B `-onA` | 1.772132 | **1.581980** | **−10.73 %** | 14 × `rejected_kind_by_absolute_oracle` |
+| gemma-4-26B `-onA` | 1.772132 | **1.581980** *(sliding, 11 cores)* | **−10.73 %** | 17 × `rejected_kind_by_absolute_oracle`, from **one** tested rung at 0.99457 |
+| gemma-4-26B `nofuse-noadvise` | 1.257985 | **1.101676** | **−12.43 %** | absolute oracle, 0.99469 vs a 0.995 bar — **disputed**, P3 |
 | north-mini `fuse-noadvise` | 0.568391 | 0.541720 | −4.69 % | cross-kind: the fast one is a different layer kind |
-| phi-3.5 `nofuse-noadvise` | 0.788347 | 0.755911 | −4.11 % | **PCC 0.9173** — genuinely broken, correctly rejected |
+| phi-3.5 `nofuse-noadvise` | 0.788347 | 0.755911 | −4.11 % | **PCC 0.9173** — genuinely broken, correctly rejected. **But v3's own substitution is what broke it** |
 | gemma-4-26B `fuse-noadvise` | 1.278301 | 1.250767 | −2.15 % | oracle |
-| phi-3.5 `-onA` | 0.617275 | 0.611697 | **−0.90 %** | **clause-2 artefact — PCC gap 1.2 × 10⁻⁷.** A defect, §3.1 of DEVIATIONS |
+| phi-3.5 `-onA` | 0.617275 | 0.611697 | **−0.90 %** | **clause-2 artefact — PCC gap 1.2 × 10⁻⁷.** A defect, [`DEVIATIONS`](ADVCHAL-V3-DEVIATIONS.md) §3.1 |
 | north-mini `nofuse-noadvise` | 0.610086 | 0.607920 | −0.35 % | composite policy, per-kind winner shipped |
 | phi-3.5 `fuse-noadvise` | 0.798063 | 0.798063 | 0 | **shipped its best** |
 | north-mini `-onA` | 0.280288 | 0.280288 | 0 | **shipped its best** |
 | qwen3.6 `nofuse-noadvise` | 1.434794 | 1.434794 | 0 | **shipped its best** |
 | qwen3.6 `fuse-noadvise` | 1.208144 | 1.222304 | — | nothing measured faster |
 
-**Four cells shipped exactly their best. Seven did not, and in every case an oracle verdict is the reason.**
-So the decision procedure now *records* why — which v2 did not — but the rule doing the recording is itself
-under suspicion.
+**Four cells shipped exactly their best. Seven did not, and in every case an oracle verdict is the reason.** The
+procedure now *records* why — v2 could not — but the rule doing the recording is itself under suspicion, and on
+the biggest cell it rejected 16 configurations it never tested.
 
-## 4. What `apply_all` did, per cell
+---
 
-F5's bound, measured rather than assumed:
+# 4. What v3 is unambiguously better at
 
-| verdict | cells |
-|---|---|
-| `hard_error` (no knob for the advised placements) | 6 — phiFN, phiA, phiB, g26B, nmFN, nmOnA |
-| applied and measured, in some form | **5** — g26onA (`measured`), g26FN and nmB (`…maximal_expressible_subset`), nmB again (`…then_ablated`), qwenB (`hard_error_then_maximal_expressible_subset_measured`) |
-| `rejected` | 1 — qwen |
+Stated separately so the 45 % is not read as "the rebuild failed":
 
-So *"F5 is unexecutable"* — which I wrote after one cell — is **too strong**: five cells applied an expressible
-subset, and the cell with the largest single-kind gain (g26onA, −12.10 % on `full_attention`) is the cell that
-applied the advised plan and measured it. The bound is real and partial, not absolute.
+| | v2 | v3 |
+|---|---|---|
+| **per-op coverage** | g26onA: **7.8 % / 15.3 %** of the layer, **zero norm rows** — no op-level evidence for its own shipped op | **100 %** of both layers, all 11 norms, per-call µs and core counts |
+| **grid search** | the advised grid only (88 cores) | 6-rung ladder + 7 ablations + advised-verbatim, **both kinds** — and **better grids than v2 on both**: 8 cores beats 88 by 0.26 %, 11 beats 88 by 0.33 % |
+| **layer-kind coverage** | 3 cells reported 0.0 % because their dominant kind never captured | those 3 now report **−2,701 µs**, 40 % of the run |
+| **oracle** | phiFN: **differential vs itself, PCC 1.0**; g26onA: no per-candidate reference recorded | **absolute on every cell**, both sides reported, bar sourced to the model's own test file |
+| **decision recording** | shipped without op-level evidence for the shipped op | every rejection carries a verdict — **this file and `OP-BY-OP` exist only because of that** |
+| **provenance** | 2 of 15 cells untagged; one `CONTAMINATED` | 11/11 tagged, `tracer_matches_checkout=True`, no optimizer drift, `device_users=[0,0]` on every measurement, `.agents` byte-identical to the frozen tree, no blob shared with any v2 run, all 156 parked refs still unnamed |
+| **incumbent reproduction** | — | phiB **0.788347 vs 0.788610** (0.03 %) with its 60-op profile matching v2's op-for-op inside 0.5 %; g26onA `before_us` **identical**; nmFN control `0.1727` both |
 
-## 5. Provenance, uniform across all 11
+**The measurement apparatus improved on every axis. The decision layer got worse.**
 
-`tracer_matches_checkout=True`, `optimizer_files_changed_since_pin=[]`, advisor at `97724a1170` against the
-pin, `device_users=[0,0]` on every measurement, `.agents` byte-identical to the frozen tree on every cell, no
-blob shared with any v2 run, all 156 parked refs still unnamed at the end of every cell. One publish failure,
-no measurement lost — [`RUN-LOG`](RUN-LOG.md) P6.
+---
+
+# 5. Why percentages were the wrong column, and what it cost
+
+An earlier revision of §1 compared **v3 headline percentages against v2 headline percentages** and, on
+gemma-4-26B `-onA`, read −11.91 % against −12.98 % and called it *"reproduces v2"*. Three separate faults:
+
+1. **the percentages are per layer kind**, and the cells improved different kinds;
+2. **v2's "−12.98 %" is a single cell-level figure repeated on both kind rows** of its own tables — not a
+   sliding-only number. v2 improved **both** kinds;
+3. **the v2 µs figures were wrong on three of five cells**, because I took them from v2's results table instead
+   of its `final.json` files.
+
+Re-derived from the artefacts:
+
+| | published | the artefact says |
+|---|---:|---:|
+| g26onA | −5,923 *(sliding only)* | **−7,105.4** *(sliding −5,919.0 + full −1,186.3)* |
+| phiA | −1,840 | **−1,594.1** |
+| phiB | −1,449 | **−1,284.9** |
+| g26FN | *omitted as not comparable* | **−791.7 — and v3 beat it, 125 %** |
+| totals | four cells, −10,480 → 26 % | **five cells −11,251.9 → 24 %; all eleven −15,176.8 → 45 %** |
+
+**Correcting it surfaced the run's strongest result, which the percentage columns had hidden.** On gemma-4-26B
+`-onA`, from identical `before_us`:
+
+| kind | layers | v2 `after_us` | v3 `after_us` | v2 Δ | v3 Δ |
+|---|---:|---:|---:|---|---|
+| `sliding_attention` | **25** | 38,809.3 | **44,728.3 — unchanged** | **−5,919.0 µs (−13.23 %)** | **0 — nothing** |
+| `full_attention` | 5 | 8,718.9 | **8,707.0** | −1,186.3 µs (−11.98 %) | **−1,198.3 µs (−12.10 %)** |
+
+**v3 reproduces v2 to 0.14 % on `full_attention`** — the tightest cross-version agreement in the run — and gets
+**zero** on the kind carrying five times the layers. Same op, same model, same host, one PCC sample apart. That
+contrast is what makes §1.2's largest row a finding rather than noise, and it is invisible in any percentage
+column.

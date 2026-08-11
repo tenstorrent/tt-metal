@@ -15,7 +15,7 @@ The distribution is the finding, so it goes first.
 |---|---|---|
 | **(A) wrong estimates** | 5 | credibility of the predictions — no measurement was harmed, but **one (§2.0) was refuted by its own source data before the run** |
 | **(B) wrongly implemented** | 3 | noise: false positives that make real signals harder to see |
-| **(C) unexpected side effects** | 4 | **the actual lost wins** — 0.90 % provably on one cell, and plausibly gemma-4-26B `-onA`'s entire sliding kind (§3.2a) |
+| **(C) unexpected side effects** | 4 | **the actual lost wins** — **−6,055 µs/model measured** on g26onA's sliding kind (§3.2a), −1,285 µs on phiB (§3.2), −340 µs on phiA (§3.1) |
 
 **Estimates cost credibility, implementations cost noise, side effects cost value.** And the side effects are
 the category I never looked for.
@@ -156,23 +156,47 @@ substitute is a new configuration nobody validated. So the bound does not merely
 correctness surface. `inexpressible[]` should therefore also record *what was substituted*, and a substituted
 geometry should be labelled as such rather than presented as the advice.
 
-This also revises §2.3: phiB's `no_change` is **correct** — the only faster thing it found breaks the model.
-Whether v2's −5.74 % shipped that same broken geometry is now an open question about v2, not about v3.
+⚠ **And the follow-up settles the open question the wrong way for v3.** This entry originally concluded that
+phiB's `no_change` was correct and left open whether v2 had shipped the same broken geometry. **It had not.**
+The two versions wrote *different knobs* into `tt/optimized_decoder.py` — v2's `advisor_rope_l1_chain`, v3's
+`advisor_rope_l1` — and they differ in exactly two places: v2 does the `multiply`/`add` in the query's **sharded**
+config where v3 does them **interleaved**, and v2 restores the key to `key_memory_config` where v3 returns
+**both** tensors in `rope_memory_config`. v2's version measures **−5.09 % at PCC 0.998993** with the identical
+oracle harness (`CACHE_SOURCE reference_fill recorded_target_prefix prefix_length=127 batch=32`, string-for-string
+the same). So:
 
-## 3.2a A correctness rejection ends the ladder for that kind — nothing says it should not
+> **v3's `no_change` is right about its own candidate and wrong about the cell.** It rejected a defective
+> implementation of a change that is achievable, achieved and correct in the other version's tree — and the
+> defect is two lines of v3's own substitution, not a property of the model or of tt-metal.
 
-Found while collecting [`PCC-BY-GRID`](ADVCHAL-V3-PCC-BY-GRID.md). gemma-4-26B `-onA` tried **one** rung on the
-kind v2 won — 1 → 11 cores, PCC 0.99457, `rejected_correctness` — and then stopped searching that kind. **The
-grid v2 shipped, 88 cores, was never tried.** On the other kind the same cell went on to a second rung and kept
-it.
+[`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §2 has the code side by side and the per-op profile that confirms it:
+v2's `BinaryNg` ×6 run at `L1_HEIGHT_SHARDED`, 13.25 µs, a row v3's interleaved path cannot produce.
 
-So this is a **better explanation of that cell's miss than §3.1**: the rule that vetoes is one problem, and
-*stopping the search on a veto* is a different one. `SKILL.md` says to sweep the ladder and says nothing about
-what to do when a rung fails correctness — so the cell did the locally sensible thing and abandoned the class.
+## 3.2a One PCC sample vetoed seventeen measurements — the run's single most expensive line
 
-Unmodelled because I specified the ladder as a *performance* search and the oracle as a *gate*, and never
-considered their interaction. Fix: a correctness rejection continues the ladder, and the untried rungs are
-recorded as `not_screened_after_correctness_rejection` so the gap is visible rather than silent.
+⚠ **An earlier revision of this entry was wrong** and is corrected here. It said gemma-4-26B `-onA` *"tried one
+rung and stopped searching that kind"*. Reading all 33 measurement files shows **the sliding ladder was fully
+swept** — rungs 2, 4, 8, 11, 22, 44, seven single-norm ablations and the advised plan verbatim, **17 sliding
+measurements**, the fastest at **1.581980 ms (−13.28 %)**, which is *faster than the 1.5873 v2 shipped*.
+
+The actual defect: all 17 carry `verdict = rejected_kind_by_absolute_oracle`, and **sixteen** carry
+`"oracle_pcc": "not_retested; sliding kind vetoed at its best measured rung"`. Exactly one was tested —
+`ladder_11_sliding`, at **PCC 0.99457** against a 0.995 bar, missing it by **0.0003**.
+
+> **The performance search was complete and correct. The correctness verdict was extrapolated from one
+> configuration to sixteen that were never measured.** Two of them (8 and 22 cores) are within 0.25 % of the
+> tested one.
+
+**−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198. **73 % of the whole v3-vs-v2
+gap.**
+
+Unmodelled because I specified the ladder as a *performance* search and the oracle as a *gate*, and never asked
+what **scope** a gate verdict has. `SKILL.md` says to sweep the ladder and says nothing about how far a
+correctness rejection generalises — so the cell picked the widest scope available. Fix: an oracle verdict binds
+only the configuration it was measured on; untested rungs are recorded as
+`not_screened_after_correctness_rejection`. And **put the advised grid and the prior version's shipped grid on
+the ladder** — 88 was the one rung never measured, and both remaining open questions turn on it.
+[`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §1.3–1.5.
 
 ## 3.3 Parking a cell branch but not its run branch collides at publish
 
