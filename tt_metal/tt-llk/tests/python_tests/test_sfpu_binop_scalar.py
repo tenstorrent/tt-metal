@@ -14,7 +14,6 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_domains import SPECIALS_READY_OPS, edge_spec, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -186,47 +185,31 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
 
 
-@pytest.mark.nightly
-@parametrize(
-    formats=_SCALAR_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=_SCALAR_OPS,
-)
-def test_sfpu_binop_scalar_edges(request, formats, dest_acc, mathop):
-    """The scalar axis' counterpart: edge values on the *tensor* operand.
-
-    All five ops are x (+|-|*|/) c for a compile-time c, which is smooth in x -- no pole,
-    no knee -- so cat A and cat D contribute nothing and edge_spec() returns None. What is
-    left is cat B, and that is gated per op on SPECIALS_READY_OPS, which is empty until the
-    goldens define a result for non-finite inputs. So today every variant skips, and each
-    one starts running the moment its op joins that set.
-
-    The wrapper is here rather than waiting for the goldens because it is what makes the
-    spec_A knob reachable: without it the tensor operand is only overridable by editing
-    _run_sfpu_binop_scalar, which is how it stayed pinned to uniform(-1, 1) while the
-    scalar axis was being swept.
-
-    Deliberately not swept here: |scalar| > 8 and the +/-tiny, +/-large tensor values. Both
-    need a per-op tolerance first -- the default bf16 tolerance is only meaningful while
-    the result stays in range -- which is its own piece of work.
-    """
-    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
-
-    specials = mathop in SPECIALS_READY_OPS and specials_safe(
-        formats.input_format, formats.output_format, dest_acc
-    )
-    spec_A = edge_spec(
-        mathop,
-        formats.input_format,
-        formats.output_format,
-        specials=specials,
-    )
-    if spec_A is None:
-        pytest.skip(
-            reason=f"{mathop.name} has no edge values for the tensor operand "
-            f"(smooth in x; cat B gated on SPECIALS_READY_OPS)"
-        )
-
-    _run_sfpu_binop_scalar(
-        formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, spec_A=spec_A
-    )
+# Not swept here yet: edge values on the *tensor* operand. All five ops are
+# x (+|-|*|/) c for a compile-time c, which is smooth in x -- no pole, no knee -- so cat A
+# and cat D contribute nothing and edge_spec() returns None for every one of them. What is
+# left is cat B, gated per op on SPECIALS_READY_OPS, which is empty until the goldens
+# define a result for non-finite inputs.
+#
+# A wrapper written now would therefore skip every variant it collected: nightly runtime
+# and a test name that reads like protection, with no executable assertion behind it. What
+# it needed to exist was the spec_A hook on _run_sfpu_binop_scalar, and that is in place —
+# so add the wrapper in the commit that makes the first scalar golden specials-ready,
+# where its skips turn into runs:
+#
+#     @pytest.mark.nightly
+#     @parametrize(formats=_SCALAR_FORMATS, dest_acc=[...], mathop=_SCALAR_OPS)
+#     def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
+#         _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+#         specials = mathop in SPECIALS_READY_OPS and specials_safe(
+#             formats.input_format, formats.output_format, dest_acc
+#         )
+#         spec_A = edge_spec(mathop, formats.input_format, formats.output_format,
+#                            specials=specials)
+#         ...
+#         _run_sfpu_binop_scalar(formats, dest_acc, mathop,
+#                                scalar=_PRESUBMIT_SCALAR, spec_A=spec_A)
+#
+# Also deliberately out of scope there: |scalar| > 8 and the +/-tiny, +/-large tensor
+# values. Both need a per-op tolerance first -- the default bf16 tolerance is only
+# meaningful while the result stays in range -- which is its own piece of work.
