@@ -800,9 +800,10 @@ void kernel_main() {
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
 
-        // Synchronize with the opposite-direction worker on the immediate neighbor before reusing the
-        // intermediate scratch and out_ready semaphores for the next batch. A one-hop handshake is sufficient
-        // for the ring pipeline and avoids a full-ring multicast barrier on bent rings.
+        // Batch-ready barrier: a global all-workers sync so the next batch cannot clobber the reused
+        // intermediate scratch or out_ready_sem while this batch is still being consumed. Skipped on the
+        // final batch — there is no next batch to protect, and the reader gates receive-side completion.
+        // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
         if (b + 1 < input_tensor_B) {
             // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
             uint64_t opposite_batch_ready_sem_noc_addr =
