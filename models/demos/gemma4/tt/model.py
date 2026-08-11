@@ -2143,6 +2143,15 @@ class Gemma4Model:
                 torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
             else:
                 torch_out = ttnn.to_torch(tt_out)
+            if is_tokens:
+                # Gemma4's vocab (262144) exceeds uint16 range, so tt_sampling
+                # picks ttnn.uint32 for sampled-token indices (see
+                # models/common/sampling/tt_sampling.py). torch.uint32 has no
+                # CPU fancy-indexing kernel, so callers indexing this result
+                # (e.g. vllm_tt_plugin's _take(tensor[_rows])) crash with
+                # "index_cpu" not implemented for 'UInt32'. Cast to int64 to
+                # match how token ids are represented everywhere else.
+                torch_out = torch_out.to(torch.int64)
             return torch_out.reshape(-1)[:B]
 
         if self.mesh_config is not None and self.mesh_config.tp > 1:

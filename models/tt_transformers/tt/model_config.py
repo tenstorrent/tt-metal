@@ -1362,10 +1362,26 @@ class ModelArgs:
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
+                    ff2_m = self.tile_padded_batch_rows
+                    ff2_k = self.hidden_dim // self.cluster_shape[1]
+                    ff2_n = self.dim
+                    # Measured on Gemma4-12B/1x4 decode (batch=32): at this small M=32
+                    # shape, dram_shard_core_grid_for_k_and_n's greedy largest-divisor
+                    # pick (32 cores) is 1.56x SLOWER than 1 core (0.0611ms vs 0.0391ms,
+                    # identical PCC 0.9998) -- per-core dispatch overhead dominates at
+                    # this small a shape. Narrowly scoped to the exact verified
+                    # model/shape; other models/shapes keep the default heuristic.
+                    if (
+                        getattr(self, "base_model_name", None) == "gemma-4-12B-it"
+                        and ff2_m == 32
+                        and ff2_k == 4096
+                        and ff2_n == 1024
+                    ):
+                        return self.dram_matmul_config(m=ff2_m, k=ff2_k, n=ff2_n, num_cores=1)
                     return self.dram_matmul_config(
-                        m=self.tile_padded_batch_rows,
-                        k=self.hidden_dim // self.cluster_shape[1],
-                        n=self.dim,
+                        m=ff2_m,
+                        k=ff2_k,
+                        n=ff2_n,
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
