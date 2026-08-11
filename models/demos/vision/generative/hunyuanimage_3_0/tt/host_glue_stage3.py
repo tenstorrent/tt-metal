@@ -110,6 +110,16 @@ def setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=64, token
                 "suffix": suffix_tt,
             }
         )
+    ctx["cfg_parallel_ok"] = False
+    if cfg == 2:
+        r0, r1 = ctx["rows"][0], ctx["rows"][1]
+        ctx["cfg_parallel_ok"] = bool(
+            r0["start"] == r1["start"]
+            and r0["end"] == r1["end"]
+            and torch.equal(cos[0], cos[1])
+            and torch.equal(sin[0], sin[1])
+            and (attn_mask is None or torch.equal(attn_mask[0], attn_mask[1]))
+        )
     return ctx
 
 
@@ -126,15 +136,99 @@ def run_velocity_once_ondevice(model, ctx, tt_pipe, latents, t, cfg_factor):
     emb_pe, emb_fl = _repl(dev, te), _repl(dev, te2)
     img_embeds = pe_tt(latents.to(torch.float32), emb_pe)  # [1,H*W,hidden] TILE (same for all CFG)
     img_rm = ttnn.to_layout(img_embeds, ttnn.ROW_MAJOR_LAYOUT)
+    import os as _os
+
+    if _os.environ.get("HUNYUAN_CFG_PARALLEL", "0") == "1" and cfg_factor == 2 and ctx.get("cfg_parallel_ok", False):
+        # CFG-parallel: cond+uncond as ONE bsz=2 forward -> ~half the per-layer TP
+        # collectives across the decoder stack. Eligible only when the 2 rows share
+        # cos/sin/mask + image-block position (asserted in setup_ondevice_headglue).
+        seqs = []
+        for i in range(cfg_factor):
+            r = ctx["rows"][i]
+            pref = r["prefix_base"].clone()
+            pref[0, r["ts_pos"]] = ts_tok.to(pref.dtype)
+            pref_rm = _rm_upload(tt_pipe, pref)
+            seq_rm = ttnn.concat([pref_rm, img_rm, r["suffix"]], dim=1)
+            ttnn.deallocate(pref_rm)
+            if tt_pipe._sp:
+                S = int(seq_rm.shape[1])
+                _, npad = tt_pipe._sp_pad(S)
+                if npad:
+                    zpad = _rm_upload(tt_pipe, torch.zeros(int(seq_rm.shape[0]), npad, int(seq_rm.shape[2])))
+                    seq_rm_p = ttnn.concat([seq_rm, zpad], dim=1)
+                    ttnn.deallocate(zpad)
+                    ttnn.deallocate(seq_rm)
+                    seq_rm = seq_rm_p
+                seq_repl = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(seq_rm)
+                seq_tt = tt_pipe._sp_scatter_seq(seq_repl)
+                ttnn.deallocate(seq_repl)
+            else:
+                seq_tt = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(seq_rm)
+            seqs.append(seq_tt)
+        seq_b = ttnn.concat(seqs, dim=0)  # [cfg, S_pad/sp, hidden]
+        for s in seqs:
+            ttnn.deallocate(s)
+        r0 = ctx["rows"][0]
+        hidden_b = _forward_image_device(tt_pipe, seq_b, r0["cos"], r0["sin"], r0["mask"])
+        ttnn.deallocate(seq_b)
+        vels = []
+        for i in range(cfg_factor):
+            hi = ttnn.slice(hidden_b, [i, 0, 0], [i + 1, int(hidden_b.shape[1]), int(hidden_b.shape[2])])
+            if tt_pipe._sp:
+                hg = tt_pipe._seq_gather(hi)
+                ttnn.deallocate(hi)
+                hi = hg
+            hidden_rm = ttnn.to_layout(hi, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(hi)
+            r = ctx["rows"][i]
+            hid_img_rm = ttnn.slice(hidden_rm, [0, r["start"], 0], [1, r["end"], int(hidden_rm.shape[-1])])
+            ttnn.deallocate(hidden_rm)
+            hid_img = ttnn.to_layout(hid_img_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(hid_img_rm)
+            vel = fl_tt(hid_img, emb_fl)
+            ttnn.deallocate(hid_img)
+            vt = _mesh_to_torch(vel, dev).to(torch.float32).reshape(1, th, tw, 32).permute(0, 3, 1, 2).contiguous()
+            ttnn.deallocate(vel)
+            vels.append(vt)
+        ttnn.deallocate(hidden_b)
+        for x in (emb_pe, emb_fl, img_embeds, img_rm):
+            ttnn.deallocate(x)
+        return torch.cat(vels, dim=0)
     vels = []
     for i in range(cfg_factor):
         r = ctx["rows"][i]
         pref = r["prefix_base"].clone()
         pref[0, r["ts_pos"]] = ts_tok.to(pref.dtype)  # patch the per-step <timestep> token
         pref_rm = _rm_upload(tt_pipe, pref)
-        seq_rm = ttnn.concat([pref_rm, img_rm, r["suffix"]], dim=1)  # [1,S,hidden] ROW_MAJOR
-        seq_tt = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)
-        hidden = _forward_image_device(tt_pipe, seq_tt, r["cos"], r["sin"], r["mask"])  # device [1,S,hidden]
+        seq_rm = ttnn.concat([pref_rm, img_rm, r["suffix"]], dim=1)  # [1,S,hidden] ROW_MAJOR (replicated)
+        if tt_pipe._sp:
+            # SP: these embeds are assembled REPLICATED on device, but the decoder runs
+            # sequence-parallel (rope/mask/K,V-gather all assume S_pad/sp per device).
+            # Zero-pad the sequence to S_pad (mult of sp*32) in ROW_MAJOR (tile-safe),
+            # tilize, then reshard replicated -> per-device seq shard. Pad tokens are
+            # masked out (see _upload_mask) and their positions are never read back
+            # (only the image block [start:end] is sliced out below).
+            S = int(seq_rm.shape[1])
+            _, npad = tt_pipe._sp_pad(S)
+            if npad:
+                # replicated zero pad (same upload path as _rm_upload -> matches seq_rm)
+                zpad = _rm_upload(tt_pipe, torch.zeros(int(seq_rm.shape[0]), npad, int(seq_rm.shape[2])))
+                seq_rm_p = ttnn.concat([seq_rm, zpad], dim=1)
+                ttnn.deallocate(zpad)
+                ttnn.deallocate(seq_rm)
+                seq_rm = seq_rm_p
+            seq_repl = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)  # [1,S_pad,hidden] replicated
+            seq_tt = tt_pipe._sp_scatter_seq(seq_repl)  # [1,S_pad/sp,hidden] seq-sharded
+            ttnn.deallocate(seq_repl)
+        else:
+            seq_tt = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)
+        hidden = _forward_image_device(tt_pipe, seq_tt, r["cos"], r["sin"], r["mask"])  # [1,S_pad/sp,hidden] under SP
+        if tt_pipe._sp:
+            hidden_full = tt_pipe._seq_gather(hidden)  # gather seq shard -> [1,S_pad,hidden] replicated
+            ttnn.deallocate(hidden)
+            hidden = hidden_full
         hidden_rm = ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT)
         hid_img_rm = ttnn.slice(hidden_rm, [0, r["start"], 0], [1, r["end"], int(hidden.shape[-1])])
         hid_img = ttnn.to_layout(hid_img_rm, ttnn.TILE_LAYOUT)  # [1,H*W,hidden]
@@ -185,6 +279,15 @@ def generate_image_ondevice(
 
     ctx = setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=h, token_w=w, heads=heads)
 
+    # Prepare the on-device VAE decoder HERE (model setup), before the timed render, so the
+    # ~19.4s one-time prepare-mesh-weights build is not charged to the per-image path — the
+    # loop and vae timers below then measure decode-only. Cached on `model`; a no-op on later
+    # images (and when host VAE is used).
+    if os.environ.get("HUNYUAN_ONDEVICE_VAE", "").lower() in ("1", "true", "yes"):
+        from .vae_decode import prebuild_ondevice_vae
+
+        prebuild_ondevice_vae(model, tt_pipe.device, latent_h=h, latent_w=w, latent_t=1)
+
     t_gen = time.time()
     per_step_ms = []
     for i, t in enumerate(timesteps):
@@ -205,8 +308,14 @@ def generate_image_ondevice(
     if hasattr(model.vae, "ffactor_temporal"):
         latents = latents.unsqueeze(2)
     _vae_ac = os.environ.get("HUNYUAN_VAE_AUTOCAST", "").lower()
+    _ondevice_vae = os.environ.get("HUNYUAN_ONDEVICE_VAE", "").lower() in ("1", "true", "yes")
     with torch.no_grad():
-        if _vae_ac in ("bf16", "fp16"):
+        if _ondevice_vae:
+            # On-device mesh VAE decode (perf lever #1). Host model.vae.decode stays the oracle.
+            from .vae_decode import ondevice_vae_decode
+
+            image = ondevice_vae_decode(model, tt_pipe.device, latents.float())  # [1,3,1,H,W]
+        elif _vae_ac in ("bf16", "fp16"):
             _dt = torch.bfloat16 if _vae_ac == "bf16" else torch.float16
             with torch.autocast(device_type="cpu", dtype=_dt):
                 image = model.vae.decode(latents.float(), return_dict=False)[0]

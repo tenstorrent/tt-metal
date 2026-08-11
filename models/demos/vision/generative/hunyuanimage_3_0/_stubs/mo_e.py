@@ -133,9 +133,281 @@ def _ccl_links():
         return 2
 
 
+def _ep_links():
+    """num_links for the EP-axis all_reduce from HUNYUAN_EP_LINKS (default 1).
+
+    LEVER 4: the EP-axis (DP-axis) reduce on the EP=32 full mesh was hardcoded to
+    1 link. HUNYUAN_EP_LINKS=2 bumps it to match the TP-axis reduce; unset/1 keeps
+    behavior byte-identical to the prior baseline.
+    """
+    try:
+        return max(1, int(os.environ.get("HUNYUAN_EP_LINKS", "1")))
+    except ValueError:
+        return 1
+
+
+def _sp_fused_on():
+    """HUNYUAN_SP_FUSED=1 -> SP Step 2. On TOP of SP Step 1 (auto-enabled via _sp_on),
+    ALSO H-shards the residual/activation HIDDEN dim across the TP axis (axis 0) so the
+    residual stream is [1, S/sp, H/tp], and swaps the plain matmuls for collective
+    matmuls: col-parallel -> AG+MM (all_gather_minimal_matmul_async, gathers H then
+    matmuls) and row-parallel -> MM + reduce_scatter (sums the TP/expert partials AND
+    re-scatters H). The two RMSNorms become DISTRIBUTED (variance reduced over the full
+    H via an all_reduce over the TP axis). OFF by default -> byte-identical SP-only path.
+
+    NOTE: the FUSED matmul+reduce_scatter op (minimal_matmul_strided_reduce_scatter_async)
+    requires Ring topology; this Galaxy runs FABRIC_1D (Linear), so the row-parallel side
+    uses the non-fused MM + ccl_manager.reduce_scatter (Linear) instead -- same math, same
+    H/tp-sharded output, no fabric change. AG+MM is Linear-native and used as-is."""
+    return os.environ.get("HUNYUAN_SP_FUSED", "0") == "1" or _sp_ring_on()
+
+
+def _sp_ring_on():
+    """HUNYUAN_SP_RING=1 -> open the mesh under FABRIC_1D_RING and run every SP
+    collective with Ring topology, AND (unless HUNYUAN_SP_RING_FUSEDMM=0) swap the
+    row-parallel MM+reduce_scatter for the FUSED minimal_matmul_strided_reduce_scatter_async
+    (Ring-only op). Implies SP_FUSED (Step 2) + SP. OFF -> the FABRIC_1D (Linear)
+    SP_FUSED path, byte-identical. EXPLORATORY (ring-fabric overlap experiment)."""
+    return os.environ.get("HUNYUAN_SP_RING", "0") == "1"
+
+
+def _sp_topology():
+    """Ring under HUNYUAN_SP_RING (ring fabric), else Linear (FABRIC_1D). Every SP
+    collective reads this so the OFF path stays byte-identical."""
+    return ttnn.Topology.Ring if _sp_ring_on() else ttnn.Topology.Linear
+
+
+def _sp_ring_fusedmm_on():
+    """Under SP_RING, use the FUSED MM+RS for row-parallel matmuls (default ON;
+    HUNYUAN_SP_RING_FUSEDMM=0 falls back to Ring-topology non-fused MM + reduce_scatter
+    for ablation)."""
+    return _sp_ring_on() and os.environ.get("HUNYUAN_SP_RING_FUSEDMM", "1") == "1"
+
+
+def _sp_on():
+    """HUNYUAN_SP=1 -> Sequence-Parallel (SP Step 1). Shards the residual/activation
+    SEQUENCE dim across the DP mesh axis (axis 1) and shrinks expert-parallel to the
+    TP axis only (EP=8, see _TtMoE.__init__). A PURE RESHARD: no math change, so it
+    must PCC-match the EP=32 path. OFF by default -> byte-identical EP=32 behavior.
+    HUNYUAN_SP_FUSED implies SP (Step 2 builds on Step 1's seq-shard + EP=8 layout)."""
+    return os.environ.get("HUNYUAN_SP", "0") == "1" or _sp_fused_on()
+
+
+# --- SP Step 2 (HUNYUAN_SP_FUSED) collective-matmul / distributed-norm helpers ----
+# Module-level so BOTH stubs (mo_e AND image3_decoder_layer) share ONE implementation.
+def _ag_last(x, tp_axis, num_links=None):
+    """all_gather x's LAST (hidden) dim over the TP axis -> full H. x 3D [1,S,H/tp] ->
+    [1,S,H]. Explicit Linear-topology gather (the fused AG+MM gathers internally; this
+    is for the one-shot gather feeding the router + plain expert matmuls)."""
+    nlinks = num_links if num_links is not None else _ccl_links()
+    x4 = ttnn.unsqueeze_to_4D(x)
+    g = ttnn.all_gather(x4, dim=3, cluster_axis=tp_axis, num_links=nlinks, topology=_sp_topology())
+    return ttnn.reshape(g, [int(x.shape[0]), int(g.shape[-2]), int(g.shape[-1])])
+
+
+def _reduce_scatter_last(x, ccl_manager, tp_axis):
+    """reduce_scatter a row-parallel partial [1,S,H] over the TP axis on the hidden dim
+    -> [1,S,H/tp]. SIMULTANEOUSLY sums the per-device (head / expert) partials AND
+    re-scatters H so the output matches the H-sharded residual. Linear topology."""
+    x4 = ttnn.unsqueeze_to_4D(x)
+    rs = ccl_manager.reduce_scatter(x4, dim=3, mesh_axis=tp_axis)
+    return ttnn.reshape(rs, [int(x.shape[0]), int(rs.shape[-2]), int(rs.shape[-1])])
+
+
+def _mmrs_last(x, w, device, ccl_manager, tp_axis, *, compute_kernel_config=None):
+    """SP_RING: FUSED row-parallel matmul + strided reduce_scatter over the TP axis
+    (minimal_matmul_strided_reduce_scatter_async, Ring-only). x [1,S,K] @ w [K,N] ->
+    matmul partial [1,S,N] whose per-device (head/expert) partials are summed AND
+    re-scattered on the hidden dim in ONE op -> [1,S,N/tp]. Overlaps the MM with the RS
+    on the ring fabric. Mirrors RowParallelLinear.forward_fused_addcmul (no addcmul)."""
+    from models.tt_dit.utils.matmul import get_fused_mmrs_config
+
+    x4 = ttnn.unsqueeze_to_4D(x)  # [1,1,S,K]
+    M, K, N = int(x4.padded_shape[-2]), int(x4.padded_shape[-1]), int(w.padded_shape[-1])
+    core_grid = device.compute_with_storage_grid_size()
+    ck = compute_kernel_config
+    if ck is None:
+        # The fused op REQUIRES a compute_kernel_config (no default in the binding);
+        # our matmuls normally run with None, so build a sane default here.
+        ck = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    _, rs = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+        input_tensor=x4,
+        weight_tensor=w,
+        dim=3,
+        multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(tp_axis),
+        **get_fused_mmrs_config(M, K, N, core_grid, ccl_manager.num_links),
+        bias=None,
+        memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        topology=_sp_topology(),
+        cluster_axis=tp_axis,
+        compute_kernel_config=ck,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(tp_axis),
+        dtype=None,
+    )
+    return ttnn.reshape(rs, [int(x.shape[0]), int(rs.shape[-2]), int(rs.shape[-1])])
+
+
+def _agmm(x, w, device, ccl_manager, tp_axis, *, compute_kernel_config=None, fused_activation=None):
+    """Column-parallel AG+MM: all_gather_minimal_matmul_async gathers x's H-shard over
+    the TP axis then matmuls with the local weight shard. x 3D [1,S,H/tp]; w 2D [H, N/tp]
+    (K = full H, output col-fractured). Returns 3D [1,S,N/tp]. The compute grid frees a
+    row (full.y-1) for the CCL worker zone (the NOC lesson: a full grid hits Illegal-NOC)."""
+    from models.tt_dit.utils.matmul import get_matmul_config
+
+    x4 = ttnn.unsqueeze_to_4D(x)  # [1,1,S,H/tp]
+    M, K, N = int(x4.shape[-2]), int(w.shape[-2]), int(w.shape[-1])
+    full = device.compute_with_storage_grid_size()
+    cg = ttnn.CoreCoord(full.x, full.y - 1)
+    cfg = get_matmul_config(M, K, N, cg, None)
+    nlinks = _ccl_links()
+    out = ttnn.experimental.all_gather_minimal_matmul_async(
+        input_tensor=x4,
+        weight_tensor=w,
+        bias_tensor=None,
+        config=cfg,
+        fused_activation=fused_activation,
+        compute_kernel_config=compute_kernel_config,
+        persistent_output_buffer=ccl_manager.get_ag_ping_pong_buffer(x4.shape, 3, tp_axis, dtype=x4.get_dtype()),
+        multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(tp_axis),
+        num_links=nlinks,
+        topology=_sp_topology(),
+        cluster_axis=tp_axis,
+        barrier_semaphore=None,
+        force_transpose=True,
+        num_workers_per_link=full.x // nlinks,
+        num_buffers_per_channel=24,
+        chunks=1,
+        dtype=None,
+    )[0]
+    return ttnn.reshape(out, [int(x.shape[0]), M, N])
+
+
+def _dist_rmsnorm(x, weight, tp_axis, eps, hidden_size, num_links=None):
+    """Distributed RMSNorm on an H-sharded activation x [1,S,H/tp] with H-sharded weight
+    [1,1,H/tp]. The variance reduction spans the FULL H, so the local sum-of-squares is
+    all_reduced over the TP axis. Validated to PCC 1.000001 vs torch RMSNorm on-mesh."""
+    nlinks = num_links if num_links is not None else _ccl_links()
+    sq = ttnn.multiply(x, x)
+    ssl = ttnn.sum(sq, dim=-1, keepdim=True)  # [1,S,1] local sum-of-squares
+    ttnn.deallocate(sq)
+    ss = ttnn.all_reduce(ssl, cluster_axis=tp_axis, num_links=nlinks, topology=_sp_topology())
+    ttnn.deallocate(ssl)
+    inv = ttnn.rsqrt(ttnn.add(ttnn.multiply(ss, 1.0 / float(hidden_size)), eps))  # [1,S,1]
+    ttnn.deallocate(ss)
+    xn = ttnn.multiply(x, inv)  # broadcast over H/tp
+    ttnn.deallocate(inv)
+    out = ttnn.multiply(xn, weight)  # [1,1,H/tp] broadcast over S
+    ttnn.deallocate(xn)
+    return out
+
+
+def _minmm_on():
+    """HUNYUAN_MINMM=1 -> use flux2 experimental.minimal_matmul (block/core-grid
+    optimized matmul, NO collective) as a drop-in for our ttnn.matmul/linear.
+    OFF by default (byte-identical fallback). Mixed act/weight dtype is allowed
+    by minimal_matmul (validate() only requires each dtype in {bf16,bf8_b,bf4_b,fp32}),
+    so it drops into the bf16-act x bf4_b/bf8_b-weight expert matmuls too."""
+    return os.environ.get("HUNYUAN_MINMM", "0") == "1"
+
+
+# --- LEVER 1: swept minimal_matmul block-size winners (HUNYUAN_MMCFG) ----------
+# From a single-device `minimal_matmul` block sweep (grid 12x10, M=4096 fixed),
+# keyed on per-device (K, N) = (weight.shape[-2], weight.shape[-1]). Values are in
+# TILE units (minimal_matmul config semantics). Applied ONLY when HUNYUAN_MMCFG=1.
+# (M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+_MMCFG_WINNERS = {
+    (4096, 12288): (6, 8, 16, 2, 2),  # expert gate_up
+    (6144, 4096): (4, 8, 13, 4, 1),  # expert down
+    (4096, 768): (11, 8, 3, 1, 3),  # qkv_proj
+    (512, 4096): (10, 2, 12, 2, 2),  # o_proj
+    (384, 4096): (8, 4, 13, 4, 1),  # shared_down
+}
+_MMCFG_SWEEP_GRID = (12, 10)  # (x, y) the sweep ran on; skip (fall back) if runtime grid differs
+_MMCFG_CFG_CACHE = {}  # (gx, gy) -> {(K, N): ttnn.MinimalMatmulConfig}, built once per runtime grid
+_MMCFG_GRID_WARNED = set()
+
+
+def _mmcfg_on():
+    """HUNYUAN_MMCFG=1 -> apply the swept-winner MinimalMatmulConfig block sizes
+    (per (K, N)) to matmuls routed through _minmm. OFF by default: _minmm behaves
+    byte-identically to today. The ON path is a strict superset -- a shape with no
+    swept winner (or a runtime grid != the swept 12x10) falls through unchanged."""
+    return os.environ.get("HUNYUAN_MMCFG", "0") == "1"
+
+
+def _mmcfg_winners_for_grid(gx, gy):
+    """Build (once, cached) the {(K,N): MinimalMatmulConfig} dict for a runtime grid.
+    Grid comes from the device at call time (matches _mm_grid), NOT hardcoded."""
+    key = (gx, gy)
+    d = _MMCFG_CFG_CACHE.get(key)
+    if d is None:
+        cc = ttnn.CoreCoord(gx, gy)
+        d = {
+            kn: ttnn.MinimalMatmulConfig(
+                M_block_size=mb,
+                K_block_size=kb,
+                N_block_size=nb,
+                subblock_h=sh,
+                subblock_w=sw,
+                compute_with_storage_grid_size=cc,
+            )
+            for kn, (mb, kb, nb, sh, sw) in _MMCFG_WINNERS.items()
+        }
+        _MMCFG_CFG_CACHE[key] = d
+    return d
+
+
+def _mmcfg_lookup(w):
+    """Return the swept MinimalMatmulConfig for weight w's (K, N) grid-matched to the
+    runtime device, or None to fall back (no winner, grid mismatch, or device error)."""
+    kn = (int(w.shape[-2]), int(w.shape[-1]))
+    if kn not in _MMCFG_WINNERS:
+        return None
+    try:
+        g = w.device().compute_with_storage_grid_size()
+        gx, gy = int(g.x), int(g.y)
+    except Exception:
+        return None
+    if (gx, gy) != _MMCFG_SWEEP_GRID:
+        if (gx, gy) not in _MMCFG_GRID_WARNED:
+            _MMCFG_GRID_WARNED.add((gx, gy))
+            print(
+                f"[mo_e] HUNYUAN_MMCFG: runtime grid ({gx},{gy}) != swept {_MMCFG_SWEEP_GRID}; "
+                f"skipping swept minimal_matmul configs (fallback to current behavior)."
+            )
+        return None
+    return _mmcfg_winners_for_grid(gx, gy)[kn]
+
+
+def _minmm(x, w, *, compute_kernel_config=None, core_grid=None, fallback=None):
+    """Drop-in matmul. HUNYUAN_MMCFG=1: dispatch minimal_matmul with the swept block
+    config for w's (K, N) when one exists (LEVER 1). Otherwise the CURRENT behavior
+    EXACTLY: minimal_matmul (no config) when HUNYUAN_MINMM=1, else `fallback`
+    (default ttnn.matmul). The OFF path is byte-identical to today. minimal_matmul
+    picks its own core grid via its config, so core_grid is only forwarded to the
+    fallback."""
+    if _mmcfg_on():
+        cfg = _mmcfg_lookup(w)
+        if cfg is not None:
+            return ttnn.experimental.minimal_matmul(x, w, compute_kernel_config=compute_kernel_config, config=cfg)
+        # no swept winner / grid mismatch -> fall through to the current behavior below
+    if _minmm_on():
+        return ttnn.experimental.minimal_matmul(x, w, compute_kernel_config=compute_kernel_config)
+    fb = fallback if fallback is not None else ttnn.matmul
+    return fb(x, w, compute_kernel_config=compute_kernel_config, core_grid=core_grid)
+
+
 class _TtMoE:
-    def __init__(self, device, torch_module):
+    def __init__(self, device, torch_module, ccl_manager=None):
         self.device = device
+        self.ccl_manager = ccl_manager  # SP Step 1: shared mesh CCLManager (used from Step 2)
         self.is_mesh = _is_mesh_device(device)
         cfg = torch_module.config
         layer_idx = getattr(torch_module, "layer_idx", 0) or 0
@@ -165,8 +437,25 @@ class _TtMoE:
             # device count (else the TP-axis shard fallback below).
             _ep_on = os.environ.get("HUNYUAN_EP_FULLMESH", "1") != "0"
             self._ep_fullmesh = _ep_on and (self.num_experts % int(self.device.get_num_devices()) == 0)
+            # SP Step 1 (HUNYUAN_SP): mesh axis 1 (the DP axis) becomes
+            # sequence-parallel, so the routed experts can no longer shard across
+            # it -> expert-parallel shrinks to the TP axis (EP=8). Forcing
+            # _ep_fullmesh OFF makes _build_sharded shard experts on the TP axis
+            # only (n_shard = tp = mesh_shape[tp_axis] = 8, epd = num_experts/8)
+            # AND makes _mesh_reduce sum the per-device expert partials over the
+            # TP axis ONLY (dropping the axis-1 EP reduce) -- exactly the EP=8 /
+            # single-axis reduce SP requires. This reuses the known-good pre-EP=32
+            # path; sp_axis is recorded for Step 2 (fused collectives). OFF by
+            # default -> _ep_fullmesh unchanged -> byte-identical EP=32 behavior.
+            self._sp = _sp_on()
+            self._sp_fused = _sp_fused_on() and self._sp
+            if self._sp:
+                self._ep_fullmesh = False
+                self.sp_axis = 1 - self.tp_axis
             self._build_sharded(torch_module)
         else:
+            self._sp = False
+            self._sp_fused = False
             self._build_single(torch_module)
 
     # ------------------------------------------------------------------
@@ -349,10 +638,10 @@ class _TtMoE:
         reduce gpt_oss/gemma4/deepseek use. Same math, same shape."""
         if not _is_mesh_device(self.device):
             return x  # single chip: the per-device partial already IS the full sum
-        x = ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=ttnn.Topology.Linear)
+        x = ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=_sp_topology())
         if getattr(self, "_ep_fullmesh", False):
             # EP=32: experts sharded over BOTH mesh axes -> also sum over the DP axis (63cfd0eb26).
-            x = ttnn.all_reduce(x, cluster_axis=(1 - self.tp_axis), num_links=1, topology=ttnn.Topology.Linear)
+            x = ttnn.all_reduce(x, cluster_axis=(1 - self.tp_axis), num_links=_ep_links(), topology=_sp_topology())
         return x
 
     def _swiglu(self, x, gu_w, down_w, inter):
@@ -364,7 +653,9 @@ class _TtMoE:
         act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        out = ttnn.linear(act, down_w, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device))
+        out = _minmm(
+            act, down_w, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device), fallback=ttnn.linear
+        )
         ttnn.deallocate(act)
         return out
 
@@ -465,6 +756,8 @@ class _TtMoE:
                 return self._forward_sharded_sparse(hidden_states, return_l_aux=return_l_aux)
             except Exception as e:  # draft path: keep the run alive with the exact dense fallback
                 print(f"[mo_e] SPARSE path failed ({type(e).__name__}: {e}) -> dense fallback")
+        if getattr(self, "_sp_fused", False):
+            return self._forward_sp_fused(hidden_states, return_l_aux=return_l_aux)
         x = hidden_states
 
         # --- routing via the composed graduated gate (top_k_gate) ---
@@ -487,7 +780,7 @@ class _TtMoE:
         # permute/expert-sum overhead is gone.
         I = self.expert_inter
         eI = self.experts_per_dev * I
-        gu = ttnn.matmul(
+        gu = _minmm(
             x, self.exp_gu_cat, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device)
         )  # [1, S, 2*epd*I] = [all gates | all ups]
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], eI])  # gates [1,S,epd*I]
@@ -499,7 +792,7 @@ class _TtMoE:
         ttnn.deallocate(x2)
         act = ttnn.multiply(act, router_local)  # per-expert-column router weight
         ttnn.deallocate(router_local)
-        combined = ttnn.matmul(
+        combined = _minmm(
             act, self.exp_down_stack, core_grid=self.mm_core_grid, compute_kernel_config=_mm_cfg()
         )  # [1, S, H] (down + expert-sum fused)
         ttnn.deallocate(act)
@@ -521,6 +814,77 @@ class _TtMoE:
             ttnn.deallocate(routed)
         else:
             out = self._mesh_reduce(combined)
+            ttnn.deallocate(combined)
+        if return_l_aux:
+            return out, l_aux
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
+        return out
+
+    # ------------------------------------------------------------------
+    def _forward_sp_fused(self, hidden_states, return_l_aux=False):
+        """SP Step 2 MoE: the residual is H-sharded [1, S/sp, H/tp]. Gather H ONCE
+        (feeds the replicated router + the plain merged-2D expert/shared matmuls, which
+        want full H), run the exact dense MoE, then reduce_scatter the [1,S/sp,H] partial
+        back to [1,S/sp,H/tp] -- the reduce_scatter simultaneously sums the EP=8 expert
+        partials and re-scatters H. The shared expert stays REPLICATED (full-H output);
+        folding shared/tp into the routed partial makes the single reduce_scatter sum
+        tp*(shared/tp) = shared exactly (1/tp is an exact bf16 exponent shift), so no
+        si-divisibility constraint and no extra collective."""
+        x_sh = hidden_states  # [1, S/sp, H/tp]
+        x = _ag_last(x_sh, self.tp_axis)  # [1, S/sp, H] full hidden (one gather, reused below)
+
+        l_aux, router = self.gate(x, return_router=True, need_l_aux=return_l_aux)
+        router_local = ttnn.matmul(router, self.sel)  # [1, S/sp, epd*I]
+        ttnn.deallocate(router)
+
+        I = self.expert_inter
+        eI = self.experts_per_dev * I
+        gu = _minmm(x, self.exp_gu_cat, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device))
+        x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], eI])
+        x2 = ttnn.slice(gu, [0, 0, eI], [gu.shape[0], gu.shape[1], 2 * eI])
+        ttnn.deallocate(gu)
+        act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        act = ttnn.multiply(act, router_local)
+        ttnn.deallocate(router_local)
+        if _sp_ring_fusedmm_on():
+            # SP_RING: FUSED routed-down matmul + reduce_scatter (overlaps the dominant
+            # expert-down MM with its RS on the ring fabric). The replicated shared expert
+            # is scattered to matching H/tp blocks via a separate Ring reduce_scatter of
+            # shared/tp (sum over tp of replicated shared/tp = shared; block d -> device d).
+            out = _mmrs_last(
+                act,
+                self.exp_down_stack,
+                self.device,
+                self.ccl_manager,
+                self.tp_axis,
+                compute_kernel_config=_mm_cfg(),
+            )  # [1, S/sp, H/tp] routed sum
+            ttnn.deallocate(act)
+            if self.use_shared:
+                shared = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_inter)  # [1,S/sp,H] full
+                shared = ttnn.multiply(shared, 1.0 / float(self.tp))
+                shared_sh = _reduce_scatter_last(shared, self.ccl_manager, self.tp_axis)  # [1,S/sp,H/tp] block d
+                ttnn.deallocate(shared)
+                out = ttnn.add(out, shared_sh)
+                ttnn.deallocate(shared_sh)
+            ttnn.deallocate(x)
+        else:
+            combined = _minmm(
+                act, self.exp_down_stack, core_grid=self.mm_core_grid, compute_kernel_config=_mm_cfg()
+            )  # [1, S/sp, H] partial (EP=8 per-device expert sum, pre-reduce)
+            ttnn.deallocate(act)
+
+            if self.use_shared:
+                shared = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_inter)  # [1,S/sp,H] full
+                shared = ttnn.multiply(shared, 1.0 / float(self.tp))  # fold into the tp-way reduce
+                combined = ttnn.add(combined, shared)
+                ttnn.deallocate(shared)
+            ttnn.deallocate(x)
+
+            out = _reduce_scatter_last(combined, self.ccl_manager, self.tp_axis)  # [1, S/sp, H/tp]
             ttnn.deallocate(combined)
         if return_l_aux:
             return out, l_aux
@@ -566,10 +930,10 @@ class _TtMoE:
         return combined
 
 
-def build(device, torch_module=None):
+def build(device, torch_module=None, ccl_manager=None):
     if torch_module is None:
         raise RuntimeError("mo_e native port requires the HF torch_module to extract weights.")
-    return _TtMoE(device, torch_module)
+    return _TtMoE(device, torch_module, ccl_manager=ccl_manager)
 
 
 def mo_e(device, torch_module=None):

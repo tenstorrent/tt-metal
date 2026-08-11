@@ -46,6 +46,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.vision.generative.hunyuanimage_3_0._stubs import image3_decoder_layer as _decoder_stub
+from models.demos.vision.generative.hunyuanimage_3_0._stubs import mo_e as _mo_e
 
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
 DEFAULT_PROMPT = "A serene mountain lake at sunrise, photorealistic, ultra detailed."
@@ -334,8 +335,40 @@ class HunyuanImage3Pipeline:
         # embedding table (ttnn, on device)
         self.embed = _TtEmbedding(device, model.model.wte.weight.detach())
 
+        # SP Step 1 scaffolding (HUNYUAN_SP, OFF by default). ONE CCLManager for
+        # the whole mesh, threaded into every decoder layer/stub (used from Step 2;
+        # Step 1 keeps the plain ttnn.all_reduce, so it is only WIRED here). When SP
+        # is OFF, _sp_on() short-circuits -> no CCLManager import/instantiation, the
+        # manager is None, and every build call / upload below is byte-identical to
+        # the prior EP=32 replicated path.
+        self._sp = (
+            _mo_e._sp_on() and _is_mesh_device(device) and int(getattr(device, "get_num_devices", lambda: 1)()) > 1
+        )
+        self._ccl_manager = None
+        if self._sp:
+            from models.tt_dit.parallel.manager import CCLManager
+
+            self._mesh_shape = tuple(int(x) for x in device.shape)
+            self._ccl_manager = CCLManager(device, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology())
+
         # graduated decoder layers (each composes mo_e -> top_k_gate)
-        self.layers = [_decoder_stub.build(device, model.model.layers[i].float()) for i in range(self.num_layers)]
+        self.layers = [
+            _decoder_stub.build(device, model.model.layers[i].float(), ccl_manager=self._ccl_manager)
+            for i in range(self.num_layers)
+        ]
+
+        # SP sequence (DP) axis, read back from the built layer so the pipeline's
+        # shard axis can never diverge from the stubs' pick. None when SP is off.
+        self.sp_axis = getattr(self.layers[0], "sp_axis", None) if (self._sp and self.layers) else None
+        self._sp = self._sp and self.sp_axis is not None
+        # SP Step 2 (HUNYUAN_SP_FUSED): the residual is ALSO H-sharded on the TP axis, so
+        # the embed upload shards hidden (dim 2) on tp_axis and the gather-back gathers it.
+        self.tp_axis = getattr(self.layers[0], "tp_axis", None) if (self._sp and self.layers) else None
+        self._sp_fused = self._sp and _mo_e._sp_fused_on() and self.tp_axis is not None
+        # SP factor = number of devices on the sequence (SP/DP) axis; sequence tensors
+        # are padded to a multiple of (sp_factor * 32) so each of the sp_factor shards
+        # is TILE-aligned (see _sp_pad). 1 when SP is off.
+        self._sp_factor = int(self._mesh_shape[self.sp_axis]) if self._sp else 1
 
         # Command 3 persistent trace buffers (populated by *_trace_setup)
         self._trace_buffers = {}
@@ -368,6 +401,86 @@ class HunyuanImage3Pipeline:
     def _mesh_kw(self):
         mapper = _repl_mapper(self.device)
         return {"mesh_mapper": mapper} if mapper is not None else {}
+
+    # -- SP Step 1 sequence-parallel helpers (HUNYUAN_SP) -----------------
+    def _sp_pad(self, S):
+        """SP: round sequence length S UP to a multiple of (sp_factor * 32) so each of
+        the sp_factor sequence shards is TILE-aligned (divisible by 32). Returns
+        (S_pad, n_pad). (S, 0) when SP is off. The pad tokens are masked out of real
+        outputs and discarded after the gather-back, so padding never changes results."""
+        if not self._sp:
+            return int(S), 0
+        mult = self._sp_factor * 32
+        Spad = ((int(S) + mult - 1) // mult) * mult
+        return Spad, Spad - int(S)
+
+    def _sp_scatter_seq(self, x):
+        """SP reshard: REPLICATED on-device [1, S, H] (TILE, S already a multiple of
+        sp_factor*32) -> SEQUENCE-SHARDED [1, S/sp, H] on the SP axis. reduce_scatter
+        folds the sp identical replicas (sum) then scatters the sequence dim, so scale
+        by 1/sp to undo the fold (exact for a power-of-2 sp in bf16: pure exponent
+        shifts). Used by the stage-3 on-device head-glue path, whose embeds are
+        assembled REPLICATED on device (not via _upload_embeds). No-op when SP is off.
+
+        SP Step 2 (sp_fused): the residual is ALSO H-sharded on the TP axis, so after
+        the seq-scatter (which leaves H full + REPLICATED across the TP axis) do a
+        SECOND reduce_scatter over the TP axis on the hidden dim -> [1, S/sp, H/tp].
+        Same fold-undo logic: reduce_scatter sums the tp identical replicas (x tp)
+        then scatters H, so scale by 1/tp. This makes the on-device-assembled residual
+        match the 2D-sharded stream the fused decoder expects (identical to what the
+        _embed_shard_kw upload places on the e2e path), and is exactly reversed by
+        _seq_gather's sp_fused H-gather + seq-gather."""
+        if not self._sp:
+            return x
+        sh = self._ccl_manager.reduce_scatter(x, dim=1, mesh_axis=self.sp_axis)
+        out = ttnn.multiply(sh, 1.0 / float(self._sp_factor))
+        ttnn.deallocate(sh)
+        if self._sp_fused:
+            rs = _mo_e._reduce_scatter_last(out, self._ccl_manager, self.tp_axis)  # [1, S/sp, H/tp], sums tp replicas
+            out2 = ttnn.multiply(rs, 1.0 / float(self._mesh_shape[self.tp_axis]))  # undo the tp-way fold
+            ttnn.deallocate(rs)
+            ttnn.deallocate(out)
+            out = out2
+        return out
+
+    def _seq_shard_kw(self, seq_dim):
+        """mesh_mapper that SHARDS `seq_dim` across the SP (sequence) mesh axis and
+        REPLICATES across the TP axis -- so each SP-axis device holds S/sp tokens
+        while every TP-axis device sees the same tokens. SP-only; the OFF path uses
+        _mesh_kw() (fully replicated) and is unchanged."""
+        dims = [None, None]
+        dims[self.sp_axis] = seq_dim
+        return {"mesh_mapper": ttnn.ShardTensor2dMesh(self.device, dims=tuple(dims), mesh_shape=self._mesh_shape)}
+
+    def _embed_shard_kw(self):
+        """Residual-stream (embeds) mesh mapper. SP: shard sequence (dim 1) on the SP axis.
+        SP Step 2 (sp_fused): ALSO shard hidden (dim 2) on the TP axis -> the residual is
+        uploaded [1, S/sp, H/tp] (2D-sharded), matching the H-sharded decoder stream."""
+        dims = [None, None]
+        dims[self.sp_axis] = 1
+        if self._sp_fused:
+            dims[self.tp_axis] = 2
+        return {"mesh_mapper": ttnn.ShardTensor2dMesh(self.device, dims=tuple(dims), mesh_shape=self._mesh_shape)}
+
+    def _seq_gather(self, t):
+        """SP readback: all-gather the [1, S/sp, H] sequence shard back over the SP
+        axis into a full-S, fully-replicated [1, S, H] so _mesh_to_torch reads
+        device-0's full-S copy exactly as the non-SP (all-reduced/replicated) path
+        does. No-op (returns t unchanged) when SP is off. Assumes the documented 3D
+        residual-stream layout [1, S, H]."""
+        if not self._sp:
+            return t
+        t4 = ttnn.unsqueeze_to_4D(t)  # [1, S/sp, H(/tp)] -> [1, 1, S/sp, H(/tp)]; sequence now dim 2
+        if self._sp_fused:
+            # SP Step 2: hidden is TP-sharded too -> first gather H over the TP axis so
+            # the readback is fully replicated [1, S, H] on device 0 (as _mesh_to_torch expects).
+            t4 = ttnn.all_gather(
+                t4, dim=3, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
+            )
+        g = ttnn.all_gather(
+            t4, dim=2, cluster_axis=self.sp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
+        )
+        return ttnn.reshape(g, [int(g.shape[0]), int(g.shape[2]), int(g.shape[3])])  # -> [1, S, H]
 
     def _input_ids_to_device(self, input_ids):
         tok = input_ids.to(torch.int32)
@@ -465,28 +578,44 @@ class HunyuanImage3Pipeline:
     # SDPA. ln_f + the velocity head (ragged_final_layer) stay on host.
     def _upload_embeds(self, inputs_embeds):
         """Upload host [1, S, hidden] inputs_embeds -> device residual stream
-        (REPLICATED on a mesh, TILE, bf16 -- the dtype the decoder stubs consume)."""
+        (REPLICATED on a mesh, TILE, bf16 -- the dtype the decoder stubs consume).
+        Under SP the sequence (dim 1) is zero-padded up to S_pad (a multiple of
+        sp_factor*32) so the sp shards are TILE-aligned, then sharded on the SP axis;
+        the pad rows are masked out and trimmed after the gather-back."""
+        e = inputs_embeds
+        if self._sp:
+            _, npad = self._sp_pad(int(e.shape[1]))
+            if npad:
+                e = torch.nn.functional.pad(e, (0, 0, 0, npad))  # zero-pad seq tail (dim 1)
         return ttnn.from_torch(
-            inputs_embeds.to(torch.bfloat16),
+            e.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self._mesh_kw(),
+            **(self._embed_shard_kw() if self._sp else self._mesh_kw()),  # SP: shard S (+H under sp_fused)
         )
 
     def _upload_pos_img(self, cos, sin, S):
-        """Upload 2D-image-grid RoPE cos/sin as [1,1,S,head_dim] (REPLICATED),
-        the shape the decoder-stub attention consumes directly."""
+        """Upload 2D-image-grid RoPE cos/sin as [1,1,S,head_dim], the shape the
+        decoder-stub attention consumes directly. REPLICATED by default; under SP
+        the rope tables are SHARDED on the sequence dim (dim 2) across the SP axis
+        so each device's per-position rotation matches its local S/sp query/key
+        tokens -- rope runs on the sequence-sharded q,k BEFORE the KV all-gather."""
+        kw = self._seq_shard_kw(2) if self._sp else self._mesh_kw()
+        _, npad = self._sp_pad(S)  # SP: pad seq up to a TILE-aligned per-shard block
 
         def up(t):
+            t = t.reshape(1, 1, S, self.head_dim).to(torch.bfloat16)
+            if npad:
+                t = torch.nn.functional.pad(t, (0, 0, 0, npad))  # zero-pad seq (dim 2) -> [1,1,S_pad,hd]
             return ttnn.from_torch(
-                t.reshape(1, 1, S, self.head_dim).to(torch.bfloat16),
+                t,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                **self._mesh_kw(),
+                **kw,
             )
 
         return up(cos), up(sin)
@@ -504,14 +633,32 @@ class HunyuanImage3Pipeline:
                 torch.zeros((), dtype=torch.float32),
                 torch.full((), float(neg), dtype=torch.float32),
             )
-        m = m.reshape(1, 1, S, S).to(torch.bfloat16)
+        m = m.reshape(1, 1, S, S).to(torch.float32)
+        # SP: pad the [1,1,S,S] mask up to [1,1,S_pad,S_pad] so the sharded QUERY dim
+        # is TILE-aligned, consistently with the padded embeds/rope. Real query rows
+        # must NOT attend to the padded key columns (set them to neg); padded query
+        # rows attend-all (0) so their softmax is well defined (no all-neg NaN) and
+        # their garbage output is discarded on trim. This isolates the pad tokens: no
+        # real position ever reads a padded position (attention) or mixes across
+        # positions (MoE/MLP are position-wise), so real outputs are unchanged.
+        _, npad = self._sp_pad(S)
+        if npad:
+            Spad = S + npad
+            mfull = torch.zeros(1, 1, Spad, Spad, dtype=torch.float32)  # pad rows -> 0 (attend-all)
+            mfull[:, :, :S, :S] = m  # real query x real key: original block mask
+            mfull[:, :, :S, S:] = float(neg)  # real query x PADDED key: blocked
+            m = mfull
+        m = m.to(torch.bfloat16)
+        # SP: shard the QUERY dim (dim 2) across the SP axis -> [1,1,S_pad/sp,S_pad]; the
+        # KEY dim (dim 3) stays full to match the all-gathered K,V, and the rows line
+        # up with this device's local query tokens. Replicated when SP is off.
         return ttnn.from_torch(
             m,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self._mesh_kw(),
+            **(self._seq_shard_kw(2) if self._sp else self._mesh_kw()),
         )
 
     def forward_image(self, inputs_embeds, cos, sin, attn_mask=None):
@@ -534,9 +681,14 @@ class HunyuanImage3Pipeline:
                 return_l_aux=False,
                 attn_mask=mask_tt,
             )
-        out = _mesh_to_torch(hidden, self.device).to(torch.float32)
+        hidden_g = self._seq_gather(hidden)  # SP: S/sp -> full S_pad (replicated); else no-op
+        out = _mesh_to_torch(hidden_g, self.device).to(torch.float32)
         if out.dim() == 4:
             out = out.reshape(out.shape[0], out.shape[-2], out.shape[-1])
+        if self._sp and out.shape[1] > S:
+            out = out[:, :S, :]  # SP: trim the sequence padding back to the real S
+        if hidden_g is not hidden:
+            ttnn.deallocate(hidden_g)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
         if mask_tt is not None:
@@ -579,7 +731,21 @@ class HunyuanImage3Pipeline:
         trace (CQ0), return post-layer hidden [1, S, hidden] as host torch."""
         dev = self.device
         tb = self._img_trace
-        host = ttnn.from_torch(inputs_embeds.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # SP: the persistent embeds buffer is sequence-sharded (and zero-padded to
+        # S_pad), so the host copy source must be padded the SAME way AND carry the
+        # SAME shard mapper for copy_host_to_device_tensor to place each device its
+        # S_pad/sp slice. Plain (no pad, no mapper) when SP is off.
+        e = inputs_embeds
+        if self._sp:
+            _, npad = self._sp_pad(int(e.shape[1]))
+            if npad:
+                e = torch.nn.functional.pad(e, (0, 0, 0, npad))
+        host = ttnn.from_torch(
+            e.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            **(self._embed_shard_kw() if self._sp else {}),
+        )
         # 2CQ input-copy overlap (CQ1) if the device has a 2nd queue; else CQ0.
         # Probe once — the box opens single-CQ (reference Galaxy convention), so
         # don't re-trigger the "cq_id 1 out of range" fatal every step.
@@ -592,9 +758,15 @@ class HunyuanImage3Pipeline:
         else:
             ttnn.copy_host_to_device_tensor(host, tb["embeds"])
         ttnn.execute_trace(dev, tb["tid"], cq_id=0, blocking=True)
-        out = _mesh_to_torch(tb["out"], dev).to(torch.float32)
+        out_tt = self._seq_gather(tb["out"])  # SP: gather S back (live, outside the trace); else no-op
+        out = _mesh_to_torch(out_tt, dev).to(torch.float32)
         if out.dim() == 4:
             out = out.reshape(out.shape[0], out.shape[-2], out.shape[-1])
+        _S = int(tb.get("S", out.shape[1]))
+        if self._sp and out.shape[1] > _S:
+            out = out[:, :_S, :]  # SP: trim the sequence padding back to the real S
+        if out_tt is not tb["out"]:
+            ttnn.deallocate(out_tt)
         return out
 
     def image_trace_release(self):
@@ -1029,7 +1201,7 @@ def enable_fabric_1d():
     NOT take a `fabric_config` kwarg — fabric is enabled via set_fabric_config
     BEFORE opening the mesh. Must be paired with disable_fabric() after close."""
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        (ttnn.FabricConfig.FABRIC_1D_RING if _mo_e._sp_ring_on() else ttnn.FabricConfig.FABRIC_1D),
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,

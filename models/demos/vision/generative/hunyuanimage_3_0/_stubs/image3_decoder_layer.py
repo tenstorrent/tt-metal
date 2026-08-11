@@ -149,8 +149,9 @@ def _is_mesh_device(device) -> bool:
 
 
 class _TtDecoderLayer:
-    def __init__(self, device, torch_module):
+    def __init__(self, device, torch_module, ccl_manager=None):
         self.device = device
+        self.ccl_manager = ccl_manager  # SP Step 1: shared mesh CCLManager (used from Step 2)
         self.is_mesh = _is_mesh_device(device)
         self.num_devices = int(device.get_num_devices()) if self.is_mesh else 1
 
@@ -182,8 +183,30 @@ class _TtDecoderLayer:
             self.mesh_shape = tuple(int(x) for x in device.shape)
             self.tp_axis = self._pick_tp_axis()
             self.tp = int(self.mesh_shape[self.tp_axis])
+            # FSDP (HUNYUAN_FSDP=1, OFF by default): the attention qkv/o weights are
+            # TP-sharded on the tp_axis but 4x-REPLICATED across the other (DP) mesh
+            # axis (dead replication -- a single image has no batch on that axis).
+            # FSDP shards them across the DP axis too and all-gathers each weight
+            # back at forward (see _shard_linear_fsdp / _fsdp_gather). Cuts per-chip
+            # attention-weight footprint by dp. Needs exactly a 2D mesh with dp>1.
+            self.dp_axis = (1 - self.tp_axis) if len(self.mesh_shape) == 2 else None
+            self.dp = int(self.mesh_shape[self.dp_axis]) if self.dp_axis is not None else 1
+            self.is_fsdp = _os.environ.get("HUNYUAN_FSDP", "0") == "1" and self.dp > 1
+            # SP Step 1 (HUNYUAN_SP): the residual/activation SEQUENCE dim is
+            # sharded across the DP axis (axis 1), so that axis carries S/dp tokens
+            # per device. Attention then all-gathers K,V over this axis so each
+            # device's local heads see all tokens (see _attention_sharded). Needs a
+            # real 2D mesh with dp>1. OFF by default -> self.sp False, no change.
+            self.sp = _mo_e._sp_on() and self.dp_axis is not None and self.dp > 1
+            self.sp_axis = self.dp_axis if self.sp else None
+            # SP Step 2 (HUNYUAN_SP_FUSED): H-shard the residual on the TP axis, distributed
+            # RMSNorm, AG+MM (col-parallel) + MM/reduce_scatter (row-parallel). Requires SP.
+            self.sp_fused = _mo_e._sp_fused_on() and self.sp
             self._build_sharded(torch_module)
         else:
+            self.sp = False
+            self.sp_axis = None
+            self.sp_fused = False
             self._build_single(torch_module)
 
     # ------------------------------------------------------------------
@@ -234,6 +257,27 @@ class _TtDecoderLayer:
         dim=-1 = output feats / column-parallel)."""
         return self._shard(w.t().contiguous(), dim, dtype=dtype)
 
+    def _shard_fsdp(self, t, tp_dim, fsdp_dim, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+        """FSDP 2D-shard: split `tp_dim` across the TP axis AND `fsdp_dim` across the
+        DP axis, so the otherwise-DP-replicated weight becomes a 1/dp shard. The
+        DP-sharded dim is all-gathered back at forward (see _fsdp_gather)."""
+        dims = [None, None]
+        dims[self.tp_axis] = tp_dim
+        dims[self.dp_axis] = fsdp_dim
+        return ttnn.from_torch(
+            t.to(_host_of(dtype)),
+            dtype=dtype,
+            layout=layout,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=tuple(dims), mesh_shape=self.mesh_shape),
+        )
+
+    def _shard_linear_fsdp(self, w, tp_dim, fsdp_dim, dtype=ttnn.bfloat16):
+        """nn.Linear weight [out, in] -> transpose [in, out], then FSDP 2D-shard
+        (tp_dim/fsdp_dim index the TRANSPOSED tensor: 0=in feats, -1=out feats)."""
+        return self._shard_fsdp(w.t().contiguous(), tp_dim, fsdp_dim, dtype=dtype)
+
     # ------------------------------------------------------------------
     # single-device build (unchanged)
     # ------------------------------------------------------------------
@@ -274,7 +318,7 @@ class _TtDecoderLayer:
         # (shared SwiGLU + top-8 gate + 64 routed expert SwiGLUs) to the
         # graduated `mo_e` stub, which itself composes the graduated
         # `top_k_gate`. This is the real HF module nesting.
-        self.moe = _mo_e.build(device, torch_module.mlp)
+        self.moe = _mo_e.build(device, torch_module.mlp, ccl_manager=self.ccl_manager)
 
     # ------------------------------------------------------------------
     # tensor-parallel build (mesh)
@@ -292,9 +336,18 @@ class _TtDecoderLayer:
         self.tp_num_heads = q_per_dev
         self.tp_num_kv_heads = kv_per_dev
 
-        # --- norms / qk-norms / (rope tables handled at forward) -> REPLICATED ---
-        self.input_ln_w = self._repl(torch_module.input_layernorm.weight.reshape(1, 1, 1, -1))
-        self.post_ln_w = self._repl(torch_module.post_attention_layernorm.weight.reshape(1, 1, 1, -1))
+        # --- norms / qk-norms / (rope tables handled at forward) ---
+        # SP Step 2: the residual is H-sharded on the TP axis, so the two hidden-dim
+        # RMSNorm weights are H-sharded too (each device holds its H/tp slice; the norm
+        # is DISTRIBUTED -- variance all_reduced over the TP axis at forward). Stored 3D
+        # [1,1,H/tp] to broadcast over S/sp. The qk-norms operate on head_dim (NOT sharded
+        # -- heads are sharded, head_dim is full) so they stay REPLICATED.
+        if self.sp_fused:
+            self.input_ln_w = self._shard(torch_module.input_layernorm.weight.reshape(1, 1, -1), dim=-1)
+            self.post_ln_w = self._shard(torch_module.post_attention_layernorm.weight.reshape(1, 1, -1), dim=-1)
+        else:
+            self.input_ln_w = self._repl(torch_module.input_layernorm.weight.reshape(1, 1, 1, -1))
+            self.post_ln_w = self._repl(torch_module.post_attention_layernorm.weight.reshape(1, 1, 1, -1))
         if self.use_qk_norm:
             self.q_norm_w = self._repl(cfg.query_layernorm.weight.reshape(1, 1, 1, -1))
             self.k_norm_w = self._repl(cfg.key_layernorm.weight.reshape(1, 1, 1, -1))
@@ -317,13 +370,21 @@ class _TtDecoderLayer:
                 base = kv * block + (g + 1) * hd
                 sharded_rows.extend(range(base, base + hd))
         qkv_w = cfg.qkv_proj.weight[sharded_rows, :].contiguous()  # [6144, hidden]
-        self.qkv_w = self._shard_linear(qkv_w, dim=-1)  # column-parallel (output feats)
+        if self.is_fsdp:
+            # column-parallel out on tp_axis (dim=-1) + FSDP shard in on dp_axis (dim=0)
+            self.qkv_w = self._shard_linear_fsdp(qkv_w, tp_dim=-1, fsdp_dim=0)
+        else:
+            self.qkv_w = self._shard_linear(qkv_w, dim=-1)  # column-parallel (output feats)
 
         # O-proj row-parallel: split INPUT features. The concat-heads output
         # feature order is head-major, and device d holds the contiguous block
         # [d*q_per_dev*hd : (d+1)*q_per_dev*hd], so a plain dim=0 (input) shard
         # of the transposed weight lines up exactly.
-        self.o_w = self._shard_linear(cfg.o_proj.weight, dim=0)  # row-parallel (input feats)
+        if self.is_fsdp:
+            # row-parallel in on tp_axis (dim=0) + FSDP shard out on dp_axis (dim=-1)
+            self.o_w = self._shard_linear_fsdp(cfg.o_proj.weight, tp_dim=0, fsdp_dim=-1)
+        else:
+            self.o_w = self._shard_linear(cfg.o_proj.weight, dim=0)  # row-parallel (input feats)
 
         # --- decode KV cache (incremental single-token decode) ---
         # Full [B, num_kv_heads, max_seq, head_dim] sharded on the head dim across
@@ -342,7 +403,7 @@ class _TtDecoderLayer:
         # composes the graduated `top_k_gate`. This keeps both mo_e AND
         # top_k_gate on the one real sharded forward path (Gate 2) and avoids a
         # duplicate ~10 GB expert-weight set on device.
-        self.moe = _mo_e.build(self.device, torch_module.mlp)
+        self.moe = _mo_e.build(self.device, torch_module.mlp, ccl_manager=self.ccl_manager)
 
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
@@ -353,8 +414,30 @@ class _TtDecoderLayer:
         if not self.is_mesh:
             return x  # single chip: no TP axis to reduce over; partial is complete
         return ttnn.all_reduce(
-            x, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=ttnn.Topology.Linear
+            x, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
         )
+
+    def _norm(self, x, weight):
+        """RMSNorm on the residual stream. SP Step 2: the hidden dim is TP-sharded, so
+        the variance spans devices -> DISTRIBUTED RMSNorm (local sum-of-squares all_reduced
+        over the TP axis; validated PCC 1.000001). Otherwise the plain fused rms_norm."""
+        if self.sp_fused:
+            return _mo_e._dist_rmsnorm(x, weight, self.tp_axis, self.eps, self.hidden_size)
+        return ttnn.rms_norm(x, epsilon=self.eps, weight=weight)
+
+    def _fsdp_gather(self, w, dim):
+        """All-gather an FSDP-sharded weight back over the DP axis just before its
+        matmul (mirrors flux2 all_gather_persistent_buffer(weight, dim=2/3)). `dim`
+        is the 4D gather dim: 2 = in/K (column-parallel qkv), 3 = out/N (row-parallel
+        o_proj). No-op unless FSDP is on. Weight is static, but re-gathered each call
+        (flux2-faithful); if this dominates, cache the gathered weight at setup."""
+        if not self.is_fsdp:
+            return w
+        w4 = ttnn.unsqueeze_to_4D(w)
+        g = ttnn.all_gather(
+            w4, dim=dim, cluster_axis=self.dp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
+        )
+        return ttnn.reshape(g, [g.shape[-2], g.shape[-1]])
 
     def _swiglu(self, x, gu_w, down_w, inter):
         gu = ttnn.linear(x, gu_w)
@@ -432,9 +515,20 @@ class _TtDecoderLayer:
     def _attention_sharded(self, x, custom_pos_emb, attn_mask=None):
         bsz = x.shape[0]  # 1, or 2 under CFG-parallel
         S = x.shape[1]
-        qkv = ttnn.linear(
-            x, self.qkv_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
-        )  # [1, S, tp_qkv] per device
+        if self.sp_fused:
+            # AG+MM: x is H-sharded [1, S/sp, H/tp]; all_gather H over the TP axis then
+            # matmul the col-parallel qkv weight [H, tp_qkv] -> [1, S/sp, tp_qkv].
+            qkv = _mo_e._agmm(
+                x, self.qkv_w, self.device, self.ccl_manager, self.tp_axis, compute_kernel_config=_mo_e._mm_cfg()
+            )
+        else:
+            qkv = _mo_e._minmm(
+                x,
+                self._fsdp_gather(self.qkv_w, 2),
+                compute_kernel_config=_mo_e._mm_cfg(),
+                core_grid=_mo_e._mm_grid(self.device),
+                fallback=ttnn.linear,
+            )  # [1, S, tp_qkv] per device
         qkv = ttnn.reshape(qkv, [bsz, 1, S, qkv.shape[-1]])
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -452,6 +546,21 @@ class _TtDecoderLayer:
             q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
             k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
 
+        if self.sp:
+            # SP: Q stays sequence-sharded (this device holds S/dp local query
+            # tokens); all-gather K,V over the SP axis so the local heads attend to
+            # ALL tokens (S/dp -> S on the sequence dim=2). rope + qk-norm were
+            # already applied per-position while K,V were S/dp, so the gathered K
+            # carries the correct per-position rotation. SDPA output length ==
+            # query length, so it stays S/dp-sharded, matching the residual stream.
+            # Explicit KV-gather (flux2 Linear-topology fallback), NOT a fused op.
+            k = ttnn.all_gather(
+                k, dim=2, cluster_axis=self.sp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
+            )
+            v = ttnn.all_gather(
+                v, dim=2, cluster_axis=self.sp_axis, num_links=_mo_e._ccl_links(), topology=_mo_e._sp_topology()
+            )
+
         _sdpa_kw = {"attn_mask": attn_mask, "is_causal": False, "scale": self.scale}
         _ck = _mo_e._mm_cfg()  # only pass fidelity when set, so the default path is untouched
         if _ck is not None:
@@ -462,11 +571,34 @@ class _TtDecoderLayer:
         ttnn.deallocate(v)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, [bsz, S, self.tp_num_heads * self.head_dim])
-        out_partial = ttnn.linear(
-            attn, self.o_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
+        if _mo_e._sp_ring_fusedmm_on():
+            # SP_RING: FUSED O-proj matmul + reduce_scatter (overlaps the MM with the RS
+            # on the ring fabric). attn [1,S,hd_local] @ o_w [hd_local,H] -> RS over TP ->
+            # [1, S/sp, H/tp], matching the H-sharded residual.
+            out = _mo_e._mmrs_last(
+                attn,
+                self.o_w,
+                self.device,
+                self.ccl_manager,
+                self.tp_axis,
+                compute_kernel_config=_mo_e._mm_cfg(),
+            )
+            ttnn.deallocate(attn)
+            return out
+        out_partial = _mo_e._minmm(
+            attn,
+            self.o_w if self.sp_fused else self._fsdp_gather(self.o_w, 3),
+            compute_kernel_config=_mo_e._mm_cfg(),
+            core_grid=_mo_e._mm_grid(self.device),
+            fallback=ttnn.linear,
         )  # [1, S, hidden] partial sum
         ttnn.deallocate(attn)
-        out = self._mesh_reduce(out_partial)  # all-reduce -> full o_proj, replicated
+        if self.sp_fused:
+            # MM + reduce_scatter: sum the per-device head partials AND re-scatter H ->
+            # [1, S/sp, H/tp], matching the H-sharded residual (no full-H all_reduce).
+            out = _mo_e._reduce_scatter_last(out_partial, self.ccl_manager, self.tp_axis)
+        else:
+            out = self._mesh_reduce(out_partial)  # all-reduce -> full o_proj, replicated
         ttnn.deallocate(out_partial)
         return out
 
@@ -478,7 +610,7 @@ class _TtDecoderLayer:
         Runs on local shards: q=[1,B,tp_num_heads,hd], k/v=[1,B,1,hd], KV cache
         local [B,1,max_seq,hd]. GQA (4 q : 1 kv) handled inside sdpa_decode."""
         B = x.shape[-2]
-        qkv = ttnn.linear(x, self.qkv_w, compute_kernel_config=_DECODE_MM_CFG)  # [1, B, tp_qkv]
+        qkv = ttnn.linear(x, self._fsdp_gather(self.qkv_w, 2), compute_kernel_config=_DECODE_MM_CFG)  # [1, B, tp_qkv]
         qkv = ttnn.reshape(qkv, [1, 1, B, qkv.shape[-1]])  # decode create-heads layout
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv,
@@ -538,7 +670,7 @@ class _TtDecoderLayer:
         # output; nlp_concat_heads_decode wants sharded input) -> plain reshape merges
         # the head dim head-major, matching the row-parallel o-proj input order.
         attn = ttnn.reshape(attn, [1, B, self.tp_num_heads * self.head_dim])
-        out_partial = ttnn.linear(attn, self.o_w, compute_kernel_config=_DECODE_MM_CFG)
+        out_partial = ttnn.linear(attn, self._fsdp_gather(self.o_w, 3), compute_kernel_config=_DECODE_MM_CFG)
         ttnn.deallocate(attn)
         out = self._mesh_reduce(out_partial)
         ttnn.deallocate(out_partial)
@@ -579,7 +711,7 @@ class _TtDecoderLayer:
     # ------------------------------------------------------------------
     def _forward_sharded(self, hidden_states, custom_pos_emb=None, return_l_aux=False, attn_mask=None):
         residual = hidden_states
-        x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
+        x = self._norm(hidden_states, self.input_ln_w)
         with _StageTimer(self.device, "attn_ms"):
             attn = self._attention_sharded(x, custom_pos_emb, attn_mask=attn_mask)
         ttnn.deallocate(x)
@@ -587,7 +719,7 @@ class _TtDecoderLayer:
         ttnn.deallocate(attn)
 
         residual2 = hidden
-        x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
+        x2 = self._norm(hidden, self.post_ln_w)
         # Composed graduated MoE (which composes the graduated gate), sharded.
         with _StageTimer(self.device, "moe_ms"):
             if return_l_aux:
@@ -636,8 +768,8 @@ class _TtDecoderLayer:
         return out
 
 
-def build(device, torch_module):
-    return _TtDecoderLayer(device, torch_module)
+def build(device, torch_module, ccl_manager=None):
+    return _TtDecoderLayer(device, torch_module, ccl_manager=ccl_manager)
 
 
 def image3_decoder_layer(*args, **kwargs):  # pragma: no cover - build() is the entry point

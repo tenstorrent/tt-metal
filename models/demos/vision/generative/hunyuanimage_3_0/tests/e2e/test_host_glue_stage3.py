@@ -46,7 +46,16 @@ IMAGE_SIZE = (1024, 1024)
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "l1_small_size": 24576,
+            "fabric_config": (
+                ttnn.FabricConfig.FABRIC_1D_RING
+                if os.environ.get("HUNYUAN_SP_RING") == "1"
+                else ttnn.FabricConfig.FABRIC_1D
+            ),
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [_MESH], indirect=True)
