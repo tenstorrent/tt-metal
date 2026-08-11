@@ -1529,6 +1529,23 @@ static std::map<std::string, std::string> build_kernel_defines(
                 }
             }
         }
+        // A dataflow buffer carries the same LLK-facing entry metadata as a circular buffer, keyed
+        // by the same device slot, so it feeds the same tables — without this a program declaring
+        // DFBs instead of CBs (ttnn::typecast) reports page size 0 to its kernels.
+        // See tt-emule docs/cb-dataformat.md.
+        for (const auto& dfb_impl : impl.dataflow_buffers_on_core(first_core)) {
+            const uint32_t slot = dfb_impl->device_slot;
+            if (slot >= EMULE_NUM_CBS) {  // no CB view above the ceiling, so no metadata either
+                continue;
+            }
+            const auto& dfb_cfg = dfb_impl->config;
+            tile_sizes[slot] = dfb_cfg.entry_size;
+            cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
+            if (dfb_cfg.tile.has_value()) {
+                tile_r_dim[slot] = dfb_cfg.tile->get_height();
+                tile_c_dim[slot] = dfb_cfg.tile->get_width();
+            }
+        }
         std::ostringstream ts, df, tr, tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
@@ -1735,17 +1752,31 @@ static void collect_kernels(
             // chain and to define `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
             // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
             // thread, so we set the corresponding macro based on the kernel's processor class.
+            //
+            // PROCESSOR_INDEX — silicon's HAL emits it alongside the COMPILE_FOR_* defines, and
+            // get_hw_thread_idx() returns it, so the debug headers reaching it (waypoint, pause,
+            // assert, device_print) fail to compile without it. Taken from the HAL, not hard-coded,
+            // so it tracks tt-metal.
+            uint32_t processor_type_idx = 0;  // emule fuses TRISC0-2 into one compute fiber
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
             } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
                 auto cfg_variant = dm_kernel->config();
                 const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
                 switch (cfg.processor) {
-                    case DataMovementProcessor::RISCV_0: defines["COMPILE_FOR_BRISC"] = "1"; break;
-                    case DataMovementProcessor::RISCV_1: defines["COMPILE_FOR_NCRISC"] = "1"; break;
+                    case DataMovementProcessor::RISCV_0:
+                        defines["COMPILE_FOR_BRISC"] = "1";
+                        processor_type_idx = 0;
+                        break;
+                    case DataMovementProcessor::RISCV_1:
+                        defines["COMPILE_FOR_NCRISC"] = "1";
+                        processor_type_idx = 1;
+                        break;
                     default: break;
                 }
             }
+            defines["PROCESSOR_INDEX"] = std::to_string(hal.get_processor_index(
+                hal.get_programmable_core_type(pct), kernel->get_kernel_processor_class(), processor_type_idx));
 
             // Helper: compute cache key from a defines map (preserves upstream's sorted
             // iteration of named_compile_args and defines for key stability).
@@ -2883,7 +2914,16 @@ static void init_core_cb_sync(
     bool configured[EMULE_NUM_CBS] = {};
     auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            if (idx >= EMULE_NUM_CBS || configured[idx]) {
+            // Loud, not clamped: an index past the ceiling means the host CircularBufferConfig
+            // did not cap at the arch's NUM_CIRCULAR_BUFFERS. Skipping it silently leaves the
+            // CB's sync state uninitialised, which surfaces far away as wrong tile data.
+            TT_FATAL(
+                idx < EMULE_NUM_CBS,
+                "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
+                "arch's NUM_CIRCULAR_BUFFERS.",
+                idx,
+                EMULE_NUM_CBS);
+            if (configured[idx]) {
                 continue;
             }
             uint32_t cb_addr = cb_impl->address();
