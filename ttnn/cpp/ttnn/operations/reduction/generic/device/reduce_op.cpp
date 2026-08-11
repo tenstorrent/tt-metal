@@ -96,7 +96,6 @@ Tensor reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     bool negate,
-    bool use_row_major_support,
     bool fast_and_approximate_mode,
     const std::optional<tt::tt_metal::Layout>& output_layout) {
     // Only ttnn::sum / ttnn::mean expose output_layout and convert when the device path can't emit it.
@@ -146,15 +145,12 @@ Tensor reduce(
     // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
     // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
     // accumulation through that pipeline is doable but not yet done; for now they tilize.
-    //
-    // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
-    // off and the op always tilizes through the classic tile-reduce kernels.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     const bool rm_base_eligible =
-        use_row_major_support && input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-        input_tensor.logical_shape().rank() == 4 && both_interleaved &&
+        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
+        both_interleaved &&
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);

@@ -297,7 +297,6 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*use_row_major_support=*/true,
                 /*fast_and_approximate_mode=*/false,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
@@ -311,7 +310,6 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*use_row_major_support=*/true,
                 /*fast_and_approximate_mode=*/fast_and_approximate_mode,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Max) {
