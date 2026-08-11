@@ -4256,6 +4256,43 @@ void kernel_main() {}
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
+// Same stress as above, on a compute (TRISC) kernel — CTA varargs are available on DM and compute.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromComputeKernel) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumVarargs = 1024u;
+    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
+
+    auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
+    compute_kernel.source = KernelSpec::SourceCode{R"(
+constexpr bool compile_time_varargs_are_iota() {
+    if (get_num_compile_time_varargs() != 1024u) {
+        return false;
+    }
+    for (uint32_t i = 0; i < get_num_compile_time_varargs(); ++i) {
+        if (get_compile_time_vararg(i) != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(compile_time_varargs_are_iota());
+
+void kernel_main() {}
+)"};
+    compute_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_iota_1024_compute";
+    spec.kernels = {compute_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
 // CTA varargs are a positional prefix ahead of TensorBinding CTA payloads.
 TEST_F(ProgramSpecTestGen1, CompileTimeVarargsPrefixBeforeTensorBindingCTAs) {
     NodeCoord node{0, 0};
