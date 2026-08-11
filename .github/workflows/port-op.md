@@ -57,6 +57,26 @@ permissions:
 
 engine: copilot
 
+# The agent firewall's API proxy meters AI credits on every request, and it prices them from a table
+# keyed by model. `engine: copilot` with no model pinned resolves to `auto`, which is not in that
+# table, so the proxy rejected every request and the agent made no changes at all:
+#
+#   400 Model "auto" has no AI credits pricing and no default pricing is configured.
+#
+# It retried three times and gave up in 43 seconds. Nothing to do with this runner pool -- it would
+# fail the same way anywhere -- but it is the last thing between a working CIv2 job and an agent that
+# actually ports the op.
+#
+# A fallback rate rather than pinning a priced model, because pinning one would change which model
+# does the work, and the point of this run is to test the harness rather than to re-tune the agent.
+# The rates are the ones the proxy's own error message suggests, in dollars per million tokens; they
+# affect credit accounting only, never behaviour, and are worth revisiting if that accounting has to
+# be accurate for a model `auto` chose.
+models:
+  default-ai-credits-pricing:
+    input: 3.0
+    output: 15.0
+
 network: defaults
 
 # One port at a time per branch: two concurrent runs would fight over the same card and produce
