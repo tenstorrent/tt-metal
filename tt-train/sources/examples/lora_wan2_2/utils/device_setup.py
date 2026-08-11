@@ -32,25 +32,20 @@ _MGD_WARNING = """
 
 def setup_device(dp_size: int, tp_size: int, seed: int = 42):
     distributed = dp_size > 1 or tp_size > 1
-    total_devices = dp_size * tp_size
-
     if distributed:
         if "TT_MESH_GRAPH_DESC_PATH" not in os.environ:
             print(_MGD_WARNING, file=sys.stderr)
-
         print(
             f"\nEnabling distributed mode: DP={dp_size}, TP={tp_size} "
-            f"({total_devices} devices, mesh [{dp_size}, {tp_size}])"
+            f"({dp_size * tp_size} devices, mesh [{dp_size}, {tp_size}])"
         )
-        ttml.core.distributed.enable_fabric(total_devices)
+
+    ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
 
     ctx = ttml.autograd.AutoContext.get_instance()
     if distributed:
-        ctx.open_device([dp_size, tp_size])
         ctx.initialize_parallelism_context(
             ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
         )
-    else:
-        ctx.open_device()
     ctx.set_seed(seed)
     return ctx, ctx.get_device()

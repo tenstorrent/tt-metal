@@ -2,12 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load one Wan expert from a diffusers checkpoint into a WanTransformer3D.
-
-Checkpoint tensors are bf16, which numpy cannot represent, so safetensors' torch reader
-is used and the arrays are converted to fp32 on the way out. torch appears here only as
-the weight reader, as in ttml/models/qwen3/weights.py.
-"""
+"""Load one Wan expert from a diffusers checkpoint into a WanTransformer3D."""
 
 from __future__ import annotations
 
@@ -19,12 +14,11 @@ import numpy as np
 import ttnn
 
 import ttml
+from ttml.modules import ColumnParallelLinear, RowParallelLinear
 
 from .patch_embed import conv3d_weight_to_linear
 
-# Checkpoint leaf -> ttml leaf. Inverse of the export renames in the example's lora_export.
-# Anchored on start-of-string or a dot so a submodule state_dict ("ffn.net.2.weight") maps as
-# well as a full one ("blocks.0.ffn.net.2.weight").
+# Anchored on start-of-string or a dot so a submodule state_dict maps as well as a full one.
 _LEAF_RENAMES = [
     (re.compile(r"(^|\.)patch_embedding\."), r"\1patch_embed."),
     (re.compile(r"(^|\.)to_out\.0\."), r"\1to_out."),
@@ -40,12 +34,7 @@ def to_ttml_name(key: str) -> str:
 
 
 def to_ttml_array(name: str, array: np.ndarray, target_shape: tuple) -> np.ndarray:
-    """Reshape a checkpoint tensor to its ttml parameter shape.
-
-    Linear weights arrive (out, in) and ttml wants (1, 1, out, in); biases and norm
-    weights arrive (n,) and ttml wants (1, 1, 1, n); the patch embed arrives as a 5-D
-    conv kernel; the modulation tables arrive (1, chunks, dim).
-    """
+    """Reshape a checkpoint tensor to its ttml parameter shape."""
     if name.startswith("patch_embed.") and array.ndim == 5:
         array = conv3d_weight_to_linear(array)
     while array.ndim < len(target_shape):
@@ -81,9 +70,51 @@ def _read_shard(path: Path) -> dict[str, np.ndarray]:
     return {name: tensor.float().numpy() for name, tensor in load_file(str(path)).items()}
 
 
+def _shard_plan(model) -> dict:
+    """param name -> (mapper, sharded_dim, tp_size). Absent means replicated.
+
+    ColumnParallelLinear shards its weight on dim 2 but its bias on dim 3; RowParallelLinear
+    leaves its bias replicated, since it is added after the all-reduce.
+    """
+    mesh = ttml.maybe_mesh()
+    if mesh is None or mesh.num_devices() == 1:
+        return {}
+
+    plan: dict = {}
+    for prefix, module in model.named_modules():
+        if isinstance(module, ColumnParallelLinear):
+            entries = [("weight", 2)] + ([("bias", 3)] if module.bias is not None else [])
+        elif isinstance(module, RowParallelLinear):
+            entries = [("weight", 3)]
+        else:
+            continue
+        size = mesh.axis_size(module.axis_name)
+        for leaf, tdim in entries:
+            name = f"{prefix}.{leaf}" if prefix else leaf
+            plan[name] = (mesh.axis_mapper(module.axis_name, tdim=tdim), tdim, size)
+
+    # A prefix mismatch here would silently load sharded weights as replicated.
+    unknown = sorted(set(plan) - {n for n, _ in model.named_parameters()})
+    if unknown:
+        raise RuntimeError(
+            f"shard plan does not match named_parameters(), e.g. {unknown[:4]}; "
+            f"sharded weights would be loaded as replicated"
+        )
+    return plan
+
+
+def _global_shape(local_shape, tdim, tp_size) -> tuple:
+    """Parameter.shape() is per-device, so undo the shard to get the checkpoint's shape."""
+    shape = list(local_shape)
+    if tdim is not None:
+        shape[tdim] *= tp_size
+    return tuple(shape)
+
+
 def load_expert_from_safetensors(model, model_id: str, subfolder: str = "transformer", *, strict: bool = True) -> int:
     """Fill `model`'s parameters from one expert subfolder. Returns the count loaded."""
     params = dict(model.named_parameters())
+    plan = _shard_plan(model)
     remaining = set(params)
     loaded, unexpected = 0, []
 
@@ -94,8 +125,10 @@ def load_expert_from_safetensors(model, model_id: str, subfolder: str = "transfo
             if target is None:
                 unexpected.append(key)
                 continue
-            value = to_ttml_array(name, array, tuple(target.shape()))
-            new_tensor = ttml.autograd.Tensor.from_numpy(value, ttnn.Layout.TILE, ttnn.bfloat16)
+            mapper, tdim, tp_size = plan.get(name, (None, None, 1))
+            expected = _global_shape(target.shape(), tdim, tp_size)
+            value = to_ttml_array(name, array, expected)
+            new_tensor = ttml.autograd.Tensor.from_numpy(value, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
             target.set_value(new_tensor.get_value())
             remaining.discard(name)
             loaded += 1
@@ -108,5 +141,6 @@ def load_expert_from_safetensors(model, model_id: str, subfolder: str = "transfo
             raise RuntimeError(message)
         print(message)
 
-    print(f"[wan] loaded {loaded} tensors from {subfolder}")
+    sharded = len(plan)
+    print(f"[wan] loaded {loaded} tensors from {subfolder} ({sharded} sharded, " f"{loaded - sharded} replicated)")
     return loaded

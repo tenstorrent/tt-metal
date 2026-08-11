@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from pipeline_config import Config
+from timing import phase
 
 
 def preprocess(cfg: Config) -> Path:
@@ -24,11 +25,12 @@ def preprocess(cfg: Config) -> Path:
     images_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[pre] downloading {cfg.STYLE}/tar + {cfg.STYLE}/caption from {cfg.DATASET_ID} ...")
-    local = snapshot_download(
-        repo_id=cfg.DATASET_ID,
-        repo_type="dataset",
-        allow_patterns=[f"{cfg.STYLE}/tar/*.png", f"{cfg.STYLE}/caption/*.txt"],
-    )
+    with phase("hf download"):
+        local = snapshot_download(
+            repo_id=cfg.DATASET_ID,
+            repo_type="dataset",
+            allow_patterns=[f"{cfg.STYLE}/tar/*.png", f"{cfg.STYLE}/caption/*.txt"],
+        )
     style_root = Path(local) / cfg.STYLE
     tar_dir, cap_dir = style_root / "tar", style_root / "caption"
     if not tar_dir.is_dir():
@@ -36,18 +38,19 @@ def preprocess(cfg: Config) -> Path:
 
     metadata: list[dict] = []
     skipped = 0
-    for img_path in sorted(tar_dir.glob("*.png")):
-        stem = img_path.stem
-        cap_path = cap_dir / f"{stem}.txt"
-        if not cap_path.exists():
-            skipped += 1
-            continue
-        caption = cap_path.read_text(encoding="utf-8").strip()
-        if not caption:
-            skipped += 1
-            continue
-        shutil.copyfile(img_path, images_dir / f"{stem}.png")
-        metadata.append({"idx": int(stem), "image": f"images/{stem}.png", "caption": caption})
+    with phase("copy images + captions"):
+        for img_path in sorted(tar_dir.glob("*.png")):
+            stem = img_path.stem
+            cap_path = cap_dir / f"{stem}.txt"
+            if not cap_path.exists():
+                skipped += 1
+                continue
+            caption = cap_path.read_text(encoding="utf-8").strip()
+            if not caption:
+                skipped += 1
+                continue
+            shutil.copyfile(img_path, images_dir / f"{stem}.png")
+            metadata.append({"idx": int(stem), "image": f"images/{stem}.png", "caption": caption})
 
     metadata.sort(key=lambda m: m["idx"])
     (out / "metadata.jsonl").write_text(
