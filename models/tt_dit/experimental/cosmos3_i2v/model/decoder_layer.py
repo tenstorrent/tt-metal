@@ -41,10 +41,36 @@ from __future__ import annotations
 import ttnn
 
 from ....layers.module import Module
-from ....layers.normalization import RMSNorm
+from ....layers.normalization import DistributedRMSNorm, RMSNorm
 from ....parallel.config import DiTParallelConfig, ParallelFactor
-from .attention import Cosmos3JointAttention
+from .attention import Cosmos3JointAttention, tp_shard_enabled
 from .mlp import Cosmos3VLTextMLP
+
+
+class _CompositeDistributedRMSNorm(DistributedRMSNorm):
+    """DistributedRMSNorm with the norm composed from standard eltwise/reduction ops.
+
+    The fused wan_fused_rmsnorm pre/post pair corrupts under trace capture+replay
+    (latent PCC 0.9667 vs 0.999+ eager, isolated to the norm by identity-roundtrip
+    probes); the standard ops are trace-proven. Costs a couple of extra eltwise
+    passes per call — revisit when the fused single-op distributed rmsnorm from
+    newer ttnn is available in the build.
+    """
+
+    def forward(self, x, **_ignored):
+        # fp32 stats: bf16 sum-of-squares over 640 costs visible precision at 35-step depth.
+        sq = ttnn.multiply(x, x, dtype=ttnn.float32)
+        local_ss = ttnn.sum(sq, dim=-1, keepdim=True)
+        ttnn.deallocate(sq)
+        gathered = self.ccl_manager.all_gather_persistent_buffer(local_ss, dim=3, mesh_axis=self.mesh_axis)
+        total = ttnn.sum(gathered, dim=-1, keepdim=True)
+        inv = ttnn.rsqrt(ttnn.add(ttnn.multiply(total, 1.0 / self.embedding_dim), self.norm_eps))
+        ttnn.deallocate(total)
+        out = ttnn.multiply(x, inv)
+        ttnn.deallocate(inv)
+        if self.weight is not None:
+            out = ttnn.multiply(out, self.weight.data)
+        return out
 
 
 def _default_parallel_config() -> DiTParallelConfig:
@@ -112,10 +138,35 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         }
 
         self.input_layernorm = RMSNorm(hidden_size, **norm_kw)
-        self.input_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.self_attn = Cosmos3JointAttention(**attn_kw)
         self.post_attention_layernorm = RMSNorm(hidden_size, **norm_kw)
-        self.post_attention_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+        # Feature-sharded stream: the post-attention gen norm consumes the TP-fractured
+        # residual, so it reduces via the distributed-stats op with a TP-sharded weight.
+        # The input gen norm stays replicated -- QKV projections consume full width.
+        self._tp_shard = tp_shard_enabled() and parallel_config.tensor_parallel.factor > 1
+        if self._tp_shard:
+            dist_norm_kw = dict(
+                norm_eps=rms_norm_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            self.input_layernorm_moe_gen = _CompositeDistributedRMSNorm(hidden_size, **dist_norm_kw)
+            self.post_attention_layernorm_moe_gen = _CompositeDistributedRMSNorm(
+                hidden_size,
+                norm_eps=rms_norm_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.post_attention_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+        if not self._tp_shard:
+            self.input_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.mlp = Cosmos3VLTextMLP(**mlp_kw)
         self.mlp_moe_gen = Cosmos3VLTextMLP(**mlp_kw)
 
@@ -155,7 +206,14 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         # passed through unused; only gen is advanced.
         if getattr(self.self_attn, "_und_kv_cache", None) is not None:
             gen_norm = self.input_layernorm_moe_gen(gen_seq)
+            if self._tp_shard:
+                # QKV consumes full width: gather the fractured norm output here (the
+                # AG+MM fused variant replaces this exposed gather later).
+                tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+                gen_norm = self.ccl_manager.all_gather_persistent_buffer(gen_norm, dim=3, mesh_axis=tp_axis)
             _, gen_attn = self.self_attn(None, gen_norm, None, None, cos_gen, sin_gen, logical_n_gen=logical_n_gen)
+            if self._tp_shard:
+                return und_seq, self._fractured_post_attn(gen_seq, gen_attn)
             residual_gen = ttnn.add(gen_seq, gen_attn)
             mlp_gen_out = self.mlp_moe_gen(self.post_attention_layernorm_moe_gen(residual_gen))
             gen_out = ttnn.add(residual_gen, mlp_gen_out)
@@ -163,21 +221,38 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
 
         und_norm = self.input_layernorm(und_seq)
         gen_norm = self.input_layernorm_moe_gen(gen_seq)
+        if self._tp_shard:
+            gen_norm = self.ccl_manager.all_gather_persistent_buffer(
+                gen_norm, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
 
         und_attn, gen_attn = self.self_attn(
             und_norm, gen_norm, cos_und, sin_und, cos_gen, sin_gen, logical_n_gen=logical_n_gen
         )
 
         residual_und = ttnn.add(und_seq, und_attn)
-        residual_gen = ttnn.add(gen_seq, gen_attn)
 
         mlp_und_in = self.post_attention_layernorm(residual_und)
-        mlp_gen_in = self.post_attention_layernorm_moe_gen(residual_gen)
-
         mlp_und_out = self.mlp(mlp_und_in)
-        mlp_gen_out = self.mlp_moe_gen(mlp_gen_in)
-
         und_out = ttnn.add(residual_und, mlp_und_out)
+
+        if self._tp_shard:
+            return und_out, self._fractured_post_attn(gen_seq, gen_attn)
+
+        residual_gen = ttnn.add(gen_seq, gen_attn)
+        mlp_gen_in = self.post_attention_layernorm_moe_gen(residual_gen)
+        mlp_gen_out = self.mlp_moe_gen(mlp_gen_in)
         gen_out = ttnn.add(residual_gen, mlp_gen_out)
 
         return und_out, gen_out
+
+    def _fractured_post_attn(self, gen_seq: ttnn.Tensor, gen_attn_frac: ttnn.Tensor) -> ttnn.Tensor:
+        """Post-attention span on the TP-fractured gen stream.
+
+        gen_seq and gen_attn both arrive TP-fractured [1, 1, N, hidden/tp]; the whole
+        span runs fractured and the layer output stays fractured (the trunk gathers
+        once at exit).
+        """
+        residual_gen = ttnn.add(gen_seq, gen_attn_frac)
+        mlp_gen_out = self.mlp_moe_gen(self.post_attention_layernorm_moe_gen(residual_gen), fractured_io=True)
+        return ttnn.add(residual_gen, mlp_gen_out)

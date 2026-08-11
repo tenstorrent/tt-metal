@@ -83,6 +83,14 @@ def sp_ring_enabled() -> bool:
     return os.environ.get("TT_COSMOS3_ENABLE_SP_RING", "1") not in ("", "0", "false", "False")
 
 
+def tp_shard_enabled() -> bool:
+    """Feature-sharded gen residual stream: the post-attention span (to_add_out output →
+    residual → norm → MLP → residual) stays TP-fractured [.., hidden/tp] instead of being
+    re-replicated after every RowParallel, halving the trunk's exposed all-gathers. The und
+    pathway is unaffected."""
+    return os.environ.get("TT_COSMOS3_TP_SHARD") in ("1", "true", "True")
+
+
 # Module-level latch so TT_COSMOS3_DUMP_ATTN_DIR captures the FIRST attention call
 # of the process (layer 0, step 0, cond pass). Reset is not needed — process is short-lived.
 _attn_dump_done = False
@@ -95,6 +103,16 @@ def _default_parallel_config() -> DiTParallelConfig:
         tensor_parallel=ParallelFactor(1, 1),
         sequence_parallel=ParallelFactor(1, 0),
     )
+
+
+def _use_grouped_kv() -> bool:
+    """Feed ring-joint SDPA grouped K/V (n_local_kv_heads) instead of broadcasting to
+    n_local_heads — skips the 8x `_gqa_interleave_broadcast` and moves 8x less KV over
+    the ring. Perf opt-in (default off) because it needs a ttnn build that accepts
+    joint tensors in GQA grouped-KV mode (ring_joint_sdpa_device_operation.cpp); an
+    older build fails fast with the joint+GQA TT_FATAL. Output is a different valid
+    sample vs the broadcast path (bf16 accumulation order shift)."""
+    return os.environ.get("TT_COSMOS3_GQA_KV") in ("1", "true", "True")
 
 
 def _gqa_interleave_broadcast(t, kv_repeat: int, n_kv_heads: int, sub_core_grids):
@@ -232,8 +250,13 @@ class Cosmos3JointAttention(Module):
         # accumulation gives the softmax enough headroom; HiFi4 matches what diffusers uses
         # downstream for the attention math.
         # The NaN was attributed to bf16 accumulation, not the math fidelity. fp32_dest_acc
-        # is kept unconditionally; TT_COSMOS3_SDPA_HIFI2=1 drops the QK/PV matmul fidelity to
+        # defaults on; TT_COSMOS3_SDPA_HIFI2=1 drops the QK/PV matmul fidelity to
         # HiFi2 (~half the math cycles) to test whether HiFi4 is actually required for parity.
+        # TT_COSMOS3_SDPA_FP32_ACC=0 disables the fp32 accumulator: the ring-joint op only
+        # takes its streaming compute path (pipelined QK^T->softmax->PV, full-depth DST) with
+        # bf16 dst (ring_joint_sdpa_program_factory.cpp use_streaming_compute), and wan
+        # production ships that exact config (HiFi2 + bf16-acc) at 75K-token scale, so the
+        # NaN attribution above is testable rather than load-bearing.
         import os as _os_sdpa
 
         _sdpa_fidelity = (
@@ -241,11 +264,12 @@ class Cosmos3JointAttention(Module):
             if _os_sdpa.environ.get("TT_COSMOS3_SDPA_HIFI2") in ("1", "true", "True")
             else ttnn.MathFidelity.HiFi4
         )
+        _sdpa_fp32_acc = _os_sdpa.environ.get("TT_COSMOS3_SDPA_FP32_ACC", "1") not in ("0", "false", "False")
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=_sdpa_fidelity,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=_sdpa_fp32_acc,
         )
         # Clamp SDPA's compute grid to 11x10 on Blackhole Galaxy. The raw
         # compute_with_storage_grid_size() returns 13x10 on BH P150, which can
@@ -261,11 +285,15 @@ class Cosmos3JointAttention(Module):
         # since k_chunk also sets the N_gen padding granularity (k_chunk * sp_factor).
         self.sdpa_q_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_Q_CHUNK", "256"))
         self.sdpa_k_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_K_CHUNK", "384"))
+        # SFPU exp precision in the softmax. The SDPA op itself defaults to approx exp when
+        # the program config leaves it unset; False opts into the precise (slower) mode.
+        # TT_COSMOS3_SDPA_EXP_APPROX=1 switches to the op-default approx exp.
+        self.sdpa_exp_approx = os.environ.get("TT_COSMOS3_SDPA_EXP_APPROX") in ("1", "true", "True")
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=self.sdpa_q_chunk_size,
             k_chunk_size=self.sdpa_k_chunk_size,
-            exp_approx_mode=False,
+            exp_approx_mode=self.sdpa_exp_approx,
         )
         # Ring-joint SDPA needs cores reserved for the CCL fabric workers.
         # Mirror the Flux/Motif pattern (blocks/attention.py:70-73, 301): reserve the
@@ -277,7 +305,7 @@ class Cosmos3JointAttention(Module):
                 compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
                 q_chunk_size=self.sdpa_q_chunk_size,
                 k_chunk_size=self.sdpa_k_chunk_size,
-                exp_approx_mode=False,
+                exp_approx_mode=self.sdpa_exp_approx,
             )
         else:
             self.ring_sdpa_worker_grid = None
@@ -423,8 +451,13 @@ class Cosmos3JointAttention(Module):
         self,
         attn_BHNE: ttnn.Tensor,
         proj: RowParallelLinear,
+        gather_output: bool = True,
     ) -> ttnn.Tensor:
-        """Concat heads → row-parallel matmul → all-gather → replicated `[1, 1, N, hidden_size]`."""
+        """Concat heads → row-parallel matmul → all-gather → replicated `[1, 1, N, hidden_size]`.
+
+        With gather_output=False the TP all-gather is skipped and the fractured
+        `[1, 1, N, hidden_size / tp]` reduce-scatter output is returned directly
+        (feature-sharded residual stream)."""
         heads = ttnn.transformer.concatenate_heads(attn_BHNE)
         ttnn.deallocate(attn_BHNE)
         heads_11NF = ttnn.unsqueeze(heads, 0)
@@ -435,7 +468,7 @@ class Cosmos3JointAttention(Module):
         out_fractured = proj(heads_11NF)
         ttnn.deallocate(heads_11NF)
 
-        if self._tp_factor() <= 1:
+        if self._tp_factor() <= 1 or not gather_output:
             return out_fractured
 
         # All-gather on TP axis to replicate so the tt-symbiote-wrapped caller (host PyTorch
@@ -471,7 +504,7 @@ class Cosmos3JointAttention(Module):
             norm_q=self.norm_added_q,
             norm_k=self.norm_added_k,
         )
-        kv_repeat = self.n_local_heads // self.n_local_kv_heads
+        kv_repeat = 1 if _use_grouped_kv() else self.n_local_heads // self.n_local_kv_heads
         if kv_repeat > 1:
             crs = self.safe_core_range_set
             k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
@@ -492,6 +525,8 @@ class Cosmos3JointAttention(Module):
             k_gen_b = k_masked
 
         q_und_c, k_und_c, v_und_c = self._und_kv_cache
+        if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
+            print("[ccl-trace] ring_joint_sdpa ENTER", flush=True)
         gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q_gen,
             k_gen_b,
@@ -510,15 +545,21 @@ class Cosmos3JointAttention(Module):
             num_links=self.ccl_manager.num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=self.ccl_manager.topology,
+            # Keep the ring-joint SDPA on Linear regardless of TT_COSMOS3_CCL_RING: the Ring
+            # variant deadlocks when the two cfg submeshes run it concurrently. The knob is
+            # only meant to flip the RowParallel RS/AG topology, not this op.
+            topology=ttnn.Topology.Linear,
             subdevice_id=self.ccl_manager.ccl_sub_device_id,
             ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
         )
+        if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
+            ttnn.synchronize_device(self.mesh_device)
+            print("[ccl-trace] ring_joint_sdpa EXIT", flush=True)
         ttnn.deallocate(q_gen)
         ttnn.deallocate(k_gen_b)
         ttnn.deallocate(v_gen_b)
         ttnn.deallocate(und_attn_via_ring)
-        gen_out = self._project_out(gen_attn_BHME, self.to_add_out)
+        gen_out = self._project_out(gen_attn_BHME, self.to_add_out, gather_output=not tp_shard_enabled())
         return None, gen_out
 
     def forward(
@@ -624,11 +665,12 @@ class Cosmos3JointAttention(Module):
             if logical_n_gen is None:
                 msg = "logical_n_gen is required when sp_factor > 1"
                 raise ValueError(msg)
-            # Ring SDPA requires Q.num_heads == K.num_heads (no internal GQA broadcast,
-            # unlike the local SDPA op). Cosmos3 is GQA (64 Q-heads / 8 KV-heads), so
-            # broadcast K/V from n_local_kv_heads to n_local_heads via a per-head
-            # interleave that stays within `safe_core_range_set` (see `_gqa_interleave_broadcast`).
-            kv_repeat = self.n_local_heads // self.n_local_kv_heads
+            # Cosmos3 is GQA (64 Q-heads / 8 KV-heads). Ring-joint SDPA handles grouped
+            # K/V natively when TT_COSMOS3_GQA_KV is set (needs the joint+GQA guard
+            # lifted in ttnn); otherwise broadcast K/V from n_local_kv_heads to
+            # n_local_heads via a per-head interleave that stays within
+            # `safe_core_range_set` (see `_gqa_interleave_broadcast`).
+            kv_repeat = 1 if _use_grouped_kv() else self.n_local_heads // self.n_local_kv_heads
             if kv_repeat > 1:
                 crs = self.safe_core_range_set
                 k_gen_b = _gqa_interleave_broadcast(k_gen, kv_repeat, self.n_local_kv_heads, crs)
@@ -683,6 +725,8 @@ class Cosmos3JointAttention(Module):
                     ttnn.clone(v_und_pad_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 )
 
+            if os.environ.get("TT_COSMOS3_CCL_TRACE") in ("1", "true", "True"):
+                print("[ccl-trace] ring_joint_sdpa ENTER", flush=True)
             gen_attn_BHME, und_attn_via_ring, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_gen,
                 k_gen_b,
@@ -701,7 +745,7 @@ class Cosmos3JointAttention(Module):
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.sp_axis,
                 mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
+                topology=ttnn.Topology.Linear,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(0, self.ring_sdpa_worker_grid.y),
             )
@@ -721,7 +765,7 @@ class Cosmos3JointAttention(Module):
         if _do_dump and (self.sp_factor <= 1 or not sp_ring_enabled()):
             self._dump_attn_stage(gen_attn_BHME, _dump_dir, "07_gen_attn_post_sdpa")
         und_out = self._project_out(und_attn_BHNE, self.to_out)
-        gen_out = self._project_out(gen_attn_BHME, self.to_add_out)
+        gen_out = self._project_out(gen_attn_BHME, self.to_add_out, gather_output=not tp_shard_enabled())
         if _do_dump:
             self._dump_attn_stage(gen_out, _dump_dir, "08_gen_out_post_project")
         return und_out, gen_out

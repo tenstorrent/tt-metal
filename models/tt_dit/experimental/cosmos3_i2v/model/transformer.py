@@ -120,7 +120,22 @@ class Cosmos3OmniTransformer(Module):
             "dtype": dtype,
         }
         self.norm = RMSNorm(hidden_size, **norm_kw)
-        self.norm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+        from .attention import tp_shard_enabled as _tp_shard_enabled
+        from .decoder_layer import _CompositeDistributedRMSNorm
+
+        self._tp_shard = _tp_shard_enabled() and parallel_config.tensor_parallel.factor > 1
+        if self._tp_shard:
+            self.norm_moe_gen = _CompositeDistributedRMSNorm(
+                hidden_size,
+                norm_eps=rms_norm_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.norm_moe_gen = RMSNorm(hidden_size, **norm_kw)
 
         # Vision proj_in/proj_out on device. Replicated weights (no TP) — both are
         # tiny (5120 x 192). proj_in shrinks the gen upload 26x; proj_out shrinks the
@@ -277,6 +292,12 @@ class Cosmos3OmniTransformer(Module):
 
         _profile_flush_every = int(_os.environ.get("TT_COSMOS3_PROFILE_FLUSH_EVERY", "0"))
 
+        if self._tp_shard:
+            # The gen residual stream runs TP-fractured through all layers; fracture once
+            # here (mesh_partition's device order is round-trip-exact with the CCL AGs)
+            # and re-replicate once after the final norm.
+            gen_seq = ttnn.mesh_partition(gen_seq, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
+
         for i, layer in enumerate(self.layers):
             und_seq, gen_seq = layer(und_seq, gen_seq, cos_und, sin_und, cos_gen, sin_gen, logical_n_gen=logical_n_gen)
             if do_dump:
@@ -290,6 +311,12 @@ class Cosmos3OmniTransformer(Module):
 
         und_out = self.norm(und_seq)
         gen_out = self.norm_moe_gen(gen_seq)
+        if self._tp_shard:
+            # Layer boundary is TP-fractured under TT_COSMOS3_TP_SHARD; re-replicate once
+            # here so the sp gather / proj_out / host download see the standard layout.
+            gen_out = self.ccl_manager.all_gather_persistent_buffer(
+                gen_out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
 
         if self.parallel_config.sequence_parallel.factor > 1 and sp_ring_enabled():
             gen_out = self.ccl_manager.all_gather_persistent_buffer(

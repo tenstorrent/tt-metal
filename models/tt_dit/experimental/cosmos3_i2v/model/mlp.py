@@ -151,8 +151,23 @@ class Cosmos3VLTextMLP(Module):
     def _tp_axis(self) -> int:
         return self.parallel_config.tensor_parallel.mesh_axis
 
-    def forward(self, x_11NH: ttnn.Tensor) -> ttnn.Tensor:
-        """Replicated `[1, 1, N, hidden_size]` → replicated `[1, 1, N, hidden_size]`."""
+    def forward(self, x_11NH: ttnn.Tensor, fractured_io: bool = False) -> ttnn.Tensor:
+        """Replicated `[1, 1, N, hidden_size]` → replicated `[1, 1, N, hidden_size]`.
+
+        With fractured_io=True (feature-sharded residual stream), input is the TP-fractured
+        `[1, 1, N, hidden_size / tp]`: it is all-gathered here, immediately before gate_up —
+        the one consumer that needs full width — and the down_proj reduce-scatter output is
+        returned fractured, skipping the trailing all-gather.
+        """
+        if fractured_io and self._tp_factor() > 1:
+            if self.ccl_manager.topology == ttnn.Topology.Ring:
+                # Fuse the gather into the gate_up matmul (AG+MM) — the all-gather
+                # overlaps the compute instead of running exposed on the ring.
+                h = self.fused_gate_up(x_11NH, parallel_config=self.parallel_config)
+                out_fractured = self.down_proj(h)
+                ttnn.deallocate(h)
+                return out_fractured
+            x_11NH = self.ccl_manager.all_gather_persistent_buffer(x_11NH, dim=3, mesh_axis=self._tp_axis())
         # Fused gate+up + swiglu: per chip output is [1, 1, N, intermediate_size / tp].
         h = self.fused_gate_up(x_11NH)
         # RowParallelLinear: partial-sum matmul + reduce-scatter on TP axis.
@@ -160,7 +175,7 @@ class Cosmos3VLTextMLP(Module):
         out_fractured = self.down_proj(h)
         ttnn.deallocate(h)
 
-        if self._tp_factor() <= 1:
+        if self._tp_factor() <= 1 or fractured_io:
             return out_fractured
 
         # All-gather on TP axis → replicated [1, 1, N, hidden_size] for the tt-symbiote caller.
