@@ -37,6 +37,7 @@ add_subdirectory(kda/sigmoid_gated_rms_norm)
 add_subdirectory(kda/qkv_causal_conv1d_silu)
 add_subdirectory(kda/reduce_affine_transforms)
 add_subdirectory(kda/affine_exclusive_scan)
+add_subdirectory(kda/prepare_chunk_recurrence)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
@@ -98,6 +99,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
         TTNN::Ops::Experimental::KDA::ReduceAffineTransforms
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
+        TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
@@ -152,6 +154,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
