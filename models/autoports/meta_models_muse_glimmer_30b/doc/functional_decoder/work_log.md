@@ -255,13 +255,16 @@ the same in the evidence and in the model.
 |---|---|---|---|
 | sliding prefill SDPA | 11x10, q=128, k=128 | 11x10, q<=256, k<=256 (largest divisor of the length) | 12.02 ms -> 7.46 ms per 8192-token call |
 | chunked prefill SDPA | 11x10, q<=128 | 11x10, q<=256, k<=256 | 12.16 ms -> 7.55 ms per 8192-token call |
-| decode SDPA | 11x10, k=64 | 8x4 while `cores >= batch * kv_heads`, k=64 everywhere, and capped to divide the page-table capacity (section 9) | batch 1: 52.4 us -> 43.9 us (sliding), 67.3 us -> 50.9 us (full). k=64 is the batch-**32** optimum for both kinds; at batch 1 it costs a few us against 8x4/k=256 |
+| decode SDPA | 11x10, k=64 | 8x4 while `cores >= batch * kv_heads`, k=64 everywhere, with the page table sized to a whole number of K chunks (section 9) | batch 1: 52.29 us -> 43.30 us (sliding), 67.32 us -> 50.90 us (full). k=64 is the batch-**32** optimum for both kinds; at batch 1 it costs a few us against 8x4/k=256 |
 
 `q_chunk=512` is *slower* than 256 under this policy (10.31-10.34 ms) and 128 is slower
 still, so 256 is the measured optimum rather than "as large as possible". Bigger is not even
-always legal: `q_chunk=1024` (any k) and `q_chunk=512, k_chunk=256` are rejected outright with
+always legal: `q_chunk=1024` (swept at `k_chunk=128`) is rejected on **both** prefill call sites
+and `q_chunk=512, k_chunk=256` is rejected on the sliding one, with
 `TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2294528 B
-which is beyond max L1 size of 1572864 B`, recorded as `RuntimeError` rows in the sweep CSV.
+which is beyond max L1 size of 1572864 B` — recorded as `RuntimeError` rows in the sweep CSV.
+(`q_chunk=512, k_chunk=256` does run on the chunked call site, at 8.51 ms: legal, still slower
+than 256/256's 7.55 ms.)
 The k-chunk axis was extended after a review noted it was under-swept: `k_chunk=256` with
 `q_chunk=256` is a further ~12% (8.44-8.59 ms -> 7.46-7.55 ms) and is the shipped default. The full 11x10
 grid and the 11x8 sub-grid are within ~1% of each other for prefill and both beat the
@@ -304,7 +307,7 @@ every affected artifact was re-collected.
 
 | # | finding | fix | how it is now pinned |
 |---|---|---|---|
-| R1 | the **full-attention** prefill SDPA ran at `q_chunk_size=512` — the size the sweep measured as *slower* — because `_chunked_sdpa_chunk_sizes` took `max(candidates)` with no cap, so the `prefill_sdpa_q_chunk` constructor argument was dead on that path and the recorded geometry did not match the executed geometry | cap both candidates with `self.prefill_sdpa_q_chunk` / `self.prefill_sdpa_k_chunk` | `test_chunked_sdpa_chunk_sizes_respect_the_configured_cap`; the re-collected `prefill_*_ops.csv` for **both** kinds now show `q_chunk_size=256;k_chunk_size=128` |
+| R1 | the **full-attention** prefill SDPA ran at `q_chunk_size=512` — the size the sweep measured as *slower* — because `_chunked_sdpa_chunk_sizes` took `max(candidates)` with no cap, so the `prefill_sdpa_q_chunk` constructor argument was dead on that path and the recorded geometry did not match the executed geometry | cap both candidates with `self.prefill_sdpa_q_chunk` / `self.prefill_sdpa_k_chunk` | `test_chunked_sdpa_chunk_sizes_respect_the_configured_cap`; the re-collected prefill ops CSVs for **both** kinds show the configured geometry (`k_chunk_size` was 128 when this was fixed; section 9 later moved it to 256 after extending the sweep, and that is what the committed artifacts show today) |
 | R2 | `start_pos > 0` (continued prefill) was documented and validated but silently wrong on sliding layers: the window prefix comes from the input tensor, so a continued segment's first 2048 positions attend to a truncated window | sliding layers raise with an explanation; full-attention layers keep the capability (they read the whole prefix from the paged cache) | `test_continued_prefill_contract`: asserts the raise for sliding, and PCC of a `[0,1024)` + `[1024,1536)` continued prefill against a single-shot `[0,1536)` reference for full-attention |
 | R3 | 132 of 144 PCC records had no provenance, so a record from an older revision was indistinguishable from a fresh one, and no console log was kept for the definitive suites | every record now carries `code_sha256` (hash of implementation + reference + tests), `git_head` and `recorded_at`; the artifact records the current fingerprint and `render_evidence.py` names any stale record | `pcc/pcc_results.json` was deleted and rebuilt from scratch: **165 records, 0 stale**. Console logs kept in [`logs/`](logs) |
 | R4 | the Environment section claimed "no reset, no hang, no recovery ... `tt-triage` was never required" while the same file documented a hang with captured triage and a device recovery | Environment section now points at both incidents | see the top of this file |
@@ -418,11 +421,17 @@ through the same unbounded `page_table_ptr[virtual_block]`, with `cur_pos` a dev
 nothing host-side bounds. A stage review caught this by reading the source: with a 25-block
 page table at `block_size=32` (capacity 800) and `k_chunk=64`, decoding at position 777 rounds
 to 832 and reads block-id entry 25 of a 25-entry row — a configuration `test_page_block_sizes`
-was already producing, masked only by `ttnn.from_torch`'s zeroed padding. `_decode_sdpa_k_chunk`
-now picks a K chunk that **divides the page-table capacity**, which makes the rounding safe for
-every addressable position, and
-`test_decode_sdpa_k_chunk_stays_inside_the_page_table` pins it. Evidence for the localization is
-in [`logs/autofix/`](logs/autofix).
+was already producing, masked only by `ttnn.from_torch`'s zeroed padding.
+
+The first attempt at a fix was to *shrink* the decode K chunk so it divides the capacity. That
+is wrong on device: `k_chunk=32` for that geometry measured decode PCC **0.6558**, so the small
+K chunk is itself broken here. The shipped fix goes the other way and keeps the K chunk at the
+measured, correctness-verified 64: `blocks_per_seq` rounds the page-table capacity up to a whole
+number of `lcm(block_size, k_chunk)` tokens (25 blocks -> 26 at `block_size=32`), and
+`_check_decode_page_table_capacity` refuses a capacity that is not a whole number of K chunks,
+so the rounding is safe for every position the table can address.
+`test_decode_page_table_capacity_covers_the_k_chunk_rounding` pins it. Evidence for the
+localization of the prefill-side bug is in [`logs/autofix/`](logs/autofix).
 
 Upstream: `scripts/repro_chunked_sdpa_page_table_overrun.py` is a standalone reproducer with no
 model weights. Its out-of-bounds calls are **opt-in** (`--include-hang-case`) because the
@@ -462,14 +471,14 @@ process.**
 | locks cleared | none |
 | mesh smoke | `Arch.BLACKHOLE`, grid `11-10`, `MESH_SMOKE_OK` |
 | `tt-triage` | not applicable (no hang; a fixture-level open failure) |
-| resumed | both suites re-run serially, one at a time: `logs/fast_suite.log` **86 passed**, `logs/long_context_suite.log` **2 passed**. The failed run is superseded and its records were discarded (the PCC artifact was deleted before the re-run). |
+| resumed | both suites re-run serially, one at a time; the failed run is superseded and its records discarded (the PCC artifact is deleted before every re-run). The fast suite was 86 tests at the time of this incident; the committed `logs/fast_suite.log` is the final rerun, **101 passed** of 103 collected, and `logs/long_context_suite.log` is **2 passed**. |
 
 ## 10. Final state
 
 * Correctness suite: **101 passed** (`-k "not long_context"`, log in `logs/fast_suite.log`),
   full-context suite: **2 passed** (`logs/long_context_suite.log`). 103 tests collected.
 * PCC: **165 recorded measurements, 0 stale** (every record stamped with the current code
-  fingerprint `68b4a0ca63d305c9`, which is also the fingerprint the watcher summary certifies),
+  fingerprint `9997b1d8381fdb9a`, which is also the fingerprint the watcher summary certifies),
   global minimum **0.999723** against a 0.995 bar, including the full-context (131072) and
   real-weight runs. `scripts/render_evidence.py` exits 0, i.e. no stale record and no drift
   between the executed SDPA geometry and the module defaults.
@@ -481,6 +490,14 @@ process.**
 * `$autofix` was used once, for the bug in section 9; the earlier failures were explained
   directly by op-validation source, triage output, or a script bug and fixed at the cause.
 
+### One classified log oddity
+
+Every committed pytest log ends with `nanobind: leaked N instances / types / functions` at
+interpreter shutdown, after the pytest summary line. It appears identically in every run
+regardless of which tests ran and every run still exits 0 — it is a ttnn Python-binding
+teardown property of this build, not a stage result, and the watcher log shows no device-side
+counterpart.
+
 ## 11. Checkpoint commit
 
 Stage-owned changes are committed locally on `agentic-research/hous/multigoal-claude`; nothing
@@ -488,7 +505,9 @@ was pushed.
 
 | repo | branch | commit | contents |
 |---|---|---|---|
-| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — implementation, host reference, tests, scripts and all evidence |
+| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — implementation, host reference, tests, scripts and evidence |
+| tt-metal | same | `6c3a6236d44` | this section |
+| tt-metal | same | see `git log` | the final round-4 corrections: the decode page-table capacity guard, the doc fixes the review required, and the re-run evidence |
 
 The commit contains only this stage's files; the one other dirty path in the worktree
 (`tt_metal/third_party/tt-cluster-descriptors/`, an untracked submodule checkout) was left
@@ -497,8 +516,10 @@ the repo root `.gitignore` excludes, because those are the stage's evidence; the
 that exceed the repo's 500 KB pre-commit limit (the raw Tracy ops CSVs and the watcher log) are
 committed gzipped, and `scripts/render_evidence.py` reads either form.
 
-The PCC artifact records `git_head` `c24bb9de468f` and code fingerprint `68b4a0ca63d305c9` for
-all 165 records — i.e. the evidence was produced by exactly the committed code, after the
-pre-commit formatting hooks had settled.
+All 165 PCC records carry code fingerprint `9997b1d8381fdb9a` and `git_head` `6c3a6236d44`.
+The **fingerprint** is what proves the evidence was produced by exactly the committed code: it
+hashes the implementation, host reference and test files, and the runs happened after the
+pre-commit formatting hooks had settled. The recorded `git_head` is necessarily the *previous*
+HEAD, because the runs precede the commit that contains them.
 
 See `README.md` for the results tables and the exact artifact paths.

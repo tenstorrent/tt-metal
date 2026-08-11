@@ -57,6 +57,9 @@ def _module_constants() -> dict:
         "prefill_k": module.PREFILL_SDPA_K_CHUNK,
         "decode_k": module.DECODE_SDPA_K_CHUNK,
         "decode_grid": module.DECODE_SDPA_GRID,
+        # The device this stage ran on; the perf artifacts record CORE COUNT, and the decode
+        # grid falls back to the whole compute grid once a batch needs more cores.
+        "device_cores": 11 * 10,
     }
 
 
@@ -282,7 +285,8 @@ def _executed_geometry_table() -> list[str]:
         "checked against the module defaults "
         f"(`PREFILL_SDPA_Q_CHUNK={constants['prefill_q']}`, "
         f"`PREFILL_SDPA_K_CHUNK={constants['prefill_k']}`, "
-        f"`DECODE_SDPA_K_CHUNK={constants['decode_k']}`). "
+        f"`DECODE_SDPA_K_CHUNK={constants['decode_k']}`, decode grid "
+        f"{constants['decode_grid'][0]}x{constants['decode_grid'][1]} or the full 11x10). "
         "`render_evidence.py` exits non-zero if they disagree.",
         "",
         "| artifact | prefill SDPA q/k | decode SDPA k | decode SDPA cores |",
@@ -317,6 +321,13 @@ def _executed_geometry_table() -> list[str]:
         for value in decode_k:
             if value != constants["decode_k"]:
                 PROBLEMS.append(f"{name}: decode SDPA ran k_chunk={value}, expected {constants['decode_k']}")
+        # The decode grid is batch-dependent (see _decode_sdpa_program_config): the configured
+        # sub-grid while it has one core per (user, KV head), the full grid beyond that. Check
+        # the executed core counts are one of those two, not some third thing.
+        legal_cores = {constants["decode_grid"][0] * constants["decode_grid"][1], constants["device_cores"]}
+        for cores in decode_cores:
+            if int(cores) not in legal_cores:
+                PROBLEMS.append(f"{name}: decode SDPA ran on {cores} cores, expected one of {sorted(legal_cores)}")
         lines.append(
             f"| `{name}` | "
             + (", ".join(f"{q}/{k} x{n}" for (q, k), n in prefill_pairs.items()) or "-")

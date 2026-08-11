@@ -10,7 +10,7 @@ model-specific exception was needed). Source of truth:
 
 Provenance: every record carries `code_sha256` (a hash of the implementation, host
 reference and test files), `git_head` and `recorded_at`. Current code fingerprint
-`68b4a0ca63d305c9`; **165 of 165** records were produced by
+`9997b1d8381fdb9a`; **165 of 165** records were produced by
 exactly this code and none are stale.
 
 ### Summary by test
@@ -59,20 +59,20 @@ to within a few percent, i.e. profiling overhead is not distorting these numbers
 |---|---|---|---|---|---|---|
 | decode_traced_warmed | full_nope | 1 | False | 32 | 3.223 | 310.3 |
 | decode_traced_warmed | full_nope | 1 | True | 12 | 3.244 | 308.3 |
-| decode_traced_warmed | full_nope | 32 | False | 32 | 3.572 | 8957.4 |
-| decode_traced_warmed | full_nope | 32 | True | 12 | 3.564 | 8978.4 |
+| decode_traced_warmed | full_nope | 32 | False | 32 | 3.565 | 8976.3 |
+| decode_traced_warmed | full_nope | 32 | True | 12 | 3.563 | 8981.1 |
 | decode_traced_warmed | sliding_rope | 1 | False | 32 | 3.242 | 308.4 |
-| decode_traced_warmed | sliding_rope | 1 | True | 12 | 3.271 | 305.8 |
-| decode_traced_warmed | sliding_rope | 32 | False | 32 | 3.402 | 9407.5 |
-| decode_traced_warmed | sliding_rope | 32 | True | 12 | 3.419 | 9359.7 |
-| prefill_warmed | full_nope | 4096 | False | 5 | 59.632 | 68687.4 |
-| prefill_warmed | full_nope | 4096 | True | 5 | 58.847 | 69604.3 |
-| prefill_warmed | full_nope | 8192 | False | 5 | 98.100 | 83506.9 |
-| prefill_warmed | full_nope | 8192 | True | 5 | 96.049 | 85289.4 |
-| prefill_warmed | sliding_rope | 4096 | False | 5 | 59.143 | 69255.3 |
-| prefill_warmed | sliding_rope | 4096 | True | 5 | 59.430 | 68921.0 |
-| prefill_warmed | sliding_rope | 8192 | False | 5 | 98.113 | 83495.1 |
-| prefill_warmed | sliding_rope | 8192 | True | 5 | 96.500 | 84891.5 |
+| decode_traced_warmed | sliding_rope | 1 | True | 12 | 3.271 | 305.7 |
+| decode_traced_warmed | sliding_rope | 32 | False | 32 | 3.398 | 9417.8 |
+| decode_traced_warmed | sliding_rope | 32 | True | 12 | 3.418 | 9362.4 |
+| prefill_warmed | full_nope | 4096 | False | 5 | 59.116 | 69287.9 |
+| prefill_warmed | full_nope | 4096 | True | 5 | 58.795 | 69665.6 |
+| prefill_warmed | full_nope | 8192 | False | 5 | 97.549 | 83978.2 |
+| prefill_warmed | full_nope | 8192 | True | 5 | 95.423 | 85849.4 |
+| prefill_warmed | sliding_rope | 4096 | False | 5 | 58.794 | 69667.4 |
+| prefill_warmed | sliding_rope | 4096 | True | 5 | 58.990 | 69435.8 |
+| prefill_warmed | sliding_rope | 8192 | False | 5 | 97.654 | 83888.2 |
+| prefill_warmed | sliding_rope | 8192 | True | 5 | 95.719 | 85583.4 |
 
 ### Device time from `tt-perf-report` (signposted window)
 
@@ -82,14 +82,14 @@ measured iterations in that window.
 
 | artifact | ops in window | total device time (us) | iterations | us/iteration |
 |---|---|---|---|---|
-| `tracy/full_nope/decode_1_perf_report.csv` | 384 | 38393.1 | 12 | 3199.4 |
-| `tracy/full_nope/decode_32_perf_report.csv` | 372 | 42290.1 | 12 | 3524.2 |
-| `tracy/full_nope/prefill_4096_perf_report.csv` | 125 | 266986.5 | 5 | 53397.3 |
-| `tracy/full_nope/prefill_8192_perf_report.csv` | 125 | 392453.3 | 5 | 78490.7 |
-| `tracy/sliding_rope/decode_1_perf_report.csv` | 504 | 38564.1 | 12 | 3213.7 |
-| `tracy/sliding_rope/decode_32_perf_report.csv` | 468 | 40546.7 | 12 | 3378.9 |
-| `tracy/sliding_rope/prefill_4096_perf_report.csv` | 145 | 269134.5 | 5 | 53826.9 |
-| `tracy/sliding_rope/prefill_8192_perf_report.csv` | 145 | 395982.8 | 5 | 79196.6 |
+| `tracy/full_nope/decode_1_perf_report.csv` | 384 | 38388.6 | 12 | 3199.0 |
+| `tracy/full_nope/decode_32_perf_report.csv` | 372 | 42308.1 | 12 | 3525.7 |
+| `tracy/full_nope/prefill_4096_perf_report.csv` | 125 | 266284.4 | 5 | 53256.9 |
+| `tracy/full_nope/prefill_8192_perf_report.csv` | 125 | 392537.6 | 5 | 78507.5 |
+| `tracy/sliding_rope/decode_1_perf_report.csv` | 504 | 38559.9 | 12 | 3213.3 |
+| `tracy/sliding_rope/decode_32_perf_report.csv` | 468 | 40537.8 | 12 | 3378.1 |
+| `tracy/sliding_rope/prefill_4096_perf_report.csv` | 145 | 269483.5 | 5 | 53896.7 |
+| `tracy/sliding_rope/prefill_8192_perf_report.csv` | 145 | 396482.4 | 5 | 79296.5 |
 
 ### Device-time share by op, per artifact
 
@@ -97,18 +97,18 @@ Derived from the same filtered CSVs, so these percentages cannot drift from the
 committed reports. Only families above 1% are listed.
 
 * `full_nope/decode_1`: MatmulDeviceOperation 32 x 6656 x 19968 43.3% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 21.6% (12 ops), LayerNormDeviceOperation 17.5% (72 ops), MatmulDeviceOperation 32 x 6656 x 4608 5.0% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.5% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 4.4% (12 ops), SdpaDecodeDeviceOperation 1.5% (12 ops)
-* `full_nope/decode_32`: MatmulDeviceOperation 32 x 6656 x 19968 39.3% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 19.6% (12 ops), LayerNormDeviceOperation 15.9% (72 ops), SdpaDecodeDeviceOperation 10.1% (12 ops), MatmulDeviceOperation 32 x 6656 x 4608 4.6% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.1% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 3.9% (12 ops)
-* `full_nope/prefill_4096`: MatmulDeviceOperation 4096 x 6656 x 19968 46.4% (10 ops), MatmulDeviceOperation 4096 x 19968 x 6656 26.2% (5 ops), MatmulDeviceOperation 4096 x 4096 x 6656 5.7% (5 ops), LayerNormDeviceOperation 4.4% (30 ops), MatmulDeviceOperation 4096 x 6656 x 4608 3.9% (5 ops), BinaryNgDeviceOperation 3.9% (25 ops), SDPAOperation 3.8% (5 ops), MatmulDeviceOperation 4096 x 6656 x 4096 2.8% (5 ops), UnaryDeviceOperation 2.3% (10 ops)
+* `full_nope/decode_32`: MatmulDeviceOperation 32 x 6656 x 19968 39.3% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 19.6% (12 ops), LayerNormDeviceOperation 15.9% (72 ops), SdpaDecodeDeviceOperation 10.1% (12 ops), MatmulDeviceOperation 32 x 6656 x 4608 4.5% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.1% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 3.9% (12 ops)
+* `full_nope/prefill_4096`: MatmulDeviceOperation 4096 x 6656 x 19968 46.5% (10 ops), MatmulDeviceOperation 4096 x 19968 x 6656 26.2% (5 ops), MatmulDeviceOperation 4096 x 4096 x 6656 5.7% (5 ops), LayerNormDeviceOperation 4.4% (30 ops), MatmulDeviceOperation 4096 x 6656 x 4608 3.9% (5 ops), BinaryNgDeviceOperation 3.9% (25 ops), SDPAOperation 3.8% (5 ops), MatmulDeviceOperation 4096 x 6656 x 4096 2.8% (5 ops), UnaryDeviceOperation 2.1% (10 ops)
 * `full_nope/prefill_8192`: MatmulDeviceOperation 8192 x 6656 x 19968 41.6% (10 ops), MatmulDeviceOperation 8192 x 19968 x 6656 21.9% (5 ops), SDPAOperation 8.3% (5 ops), MatmulDeviceOperation 8192 x 6656 x 4608 5.4% (5 ops), LayerNormDeviceOperation 5.0% (30 ops), MatmulDeviceOperation 8192 x 4096 x 6656 4.9% (5 ops), BinaryNgDeviceOperation 4.9% (25 ops), MatmulDeviceOperation 8192 x 6656 x 4096 3.7% (5 ops), UnaryDeviceOperation 3.3% (10 ops)
-* `sliding_rope/decode_1`: MatmulDeviceOperation 32 x 6656 x 19968 43.1% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 21.5% (12 ops), LayerNormDeviceOperation 17.4% (72 ops), MatmulDeviceOperation 32 x 6656 x 4608 5.0% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.5% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 4.4% (12 ops), SdpaDecodeDeviceOperation 1.2% (12 ops)
-* `sliding_rope/decode_32`: MatmulDeviceOperation 32 x 6656 x 19968 41.0% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 20.5% (12 ops), LayerNormDeviceOperation 16.6% (72 ops), SdpaDecodeDeviceOperation 5.5% (12 ops), MatmulDeviceOperation 32 x 6656 x 4608 4.7% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.3% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 4.1% (12 ops)
-* `sliding_rope/prefill_4096`: MatmulDeviceOperation 4096 x 6656 x 19968 46.0% (10 ops), MatmulDeviceOperation 4096 x 19968 x 6656 26.0% (5 ops), MatmulDeviceOperation 4096 x 4096 x 6656 5.6% (5 ops), LayerNormDeviceOperation 4.4% (30 ops), SDPAOperation 4.0% (5 ops), MatmulDeviceOperation 4096 x 6656 x 4608 3.9% (5 ops), BinaryNgDeviceOperation 3.8% (25 ops), MatmulDeviceOperation 4096 x 6656 x 4096 2.7% (5 ops), UnaryDeviceOperation 2.1% (10 ops)
-* `sliding_rope/prefill_8192`: MatmulDeviceOperation 8192 x 6656 x 19968 41.1% (10 ops), MatmulDeviceOperation 8192 x 19968 x 6656 21.7% (5 ops), SDPAOperation 8.4% (5 ops), MatmulDeviceOperation 8192 x 6656 x 4608 5.4% (5 ops), LayerNormDeviceOperation 4.9% (30 ops), MatmulDeviceOperation 8192 x 4096 x 6656 4.9% (5 ops), BinaryNgDeviceOperation 4.9% (25 ops), MatmulDeviceOperation 8192 x 6656 x 4096 3.7% (5 ops), UnaryDeviceOperation 3.1% (10 ops)
+* `sliding_rope/decode_1`: MatmulDeviceOperation 32 x 6656 x 19968 43.1% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 21.6% (12 ops), LayerNormDeviceOperation 17.4% (72 ops), MatmulDeviceOperation 32 x 6656 x 4608 5.0% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.5% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 4.4% (12 ops), SdpaDecodeDeviceOperation 1.2% (12 ops)
+* `sliding_rope/decode_32`: MatmulDeviceOperation 32 x 6656 x 19968 41.0% (24 ops), MatmulDeviceOperation 32 x 19968 x 6656 20.5% (12 ops), LayerNormDeviceOperation 16.6% (72 ops), SdpaDecodeDeviceOperation 5.5% (12 ops), MatmulDeviceOperation 32 x 6656 x 4608 4.8% (12 ops), MatmulDeviceOperation 32 x 4096 x 6656 4.3% (12 ops), MatmulDeviceOperation 32 x 6656 x 4096 4.1% (12 ops)
+* `sliding_rope/prefill_4096`: MatmulDeviceOperation 4096 x 6656 x 19968 46.0% (10 ops), MatmulDeviceOperation 4096 x 19968 x 6656 25.9% (5 ops), MatmulDeviceOperation 4096 x 4096 x 6656 5.6% (5 ops), LayerNormDeviceOperation 4.4% (30 ops), SDPAOperation 4.0% (5 ops), MatmulDeviceOperation 4096 x 6656 x 4608 3.9% (5 ops), BinaryNgDeviceOperation 3.8% (25 ops), MatmulDeviceOperation 4096 x 6656 x 4096 2.8% (5 ops), UnaryDeviceOperation 2.1% (10 ops)
+* `sliding_rope/prefill_8192`: MatmulDeviceOperation 8192 x 6656 x 19968 41.0% (10 ops), MatmulDeviceOperation 8192 x 19968 x 6656 21.7% (5 ops), SDPAOperation 8.4% (5 ops), MatmulDeviceOperation 8192 x 6656 x 4608 5.3% (5 ops), LayerNormDeviceOperation 4.9% (30 ops), MatmulDeviceOperation 8192 x 4096 x 6656 4.9% (5 ops), BinaryNgDeviceOperation 4.9% (25 ops), MatmulDeviceOperation 8192 x 6656 x 4096 3.7% (5 ops), UnaryDeviceOperation 3.2% (10 ops)
 
 ### SDPA program configs actually executed
 
 Read back out of the raw Tracy `ATTRIBUTES` column of every committed ops CSV and
-checked against the module defaults (`PREFILL_SDPA_Q_CHUNK=256`, `PREFILL_SDPA_K_CHUNK=256`, `DECODE_SDPA_K_CHUNK=64`). `render_evidence.py` exits non-zero if they disagree.
+checked against the module defaults (`PREFILL_SDPA_Q_CHUNK=256`, `PREFILL_SDPA_K_CHUNK=256`, `DECODE_SDPA_K_CHUNK=64`, decode grid 8x4 or the full 11x10). `render_evidence.py` exits non-zero if they disagree.
 
 | artifact | prefill SDPA q/k | decode SDPA k | decode SDPA cores |
 |---|---|---|---|

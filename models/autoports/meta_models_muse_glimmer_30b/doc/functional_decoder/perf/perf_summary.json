@@ -7,8 +7,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 3.2231083748683886,
-      "tokens_per_second": 310.25950222379157,
+      "wall_clock_ms_per_iter": 3.2228889685939066,
+      "tokens_per_second": 310.2806239199371,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -22,8 +22,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 3.2441064995509805,
-      "tokens_per_second": 308.25128587437274,
+      "wall_clock_ms_per_iter": 3.2437875834148144,
+      "tokens_per_second": 308.28159189982335,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -37,8 +37,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 3.5724485937862482,
-      "tokens_per_second": 8957.441698575962,
+      "wall_clock_ms_per_iter": 3.564953468639942,
+      "tokens_per_second": 8976.274243548052,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -52,8 +52,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 3.5641035004421915,
-      "tokens_per_second": 8978.414907431792,
+      "wall_clock_ms_per_iter": 3.5630427501018858,
+      "tokens_per_second": 8981.087863479874,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -67,8 +67,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 3.242426156248257,
-      "tokens_per_second": 308.4110329152658,
+      "wall_clock_ms_per_iter": 3.2422359374777443,
+      "tokens_per_second": 308.42912708503786,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -82,8 +82,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 3.2705510833087224,
-      "tokens_per_second": 305.7588689268626,
+      "wall_clock_ms_per_iter": 3.2707281667777957,
+      "tokens_per_second": 305.74231455778977,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -97,8 +97,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 3.4015364062724984,
-      "tokens_per_second": 9407.51359914637,
+      "wall_clock_ms_per_iter": 3.3978191249843803,
+      "tokens_per_second": 9417.80560498408,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -112,8 +112,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 3.4189032503491035,
-      "tokens_per_second": 9359.726689175099,
+      "wall_clock_ms_per_iter": 3.4179433332610643,
+      "tokens_per_second": 9362.355334741245,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -127,8 +127,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 59.632449998753145,
-      "tokens_per_second": 68687.43444358975,
+      "wall_clock_ms_per_iter": 59.11563120025676,
+      "tokens_per_second": 69287.93479553018,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -142,8 +142,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 58.84693740081275,
-      "tokens_per_second": 69604.3019554562,
+      "wall_clock_ms_per_iter": 58.79516599961789,
+      "tokens_per_second": 69665.59121589383,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -157,8 +157,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 98.0996279991814,
-      "tokens_per_second": 83506.94255505597,
+      "wall_clock_ms_per_iter": 97.54912439966574,
+      "tokens_per_second": 83978.201243886,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -172,8 +172,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 96.04945479950402,
-      "tokens_per_second": 85289.39614597689,
+      "wall_clock_ms_per_iter": 95.42291759862565,
+      "tokens_per_second": 85849.39767255647,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -187,8 +187,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 59.1434896006831,
-      "tokens_per_second": 69255.29804979062,
+      "wall_clock_ms_per_iter": 58.79361859988421,
+      "tokens_per_second": 69667.4247570138,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -202,8 +202,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 59.43035180098377,
-      "tokens_per_second": 68921.01217432466,
+      "wall_clock_ms_per_iter": 58.989728199958336,
+      "tokens_per_second": 69435.81747174235,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -217,8 +217,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 98.11349640076514,
-      "tokens_per_second": 83495.13879862215,
+      "wall_clock_ms_per_iter": 97.65376220020698,
+      "tokens_per_second": 83888.2170581917,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -232,8 +232,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 96.4996581999003,
-      "tokens_per_second": 84891.49239295922,
+      "wall_clock_ms_per_iter": 95.71945279894862,
+      "tokens_per_second": 85583.43952515764,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"

@@ -4,9 +4,10 @@
 logs redirected with `TT_METAL_LOGS_PATH` so this run is not mixed with any other.
 Watcher and the profiler were run separately, as `$tt-device-usage` requires.
 
-Code under test: fingerprint `68b4a0ca63d305c9`, git head `9876c3547604` — the same
-fingerprint every record in `../pcc/pcc_results.json` carries, so this run certifies the
-shipped configuration and not an earlier one.
+Code under test: fingerprint `9997b1d8381fdb9a`, `git_head` `6c3a6236d44b` at run
+time — the same fingerprint every record in `../pcc/pcc_results.json` carries, so this run
+certifies the shipped configuration and not an earlier one. (The fingerprint, not the SHA, is
+the identity: these runs necessarily precede the commit that contains them.)
 
 Selection: 26 of 103 collected tests — chunked prefill (8256),
 non-aligned prefill (100), sub-tile prefill (1/7/31), traced decode, batch-32
@@ -14,7 +15,7 @@ prefill+decode, ragged slots/positions, batched multi-chunk prefill out of a sha
 block_size 128, the continued-prefill contract, page block sizes 32/64/128, and the
 real-weight tests — both layer kinds. Result: **26 passed**
 (see `pytest_watcher.log`).
-Watcher log: 19416 lines.
+Watcher log: 19420 lines.
 
 | signature | occurrences |
 |---|---|

@@ -30,7 +30,6 @@ import pytest
 import ttnn
 from models.autoports.meta_models_muse_glimmer_30b.reference import hf_reference as R
 from models.autoports.meta_models_muse_glimmer_30b.tests import decoder_test_utils as U
-from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import _round_up
 
 KIND_IDS = ["sliding_rope", "full_nope"]
 PERF_DIR = Path(__file__).resolve().parents[1] / "doc" / "functional_decoder" / "perf"
@@ -96,7 +95,10 @@ def _record(entry: dict) -> None:
 
 
 def _setup(decoder, mesh_device, *, batch, total_tokens, block_size, page_seed=4242):
-    blocks_per_seq = _round_up(total_tokens, block_size) // block_size
+    # blocks_per_seq, not a plain round-up: the decode SDPA rounds its K extent up to the K
+    # chunk and reads the page table over the rounded extent, so the capacity has to be a whole
+    # number of K chunks (FunctionalDecoder._check_decode_page_table_capacity).
+    blocks_per_seq = decoder.blocks_per_seq(total_tokens)
     total_blocks = blocks_per_seq * batch + 2
     page_table = U.build_page_table(
         batch=batch, blocks_per_seq=blocks_per_seq, total_blocks=total_blocks, seed=page_seed

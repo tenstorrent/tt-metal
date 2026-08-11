@@ -131,7 +131,7 @@ Invariants the contract guarantees:
 | `test_sdpa_chunk_divides_length` | SDPA chunk sizes always divide the sequence length (a non-dividing `q_chunk_size` *hangs* the op) |
 | `test_chunked_sdpa_chunk_sizes_respect_the_configured_cap` | the full-attention prefill SDPA runs the configured, swept geometry — not "as large as divides" |
 | `test_chunked_sdpa_k_chunk_stays_inside_the_page_table` | the k-chunk-padded K extent never overruns the page table, for every chunk of 5 lengths x 3 block sizes (the op does not check this itself) |
-| `test_decode_sdpa_k_chunk_stays_inside_the_page_table` | the same guard on the decode side, for every position the page table can address |
+| `test_decode_page_table_capacity_covers_the_k_chunk_rounding` | the same guard on the decode side, for every position the page table can address |
 | `test_decode_sdpa_grid_covers_kv_heads` | the decode SDPA grid always has one core per (user, KV head), and fails loudly past the grid's capacity |
 | `test_paged_prefill_decode_pcc` | paged prefill + 2 decode steps + K/V cache contents at 9 sequence lengths x 2 kinds |
 | `test_page_block_sizes` | page block sizes 32 / 64 / 128 |
@@ -190,8 +190,8 @@ Blackhole chip:
 
 | measurement | sliding_rope | full_nope |
 |---|---|---|
-| warmed prefill, 4096 tokens | 59.1 ms (69.3 k tok/s) | 59.6 ms (68.7 k tok/s) |
-| warmed prefill, 8192 tokens | 98.1 ms (83.5 k tok/s) | 98.1 ms (83.5 k tok/s) |
+| warmed prefill, 4096 tokens | 58.8 ms (69.7 k tok/s) | 59.1 ms (69.3 k tok/s) |
+| warmed prefill, 8192 tokens | 97.7 ms (83.9 k tok/s) | 97.5 ms (84.0 k tok/s) |
 | traced warmed decode, batch 1, context 4096 | 3.24 ms | 3.22 ms |
 | traced warmed decode, batch 32, context 4096 | 3.40 ms (9.4 k tok/s) | 3.57 ms (9.0 k tok/s) |
 
@@ -208,10 +208,11 @@ and silently dropped rows).
 This stage optimises for correctness, not for speed — dtype/layout/program-config tuning is
 stage 02. The profiler reports say exactly where that work is:
 
-* **prefill** is dominated by matmul device time, and `tt-perf-report` marks every dominant
-  matmul `SLOW` at 8-15% DRAM utilisation and ~43% of peak FLOPs with `in0_block_w=1` and
-  inputs in DRAM interleaved — i.e. program-config and layout work, not an algorithmic
-  problem.
+* **prefill** is dominated by matmul device time, and `tt-perf-report` marks **every** matmul
+  `SLOW`, with `in0_block_w=1` and inputs in DRAM interleaved — i.e. program-config and layout
+  work, not an algorithmic problem. The two SwiGLU matmuls that dominate run at 8.4% / 7.9% of
+  DRAM bandwidth and 44% / 41% of peak FLOPs at 8192 tokens, and lower again at 4096 (7.6% /
+  6.8% DRAM, 29% / 26% FLOPs).
 * **decode** is dominated by matmul device time at 4-7% of peak FLOPs: the classic
   DRAM-bandwidth-bound decode matmul with unsharded DRAM weights, with the norms second and
   the decode SDPA itself a small fraction.
@@ -261,7 +262,7 @@ slots/positions, batched multi-chunk prefill from a shared pool at `block_size=1
 continued-prefill contract, page block sizes 32/64/128 and the real-weight tests, both layer
 kinds: **26 of the 103
 collected tests, all passed** — is in [`watcher/`](watcher):
-[`WATCHER_SUMMARY.md`](watcher/WATCHER_SUMMARY.md), the 19416-line raw log at
+[`WATCHER_SUMMARY.md`](watcher/WATCHER_SUMMARY.md), the 19420-line raw log at
 `watcher/generated/watcher/watcher.log.gz` (gzipped for the repo's 500 KB file limit), and the test log at `watcher/pytest_watcher.log`.
 Zero watcher-detected errors, kernel asserts, NOC sanitization failures, CB/L1 overflows or
 tripped waypoints; minimum stack headroom 1312 bytes free. The summary records the code
@@ -311,8 +312,10 @@ paths are outside the watcher selection, for runtime reasons.
 * **The paged decode SDPA has the same unvalidated rounding**, on a different axis:
   `rt_args_common.hpp` rounds its K extent to `nearest_n(cur_pos + 1, k_chunk_size)` and the
   reader resolves that rounded extent through the same unbounded page-table lookup, with
-  `cur_pos` a device tensor that nothing host-side bounds. `_decode_sdpa_k_chunk` therefore
-  picks a K chunk that **divides the page-table capacity**, which makes the rounding safe for
+  `cur_pos` a device tensor that nothing host-side bounds. The K chunk stays at the measured 64
+  (shrinking it so it divides the capacity was tried and is wrong on device: PCC 0.6558);
+  instead `blocks_per_seq` rounds the page-table capacity up to a whole number of K chunks and
+  `_check_decode_page_table_capacity` refuses anything else, which makes the rounding safe for
   every addressable position. Also needs an upstream bound check.
 * **SDPA chunk sizes must divide the sequence length.** `scaled_dot_product_attention`
   *hangs* (not errors) when `q_chunk_size` does not divide the Q length — reproduced with
