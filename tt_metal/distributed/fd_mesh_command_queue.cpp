@@ -1140,6 +1140,14 @@ void FDMeshCommandQueue::reset_worker_state(
     for (auto* device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, and only the
+    // CQ that is passed reset_launch_msg_state resets them. Nothing orders that reset against worker programs
+    // still outstanding on the other CQs, so drain this CQ before the resetting CQ remaps the mailboxes. The
+    // caller holds the MeshDevice api lock, hence the nolock variant. Note that this must happen before
+    // sub_device_cq_owner is resized: finish_nolock indexes it with the currently active sub device ids.
+    if (!reset_launch_msg_state && in_use_) {
+        this->finish_nolock();
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
