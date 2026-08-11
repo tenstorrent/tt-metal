@@ -269,7 +269,6 @@ def create_program_descriptor(
     # Hidden split inside a group: `rem` cores take ceil, the rest floor.
     w_floor = geo.tensor_w_tiles // w_group_size
     w_rem = geo.tensor_w_tiles % w_group_size
-    core_w_tiles_floor = w_floor if w_rem else core_w_tiles_ceil
 
     # Row split across the ACTIVE row-groups (every core of a group gets the
     # same row range — the combine is a group-wide barrier).
@@ -320,10 +319,19 @@ def create_program_descriptor(
     mcast_ct = list(mcasts[0].compile_time_args())
 
     # ---- circular buffers ------------------------------------------------
-    # Every CB is allocated on the FULL active core set at the `ceil` width, so
-    # the L1 map is identical on every group member. That is required by both
-    # the multicast destination (cb_rstd) and the gather destination
-    # (cb_stat_gather), which are addressed by a peer's local pointer.
+    # `C` (= cb_w_tiles) is the UNIFORM per-core block width along `hidden`: the
+    # ceil of the ragged split. Every CB is allocated on the FULL active core set
+    # at that width, for two reasons:
+    #   1. the L1 map must be identical on every group member — cb_rstd is a
+    #      multicast destination and cb_stat_gather a gather destination, both
+    #      addressed by a peer's LOCAL pointer;
+    #   2. a CB's page capacity must be an exact multiple of its push/pop
+    #      quantum (dataflow_api.h:216-221 — "no other wrap is legal"), and a
+    #      ragged per-core quantum does not divide a uniform capacity.
+    # A core whose VALID slice is narrower (core_w < C) still moves C pages per
+    # tile-row; the trailing pad tiles are never read by the statistics phases
+    # (which walk `core_w` columns at row stride C) and their apply-phase output
+    # is never written to DRAM.
     R = block_row_tiles
     C = core_w_tiles_ceil
     G = w_group_size
@@ -378,8 +386,6 @@ def create_program_descriptor(
     writer_args = {}
     compute_args = {}
 
-    cores_by_width = {core_w_tiles_ceil: [], core_w_tiles_floor: []}
-
     for gi, g in enumerate(groups):
         mc = mcasts[gi]
         root_virtual = device.worker_core_from_logical_core(g["root"])
@@ -395,7 +401,6 @@ def create_program_descriptor(
             else:
                 core_w = w_floor
                 w_start = w_rem * (w_floor + 1) + (slot - w_rem) * w_floor
-            cores_by_width[core_w].append((cx, cy))
 
             owns_last_w_tile = 1 if (w_start + core_w) == geo.tensor_w_tiles else 0
             has_tail = 1 if (owns_last_w_tile and geo.partial_w) else 0
@@ -426,6 +431,7 @@ def create_program_descriptor(
                 R,
                 last_block_row_tiles,
                 w_start,
+                core_w,
                 owns_last_w_tile,
                 num_sticks,
                 stick_start,
@@ -442,6 +448,7 @@ def create_program_descriptor(
                 R,
                 last_block_row_tiles,
                 w_start,
+                core_w,
                 slot,
                 is_root,
                 int(root_virtual.x),
@@ -456,95 +463,83 @@ def create_program_descriptor(
                 num_blocks,
                 R,
                 last_block_row_tiles,
+                core_w,
                 has_tail,
                 is_root,
             ]
 
     # ---- kernels ---------------------------------------------------------
-    # `core_w_tiles` is a COMPILE-TIME template parameter of tilize/untilize and
-    # of the CB page-count expressions, so the ragged hidden remainder is
-    # expressed as two kernel core-ranges with separate CT blocks.
+    # `cb_w_tiles` (= C) is a COMPILE-TIME template parameter of tilize/untilize
+    # and the stride of every block CB, so it is uniform across the whole active
+    # grid. The ragged hidden remainder rides as the per-core RUNTIME arg
+    # `core_w` (the valid slice width, core_w <= C).
     inv_w_bits = _f32_bits(1.0 / float(geo.W))
     eps_bits = _f32_bits(epsilon)
 
-    def _rt(per_core, cores):
+    def _rt(per_core):
         rt = ttnn.RuntimeArgs()
-        for cx, cy in cores:
-            rt[cx][cy] = per_core[(cx, cy)]
+        for (cx, cy), vals in per_core.items():
+            rt[cx][cy] = vals
         return rt
 
-    kernels = []
-    for core_w, cores in cores_by_width.items():
-        if not cores:
-            continue
-        crs = _core_range_set(cores)
-        reader_rt = _rt(reader_args, cores)
-        writer_rt = _rt(writer_args, cores)
-        compute_rt = _rt(compute_args, cores)
+    reader_ct = [
+        C,
+        geo.tensor_w_tiles,
+        1 if geo.is_rm_in else 0,
+        1 if geo.has_gamma else 0,
+        1 if geo.is_rm_gamma else 0,
+        geo.partial_w,
+    ]
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
+        if geo.has_gamma
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
 
-        reader_ct = [
-            core_w,
-            geo.tensor_w_tiles,
-            1 if geo.is_rm_in else 0,
-            1 if geo.has_gamma else 0,
-            1 if geo.is_rm_gamma else 0,
-            geo.partial_w,
-            geo.in_elem_bytes,
-            geo.gamma_elem_bytes,
-        ]
-        reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-        reader_ct.extend(
-            ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
-            if geo.has_gamma
-            else ttnn.TensorAccessorArgs().get_compile_time_args()
-        )
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
-                core_ranges=crs,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            )
-        )
+    writer_ct = [
+        C,
+        geo.tensor_w_tiles,
+        1 if is_rm_out else 0,
+        G,
+        SEM_GATHER,
+    ]
+    writer_ct.extend(mcast_ct)
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-        writer_ct = [
-            core_w,
-            geo.tensor_w_tiles,
-            1 if is_rm_out else 0,
-            G,
-            SEM_GATHER,
-        ]
-        writer_ct.extend(mcast_ct)
-        writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
-                core_ranges=crs,
-                compile_time_args=writer_ct,
-                runtime_args=writer_rt,
-                config=ttnn.WriterConfigDescriptor(),
-            )
-        )
+    compute_ct = [
+        C,
+        G,
+        1 if geo.has_gamma else 0,
+        1 if geo.is_rm_in else 0,
+        1 if is_rm_out else 0,
+        inv_w_bits,
+        eps_bits,
+        1 if geo.is_rm_gamma else 0,
+    ]
 
-        compute_ct = [
-            core_w,
-            G,
-            1 if geo.has_gamma else 0,
-            1 if geo.is_rm_in else 0,
-            1 if is_rm_out else 0,
-            inv_w_bits,
-            eps_bits,
-            1 if geo.is_rm_gamma else 0,
-        ]
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
-                core_ranges=crs,
-                compile_time_args=compute_ct,
-                runtime_args=compute_rt,
-                config=compute_kernel_config,
-            )
-        )
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+            core_ranges=all_core_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=_rt(reader_args),
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+            core_ranges=all_core_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=_rt(writer_args),
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+            core_ranges=all_core_ranges,
+            compile_time_args=compute_ct,
+            runtime_args=_rt(compute_args),
+            config=compute_kernel_config,
+        ),
+    ]
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)

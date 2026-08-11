@@ -24,9 +24,14 @@
 //     (mcast_pipe.hpp:44-45 states its precondition as "one sender per receiver,
 //     dst_l1 identical on all receivers" — the opposite direction). The RETURN
 //     multicast in the same phase does use SenderPipe/ReceiverPipe.
-//   * store_block on the TILE path uses raw noc_async_write_tile over a
-//     TensorAccessor; write_sticks_after_untilize is ROW-MAJOR only
-//     (tilize_helpers_dataflow.inl:82-85). The RM branch uses the helper.
+//   * store_block uses raw NoC on BOTH paths. write_sticks_after_untilize is
+//     ROW-MAJOR only (tilize_helpers_dataflow.inl:82-85), so it cannot serve the
+//     tiled path at all; and on the row-major path it derives BOTH its page
+//     count and its L1 row stride from `row_bytes` (inl:203-205,213-216), so it
+//     can only drain a block whose row stride equals this core's valid slice.
+//     untilize<CB_W> emits the GROUP-UNIFORM stride, which is wider on a ragged
+//     core. write_slice_rows() below is the helper's body with the stride taken
+//     from the uniform CB width instead of from row_bytes.
 
 #include <stdint.h>
 
@@ -38,7 +43,6 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
 constexpr uint32_t cb_stat_partial = 7;
@@ -48,18 +52,37 @@ constexpr uint32_t cb_rstd = 11;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t TILE_HW_DIM = 32;
+
+// Drain one uniform-width CB block (`cb_w_tiles` tile-sized pages) as `rows`
+// row-major sticks of `slice_bytes`, reading each stick at the block's uniform
+// L1 row stride. The trailing pad columns are never written to DRAM.
+template <uint32_t cb_id, uint32_t cb_w_tiles, typename Accessor>
+FORCE_INLINE void write_slice_rows(
+    const Accessor& acc, uint32_t rows, uint32_t slice_bytes, uint32_t start_page, uint32_t byte_offset) {
+    constexpr uint32_t tile_row_bytes = get_tile_size(cb_id) / TILE_HW_DIM;
+    constexpr uint32_t block_row_bytes = tile_row_bytes * cb_w_tiles;
+    cb_wait_front(cb_id, cb_w_tiles);
+    uint32_t l1_addr = get_read_ptr(cb_id);
+    for (uint32_t r = 0; r < rows; ++r) {
+        noc_async_write(l1_addr, acc.get_noc_addr(start_page + r, byte_offset), slice_bytes);
+        l1_addr += block_row_bytes;
+    }
+    // One barrier per 32-row block == cb_w_tiles tiles per barrier.
+    noc_async_write_barrier();
+    cb_pop_front(cb_id, cb_w_tiles);
+}
 }  // namespace
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t CORE_W_TILES = get_compile_time_arg_val(0);
+    constexpr uint32_t CB_W_TILES = get_compile_time_arg_val(0);
     constexpr uint32_t TENSOR_W_TILES = get_compile_time_arg_val(1);
     constexpr bool IS_RM_OUT = get_compile_time_arg_val(2) != 0;
     constexpr uint32_t W_GROUP_SIZE = get_compile_time_arg_val(3);
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(4);
     constexpr uint32_t MCAST_CT_BASE = 5;
-    constexpr uint32_t MCAST_RT_BASE = 14;
+    constexpr uint32_t MCAST_RT_BASE = 15;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -69,14 +92,15 @@ void kernel_main() {
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(3);
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(4);
     const uint32_t w_tile_start = get_arg_val<uint32_t>(5);
-    const uint32_t my_slot = get_arg_val<uint32_t>(6);
-    const uint32_t is_root = get_arg_val<uint32_t>(7);
-    const uint32_t root_x = get_arg_val<uint32_t>(8);
-    const uint32_t root_y = get_arg_val<uint32_t>(9);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(10);
-    const uint32_t stick_start = get_arg_val<uint32_t>(11);
-    const uint32_t out_slice_bytes = get_arg_val<uint32_t>(12);
-    const uint32_t out_byte_offset = get_arg_val<uint32_t>(13);
+    const uint32_t core_w = get_arg_val<uint32_t>(6);
+    const uint32_t my_slot = get_arg_val<uint32_t>(7);
+    const uint32_t is_root = get_arg_val<uint32_t>(8);
+    const uint32_t root_x = get_arg_val<uint32_t>(9);
+    const uint32_t root_y = get_arg_val<uint32_t>(10);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(11);
+    const uint32_t stick_start = get_arg_val<uint32_t>(12);
+    const uint32_t out_slice_bytes = get_arg_val<uint32_t>(13);
+    const uint32_t out_byte_offset = get_arg_val<uint32_t>(14);
 
     Noc noc;
     Semaphore<> gather_sem(SEM_GATHER);
@@ -97,25 +121,27 @@ void kernel_main() {
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
         if constexpr (IS_RM_OUT) {
-            uint32_t sticks_this = rows_t * TILE_HW_DIM;
-            if (sticks_this > num_sticks - sticks_done) {
-                sticks_this = num_sticks - sticks_done;
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                uint32_t sticks_this = TILE_HW_DIM;
+                if (sticks_this > num_sticks - sticks_done) {
+                    sticks_this = num_sticks - sticks_done;
+                }
+                write_slice_rows<cb_output_rm, CB_W_TILES>(
+                    out_acc, sticks_this, out_slice_bytes, stick_start + sticks_done, out_byte_offset);
+                sticks_done += sticks_this;
             }
-            write_sticks_after_untilize<cb_output_rm>(
-                out_acc, sticks_this, out_slice_bytes, stick_start + sticks_done, out_byte_offset);
-            sticks_done += sticks_this;
         } else {
             for (uint32_t r = 0; r < rows_t; ++r) {
-                cb_wait_front(cb_output_tiles, CORE_W_TILES);
+                cb_wait_front(cb_output_tiles, CB_W_TILES);
                 const uint32_t src = get_read_ptr(cb_output_tiles);
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
-                for (uint32_t c = 0; c < CORE_W_TILES; ++c) {
+                for (uint32_t c = 0; c < core_w; ++c) {
                     noc_async_write_tile(base + c, out_acc, src + c * out_tile_bytes);
                 }
-                // One barrier per tile-row (core_w_tiles tiles), never per tile.
+                // One barrier per tile-row (core_w tiles), never per tile.
                 noc_async_write_barrier();
-                cb_pop_front(cb_output_tiles, CORE_W_TILES);
+                cb_pop_front(cb_output_tiles, CB_W_TILES);
             }
         }
     };

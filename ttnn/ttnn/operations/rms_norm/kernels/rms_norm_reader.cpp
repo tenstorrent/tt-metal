@@ -6,22 +6,39 @@
 // Per kernel, once:
 //   prepare_constants()  — cb_scaler (reduce scaler 1.0), cb_wmask (0/1 column
 //                          mask for the ragged hidden tile), cb_zero_tile.
-//   load_gamma_slice()   — cb_gamma_tiles: this core's core_w_tiles gamma tiles,
-//                          resident for the whole kernel (never popped by
-//                          compute), so gamma crosses DRAM once per core.
+//   load_gamma_slice()   — cb_gamma_tiles: this core's gamma slice, resident for
+//                          the whole kernel (never popped by compute), so gamma
+//                          crosses DRAM once per core.
 //
-// Per block (a block_row_tiles x core_w_tiles tile rectangle):
+// Per block (a block_row_tiles x cb_w_tiles tile rectangle):
 //   load_block()         — the whole block behind ONE read barrier on the tiled
-//                          path, or one barrier per 32-row block (== core_w_tiles
-//                          tiles) via read_sticks_for_tilize on the ROW_MAJOR path.
+//                          path, or one barrier per 32-row block on the
+//                          ROW_MAJOR path (read_slice_rows).
+//
+// UNIFORM BLOCK WIDTH. Every CB moves CB_W_TILES pages per tile-row on EVERY
+// core, while a core's VALID hidden slice is `core_w <= CB_W_TILES` (the ragged
+// remainder of the hidden split). Two hard constraints force this:
+//   * cb_rstd / cb_stat_gather are addressed by a peer's LOCAL pointer, so the
+//     L1 map must be identical group-wide;
+//   * a CB's capacity must be an exact multiple of its push/pop quantum
+//     (dataflow_api.h:216-221, "no other wrap is legal").
+// The (CB_W_TILES - core_w) trailing pad pages are pushed but never read by the
+// statistics phases, which walk `core_w` columns at row stride CB_W_TILES.
 //
 // Helper substitutions (raw NoC instead of a kernel_lib helper), with reasons:
 //   * load_block on the TILE path uses raw noc_async_read_tile over a
 //     TensorAccessor. read_sticks_for_tilize is ROW-MAJOR ONLY: it derives a
 //     stick stride and asserts tile_size % tile_hw == 0
 //     (tilize_helpers_dataflow.inl:82-85), and a TILE tensor's DRAM pages are
-//     already tiles, so it has no sticks to read. The RM branch below does use
-//     the helper.
+//     already tiles, so it has no sticks to read.
+//   * load_block on the RM path also uses raw NoC. read_sticks_for_tilize
+//     derives BOTH its page count and its L1 row stride from `row_bytes`
+//     (tilize_helpers_dataflow.inl:91-93,120-124), so it can only produce a
+//     block whose row stride equals the core's own valid slice. tilize<CB_W>
+//     consumes a 32 x (CB_W*32) row-major block, i.e. the GROUP-UNIFORM stride,
+//     which is wider than the valid slice on a ragged core — the helper cannot
+//     express that shape. read_slice_rows() below is the helper's body with the
+//     stride taken from the uniform CB width instead of from row_bytes.
 //   * cb_zero_tile is filled with a direct L1 memset: it is the identity operand
 //     of the combine's DEST accumulation, not a reduce scaler, so the
 //     reduce-scaler helpers (whose contract is "reduce LLK only") do not apply.
@@ -30,7 +47,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -41,18 +57,37 @@ constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_gamma_rm = 12;
 constexpr uint32_t cb_gamma_tiles = 13;
 constexpr uint32_t TILE_HW_DIM = 32;
+
+// Read `rows` row-major sticks of `slice_bytes` into one uniform-width CB block
+// (`cb_w_tiles` tile-sized pages), laying each stick at the block's uniform L1
+// row stride. The trailing (cb_w_tiles*32*elem - slice_bytes) bytes of each row
+// are left untouched: the statistics phases never read those columns, and the
+// apply phase's output for them is never written to DRAM.
+template <uint32_t cb_id, uint32_t cb_w_tiles, typename Accessor>
+FORCE_INLINE void read_slice_rows(
+    const Accessor& acc, uint32_t rows, uint32_t slice_bytes, uint32_t start_page, uint32_t byte_offset) {
+    constexpr uint32_t tile_row_bytes = get_tile_size(cb_id) / TILE_HW_DIM;
+    constexpr uint32_t block_row_bytes = tile_row_bytes * cb_w_tiles;
+    cb_reserve_back(cb_id, cb_w_tiles);
+    uint32_t l1_addr = get_write_ptr(cb_id);
+    for (uint32_t r = 0; r < rows; ++r) {
+        noc_async_read(acc.get_noc_addr(start_page + r, byte_offset), l1_addr, slice_bytes);
+        l1_addr += block_row_bytes;
+    }
+    // One barrier per 32-row block == cb_w_tiles tiles per barrier.
+    noc_async_read_barrier();
+    cb_push_back(cb_id, cb_w_tiles);
+}
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t CORE_W_TILES = get_compile_time_arg_val(0);
+    constexpr uint32_t CB_W_TILES = get_compile_time_arg_val(0);
     constexpr uint32_t TENSOR_W_TILES = get_compile_time_arg_val(1);
     constexpr bool IS_RM_IN = get_compile_time_arg_val(2) != 0;
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
     constexpr bool IS_RM_GAMMA = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t PARTIAL_W = get_compile_time_arg_val(5);
-    constexpr uint32_t IN_ELEM_BYTES = get_compile_time_arg_val(6);
-    constexpr uint32_t GAMMA_ELEM_BYTES = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr auto src_args = TensorAccessorArgs<6>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -62,13 +97,14 @@ void kernel_main() {
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(4);
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(5);
     const uint32_t w_tile_start = get_arg_val<uint32_t>(6);
-    const uint32_t owns_last_w_tile = get_arg_val<uint32_t>(7);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(8);
-    const uint32_t stick_start = get_arg_val<uint32_t>(9);
-    const uint32_t in_slice_bytes = get_arg_val<uint32_t>(10);
-    const uint32_t in_byte_offset = get_arg_val<uint32_t>(11);
-    [[maybe_unused]] const uint32_t gamma_slice_bytes = get_arg_val<uint32_t>(12);
-    [[maybe_unused]] const uint32_t gamma_byte_offset = get_arg_val<uint32_t>(13);
+    const uint32_t core_w = get_arg_val<uint32_t>(7);
+    const uint32_t owns_last_w_tile = get_arg_val<uint32_t>(8);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(9);
+    const uint32_t stick_start = get_arg_val<uint32_t>(10);
+    const uint32_t in_slice_bytes = get_arg_val<uint32_t>(11);
+    const uint32_t in_byte_offset = get_arg_val<uint32_t>(12);
+    [[maybe_unused]] const uint32_t gamma_slice_bytes = get_arg_val<uint32_t>(13);
+    [[maybe_unused]] const uint32_t gamma_byte_offset = get_arg_val<uint32_t>(14);
 
     // ---------------- prepare_constants (once per kernel) ----------------
     // Pool-type-aware overload: SUM/REDUCE_ROW fills the matmul-path scaler
@@ -99,21 +135,20 @@ void kernel_main() {
     // ---------------- load_gamma_slice (once per kernel) -----------------
     if constexpr (HAS_GAMMA) {
         if constexpr (IS_RM_GAMMA) {
-            // One zero-padded stick; compute tilizes it into the row-0-valid
-            // tile form that TILE gamma already has.
+            // One stick; compute tilizes it into the row-0-valid tile form that
+            // TILE gamma already has.
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr);
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                gamma_acc, 1, gamma_slice_bytes, 0, gamma_byte_offset);
+            read_slice_rows<cb_gamma_rm, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_byte_offset);
         } else {
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
-            cb_reserve_back(cb_gamma_tiles, CORE_W_TILES);
+            cb_reserve_back(cb_gamma_tiles, CB_W_TILES);
             const uint32_t dst = get_write_ptr(cb_gamma_tiles);
-            for (uint32_t c = 0; c < CORE_W_TILES; ++c) {
+            for (uint32_t c = 0; c < core_w; ++c) {
                 noc_async_read_tile(w_tile_start + c, gamma_acc, dst + c * gamma_tile_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_gamma_tiles, CORE_W_TILES);
+            cb_push_back(cb_gamma_tiles, CB_W_TILES);
         }
     }
 
@@ -123,28 +158,29 @@ void kernel_main() {
         uint32_t sticks_done = 0;
         for (uint32_t b = 0; b < num_blocks; ++b) {
             const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
-            uint32_t sticks_this = rows_t * TILE_HW_DIM;
-            if (sticks_this > num_sticks - sticks_done) {
-                sticks_this = num_sticks - sticks_done;
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                uint32_t sticks_this = TILE_HW_DIM;
+                if (sticks_this > num_sticks - sticks_done) {
+                    sticks_this = num_sticks - sticks_done;
+                }
+                read_slice_rows<cb_input_rm, CB_W_TILES>(
+                    acc, sticks_this, in_slice_bytes, stick_start + sticks_done, in_byte_offset);
+                sticks_done += sticks_this;
             }
-            // One barrier per 32-row block == core_w_tiles tiles per barrier.
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_rm, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                acc, sticks_this, in_slice_bytes, stick_start + sticks_done, in_byte_offset);
-            sticks_done += sticks_this;
         }
     } else {
         const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
         const auto acc = TensorAccessor(src_args, src_addr, tile_bytes);
         for (uint32_t b = 0; b < num_blocks; ++b) {
             const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
-            const uint32_t pages = rows_t * CORE_W_TILES;
+            const uint32_t pages = rows_t * CB_W_TILES;
             cb_reserve_back(cb_input_tiles, pages);
             const uint32_t dst = get_write_ptr(cb_input_tiles);
             for (uint32_t r = 0; r < rows_t; ++r) {
                 const uint32_t row_tile = row_tile_start + b * block_row_tiles + r;
                 const uint32_t base = row_tile * TENSOR_W_TILES + w_tile_start;
-                for (uint32_t c = 0; c < CORE_W_TILES; ++c) {
-                    noc_async_read_tile(base + c, acc, dst + (r * CORE_W_TILES + c) * tile_bytes);
+                for (uint32_t c = 0; c < core_w; ++c) {
+                    noc_async_read_tile(base + c, acc, dst + (r * CB_W_TILES + c) * tile_bytes);
                 }
             }
             // The whole block behind one barrier — never one barrier per tile.

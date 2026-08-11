@@ -25,6 +25,15 @@
 //   gamma_block       normed * gamma      (BroadcastDim::Row), elided w/o gamma
 //   untilize_out_block (ROW_MAJOR output only)
 //
+// UNIFORM BLOCK WIDTH. Every CB moves CB_W_TILES pages per tile-row on every
+// core of a reduction group (required both by the peer-addressed cb_rstd /
+// cb_stat_gather L1 map and by the CB "capacity is a multiple of the quantum"
+// rule, dataflow_api.h:216-221). A core's VALID hidden slice is the runtime
+// `core_w <= CB_W_TILES`; the statistics phases walk `core_w` columns at row
+// stride CB_W_TILES, so the trailing pad tiles never enter the reduction. The
+// apply phases DO cover the pad columns (uniform, contiguous, no stride) — their
+// output is simply never written to DRAM by the writer.
+//
 // Helper substitutions: none. Every phase is a kernel_lib helper call
 // (eltwise_chain / eltwise_convenience / reduce / tilize / untilize). The
 // caller-managed (None, None) CB policies on sumsq_block and mask_tail_block are
@@ -68,7 +77,7 @@ constexpr uint32_t cb_output_rm = 17;
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t CORE_W_TILES = get_compile_time_arg_val(0);
+    constexpr uint32_t CB_W_TILES = get_compile_time_arg_val(0);
     constexpr uint32_t W_GROUP_SIZE = get_compile_time_arg_val(1);
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(2) != 0;
     constexpr bool IS_RM_IN = get_compile_time_arg_val(3) != 0;
@@ -80,13 +89,14 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(1);
     const uint32_t last_block_row_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t has_tail = get_arg_val<uint32_t>(3);
-    const uint32_t is_root = get_arg_val<uint32_t>(4);
+    const uint32_t core_w = get_arg_val<uint32_t>(3);
+    const uint32_t has_tail = get_arg_val<uint32_t>(4);
+    const uint32_t is_root = get_arg_val<uint32_t>(5);
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_stat_sq);
 
     // Hidden tiles handled by the bulk accumulation, and the stat-column layout.
-    const uint32_t c_full = CORE_W_TILES - has_tail;
+    const uint32_t c_full = core_w - has_tail;
     const uint32_t bulk_cols = (c_full > 0) ? 1u : 0u;
     const uint32_t nc = bulk_cols + has_tail;  // stat columns per tile-row
     const uint32_t tail_col = bulk_cols;
@@ -95,7 +105,7 @@ void kernel_main() {
     if constexpr (HAS_GAMMA && IS_RM_GAMMA) {
         // Converts the single stick to the row-0-valid tile form; TILE gamma
         // already arrives in that form from the reader.
-        ckl::tilize<CORE_W_TILES, cb_gamma_rm, cb_gamma_tiles>(1);
+        ckl::tilize<CB_W_TILES, cb_gamma_rm, cb_gamma_tiles>(1);
     }
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
@@ -103,12 +113,12 @@ void kernel_main() {
 
         // ---------------- tilize_in_block (RM input only) ----------------
         if constexpr (IS_RM_IN) {
-            ckl::tilize<CORE_W_TILES, cb_input_rm, cb_input_tiles>(rows_t);
+            ckl::tilize<CB_W_TILES, cb_input_rm, cb_input_tiles>(rows_t);
         }
 
         // The block stays resident: waited here, waited again by scale_block,
         // popped exactly once (by scale_block) at the end.
-        cb_wait_front(cb_input_tiles, rows_t * CORE_W_TILES);
+        cb_wait_front(cb_input_tiles, rows_t * CB_W_TILES);
 
         // ---------------- sumsq_block + mask_tail_block ----------------
         cb_reserve_back(cb_stat_sq, rows_t * nc);
@@ -134,7 +144,7 @@ void kernel_main() {
                     ckl::BroadcastDim::None,
                     ckl::Dst::D0,
                     ckl::DestAccumulation::PerRow>{
-                    ckl::StridedTileRange{0, CORE_W_TILES}, ckl::StridedTileRange{0, CORE_W_TILES}},
+                    ckl::StridedTileRange{0, CB_W_TILES}, ckl::StridedTileRange{0, CB_W_TILES}},
                 ckl::PackTile<ckl::output(
                     cb_stat_sq,
                     ckl::ReservePolicy::None,
@@ -160,7 +170,7 @@ void kernel_main() {
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Row,
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::Disabled>{ckl::StridedTileRange{CORE_W_TILES - 1, CORE_W_TILES}},
+                    ckl::DestAccumulation::Disabled>{ckl::StridedTileRange{core_w - 1, CB_W_TILES}},
                 ckl::Square<>{},
                 ckl::PackTile<ckl::output(
                     cb_stat_sq,
@@ -229,24 +239,24 @@ void kernel_main() {
                 ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::input(cb_rstd, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
                 ckl::output(cb_normed),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CORE_W_TILES));
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
 
             ckl::mul<
                 ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::input(cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
                 ckl::output(cb_output_tiles),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(rows_t, CORE_W_TILES));
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
         } else {
             ckl::mul<
                 ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::input(cb_rstd, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
                 ckl::output(cb_output_tiles),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CORE_W_TILES));
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows_t, CB_W_TILES));
         }
 
         // ---------------- untilize_out_block (RM output only) ----------------
         if constexpr (IS_RM_OUT) {
-            ckl::untilize<CORE_W_TILES, cb_output_tiles, cb_output_rm>(rows_t);
+            ckl::untilize<CB_W_TILES, cb_output_tiles, cb_output_rm>(rows_t);
         }
     }
 }
