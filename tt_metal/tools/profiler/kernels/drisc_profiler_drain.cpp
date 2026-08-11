@@ -46,18 +46,26 @@
 // enlarged: the FW maps nwin = ceil((in_off + bytes + 64) / 2 MiB) consecutive TLB windows per socket and
 // kNSockets * nwin <= 16, so 12 MiB already uses 14 of 16.
 //
-// So split the job across FOUR DRISCs instead of making two do all of it:
+// So split the job across SIX DRISCs instead of making two do all of it:
 //
 //   FILLER (kRole=1)  sweep worker rings -> write frames into its OWN device-DRAM ring. No socket, no PCIe,
 //                     no host MMIO at all. Its back-pressure is a DRAM ring of hundreds of MB, not 12 MiB.
-//   MOVER  (kRole=2)  read frames out of a DRAM ring -> push to the existing D2H socket, byte-for-byte the
-//                     same protocol the full-job drainer uses, so the host path is untouched.
+//                     FOUR of them, each owning a quarter of the grid, because the knee is the filler's SCAN.
+//   MOVER  (kRole=2)  read frames out of kNPeer DRAM rings -> push to the existing D2H socket, byte-for-byte
+//                     the same protocol the full-job drainer uses, so the host path is untouched. TWO of
+//                     them, each draining TWO rings, because there are only two host-facing-safe cores.
 //
 // One ring per filler, so the ring is structurally single-producer/single-consumer and no de-interleaving is
-// ever needed. The handshake is a monotonic frame count: the filler publishes `head` into a word in its own
-// L1; the mover NoC-reads head, moves head-tail frames, and NoC-writes `tail` back into that same block.
+// ever needed -- a DUAL-RING mover is still one consumer per ring, it just visits two of them. The handshake
+// is a monotonic frame count: the filler publishes `head` into a word in its own L1; the mover NoC-reads head,
+// moves head-tail frames, and NoC-writes `tail` back into that same block.
 // Every wait on either side is BOUNDED with a give-up -- an unbounded spin on a DRISC is unkillable and
 // unfeedable, and because the producers are lossless it takes the workload down with it.
+//
+// A dual-ring mover walks its peers SEQUENTIALLY, each getting the WHOLE staging area, with the same
+// per-push write barrier in between that a single-ring mover already had. That is why `max batch` stays at
+// kNStage (7) per peer instead of halving to 3-4: splitting the staging slots between peers would only pay
+// off if the two peers' egress could overlap, and it cannot -- both push into ONE socket.
 //
 // Placement is evidence-based, not arbitrary. Only DRAM cores in NoC row y == 0 are safe to HOST-FACE
 // (FINDINGS N+29: y==0 1/75 failures vs y!=0 16/125, Fisher p ~ 0.006), which is exactly two cores on this
@@ -265,8 +273,24 @@ void kernel_main() {
     constexpr uint32_t kDramAddr = get_compile_time_arg_val(22);    // bank-relative base of this ring
     constexpr uint32_t kDramFrames = get_compile_time_arg_val(23);  // ring capacity in whole frames
     constexpr uint32_t kHsAddr = get_compile_time_arg_val(24);      // FILLER: its own handshake block, in L1
-    constexpr uint32_t kPeerXY = get_compile_time_arg_val(25);      // MOVER: (y<<16)|x virtual of its filler
-    constexpr uint32_t kPeerHsAddr = get_compile_time_arg_val(26);  // MOVER: that filler's handshake block
+    constexpr uint32_t kPeerXY = get_compile_time_arg_val(25);      // MOVER: (y<<16)|x virtual of peer 0
+    constexpr uint32_t kPeerHsAddr = get_compile_time_arg_val(26);  // MOVER: peer 0's handshake block
+    // MOVER, second ring. kNPeer is 1 or 2 (0 for every other role) and is a COMPILE-time value, so a
+    // single-ring mover emits exactly the code it did before this existed. Args 21/22 above are peer 0's
+    // (bank, addr); a filler reuses those two for its own ring.
+    constexpr uint32_t kNPeer = get_compile_time_arg_val(27);
+    constexpr uint32_t kPeerXY1 = get_compile_time_arg_val(28);
+    constexpr uint32_t kPeerHsAddr1 = get_compile_time_arg_val(29);
+    constexpr uint32_t kDramBank1 = get_compile_time_arg_val(30);
+    constexpr uint32_t kDramAddr1 = get_compile_time_arg_val(31);
+    // Indexed by peer slot. constexpr arrays of compile-time args, so nothing is loaded from memory to reach
+    // them; the loop over kNPeer is a fully-known trip count.
+    constexpr uint32_t kPeerXYs[2] = {kPeerXY, kPeerXY1};
+    constexpr uint32_t kPeerHss[2] = {kPeerHsAddr, kPeerHsAddr1};
+    constexpr uint32_t kPeerBanks[2] = {kDramBank, kDramBank1};
+    constexpr uint32_t kPeerAddrs[2] = {kDramAddr, kDramAddr1};
+    static_assert(kNPeer <= 2, "a mover drains at most two rings (see kNPeerMax on the host)");
+    static_assert(kRole != kRoleMover || kNPeer >= 1, "a mover with no ring would spin forever doing nothing");
     // Handshake block: four words, 16 B apart so each is independently addressable by a 4 B NoC write
     // without a read-modify-write on its neighbours.
     //   +0  head     filler stores locally,  mover NoC-reads
@@ -277,6 +301,12 @@ void kernel_main() {
     // destroyed a capture (1.03M records lost, every lane's nesting corrupt) while every existing counter
     // read clean. An unverified peer-L1 coordinate would fail exactly that way: plausible counters, garbage
     // handshake. So the addressing is checked at bring-up rather than assumed.
+    //
+    // The magics are PER-PEER, not one constant. With four fillers a single shared magic proves only "the
+    // mover read SOME filler's probe word" -- a mover whose peer-1 coordinate accidentally named peer 0's
+    // filler (or any other filler) would pass. The host plants kProbeFillerMagic + <filler index> and checks
+    // the echo against the index it MEANT; the mover writes back kProbeMoverMagic + <peer slot>, so the host
+    // can also tell peer 0's write from peer 1's.
     constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48;
     constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
     static_assert(kRole == kRoleFull || kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
@@ -379,20 +409,35 @@ void kernel_main() {
     // The four probe/telemetry words live in the same 64 B pad behind `done` that hb/phase/dbg already use,
     // so the host can read them WHILE the loop runs -- the results block is only published on exit, which is
     // useless for verifying a handshake that has to work before any data flows.
-    volatile tt_l1_ptr uint32_t* mv_probe_f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 20);
-    volatile tt_l1_ptr uint32_t* mv_probe_frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 24);
-    volatile tt_l1_ptr uint32_t* mv_live_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 28);
-    volatile tt_l1_ptr uint32_t* mv_live_tail = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 32);
+    // PER PEER, 16 B apart: probe_f echo | first frame word | live head | live tail. Peer 0 keeps the
+    // addresses it always had (+20..+32) so nothing that reads them had to move; peer 1's block is +36..+48.
+    // 13 words = 52 B of the 64 B pad, so it still fits behind `done` with room to spare.
+    volatile tt_l1_ptr uint32_t* mv_probe_f[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 20),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 36)};
+    volatile tt_l1_ptr uint32_t* mv_probe_frame[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 24),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 40)};
+    volatile tt_l1_ptr uint32_t* mv_live_head[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 28),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 44)};
+    volatile tt_l1_ptr uint32_t* mv_live_tail[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 32),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 48)};
     // FILLER: its own handshake block. head is stored locally and read over the NoC by its mover; tail is
     // written over the NoC by that mover and read locally here.
     volatile tt_l1_ptr uint32_t* hs_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsHead);
     volatile tt_l1_ptr uint32_t* hs_tail = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsTail);
     uint32_t frames_staged = 0;    // FILLER: frames written into DRAM (monotonic; == published head)
     uint32_t frames_flushed = 0;   // FILLER: of those, how many are barrier-flushed and safe to publish
-    uint32_t mv_tail = 0;          // MOVER: frames consumed out of the ring (monotonic)
-    uint32_t mv_moved = 0;         // MOVER: frames shipped to the host
-    uint32_t mv_max_n = 0;         // MOVER: largest batch moved in one iteration
-    uint32_t ring_hi = 0;          // head - tail high-water: how much elastic buffer is REALLY used
+    // MOVER, per peer ring. Nothing here may be shared between peers: one `mv_tail` for two rings would ack
+    // frames on one ring that were only read from the other, i.e. hand the filler room it does not have.
+    uint32_t mv_tail[2] = {0, 0};   // frames consumed out of peer p's ring (monotonic)
+    uint32_t mv_moved[2] = {0, 0};  // frames shipped to the host out of peer p's ring
+    uint32_t mv_max_n[2] = {0, 0};  // largest batch moved in one visit to peer p
+    // head - tail high-water per ring: how much elastic buffer is REALLY used. A FILLER has one ring and
+    // uses slot 0 only.
+    uint32_t ring_hi[2] = {0, 0};
     uint32_t ring_blocked = 0;     // FILLER: stage_run calls that had to wait for ring room at all
     uint32_t hs_bad = 0;           // MOVER: head reads that were structurally impossible -- MUST stay 0
     if constexpr (kRole == kRoleFiller) {
@@ -567,8 +612,8 @@ void kernel_main() {
             invalidate_l1_cache();
             // tail is only ever ADVANCED by the mover and head only by us, so this cannot underflow.
             const uint32_t inflight = frames_staged - *hs_tail;
-            if (inflight > ring_hi) {
-                ring_hi = inflight;
+            if (inflight > ring_hi[0]) {
+                ring_hi[0] = inflight;
             }
             if (inflight + count <= kDramFrames) {
                 room = true;
@@ -663,19 +708,25 @@ void kernel_main() {
     // is wrong. probe_m is a separate word from tail on purpose: writing a magic into TAIL would make the
     // filler read an enormous consumed-count and overwrite frames.
     if constexpr (kRole == kRoleMover) {
-        const uint64_t peer_hs = get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsProbeF);
-        noc_async_read(peer_hs, kHeadScratch, 4u, NOC_INDEX);
-        noc_b.async_read_barrier();
-        invalidate_l1_cache();
-        *mv_probe_f = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-        volatile tt_l1_ptr uint32_t* msrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-        *msrc = kProbeMoverMagic;
-        noc_async_write(
-            kHeadScratch + 32u,
-            get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsProbeM),
-            4u,
-            NOC_INDEX);
-        (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+        // Both directions, for EVERY peer. A dual-ring mover has two independent chances to be pointed at the
+        // wrong L1, and the failure mode is silent either way.
+        for (uint32_t p = 0; p < kNPeer; p++) {
+            const uint32_t pxy = kPeerXYs[p];
+            const uint64_t peer_hs = get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeF);
+            noc_async_read(peer_hs, kHeadScratch, 4u, NOC_INDEX);
+            noc_b.async_read_barrier();
+            invalidate_l1_cache();
+            *mv_probe_f[p] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+            volatile tt_l1_ptr uint32_t* msrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
+            *msrc = kProbeMoverMagic + p;  // + slot, so the host can tell peer 0's write from peer 1's
+            noc_async_write(
+                kHeadScratch + 32u,
+                get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeM),
+                4u,
+                NOC_INDEX);
+            // Barrier per peer: the scratch word is reused by the next peer's write, so it must have landed.
+            (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+        }
     }
 
     const uint64_t t_start = get_timestamp();
@@ -716,21 +767,29 @@ void kernel_main() {
                 *hb = sweeps * kAblateBatches + b + 1;
             }
         } else if constexpr (kRole == kRoleMover) {
-        // ---- MOVER: DRAM ring -> staging -> the existing D2H socket ----
+        // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
         //
         // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
         // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
         // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
+        //
+        // The peers are visited SEQUENTIALLY and each gets the whole staging area. The write barrier at the
+        // end of a peer's visit is what makes that safe (it already had to be there for staging reuse), and
+        // it is also why splitting the slots between peers would buy nothing: the two pushes go into ONE
+        // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
+        // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
+        for (uint32_t peer = 0; peer < kNPeer; peer++) {
+        const uint32_t pxy = kPeerXYs[peer];
         const uint64_t t_r0 = get_timestamp();
         noc_async_read(
-            get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsHead), kHeadScratch, 4u, NOC_INDEX);
+            get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsHead), kHeadScratch, 4u, NOC_INDEX);
         // The FREE-function barrier, matching the free-function read above. Noc{}::async_read_barrier() is a
         // different accounting path, and a barrier that watches the wrong counters returns EARLY -- which
         // here would mean reading a head value that has not landed yet.
         noc_async_read_barrier(NOC_INDEX);
         invalidate_l1_cache();
         const uint32_t head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-        uint32_t n = head - mv_tail;
+        uint32_t n = head - mv_tail[peer];
         // HANDSHAKE SANITY, and it is not paranoia -- this exact check is what turns a silent capture
         // corruption into a reported number.
         //
@@ -745,8 +804,8 @@ void kernel_main() {
             n = 0;
             egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
         }
-        if (n > ring_hi) {
-            ring_hi = n;
+        if (n > ring_hi[peer]) {
+            ring_hi[peer] = n;
         }
         if (n != 0) {
             // Bounded by staging, then by the ring wrap -- clamping at the wrap costs one short read per lap
@@ -755,43 +814,45 @@ void kernel_main() {
             if (n > kNStage) {
                 n = kNStage;
             }
-            const uint32_t off = mv_tail % kDramFrames;
+            const uint32_t off = mv_tail[peer] % kDramFrames;
             if (off + n > kDramFrames) {
                 n = kDramFrames - off;
             }
             noc_async_read(
-                get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + off * kSlotBytes, NOC_INDEX),
+                get_noc_addr_from_bank_id<true>(kPeerBanks[peer], kPeerAddrs[peer] + off * kSlotBytes, NOC_INDEX),
                 kStageBase,
                 n * kSlotBytes,
                 NOC_INDEX);
             noc_b.async_read_barrier();
             c_read += get_timestamp() - t_r0;
-            if (*mv_probe_frame == 0) {
-                // First frame word the mover ever saw. The host checks it against spsc_span_w0(), which
-                // proves the filler's DRAM write and this read agree on the address -- end to end, with no
-                // host-side DRAM read needed and no way for a plausible-but-wrong ring address to pass.
-                *mv_probe_frame = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
+            if (*mv_probe_frame[peer] == 0) {
+                // First frame word the mover ever saw ON THIS RING. The host checks it against spsc_span_w0(),
+                // which proves the filler's DRAM write and this read agree on the address -- end to end, with
+                // no host-side DRAM read needed and no way for a plausible-but-wrong ring address to pass.
+                // Per ring, because the two rings are in different DRAM banks and only one of them may be wrong.
+                *mv_probe_frame[peer] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
             }
             // Release the ring region NOW: the bytes are in staging, so the filler may reuse it immediately.
             // Doing this before the push (rather than after) is what keeps the filler off the ring ceiling.
-            mv_tail += n;
+            mv_tail[peer] += n;
             volatile tt_l1_ptr uint32_t* tsrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-            *tsrc = mv_tail;
+            *tsrc = mv_tail[peer];
             noc_async_write(
                 kHeadScratch + 32u,
-                get_noc_addr(kPeerXY & 0xFFFFu, kPeerXY >> 16, kPeerHsAddr + kHsTail),
+                get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsTail),
                 4u,
                 NOC_INDEX);
-            *mv_live_head = head;
-            *mv_live_tail = mv_tail;
+            *mv_live_head[peer] = head;
+            *mv_live_tail[peer] = mv_tail[peer];
             ship_run(0, n);
             frames += n;
-            mv_moved += n;
-            if (n > mv_max_n) {
-                mv_max_n = n;
+            mv_moved[peer] += n;
+            if (n > mv_max_n[peer]) {
+                mv_max_n[peer] = n;
             }
-            // ONE barrier covers both the PCIe push (staging is about to be refilled) and the tail write
-            // (the filler cannot see room until it lands).
+            // ONE barrier covers the PCIe push (staging is about to be refilled -- by the NEXT PEER as well
+            // as the next sweep), the tail write (the filler cannot see room until it lands) and the reuse of
+            // the +32 scratch word the tail write sources from.
             const uint64_t t_b0 = get_timestamp();
             *phase = kPhBar2;
             if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
@@ -801,6 +862,12 @@ void kernel_main() {
         } else {
             c_read += get_timestamp() - t_r0;
         }
+        // Never start the second peer once egress is dead: staging may hold unflushed bytes, and an
+        // impossible head on one ring says nothing good about the other.
+        if (egress_dead) {
+            break;
+        }
+        }  // for peer
         } else {
         // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
         //
@@ -1146,17 +1213,28 @@ void kernel_main() {
     // clean. ring_hi says how much of the elastic buffer is actually used (the whole justification for it);
     // ring_blocked says whether the ring ever became the new bottleneck.
     out[48] = kRole;
-    out[49] = (kRole == kRoleFiller) ? frames_staged : mv_moved;
-    out[50] = ring_hi;      // head - tail high-water, in frames
+    out[49] = (kRole == kRoleFiller) ? frames_staged : mv_moved[0];
+    out[50] = ring_hi[0];   // head - tail high-water on peer 0's ring (the filler's own ring), in frames
     out[51] = ring_blocked; // FILLER: pushes that had to wait for ring room
     out[52] = kDramFrames;
-    out[53] = (kRole == kRoleFiller) ? *hs_tail : mv_tail;
-    out[54] = mv_max_n;
-    out[55] = (kRole == kRoleMover) ? *mv_probe_frame : 0u;
-    out[56] = (kRole == kRoleMover) ? *mv_probe_f : 0u;
+    out[53] = (kRole == kRoleFiller) ? *hs_tail : mv_tail[0];
+    out[54] = mv_max_n[0];
+    out[55] = (kRole == kRoleMover) ? *mv_probe_frame[0] : 0u;
+    out[56] = (kRole == kRoleMover) ? *mv_probe_f[0] : 0u;
     // MUST BE ZERO. Non-zero means the mover read something that cannot be a head (see the check site), so
-    // every frame it shipped from then on is suspect.
+    // every frame it shipped from then on is suspect. Summed over both rings -- there is nothing to gain from
+    // knowing WHICH ring lied, because the mover declares egress dead either way.
     out[57] = hs_bad;
+    // ---- PEER 1 of a dual-ring mover. Mirrors 49/53/54/55/50 above, so nothing had to be renumbered. ----
+    // A per-peer copy of every quantity the verification bar checks: frames staged == frames moved must hold
+    // PER RING, and a single summed figure could hide one ring shipping short while the other over-ships.
+    out[58] = (kRole == kRoleMover) ? mv_moved[1] : 0u;
+    out[59] = (kRole == kRoleMover) ? mv_tail[1] : 0u;
+    out[60] = mv_max_n[1];
+    out[61] = (kRole == kRoleMover) ? *mv_probe_frame[1] : 0u;
+    out[62] = (kRole == kRoleMover) ? *mv_probe_f[1] : 0u;
+    out[63] = ring_hi[1];
+    static_assert(kNPeer <= 2, "the results block only carries two peers (out[58..63])");
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
