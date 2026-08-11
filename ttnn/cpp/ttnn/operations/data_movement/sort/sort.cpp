@@ -333,15 +333,10 @@ std::vector<Tensor> sort(
     const bool widen_u16 = (padded_input_tensor.dtype() == DataType::UINT16 &&
                             padded_input_tensor.logical_shape()[-1] > 256);
     if (widen_u16) {
-        padded_input_tensor = ttnn::typecast(padded_input_tensor, DataType::FLOAT32);
-        if (!preallocated_layout_mismatch) {
-            if (output_tensors[0].has_value()) {
-                output_tensors[0] = ttnn::typecast(*output_tensors[0], DataType::FLOAT32);
-            }
-            if (output_tensors[1].has_value()) {
-                output_tensors[1] = ttnn::typecast(*output_tensors[1], DataType::FLOAT32);
-            }
-        }
+        padded_input_tensor = ttnn::to_dtype(padded_input_tensor, DataType::FLOAT32);
+        // The prim requires UINT16/UINT32 indices; let it allocate FLOAT32
+        // values + UINT32 indices and rebind the user's handles below.
+        output_tensors = {std::nullopt, std::nullopt};
     }
     auto sorted_tensors = ttnn::prim::sort(
         padded_input_tensor, static_cast<int8_t>(-1), descending, stable, device_op_mem_cfg, output_tensors);
@@ -350,7 +345,12 @@ std::vector<Tensor> sort(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, device_op_mem_cfg);
 
     if (widen_u16) {
-        results[0] = ttnn::typecast(results[0], DataType::UINT16);
+        results[0] = ttnn::to_dtype(results[0], DataType::UINT16);
+        // Honor a preallocated UINT16 index output when the width fits.
+        if (optional_output_tensors.has_value() &&
+            std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16) {
+            results[1] = ttnn::to_dtype(results[1], DataType::UINT16);
+        }
     }
 
     // The device op always writes to DRAM when sort_mem_cfg is sharded (to avoid
