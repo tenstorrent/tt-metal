@@ -79,3 +79,76 @@ the middle one.
 I am **not** predicting a µs/model total for the three. The capacity metric that produced the last corpus-level
 number was refuted by its own inputs, and I have not built a replacement. An honest "I don't know, here is the
 floor and here is the failure mode to watch" is worth more than a number I would have to retract.
+
+
+---
+
+# RESULT — phi-3.5 `exp17`, scored against the prediction above
+
+`rc=0`, gate PASSED with no warnings, published as `skillexp/done/advchal-v3/exp17/microsoft_phi_3_5_mini_instruct`.
+Driver then held at the re-placed sentinel before the llama control, as intended.
+
+| | |
+|---|---|
+| outcome | **`improved`** |
+| model estimate | 32,407.3 → 31,339.4 µs = **−1,067.9 µs = −3.295 %** |
+| band | 61.7 µs → **17.3× the band** — solidly established |
+| oracle | absolute, **PCC 0.9999810562728417**, bar 0.995 |
+| **incumbent PCC** | **0.9999810562728417 — identical to the candidate's** |
+| shipped | **`{"advisor_rope_l1": true, "advisor_norm_core_count": null}`** |
+
+## Scoring my prediction
+
+| prediction | outcome |
+|---|:--|
+| "it will ship" | ✅ |
+| **"−0.5 % to −1.5 %"** | ❌ **wrong — −3.295 %, 2.2× above my upper bound.** Underpredicted, same direction as the corpus-level miss |
+| "most likely an input-norm re-grid" | ❌ **wrong** — it shipped the **rope** knob; `advisor_norm_core_count` is `null`, no norm re-grid at all |
+| "whatever it ships will be decode-only" | ✅ — the rope knob lives in the decode path |
+| "should pass because phi is dense" | ✅ **and stronger than predicted** — not merely passing but **bit-identical PCC to the incumbent** |
+| "if it fails correctness, my dense exemption is wrong" | the exemption **survives** |
+
+Two of four, and the quantitative one wrong by 2.2× in the direction that flatters v3.
+
+# ⚠ And the decisive finding: the same knob, the same stage, two agents, one correct
+
+**phi-exp17 shipped `advisor_rope_l1: true` for −3.295 % at a PCC identical to the incumbent's.
+phi `nofuse-noadvise` wrote the same knob and scored 0.9849539 (my re-measure) / 0.9173130 (its own record) and was
+rejected.**
+
+| | phi `nofuse-noadvise` | **phi `exp17`** |
+|---|---|---|
+| knob | `advisor_rope_l1` | **`advisor_rope_l1`** |
+| stage | frozen v3, `4ea2fb1fb7d` | **the same, unmodified** |
+| skill, prompt, gate | identical | identical |
+| PCC | **0.9849539 — fails** | **0.9999810562728417 — identical to incumbent** |
+| shipped | **nothing** | **−1,067.9 µs** |
+
+Same model, same knob, same stage, same guidance. **One agent wrote a correct implementation and one wrote a
+defective one.** So:
+
+1. **The stage is capable of producing this change correctly** — it just did, unaided, on the unmodified tree. My
+   claim in [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) §7b that the remedy is *"a known-good replacement"* is
+   true but understates the options: **a re-run may simply get it right.**
+2. **Part of the v3 regression is agent implementation variance on hand-written model code**, not stage design. That
+   is the hypothesis I raised in [`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md) §3 and then set aside as unfalsifiable
+   because I had no matched pair. **This is the matched pair.**
+3. **And the stage cannot tell the two apart.** Gating on the layer PCC conflates *"my placement idea is bad"* with
+   *"my code is wrong"*. phiB's agent concluded the former and shipped nothing; the correct conclusion was the
+   latter. That is the same conflation as gemma-onA's, at a different level.
+
+# The band audit this prompted, across all 13 cells with results
+
+| | µs |
+|---|---:|
+| total shipped, 13 cells | **7,849.0** |
+| **outside its own band** | **7,837.6 — 99.85 %** |
+| **inside its own band** | **11.5 — gemma-4-12B `exp11`, at 0.03× its band** |
+
+Ratios: phiA **41×**, nmOnA **30×**, phi-exp17 **17×**, g26FN **16×**, phiFN **9×**, nmFN **8×**, g26onA **3.6×**,
+qwenB **3.0×**, nmB **1.5×** — and **gemma-4-12B 0.034×**, i.e. **29× inside its own uncertainty band, reported as
+`outcome: shipped`.**
+
+**So the "shipped ≠ established" worry I pre-registered lands on exactly one cell, and it is not the control.**
+Every other shipped result clears its own band, most of them comfortably. The corpus total should be quoted as
+**−7,837.6 µs established**, with gemma-12b's 11.5 µs recorded as a sub-band non-result rather than a win.

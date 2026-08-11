@@ -9,6 +9,8 @@ taken until now to write v3's.
 | | |
 |---|---|
 | **v3 vs v2, same 11 cells** | **−6,769 µs/model against −15,177 — 45 %** ([`RESULTS`](ADVCHAL-V3-RESULTS.md)) |
+| **with the dense cells added** | **−7,849 µs across 13 cells, of which −7,837.6 is outside its own band.** Only `gemma-4-12B exp11` ships a sub-band non-result — **11.5 µs at 0.03× its band** ([`DENSE-PREREG`](ADVCHAL-V3-DENSE-PREREG.md)) |
+| ⚠ **implementation variance is real and now proven** | **phi `exp17` shipped `advisor_rope_l1` for −3.295 % at a PCC identical to its incumbent, while phi `nofuse-noadvise` wrote the same knob on the same unmodified stage and scored 0.985.** Same model, same guidance, one agent correct and one defective — and the stage cannot distinguish "bad placement" from "wrong code" |
 | **why** | **v3's defect was detected and v2's was not, and v3 could not attribute what it detected — so it discarded the win instead of fixing the bug.** Both versions ship the same cross-phase defect; only v2's fixture hid it ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md), which supersedes part of [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)) |
 | **how much is explained** | **87 % of the 11,303 µs lost (64 % with a measured fix, 23 % explained without one). 13 % is still partial** — remaining holes are phiFN 989 µs, phiA 340 µs, g26B 148 µs ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md) §7c) |
 | **the second systematic defect** | **the absolute oracle's clause 2** — reject if worse than the incumbent — now has **three measured instances** costing −0.90 %/layer on phiA and −137.5 µs/model on nmFN, every candidate clearing the model's own bar by 30–60× the margin it misses the incumbent by. **It is a rule I wrote** ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md) §7a) |
