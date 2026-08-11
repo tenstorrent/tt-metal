@@ -226,10 +226,9 @@ PREFILL_PRODUCER_CHUNKS=11 \
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
 vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
 with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
-recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. On the normal serving path the runner PCCs
-nothing — the producer's read-back is the KV check; the only runner-side PCC is opt-in and single-rank
-(`PREFILL_REQUEST_LOOP_PCC` for a bring-up KV check, `PREFILL_VALIDATE_MIGRATION` for post-migration
-validation). The producer's reader knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
+recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
+the table and the device map, and every read-back runs in the reader's own process. The producer's reader
+knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the

@@ -9,7 +9,8 @@
 #   python -m models.demos.common.prefill.runners.migration_driver \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_gpt_oss_migration_loopback.yaml
 #
-# Expect in the RUNNER log: [kv-migrate-validate] ... ALL <N> pair(s) dst==src PASSED
+# Every verdict is logged HERE — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
 
 transport:
   sp: 4
@@ -28,7 +29,7 @@ workload:
   chunks: "11"
   max_requests: 2
   interleave: round_robin
-  check_pcc: false
+  check_pcc: true                 # SOURCE-slot golden PCC; --verify-migration covers the destinations
 
 migration:
   issue: true

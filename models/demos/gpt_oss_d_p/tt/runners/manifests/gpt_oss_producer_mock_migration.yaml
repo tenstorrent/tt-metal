@@ -9,7 +9,8 @@
 #   python -m models.demos.common.prefill.runners.migration_driver \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_gpt_oss_migration_loopback.yaml
 #
-# Expect in the RUNNER log: [kv-migrate-validate] ... ALL <N> pair(s) dst==src PASSED
+# Every verdict is logged HERE — the runner validates nothing. check_pcc below is the whole signal;
+# this manifest issues no migration, so there is no destination to read back.
 
 transport:
   sp: 4
