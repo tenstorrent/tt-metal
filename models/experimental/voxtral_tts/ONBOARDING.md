@@ -33,9 +33,13 @@ python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current on the **p150**: **39.1 ms/frame on the long-form cases, RTF 0.507**, against
-44.19 / 0.577 for the same harness before §6.52 — a paired 15×3 A/B. Long-form WER
-**1 wrong of 894** over 3 seeds, unchanged by §6.52. Beat that without breaking it.
+Current on the **p150**: **27.7 ms/frame on the long-form cases, RTF 0.365**. Long-form WER
+**0 wrong of 596**, MOS long-form 4.61. Beat that without breaking it.
+
+> **Quote ms/frame, not RTF, when comparing builds.** ms/frame is repeatable to 0.390 ms; RTF also
+> carries prefill, the codec and the trace capture, which amortise differently as frame counts
+> change, so two runs of IDENTICAL code have read 0.4559 and 0.4415. `--tier audio`'s
+> `ms_per_frame` is the gate for that reason (§6.63).
 
 > **These exclude case 0, and any RTF you quote from this harness must too.** It is the first
 > utterance in each process and pays one-time program-cache compilation — 3.3 s over 5.4 s of
