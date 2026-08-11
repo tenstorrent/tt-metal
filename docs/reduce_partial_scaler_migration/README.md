@@ -37,6 +37,17 @@ whether the moreh migrations are behaviour-preserving.
   results for SUM and MAX. There is no `inf * 0 = NaN` poisoning, so no migration needs a guarantee
   about what the padding holds.
 
+## A second structural limit, found on device in Step 8
+
+`ReducePartialScaler` describes the last tile along the reduce dimension **of the reduce call itself**.
+A kernel that folds several tiles into one by element-wise accumulation *before* reducing cannot use it:
+lane `j >= partial_positions` of the accumulated tile holds the ragged tile's padding *and* valid data
+from every earlier tile, so zeroing that lane discards real values (measured: pcc 0.86 on
+`moreh_softmax_backward_w_large`). Those kernels must keep masking the ragged tile before accumulating.
+
+This rules out the `_large` variants of the moreh softmax family — forward and backward — beyond their
+max phase, and it is now documented on `ReducePartialScaler` itself.
+
 ## Reachability of the stated end goal
 
 "No kernels using partial-tile workarounds" is **not** fully reachable with the helper as it stands.
@@ -56,3 +67,4 @@ support), not a migration. Those eight are documented and deliberately left alon
 | 5 | remaining direct `reduce_tile` callers | [step-5-remaining-reduce-tile-callers.md](step-5-remaining-reduce-tile-callers.md) — **assessment only** |
 | 6 | perf comparison vs `main` | [step-6-perf-vs-main.md](step-6-perf-vs-main.md) |
 | 7 | Phase 1 cleanups: `softmax_w` perf fix, a hang in the shared `ttnn` general softmax, dead RT args, `topk_router_gpt` | [step-7-phase1-cleanups.md](step-7-phase1-cleanups.md) |
+| 8 | `moreh_softmax_backward` small kernels — full mask removal; why the `_large` ones cannot follow | [step-8-moreh-softmax-backward.md](step-8-moreh-softmax-backward.md) |

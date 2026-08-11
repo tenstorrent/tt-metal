@@ -75,6 +75,39 @@ def main(out_path):
                 (f"softmax_small_w.{label}", lambda x=x: ttnn.operations.moreh.softmax(x, 3, strategy=S.SMALL_W))
             )
 
+        # moreh_softmax_backward (Step 8): all four kernels lose their mask entirely, so both the
+        # SMALL and the LARGE variants are measured. The LARGE strategy is forced because these
+        # shapes would otherwise pick SMALL.
+        SB = ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy
+        for label, shape in [("aligned_512", [4, 4, 512, 512]), ("ragged_511", [4, 4, 511, 512])]:
+            y, dy = _mk(device, shape), _mk(device, shape)
+            cases.append(
+                (
+                    f"softmax_backward_small_h.{label}",
+                    lambda y=y, dy=dy: ttnn.operations.moreh.softmax_backward(y, dy, 2, strategy=SB.SMALL_H),
+                )
+            )
+            cases.append(
+                (
+                    f"softmax_backward_large_h.{label}",
+                    lambda y=y, dy=dy: ttnn.operations.moreh.softmax_backward(y, dy, 2, strategy=SB.LARGE_H),
+                )
+            )
+        for label, shape in [("aligned_512", [4, 4, 512, 512]), ("ragged_511", [4, 4, 512, 511])]:
+            y, dy = _mk(device, shape), _mk(device, shape)
+            cases.append(
+                (
+                    f"softmax_backward_small_w.{label}",
+                    lambda y=y, dy=dy: ttnn.operations.moreh.softmax_backward(y, dy, 3, strategy=SB.SMALL_W),
+                )
+            )
+            cases.append(
+                (
+                    f"softmax_backward_large_w.{label}",
+                    lambda y=y, dy=dy: ttnn.operations.moreh.softmax_backward(y, dy, 3, strategy=SB.LARGE_W),
+                )
+            )
+
         # ttnn.softmax general small path (Step 7b): shares the moreh forward kernels. rank 3 keeps it
         # off the rank-4 attention factory, so dim=-1 lands on GeneralWSmall and dim=-2 on GeneralHSmall.
         for label, shape in [("aligned_512", [16, 512, 512]), ("ragged_511", [16, 512, 511])]:

@@ -16,12 +16,11 @@ void kernel_main() {
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
     uint32_t Wt = get_arg_val<uint32_t>(4);
 
-    uint32_t mask_w = get_arg_val<uint32_t>(6);
+    uint32_t mask_w = get_arg_val<uint32_t>(5);
 
     constexpr auto cb_y = tt::CBIndex::c_0;
     constexpr auto cb_dy = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_mask = tt::CBIndex::c_3;
 
     uint32_t l1_write_addr_in;
 
@@ -33,10 +32,21 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    DataflowBuffer dfb_mask_obj(cb_mask);
-    generate_mask_w(dfb_mask_obj, mask_w);
+    // When W is ragged the scaler is emitted as a full/partial pair so the sum reduce can exclude the
+    // padding columns of the last W tile; the compute kernel derives the same decision from its own
+    // mask_w compile-time arg. Both sides compare against TILE_WIDTH, and they must agree or one waits
+    // for a tile the other never emits.
+    //
+    // The 0/1 mask tile is gone with it: it only ever zeroed padding that fed this reduce.
+    if (mask_w < tt::constants::TILE_WIDTH) {
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            cb_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW>(mask_w);
+    } else {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    }
 
     Noc noc;
     DataflowBuffer dfb_y_obj(cb_y);

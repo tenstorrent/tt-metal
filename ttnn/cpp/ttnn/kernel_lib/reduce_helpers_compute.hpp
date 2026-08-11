@@ -169,6 +169,15 @@ struct ReduceInputBlockShape {
  * ever reading the scaler CB, so it cannot honor a partial scaler either; the
  * runtime asserts that those callers pass none() as well.
  *
+ * IMPORTANT - this describes the last tile along the reduce dimension *of this
+ * reduce() call*. If the caller collapses several tiles into one by element-wise
+ * accumulation (add_tiles etc.) BEFORE reducing, a partial scaler is wrong: lane
+ * j >= partial_positions of the accumulated tile holds padding from the ragged
+ * tile but also VALID data from every earlier tile, and the partial scaler zeroes
+ * all of it. Such callers must keep masking the ragged tile before accumulating
+ * and reduce with a full scaler. (This is distinct from the Accumulate note
+ * below, which is about accumulation *between* reduce() calls.)
+ *
  * Usage:
  *   constexpr auto partial = has_partial
  *       ? ReducePartialScaler::last_tile_at(1)

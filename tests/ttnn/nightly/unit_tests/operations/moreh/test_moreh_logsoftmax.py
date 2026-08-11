@@ -378,6 +378,54 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, com
 @pytest.mark.parametrize(
     "shape_dim",
     (
+        [[1, 1, 10, 15], 3],  # ragged W, single tile
+        [[1, 1, 10, 32 * 2 + 10], 3],  # ragged W, multiple tiles
+        [[1, 1, 15, 10], 2],  # ragged H, single tile
+        [[1, 1, 32 * 2 + 10, 32], 2],  # ragged H, multiple tiles
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_logsoftmax_backward_large_algorithm_not_multiple_of_32_for_dim_hw(
+    shape_dim, dtype, compute_kernel_options, device
+):
+    """Ragged reduce dimensions on the _large kernels' LOG path.
+
+    These shapes are small enough that the op would otherwise pick a SMALL strategy, and the existing
+    large-algorithm cases are all multiples of 32 -- so the ragged tail of the _large LOG path is
+    never exercised without forcing the strategy here.
+    """
+    shape, dim = shape_dim
+    torch.manual_seed(0)
+    strategy = (
+        ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_W
+        if dim == 3
+        else ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_H
+    )
+    rtol = atol = 0.1
+
+    run_moreh_logsoftmax_backward_test(
+        shape,
+        dim,
+        dtype,
+        ttnn.TILE_LAYOUT,
+        device,
+        rtol,
+        atol,
+        True,
+        strategy=strategy,
+        compute_kernel_options=compute_kernel_options,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape_dim",
+    (
         [[1, 15, 32, 32], 1],  # single tile c
         [[1, 15, 32 * 7, 32 * 5], 1],  # mutiple cores
         [[109, 15, 32, 32], 1],  # mutiple tiles per cores

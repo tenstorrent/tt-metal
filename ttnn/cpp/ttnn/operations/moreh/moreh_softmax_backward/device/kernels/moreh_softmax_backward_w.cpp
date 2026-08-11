@@ -16,8 +16,9 @@ void kernel_main() {
     constexpr auto cb_dy = tt::CBIndex::c_1;
     DataflowBuffer dfb_dy_obj(cb_dy);
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_mask = tt::CBIndex::c_3;
-    DataflowBuffer dfb_mask_obj(cb_mask);
+    // c_3 (mask) is gone: the ragged last W tile is excluded by the partial scaler below instead of
+    // being zeroed with mask_tile. The mask only ever fed the sum reduce here — dx is recomputed from
+    // y and dy — so nothing else observes those padding columns.
     constexpr auto cb_dx = tt::CBIndex::c_16;
     DataflowBuffer dfb_dx_obj(cb_dx);
 
@@ -32,39 +33,37 @@ void kernel_main() {
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
+    // Valid columns in the last W tile (TILE_W when W is tile-aligned). Wt is already a compile-time
+    // arg, so this kernel is built per shape and the ragged case costs nothing at runtime.
+    constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+    constexpr uint32_t TILE_W = 32;
+    constexpr bool do_partial_w = mask_w < TILE_W;
+
+    // The reader emits cb_bcast_scaler as a full/partial pair only when W is ragged; tile 1 fills just
+    // the valid columns, so the reduce excludes the padding instead of relying on a masked copy.
+    constexpr auto partial_scaler = do_partial_w ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                 : compute_kernel_lib::ReducePartialScaler::none();
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         // sum(dy)
-        if (Wt == 1) {
-            // apply mask
-            mask_tile_to_cb(dfb_dy_obj, dfb_mask_obj, dfb_inter2_obj, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_inter2, cb_bcast_scaler, cb_sum>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            constexpr auto cb_inter0 = tt::CBIndex::c_24;
-            compute_kernel_lib::reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
-                cb_dy,
-                cb_bcast_scaler,
-                cb_inter0,
-                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-
-            constexpr auto cb_inter1 = tt::CBIndex::c_25;
-            DataflowBuffer dfb_inter1_obj(cb_inter1);
-            mask_tile_to_cb(
-                dfb_dy_obj, dfb_mask_obj, dfb_inter1_obj, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
-
-            constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_inter1, cb_bcast_scaler, cb_inter2>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-
-            DataflowBuffer dfb_inter0_obj(cb_inter0);
-            add_tiles_to_cb(dfb_inter0_obj, dfb_inter2_obj, dfb_sum_obj);
-        }
+        //
+        // One reduce over all Wt tiles of dy, in place. This replaces a two-phase split that reduced
+        // Wt-1 tiles into an intermediate, masked the last dy tile into a second intermediate, reduced
+        // that separately and added the two together (plus a special case for Wt == 1). dy is not
+        // popped here: the epilogue below reads it again.
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_dy,
+            cb_bcast_scaler,
+            cb_sum,
+            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            partial_scaler);
 
         // dy - sum * exp(y)
         constexpr auto cb_exp = tt::CBIndex::c_24;  // y * dy
@@ -86,13 +85,10 @@ void kernel_main() {
         dfb_dy_obj.pop_front(Wt);
 #else
         // step 1, compute y * dy
+        // No longer masks the last tile: cb_ydy feeds nothing but the reduce below, which now excludes
+        // the padding columns itself.
         for (uint32_t w = 0; w < Wt; ++w) {
-            if (w == Wt - 1) {
-                mul_tiles_and_mask_tile_to_cb(
-                    dfb_y_obj, dfb_dy_obj, dfb_mask_obj, dfb_ydy_obj, w, w, 0, /*pop0=*/0, /*pop1=*/0, /*popm=*/0);
-            } else {
-                mul_tiles_to_cb(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj, w, w, /*pop0=*/0, /*pop1=*/0);
-            }
+            mul_tiles_to_cb(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj, w, w, /*pop0=*/0, /*pop1=*/0);
         }
 
         // step 2, compute sum(y * dy)
@@ -102,7 +98,12 @@ void kernel_main() {
             cb_ydy,
             cb_bcast_scaler,
             cb_sum,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            partial_scaler);
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
