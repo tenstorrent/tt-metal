@@ -26,12 +26,20 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
+from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
+from models.experimental.xtts.reference.xtts_hifi_decoder import LATENT_SCALE, SR_SCALE
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
-from models.experimental.xtts.tt.xtts_generator import TtXttsGenerator
+from models.experimental.xtts.tt.xtts_generator import TtTracedDecoder, TtXttsGenerator
 from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
 from models.experimental.xtts.tt.xtts_mel import TtConditioningMel
+
+
+def _interp_len(frames):
+    """Latent frames -> generator input steps: the decoder's two ``F.interpolate`` calls, each of
+    which floors ``len * scale`` (``XttsHifiDecoderReference.forward``)."""
+    return int(int(frames * LATENT_SCALE) * SR_SCALE)
 
 
 class TtXtts(LightweightModule):
@@ -252,3 +260,177 @@ class TtXtts(LightweightModule):
             "vocoder_replay_s": vocoder_replay_s,
         }
         return wav_dev, codes, perf
+
+    def traced_session(self, cond_wav, ref_wav_spk, text_len, max_seq, max_new_tokens, **sampling):
+        """Capture the three traces ONCE for a fixed text length, then synthesise many texts off
+        them. See :class:`TtXttsTracedSession`."""
+        return TtXttsTracedSession(self, cond_wav, ref_wav_spk, text_len, max_seq, max_new_tokens, **sampling)
+
+
+class TtXttsTracedSession:
+    """The same three traces as :meth:`TtXtts.inference_fully_traced`, but captured ONCE and
+    replayed for utterance after utterance.
+
+    ``inference_fully_traced`` captures and releases per call, so synthesising text that has been
+    split into N chunks compiles the whole model N times — by far the dominant cost (~1 minute per
+    chunk against ~1.5 s of replay). Here warmup + capture happen in ``__init__`` and every chunk is
+    just :meth:`run`: write the chunk's text ids into the persistent input buffer, replay SETUP
+    (which re-seeds the KV cache from the new text), replay the decode step per token, replay the
+    VOCODER. No compile, no allocation, no re-upload of weights between chunks.
+
+    What that costs in flexibility — a trace is a fixed program over fixed buffers, so:
+
+    * Every chunk must have the SAME padded text length (``text_len``), since ``prompt_len`` and
+      the KV geometry are baked into the capture. The caller pads all chunks to one length.
+    * The vocoder runs on a FIXED ``max_new_tokens``-frame latent buffer, zero-padded past the codes
+      actually generated, and the waveform is trimmed back afterwards (:meth:`_samples_for` gives
+      the exact length). Note this makes ``max_new_tokens`` a real cost: the vocoder always pays for
+      the full budget, and its circular buffers grow with it.
+    * Stale KV past ``prompt_len`` from the previous chunk is harmless — decode attention masks
+      everything beyond the current position (``forward_decode``'s ``add_mask``), and prefill
+      overwrites 0..prompt_len-1 on every SETUP replay.
+
+    All three traces are held simultaneously (they are only released in :meth:`close`), so the
+    device needs a trace region big enough for all of them at once, not just the largest.
+    """
+
+    def __init__(
+        self,
+        tt,
+        cond_wav,
+        ref_wav_spk,
+        text_len,
+        max_seq,
+        max_new_tokens,
+        temperature=0.0,
+        top_k=0,
+        top_p=1.0,
+        repetition_penalty=1.0,
+        min_new_tokens=0,
+    ):
+        t0 = time.perf_counter()
+        self.tt = tt
+        self.device = dev = tt.device
+        self.N = int(max_new_tokens)
+        gpt = tt.gpt
+        voc = tt.decoder.decoder
+
+        # ---- 1. ALLOCATE every persistent buffer of all three stages, BEFORE any capture. ----
+        # tt-metal stops tracking a trace's memory the moment it is captured, so a buffer allocated
+        # afterwards can be handed an address that trace uses as scratch — and is corrupted the
+        # first time the trace runs (metal warns "Allocating device buffers is unsafe due to the
+        # existence of an active trace"). With one trace at a time that is survivable; with three
+        # live traces it is a device hang. Allocating up front keeps every buffer visible to the
+        # allocator while each capture picks its scratch, so nothing overlaps.
+        # Host inputs are pre-placed here for the second reason too: a host->device write inside a
+        # capture is fatal. The reference audio is the same for every chunk; only the text ids
+        # change, and they are rewritten IN PLACE into this buffer before each SETUP replay.
+        self.wav_devs = [tt._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)]
+        self.text_dev = gpt.text_ids_to_device(torch.zeros(1, text_len, dtype=torch.long))
+        self.ref_wav_spk = ref_wav_spk  # held so the buffer the SETUP trace reads outlives the caller
+        gpt.alloc_static_kv(max_seq)
+        prompt_len = 32 + text_len  # cond perceiver latents + text; asserted against prefill below
+        self.decoder = TtTracedDecoder(
+            gpt,
+            prompt_len,
+            self.N,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            min_new_tokens=min_new_tokens,
+            capture=False,  # buffers only; warmup + capture are sequenced below
+        )
+        # The vocoder runs on a FIXED-length latent buffer (see the class docstring).
+        self.voc_in = ttnn.from_torch(
+            torch.zeros(1, self.N, HIDDEN_SIZE), layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32
+        )
+
+        def _setup():
+            cl = tt._style_mean(self.wav_devs)  # [1, 32, 1024], averaged over the windows
+            g = tt.decoder.speaker_embedding(ref_wav_spk)  # [1, 1, 512]
+            # Park g in DRAM. Left where the speaker encoder puts it, this handful of KB sits in the
+            # L1 region the vocoder wants for its circular buffers, and the VOCODER capture dies
+            # with "circular buffers ... clash with L1 buffers" (measured: an L1 buffer at 1122560
+            # against a CB region ending at 1123264 — 704 bytes of overlap). Same reason the
+            # per-window style embeddings go to DRAM in ``_style_window``.
+            g_dram = ttnn.to_memory_config(g, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(g)
+            return g_dram, gpt.prefill_on_device(self.text_dev, cl)
+
+        # ---- 2. WARM UP (compile) all three stages eagerly, still before any capture. ----
+        g_warm, warm_prompt_len = _setup()  # also populates the mel-frontend index cache
+        assert warm_prompt_len == prompt_len, f"prefill gave prompt_len {warm_prompt_len}, expected {prompt_len}"
+        self.decoder.warmup()  # needs the KV cache seeded, which the prefill above just did
+        # The vocoder folds its conditioning bias into the conv bias via a host transfer — fatal
+        # inside a trace, so both warmup and capture use the trace-safe on-device add instead.
+        with cond_bias_trace_safe():
+            _ = voc(ttnn.clone(self.voc_in), g_warm)
+            ttnn.synchronize_device(dev)
+
+        # ---- 3. CAPTURE the three traces back to back. ----
+        self.setup_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        self.g, _ = _setup()  # g + the seeded caches are the trace's persistent outputs
+        ttnn.end_trace_capture(dev, self.setup_tid, cq_id=0)
+        ttnn.synchronize_device(dev)
+        self.decoder.capture()
+        with cond_bias_trace_safe():
+            self.voc_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self.wav_dev = voc(ttnn.clone(self.voc_in), self.g)
+            ttnn.end_trace_capture(dev, self.voc_tid, cq_id=0)
+            ttnn.synchronize_device(dev)
+        # Samples per generator step, read off the capture rather than assumed.
+        self.upsample = self.wav_dev.shape[-2] // _interp_len(self.N)
+        self.compile_s = time.perf_counter() - t0
+
+    def _samples_for(self, frames):
+        """Exact waveform length for ``frames`` latent frames. NOT ``frames * (total / N)``: the two
+        linear interpolates each floor their output length, so the mapping has a sub-frame remainder
+        (192 frames -> 213760 samples is 1113.33 per frame, and 149 frames is 165888, not 165837)."""
+        return _interp_len(frames) * self.upsample
+
+    def run(self, text_ids):
+        """Synthesise one text off the captured traces. ``text_ids`` is ``[1, text_len]`` (the
+        padded length the session was built for). Returns ``(wav [T] torch float, codes, perf)``,
+        the waveform already trimmed to the codes actually generated."""
+        dev = self.device
+        assert text_ids.shape[1] == self.text_dev.shape[1], (
+            f"session captured for {self.text_dev.shape[1]} text tokens, got {text_ids.shape[1]} — "
+            "every chunk must be padded to the same length"
+        )
+        # New text into the SAME buffer the SETUP trace reads, then re-seed the KV cache with it.
+        ttnn.copy(self.tt.gpt.text_ids_to_device(text_ids), self.text_dev)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(dev, self.setup_tid, blocking=True)
+        setup_replay_s = time.perf_counter() - t0
+
+        self.decoder.reset(redraw_noise=True)
+        codes, lat_host, decode_replay_s = self.decoder.run()
+
+        # Zero-pad this chunk's latents up to the captured vocoder length and replay the vocoder.
+        frames = lat_host.shape[1]
+        padded = torch.zeros(1, self.N, HIDDEN_SIZE, dtype=torch.float32)
+        padded[:, :frames, :] = lat_host.float()
+        ttnn.copy(
+            ttnn.from_torch(padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32),
+            self.voc_in,
+        )
+        t0 = time.perf_counter()
+        ttnn.execute_trace(dev, self.voc_tid, blocking=True)
+        vocoder_replay_s = time.perf_counter() - t0
+
+        wav = ttnn.to_torch(self.wav_dev).float().reshape(-1)[: self._samples_for(frames)]
+        replay_s = setup_replay_s + decode_replay_s + vocoder_replay_s
+        perf = {
+            "replay_s": replay_s,
+            "compile_s": 0.0,  # paid once, in __init__ (self.compile_s)
+            "setup_replay_s": setup_replay_s,
+            "decode_replay_s": decode_replay_s,
+            "vocoder_replay_s": vocoder_replay_s,
+        }
+        return wav, codes, perf
+
+    def close(self):
+        for tid in (self.setup_tid, self.voc_tid):
+            ttnn.release_trace(self.device, tid)
+        self.decoder.release()

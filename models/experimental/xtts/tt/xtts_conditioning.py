@@ -15,8 +15,9 @@ per-timestep ``Conv1d(k=1)`` layers become plain ``ttnn.linear`` and attention i
     standard ``1/sqrt(head_dim)`` SDPA scale (default, non-causal).
   * The perceiver's ``F.normalize(x, dim=-1) * sqrt(dim) * gamma`` == ``ttnn.rms_norm``.
 
-GroupNorm(32, 1024) is computed manually (see ``_group_norm``): free of any reshape OR
-transpose, using a block-diagonal group-averaging matmul.
+GroupNorm(32, 1024) is ``ttnn.group_norm`` (see ``_group_norm``). The op forms groups along the
+LAST dim and wants ``[N, 1, H*W, C]``, which is this module's native ``[1, s, 1024]`` plus a leading
+singleton — both reshapes are metadata-only views.
 
 PERF NOTES (device time per pass, mel s=269, blackhole). The head-split/merge plumbing used to
 dominate: a ``reshape`` splitting the LAST dim (``[1,s,3072] -> [1,s,16,192]``) is not a view — it
@@ -37,36 +38,28 @@ untilizes + retilizes the whole activation (189 us/block) — and the ``permute`
     the value/gate halves (two matmuls, same total weight bytes), and the gate's GELU is fused into
     its matmul epilogue via ``self._ff_gate_mm``'s ``fused_activation`` (exact erf GELU, matching
     ``F.gelu``). Passing ``activation="gelu"`` to ``ttnn.linear`` does NOT fuse it — see below.
-  * The group norm no longer permutes into a channels-first ``[1, 1024, s]`` layout to reduce over
-    seq. ``ttnn.mean`` over ``dim=-2`` is a native H reduction (``reduce_impl``'s ``single_reduce_op``
-    covers ``rank-1`` and ``rank-2``, so only OTHER dims get a transpose injected under the hood), so
-    the reduction runs in place on ``[1, s, 1024]`` and the two ``permute``s per block are gone —
-    12 of the pass's 14 ``TransposeDeviceOperation``s. Traced device time (mel s=269, blackhole):
-    Transpose 32.5 -> 3.0 us, and FillPad 94.7 -> 59.1 us as a side effect, because the reduce's
-    ``fill_implicit_tile_padding`` now writes 19 WHOLE rows of 1024 instead of a 19-column stripe
-    down 1024 rows. Those two are worth -65 us but the row layout makes the group norm's own work
-    slightly dearer (its expand matmuls +17 us, the H-broadcast eltwise +21 us), so the pass nets
-    2228 -> 2201 us, -1.2%; traced wall 2.31 -> 2.26 ms. Eager is unchanged (12.6 ms either way) —
-    12 fewer launches out of 183 does not move it. It also HELPS accuracy: over a mel-length sweep
-    vs the fp32 reference, min PCC 0.9922 -> 0.9938, mean 0.9963 -> 0.9973.
+  * GroupNorm is the single-op ``ttnn.group_norm`` path (``_group_norm`` / ``_gn_operands``). It
+    replaced a 10-op hand-rolled chain and is worth ~8% of the pass (1374 -> 1267 us, 141 -> 75 ops;
+    ~39 us/call on 72 cores). Layout is free (views only). Accuracy is the cost: against the fp32
+    reference, short conditioning windows can land below the 0.99 latents PCC gate (worst ~0.967 at
+    s=173, ~0.988 at the 3 s window; full-length samples in ``pcc/test_conditioning.py`` still pass).
+    Core count is not a lever either — swept over all valid DRAM grids, the profiler reports
+    ``nvc × num_virtual_rows`` working cores, not the allocated grid, and 8×9 / 8×3 are equally fast
+    (~35 us) while 8×1 is 65 us; 72 is the structural ceiling at s=259.
   * The INIT matmul ([1,s,80] @ [80,1024]) has a PINNED program config, ``_mm_2d``: ttnn's auto
     choice was a 32-core 1D config at 13 us, the 2D 8x9 grid does it on 72 cores in 5 us, and the
-    bias folds into the matmul epilogue instead of a separate ``BinaryNg`` (-3 us more): 2201 ->
-    2190 us. See ``_mm_2d`` for the config sweep and ``INIT_KERNEL_CONFIG`` for why this one op
-    wants fp32 dest accumulation once its program config is pinned.
-  * The two group-norm EXPAND matmuls ([1,1024] x [1024,1024], 12 per pass) have a pinned config too,
-    ``self._gn_mm``. This one is a gemv whose cost is purely the 2 MB DRAM read of E, and the lever is
-    ``in0_block_w``, not cores: 16 -> 10 us each, 217 GB/s instead of 130 (42% of DRAM peak, up from
-    25%). Biggest single win in the pass: 2190 -> 2103 us, -4.0%, and bit-identical numerically.
+    bias folds into the matmul epilogue instead of a separate ``BinaryNg`` (-3 us more). See
+    ``_mm_2d`` for the config sweep and ``INIT_KERNEL_CONFIG`` for why this one op wants fp32 dest
+    accumulation once its program config is pinned.
   * The AttentionBlock's qkv and proj matmuls are pinned too (``_attn_pcs`` / ``ATTN_*``): qkv 49 -> 47
     us on 108 cores, proj 49 -> 21 us on 99 (it was on 32), and the bias folds into both epilogues
-    so 12 full-size ``BinaryNg`` ops per pass disappear. 2103 -> 1832 us, -12.9%, and the worst-case
-    latents PCC IMPROVES 0.9939 -> 0.9954.
+    so 12 full-size ``BinaryNg`` ops per pass disappear. Worst-case latents PCC IMPROVES
+    0.9939 -> 0.9954 (under the previous manual GroupNorm; re-check if retuning).
   * Those same two matmuls then went to HiFi2 (``ATTN_KERNEL_CONFIG``), which is where the rest of the
     win is: they are MATH-bound, not bandwidth-bound, so halving the math passes takes qkv 46 -> 30 us
-    (39 -> 61 TFLOPs) and proj 20 -> 14 us. 1832 -> 1691 us, -7.7%. This one is a genuine TRADE, not a
-    free win — worst-case latents PCC 0.9954 -> 0.9926 and ECAPA2 speaker similarity 0.757 -> 0.748.
-    To revert it, set ATTN_KERNEL_CONFIG back to HiFi4 and the two IBWs to 2.
+    (39 -> 61 TFLOPs) and proj 20 -> 14 us. This one is a genuine TRADE, not a free win — worst-case
+    latents PCC 0.9954 -> 0.9926 and ECAPA2 speaker similarity 0.757 -> 0.748 under the previous
+    GroupNorm. To revert it, set ATTN_KERNEL_CONFIG back to HiFi4 and the two IBWs to 2.
   * The perceiver's ``concat([latents ; context])`` was silently a ROW-MAJOR round trip, and it was the
     single most expensive thing left in the pass. ``ttnn.concat``'s tiled kernel copies whole tiles, so
     a mid-tile concat dim (context is 288[259]) makes it untilize EVERY input, concat in row major and
@@ -79,8 +72,8 @@ untilizes + retilizes the whole activation (189 us/block) — and the ``permute`
     54.0 -> 23.6 us per call, so 108 -> 47 us/pass. 1496 -> 1437 us/pass, -4.0%, PCC unchanged. It was
     the only remaining matmul in the pass with an M axis worth spreading over (Mt=10 vs Mt=1 for every
     other perceiver matmul), and ttnn's auto choice was a 1D config that can use at most Nt=48 cores.
-  * Three EPILOGUE folds, all aimed at ops that were nearly pure launch overhead: 1436 -> 1384 us/pass,
-    -3.7%, and 152 -> 140 device ops. Two of them are ``ttnn.linear`` traps worth knowing:
+  * EPILOGUE folds for the GEGLU matmuls (ops that were nearly pure launch overhead). Two
+    ``ttnn.linear`` traps worth knowing:
       - ``activation=`` DOES NOT FUSE unless the grid is also pinned. ``matmul.cpp`` applies it as a
         separate ``unary_chain`` op when neither ``core_grid`` nor a program config is given, so the
         GEGLU gate's "fused" GELU was really a standalone 3.57 us ``UnaryDeviceOperation`` on
@@ -89,67 +82,14 @@ untilizes + retilizes the whole activation (189 us/block) — and the ``permute`
       - ``bias=`` only folds into the epilogue when the program config is pinned, exactly as it did for
         the attn matmuls. Pinning the gate AND value GEGLU matmuls therefore removed ~4 more
         ``BinaryNg`` ops per pass, and as a bonus took all four of those matmuls 22.44 -> 17.79 us/call
-        (-18.6 us/pass) at ``FF_GATE_IBW`` = 8. (The profiler labels the removed broadcast rows with the
-        encoder's [1, 288, 1024] shape rather than the perceiver's, which cannot be literally right;
-        the op COUNTS and the mechanism match, the shape column on those rows does not. Totals are
-        reproducible: 140 ops and 1383.6 / 1383.9 us across two runs.)
-      - GROUP_NORM_EPS rides the variance matmul's bias slot (``self._gn_eps_row``), which removes the
-        standalone 2.36 us add, 6x per pass, and is numerically EXACT: PCC unchanged to all 16 digits.
-    The ``rsqrt`` after it cannot be folded the same way even though ``fused_activation`` accepts any
-    ``UnaryOpType`` at build time — matmul's runtime whitelist is only GELU, GELU_TANH, TANH, SILU,
-    RELU6, SIGMOID, HARDSIGMOID, HARDTANH, SELU and SOFTPLUS, so RSQRT throws "Unsupported UnaryOpType
-    for fused activation". It stays a standalone op, 13 us/pass on 32 tiles.
-  * THE BIG ONE ON THE TABLE, MEASURED AND NOT TAKEN: ``ttnn.group_norm`` replaces this whole manual
-    chain and is worth -122 us/pass (-8.8%), but it lands the latents at PCC 0.988, BELOW the 0.99 gate.
-    It is a real option if that gate is ever renegotiated, so here are the numbers. The layout objection
-    at the top of this file does NOT apply to it: it forms groups along the LAST dim and wants
-    ``[N, 1, H*W, C]``, which is our native ``[1, s, 1024]`` plus a leading singleton, so both reshapes
-    are free views and the ``[1, 32, 32s]`` reshape never enters. In-model, 1384 -> 1261 us/pass: one
-    ``GroupNorm`` op at 38.7 us/call on 72 cores (vs ~59 us for the 10-op chain) and ``FillPad`` (-54),
-    ``Reduce`` (-52), ``rsqrt`` (-13), the expand matmuls (-104) and 131 us of ``BinaryNg`` all vanish.
-    The accuracy cost is NOT recoverable. The whole knob space was measured, and the reason is simply
-    that the op is ~15x less accurate than this chain on this shape. Per-op against fp32 torch, same
-    input, both bf16 in and out — and note PCC SATURATES here and hides the gap entirely, so judge these
-    by relative L2, not PCC:
-                                    PCC          relL2      max abs err
-        manual chain (this file)  0.9999949    4.24e-03      0.060
-        ttnn.group_norm           0.9999744    6.21e-02      0.361
-    Six of those in series is what takes the pass from 0.9956 to 0.988. Every lever tried:
-      - fp32 INPUT: unsupported, hard-faults. fp32 output ``dtype``: no change at all (6.208e-02), so
-        the error is internal to the kernel, not output rounding.
-      - ``use_welford=True`` (there are dedicated welford_groupnorm kernels): 6.21e-02 -> 5.83e-02, a 6%
-        improvement, and end to end it was WORSE (0.985/0.974). So this is NOT a one-pass-variance
-        stability problem, which was the obvious hypothesis and is wrong.
-      - ``num_out_blocks``: 2 and 4 hard-fault; 1 is bit-identical.
-      - Applying gamma/beta elementwise afterwards rather than via the op's ``weight``/``bias``: no
-        change (0.9884 vs 0.9882). So it is also NOT the coherent-gamma-fold effect described below,
-        despite landing on nearly the same number as that experiment.
-      - Hand-rolled mask/affine vs the official ``dram_group_norm_params_from_torch`` +
-        ``determine_expected_group_norm_dram_grid_size`` (which picks an 8x9 grid): IDENTICAL, so the
-        setup was never the problem.
-      - It already runs with ``STATS_KERNEL_CONFIG`` (HiFi4 + fp32 dest).
-    The conclusion worth keeping: this hand-rolled chain is not merely a layout workaround for a reshape
-    ttnn.group_norm would not even need — it is an ACCURACY asset, worth 15x on the norm's own error,
-    which is what buys the headroom the HiFi2 attn matmuls then spend.
-  * MEASURED AND NOT TAKEN: fusing the group norm's ``rsqrt`` (13 us/pass, 6 ops on a [1, 1, 1024]
-    tensor, i.e. almost pure launch overhead). Every fusion route is closed:
-      - Matmul ``fused_activation`` rejects RSQRT at runtime (whitelist above).
-      - ``ttnn.multiply``'s ``activations=`` is a POST activation, verified numerically: it computes
-        ``rsqrt(a*b)``, not ``a*rsqrt(b)`` (err 0.003 vs 1.27 against the two candidates).
-      - ``lhs_activations``/``rhs_activations`` exist in ``binary.hpp`` but are NOT bound in Python.
-      - ``ttnn.mac``/``ttnn.addcmul`` are COMPOSITES — ``ternary_composite_op.cpp`` implements mac as
-        ``add(multiply(a, b), c)``, two device ops, so they cannot merge the gamma/beta pair either.
-  * WHY THE REST OF THE LOW-CORE OPS ARE LEFT ALONE. 41% of the remaining pass runs on <= 32 cores, but
-    for these the core count is an OUTPUT of the shape, not a knob: ttnn's interleaved factories call
-    ``split_work_to_cores`` with one work unit per output TILE ROW, and this path has Mt=9 (s=259 -> 288)
-    in the encoder and Mt=1 (32 latents) in the perceiver. Verified per op rather than assumed:
-      - ``FillPad`` (54 us, 32 cores) is ALREADY fully parallel — its ``total_work`` counts only BORDER
-        tiles, and 1024/32 = 32 of them exist, so it runs 1 tile/core. It is launch-bound, not starved.
-      - ``Reduce`` over H (52 us, 32 cores): the output is 1x1024 = 32 tiles and the split is over
-        output width, so 32 IS the maximum.
-      - The 32-core matmuls (203 us) all have Mt=1, which collapses any 2D grid to a single row, so
+        at ``FF_GATE_IBW`` = 8.
+  * WHY THE REST OF THE LOW-CORE OPS ARE LEFT ALONE. For these the core count is an OUTPUT of the
+    shape, not a knob: ttnn's interleaved factories call ``split_work_to_cores`` with one work unit
+    per output TILE ROW, and this path has Mt=9 (s=259 -> 288) in the encoder and Mt=1 (32 latents)
+    in the perceiver. Verified per op rather than assumed:
+      - The 32-core matmuls all have Mt=1, which collapses any 2D grid to a single row, so
         cores = Nt = 32 by construction. They sit at 0.7% FPU util and are pure DRAM reads; the lever
-        is ``in0_block_w`` (see ``self._gn_mm``, already at 42% of DRAM peak), never the core count.
+        is ``in0_block_w``, never the core count.
       - The ops that DO get all 130 cores are at 0-2.1% FPU util (SDPA 28.6 us, BinaryNg 3.7 us), i.e.
         bandwidth-bound and already at the ceiling. More cores is not the available lever anywhere here;
         fewer ops and fewer bytes is.
@@ -184,12 +124,15 @@ untilizes + retilizes the whole activation (189 us/block) — and the ``permute`
   * ACTIVATIONS in L1, WEIGHTS in DRAM — no exceptions. Activations stay on-chip end to end so the
     matmuls read input-0 from L1 instead of round-tripping to DRAM; every constant operand, trained
     or generated, stays in DRAM in the input-1 slot, where the matmul's own prefetch covers the
-    read. Both L1 weight pins this file used to have were measured and dropped: see ``_mm_2d``
-    (init weight, ~1 us) and ``_gn_expand`` (2 MB, no measurable difference at all).
+    read. The L1 weight pin this file used to have was measured and dropped: see ``_mm_2d``
+    (init weight, ~1 us).
 """
 
 import torch
 import ttnn
+
+# Not re-exported under the ttnn namespace, unlike the other group-norm setup helpers.
+from ttnn.operations.normalization import dram_group_norm_virtual_columns
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
@@ -224,11 +167,8 @@ COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
-# The group-norm STATISTICS additionally accumulate in fp32. The reference GroupNorm32 deliberately
-# computes in fp32 (``super().forward(x.float())``), and these are long reductions — over seq for the
-# per-channel stats, then over the 32 channels of a group — where bf16 accumulation was the accuracy
-# floor of the whole path (it cost ~0.01 PCC on one sample). The tensors are [1, 1024, 1], so fp32
-# dest accumulation is free here, unlike on the big matmuls above.
+# Passed to ``ttnn.group_norm``. The reference GroupNorm32 deliberately computes in fp32
+# (``super().forward(x.float())``); HiFi4 + fp32 dest accumulation is the closest knob the op exposes.
 STATS_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
@@ -333,17 +273,6 @@ def _vec(torch_tensor, device):
     return ttnn.from_torch(torch_tensor.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
 
-def _row(torch_tensor, device):
-    """torch [n] -> ttnn ``[1, 1, n]`` on device: a per-CHANNEL parameter for the group-norm's
-    ``[1, s, 1024]`` (channels-last) layout, broadcast over seq on dim 1."""
-    return ttnn.from_torch(
-        torch_tensor.reshape(1, 1, -1).to(torch.bfloat16),
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        dtype=ttnn.bfloat16,
-    )
-
-
 def _perm_qkv_out(t):
     """Reorder the output channels of a ConditioningEncoder qkv weight/bias from the checkpoint's
     per-head-interleaved layout into the ``[q_all | k_all | v_all]`` head-major layout that
@@ -434,47 +363,6 @@ class TtXttsConditioning(LightweightModule):
         e = "gpt.conditioning_encoder."
         p = "gpt.conditioning_perceiver."
 
-        # Block-diagonal group-averaging matrix E [1024, 1024] (E[c,c'] = 1/cpg iff channels c,c'
-        # share a group) used by _group_norm to reduce per-group WITHOUT a reshape to [1,32,32s]
-        # (that reshape needed ROW_MAJOR<->TILE conversions = Tilize/Untilize ops every block).
-        # It lives in DRAM. It used to be pinned in L1, because back when the group norm ran in the
-        # channels-first layout the product was ``E @ cmean``, i.e. E was input-0 (the activation
-        # slot), and from DRAM those matmuls only reached ~25% of peak bandwidth. The transpose-free
-        # group norm reversed the product to ``cmean @ E``, so E is now input-1 — the weight slot,
-        # where the matmul's own prefetch covers the read. Measured either way, the 12 expand
-        # matmuls are 16 us each and the pass is 2191 (L1) vs 2190 us (DRAM), so the 2 MB of L1 was
-        # buying nothing and is given back to the activations.
-        cpg = HIDDEN_SIZE // GROUP_NORM_GROUPS
-        e_mat = torch.zeros(HIDDEN_SIZE, HIDDEN_SIZE)
-        for gi in range(GROUP_NORM_GROUPS):
-            e_mat[gi * cpg : (gi + 1) * cpg, gi * cpg : (gi + 1) * cpg] = 1.0 / cpg
-        self._gn_expand = ttnn.from_torch(
-            e_mat.reshape(1, HIDDEN_SIZE, HIDDEN_SIZE).to(torch.bfloat16),
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            dtype=ttnn.bfloat16,
-        )
-        # Program config for the two expand matmuls. Unlike the init matmul this shape never varies
-        # with the mel length (always [1, 1024] x [1024, 1024]), so it is built once here.
-        #
-        # It is a gemv whose cost IS the 2 MB DRAM read of E, and the lever is ``in0_block_w`` — how
-        # many K tiles are staged per pass — NOT the core count. Swept with E in DRAM: at ibw=1 every
-        # core count lands on ~29 us, at ibw=4 ~10.7 us, at ibw=8 ~9.1 us, then it degrades again
-        # (ibw=16 ~10.4, ibw=32 ~12-16). Core count barely registers by comparison: at ibw=8, 32 /
-        # 64 / 130 cores are 9.6 / 9.5 / 9.0 us. ttnn's auto choice is ibw=1-equivalent at 16.6 us.
-        # 32 cores is chosen because N is 32 tiles, so per_core_N=1 gives every core exactly one
-        # output tile with nothing left over.
-        self._gn_mm = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),  # 32 cores = 32 output tiles
-            in0_block_w=8,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=1,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
         # The GEGLU GATE matmul ([1, 32, 1024] x [1024, 2752]). Its config is pinned ONLY so the GELU
         # actually fuses. Passing ``activation="gelu"`` to ``ttnn.linear`` does NOT fuse it on its own:
         # ``matmul.cpp`` applies the activation as a SEPARATE ``unary_chain`` op whenever no
@@ -509,35 +397,26 @@ class TtXttsConditioning(LightweightModule):
             mcast_in0=True,
         )
 
-        # GROUP_NORM_EPS as a [1, 1, 1024] bias row, so the VARIANCE expand matmul emits ``var + eps``
-        # from its own epilogue instead of paying a standalone ``BinaryNg`` for it. That add cost 2.36 us
-        # x 6 = 14 us/pass to add a constant to a [1, 1, 1024] tensor (32 tiles) — essentially all
-        # per-op launch overhead, on tiles the matmul is already writing. The bias slot is free because
-        # the compute kernel is ``bmm_large_block_zm_fused_bias_activation`` and the config is pinned.
-        #
-        # The ``rsqrt`` that follows CANNOT join it, though it looks like it should: RSQRT is a valid
-        # ``UnaryOpType`` and ``fused_activation`` accepts one, so this builds and then throws at
-        # runtime — ``matmul_utilities.hpp``'s ``TT_THROW("Unsupported UnaryOpType for fused
-        # activation")``. Matmul's whitelist is only GELU, GELU_TANH, TANH, SILU, RELU6, SIGMOID,
-        # HARDSIGMOID, HARDTANH, SELU, SOFTPLUS. So the rsqrt stays a standalone op (13 us/pass).
-        # NOTE this row goes in the bias/input-1 slot, so unlike self.latents it stays in DRAM.
-        self._gn_eps_row = _vec(torch.full((HIDDEN_SIZE,), GROUP_NORM_EPS), device)
-
         # --- ConditioningEncoder ---
         self.init_w = _lin(state_dict[e + "init.weight"], device)  # [80 -> 1024]
         self.init_b = _vec(state_dict[e + "init.bias"], device)
         self._grid = device.compute_with_storage_grid_size()
         self._pc_cache = {}  # seq len -> (qkv, proj) program configs; see _attn_pcs
         self._perc_qkv_pc = {}  # 32+s -> perceiver fused-qkv program config; see PERC_QKV_GX
+        self._gn_masks = {}  # virtual cols -> ttnn.group_norm input mask; see _gn_operands
 
         self.blocks = []
         i = 0
         while (e + f"attn.{i}.qkv.weight") in state_dict:
             self.blocks.append(
                 {
-                    # group-norm affine as [1, 1, 1024] rows, broadcast over seq on dim 1.
-                    "gn_w": _row(state_dict[e + f"attn.{i}.norm.weight"], device),
-                    "gn_b": _row(state_dict[e + f"attn.{i}.norm.bias"], device),
+                    # Host gamma/beta for ttnn.group_norm. The op wants them in a padded [1, 1, -1, 32]
+                    # layout whose padding depends on the core grid (and so on the mel length) — keep
+                    # the host copies and build the device tensors per length in _gn_operands.
+                    "gn_host": (
+                        state_dict[e + f"attn.{i}.norm.weight"].float(),
+                        state_dict[e + f"attn.{i}.norm.bias"].float(),
+                    ),
                     # qkv output channels relabelled to [q|k|v] head-major for nlp_create_qkv_heads.
                     "qkv_w": _lin(_perm_qkv_out(state_dict[e + f"attn.{i}.qkv.weight"]), device),  # [1024 -> 3072]
                     "qkv_b": _vec(_perm_qkv_out(state_dict[e + f"attn.{i}.qkv.bias"]), device),
@@ -591,66 +470,72 @@ class TtXttsConditioning(LightweightModule):
         self.perc_norm_gamma = _vec(state_dict[p + "norm.gamma"], device)
 
     # ------------------------------------------------------------------ #
-    def _group_norm(self, x, gamma_row, beta_row):
-        """GroupNorm(32, 1024) over (channels-in-group, seq). x: [1, s, 1024] -> [1, s, 1024]. Consumes x.
+    def _gn_operands(self, s, blk):
+        """``ttnn.group_norm``'s operands for one block at one mel length: the DRAM-interleaved core
+        grid, the group input mask, and gamma/beta in the op's padded [1, 1, -1, 32] layout.
 
-        Reshape-FREE: a full group mean/var is order-independent, so per-group stats == the group
-        average of per-channel stats. Compute the per-channel mean over seq, expand to per-group via
-        a matmul with the block-diagonal averaging matrix ``self._gn_expand``, and likewise for the
-        (centered) variance. Everything stays TILE, so this avoids the old reshape-to-[1,32,32s]
-        round trip and its four Tilize/Untilize ops.
+        All three depend on the grid, which depends on the mel length, so they cannot be built in
+        ``__init__`` — but they are DEVICE tensors, so they cannot be built inside a trace capture
+        either (a host->device write there is fatal). The cache is what reconciles that: every traced
+        caller runs an eager warmup pass at the same length first, which populates it before capture.
 
-        TRANSPOSE-FREE too: it runs in the module's native ``[1, s, 1024]`` layout. Reducing over seq
-        there is ``mean(dim=-2)``, which ttnn lowers to a native ``ReduceOpDim::H`` kernel — H and W
-        are the two dims ``reduce_impl`` handles without injecting a ``transpose`` — so there is no
-        reason to permute to channels-first (``[1, 1024, s]``) just to make seq the last dim. Two
-        ``permute``s per block, 12 per pass, dropped for free. The group-averaging matmul flips
-        accordingly (``cmean @ E`` instead of ``E @ cmean``), which is exact: E is symmetric.
+        The mask depends only on the virtual-column count, so it is shared across blocks and lengths
+        that agree on it; gamma/beta are per block."""
+        cached = blk.setdefault("_gn", {}).get(s)
+        if cached is None:
+            grid = ttnn.determine_expected_group_norm_dram_grid_size(
+                device=self.device,
+                num_channels=HIDDEN_SIZE,
+                num_groups=GROUP_NORM_GROUPS,
+                input_nhw=s,
+                num_batches=1,
+            )
+            cols = dram_group_norm_virtual_columns(grid, HIDDEN_SIZE, GROUP_NORM_GROUPS)
+            mask = self._gn_masks.get(cols)
+            if mask is None:
+                mask = ttnn.to_device(
+                    ttnn.create_group_norm_input_mask(HIDDEN_SIZE, GROUP_NORM_GROUPS, cols, ttnn.bfloat16),
+                    self.device,
+                )
+                self._gn_masks[cols] = mask
+            affine = [
+                ttnn.from_torch(
+                    ttnn.create_group_norm_weight_bias_rm(t, HIDDEN_SIZE, cols),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                )
+                for t in blk["gn_host"]
+            ]
+            cached = (grid, mask, *affine)
+            blk["_gn"][s] = cached
+        return cached
 
-        gamma/beta are ``[1, 1, 1024]`` rows broadcast over seq on dim 1."""
-        cmean = ttnn.mean(
-            x, dim=-2, keepdim=True, compute_kernel_config=STATS_KERNEL_CONFIG
-        )  # [1, 1, 1024] per-channel mean over seq
-        mu = ttnn.matmul(
-            cmean,
-            self._gn_expand,
+    def _group_norm(self, x, blk):
+        """GroupNorm(32, 1024) as ONE device op. x: [1, s, 1024] -> [1, s, 1024]. Consumes x.
+
+        No layout cost: the op forms its groups along the LAST dim and wants [N, 1, H*W, C], which is
+        this module's native [1, s, 1024] plus a leading singleton, so both reshapes are metadata-only
+        views. Runs under STATS_KERNEL_CONFIG; gamma/beta go through the op's ``weight``/``bias`` slots.
+
+        ``inplace=False`` because x is an L1 activation the caller still owns until this returns."""
+        s = x.shape[1]
+        grid, mask, gamma, beta = self._gn_operands(s, blk)
+        y = ttnn.group_norm(
+            ttnn.reshape(x, (1, 1, s, HIDDEN_SIZE)),
+            num_groups=GROUP_NORM_GROUPS,
+            epsilon=GROUP_NORM_EPS,
+            input_mask=mask,
+            weight=gamma,
+            bias=beta,
             memory_config=L1,
+            core_grid=grid,
+            inplace=False,
+            output_layout=ttnn.TILE_LAYOUT,
             compute_kernel_config=STATS_KERNEL_CONFIG,
-            program_config=self._gn_mm,
-        )  # group mean, expanded per channel
-        ttnn.deallocate(cmean)
-        xc = ttnn.subtract(x, mu, memory_config=L1)  # center by group mean (stable variance)
-        ttnn.deallocate(mu)
-        sq = ttnn.multiply(xc, xc, memory_config=L1)
-        cvar = ttnn.mean(
-            sq, dim=-2, keepdim=True, compute_kernel_config=STATS_KERNEL_CONFIG
-        )  # [1, 1, 1024] per-channel var
-        ttnn.deallocate(sq)
-        # Group variance PLUS eps: the expand is the matmul and the +eps rides its bias epilogue, so
-        # there is no standalone add. See ``self._gn_eps_row``.
-        var = ttnn.linear(
-            cvar,
-            self._gn_expand,
-            bias=self._gn_eps_row,
-            memory_config=L1,
-            compute_kernel_config=STATS_KERNEL_CONFIG,
-            program_config=self._gn_mm,
-        )  # [1, 1, 1024] group variance + eps
-        ttnn.deallocate(cvar)
-        # NOTE: gamma is applied to the ACTIVATION, not folded into this [1, 1, 1024] scale. Folding it
-        # (scale = gamma * rsqrt(var+eps)) saves one full-size eltwise op (~48 us/pass) but rounds the
-        # per-channel product to bf16 ONCE, so every position of that channel gets the SAME wrong
-        # scale — a coherent distortion, where applying gamma elementwise leaves incoherent noise that
-        # partly cancels. Measured over 7 real mels: folded min PCC 0.9886 (one input BELOW the 0.99
-        # gate) vs 0.9906 unfolded. Not worth 2% of the pass.
-        rs = ttnn.rsqrt(var, memory_config=L1)
-        ttnn.deallocate(var)
-        y = ttnn.multiply(xc, rs, memory_config=L1)
-        ttnn.deallocate(xc)
-        ttnn.deallocate(rs)
-        ttnn.multiply(y, gamma_row, memory_config=L1, output_tensor=y)  # gamma/beta bcast over seq
-        ttnn.add(y, beta_row, memory_config=L1, output_tensor=y)
-        return y
+        )
+        ttnn.deallocate(x)
+        return ttnn.reshape(y, (1, s, HIDDEN_SIZE))
 
     def _attn_pcs(self, s):
         """The (qkv, proj) program configs for a sequence length, built once per length.
@@ -670,7 +555,7 @@ class TtXttsConditioning(LightweightModule):
 
     def _attn_block(self, x, blk):
         """One ConditioningEncoder AttentionBlock: y = gn(x); y + proj(attn(qkv(y))). Consumes x."""
-        y = self._group_norm(x, blk["gn_w"], blk["gn_b"])  # consumes x
+        y = self._group_norm(x, blk)  # consumes x
         qkv_pc, proj_pc = self._attn_pcs(y.shape[1])
         # Pinning the program config also folds the bias into the matmul EPILOGUE; under ttnn's auto
         # choice each of these two linears emitted a separate full-size BinaryNg for it (9 us + 5 us

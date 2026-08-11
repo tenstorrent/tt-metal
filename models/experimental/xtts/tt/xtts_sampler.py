@@ -60,6 +60,16 @@ class TtSampler:
         self.reset()
 
     def reset(self):
+        """Clear the repetition mask, IN PLACE once it exists.
+
+        ``pick_dev`` marks into ``self.seen`` in place, so a captured decode step binds THIS
+        buffer's address for the life of the trace. Allocating a fresh tensor here would leave the
+        trace marking (and penalising against) the old one, which both fails to clear the mask
+        between captures and — for a trace replayed across several generations — carries the
+        previous utterance's whole vocabulary into the next one's penalty."""
+        if getattr(self, "seen", None) is not None:
+            ttnn.multiply(self.seen, 0.0, output_tensor=self.seen)
+            return
         # bf16 persistent repetition mask (1.0 at seen ids — 0/1 flags are bf16-exact). MUST be bf16:
         # an fp32 seen makes ttnn.gt(seen, 0.5) yield a condition whose dtype mismatches the bf16
         # logit branches in ttnn.where, silently corrupting the rep-penalty (garbage output).

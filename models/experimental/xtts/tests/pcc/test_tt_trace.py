@@ -137,6 +137,62 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
     assert spec_pass, f"fully-traced waveform diverged from eager reference: {spec_msg}"
 
 
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 157286400}], indirect=True)
+def test_tt_traced_session_reuse(device, xtts_state_dict, reset_seeds):
+    """ONE capture, several utterances: a reused trace must carry no state between runs.
+
+    ``TtXttsTracedSession`` captures setup + decode + vocoder once and replays them per text, which
+    is what lets the demo synthesise chunked text without recompiling per chunk. Everything the
+    replay touches is a persistent buffer, so the risk is not a wrong shape but silent CONTAMINATION
+    — a repetition mask, KV slot, step counter or latent accumulator left dirty by the previous run.
+    That is invisible on a single utterance, so this runs A, B, then A again with greedy decoding
+    (deterministic) and requires the third run to reproduce the first EXACTLY. Any leftover state
+    from B would show up as a divergence.
+
+    All three traces are live at once here, hence the larger trace region than the one-shot tests.
+    """
+    from scipy.signal import resample_poly
+
+    sd = xtts_state_dict
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)
+    g = math.gcd(SPK_SR, MEL_SR)
+    spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+
+    texts = [DEMO_TEXT, "The model runs entirely on the accelerator, from conditioning through the vocoder"]
+    wrapped = [wrap_text_ids(preprocess_text(t, lang="en")) for t in texts]
+    pad_to = -(-max(w.shape[1] for w in wrapped) // TILE) * TILE  # one length for all: shapes are baked in
+    wrapped = [F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN) for w in wrapped]
+
+    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    spk_wav_tt = ttnn.from_torch(
+        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+    )
+    n_tokens = 64  # short greedy budget: this checks state hygiene, not audio quality
+    session = tt.traced_session(wav, spk_wav_tt, pad_to, TRACE_MAX_SEQ, n_tokens, temperature=0.0)
+    try:
+        logger.info(f"session captured in {session.compile_s:.1f}s ({pad_to} text tokens, {n_tokens}-code budget)")
+        runs = []
+        for label, w in (("A", wrapped[0]), ("B", wrapped[1]), ("A again", wrapped[0])):
+            audio, codes, perf = session.run(w)
+            logger.info(
+                f"run {label}: {codes.shape[1]} codes, {audio.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s audio, "
+                f"replay {perf['replay_s']:.3f}s"
+            )
+            runs.append((codes, audio))
+    finally:
+        session.close()
+
+    (codes_a, audio_a), (codes_b, _), (codes_a2, audio_a2) = runs
+    assert codes_a.shape[1] > 0, "session produced no codes"
+    # The waveform must be the vocoder's exact output length for that many frames, not a rounded
+    # per-frame ratio of the fixed-length buffer the session actually vocodes.
+    assert audio_a.shape[0] == session._samples_for(codes_a.shape[1]), "trimmed audio has the wrong length"
+    assert codes_b.tolist() != codes_a.tolist(), "different texts produced identical codes — text not rebound?"
+    assert codes_a2.tolist() == codes_a.tolist(), "replaying a text after another one changed its codes"
+    assert torch.equal(audio_a2, audio_a), "replaying a text after another one changed its waveform"
+
+
 # Objective quality eval of the FULLY-TRACED (fully-on-device) pipeline — the same three backends
 # as test_tt_eval (Whisper-large-v3 / UTMOS22 / ECAPA2, downloaded on first use), but on the
 # inference_fully_traced output (setup+decode+vocoder all traced, sampling on device). Heavy, so

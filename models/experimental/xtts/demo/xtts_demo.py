@@ -99,6 +99,13 @@ MAX_TEXT_IDS = 352  # keep the padded text under MAX_TEXT_POS (404) with headroo
 MAX_SINGLE_PASS_CODES = 205  # above this, split into chunks
 MAX_CHUNK_CODES = 165  # per chunk once splitting; lower than the single-pass budget on purpose
 CODES_PER_ID = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
+# Chunked takes share ONE capture, so the decode budget is baked into it: the vocoder always runs
+# on this many latent frames (zero-padded past the codes actually generated) instead of on the
+# exact length. It therefore has to sit above MAX_CHUNK_CODES with margin for sampler overshoot,
+# and below the ~205 codes where the vocoder's circular buffers start clashing with L1. 192 is a
+# multiple of 32 (the decode accumulators tile cleanly) — the same budget the trace test uses.
+CHUNK_MAX_TOKENS = 192
+SESSION_TRACE_REGION = 157286400  # 150 MB — setup + decode + vocoder traces are all live at once
 
 
 def _split_into_chunks(text, lang):
@@ -256,12 +263,65 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args):
     return _postprocess(wav_np), codes, float(perf["replay_s"]), float(perf["compile_s"])
 
 
-def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed_offset):
-    """Open a FRESH device, build the model, run one generation, close the device. The fp32
-    HiFi-GAN vocoder exhausts L1_SMALL when several full generations share one device, so
-    best-of-N isolates each take on its own device (same reason the tests use a per-test
-    device fixture). Returns ``(wav_np, codes, replay_s, compile_s)``."""
-    device = ttnn.open_device(device_id=0, l1_small_size=65536)
+def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, args):
+    """Every chunk of one take off a SINGLE warmup + capture.
+
+    Chunked text used to re-open the device and recompile the whole model per chunk — ~60 s of
+    compile to buy ~1.5 s of replay, paid again for every chunk. The traces are static programs
+    over fixed buffers, so as long as each chunk is padded to the same text length they can be
+    captured once and replayed: per chunk the session only rewrites the text ids, re-seeds the KV
+    cache (SETUP replay), replays the decode step per token, and replays the vocoder.
+
+    Returns ``(list of (wav_np, codes, replay_s), compile_s)`` with ``compile_s`` paid once.
+    """
+    text_len = chunks[0][1].shape[1]
+    prompt_len = 32 + text_len
+    max_seq = -(-(prompt_len + CHUNK_MAX_TOKENS + 2) // TILE) * TILE
+    session = tt.traced_session(
+        cond_wav,
+        spk_wav_tt,
+        text_len,
+        max_seq,
+        CHUNK_MAX_TOKENS,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
+        min_new_tokens=args.min_tokens_resolved,
+    )
+    try:
+        logger.info(
+            f"captured setup/decode/vocoder traces ONCE in {session.compile_s:.1f}s "
+            f"({text_len} text tokens, {CHUNK_MAX_TOKENS}-code budget) — chunks now replay only"
+        )
+        out = []
+        for j, (_, w) in enumerate(chunks):
+            wav_t, codes_j, perf = session.run(w)
+            logger.info(
+                f"  chunk {j + 1}/{len(chunks)} replay split: setup {perf['setup_replay_s']:.3f}s | "
+                f"decode {perf['decode_replay_s']:.3f}s ({codes_j.shape[1]} codes) | "
+                f"vocoder {perf['vocoder_replay_s']:.3f}s"
+            )
+            wav_np = _postprocess(np.ascontiguousarray(wav_t.numpy(), dtype="float32"))
+            out.append((wav_np, codes_j, float(perf["replay_s"])))
+        return out, session.compile_s
+    finally:
+        session.close()
+
+
+def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, args, seed_offset):
+    """Open a FRESH device, build the model, synthesise the WHOLE take (all chunks), close it.
+
+    One device per TAKE, not per chunk: the fp32 HiFi-GAN vocoder exhausts L1_SMALL when several
+    full generations are *compiled* on one device, which is why best-of-N still isolates each take
+    (same reason the tests use a per-test device fixture). Chunks within a take no longer compile
+    anything — they replay one capture (see ``_generate_chunked``) — so they can share the device.
+
+    Returns ``(list of (wav_np, codes, replay_s), compile_s)``."""
+    # A chunked take holds the setup + decode + vocoder traces LIVE at the same time (the one-shot
+    # path releases each before capturing the next), so it needs a trace region for all three.
+    extra = {"trace_region_size": SESSION_TRACE_REGION} if len(chunks) > 1 else {}
+    device = ttnn.open_device(device_id=0, l1_small_size=65536, **extra)
     try:
         tt = TtXtts(device, sd, ref_decoder_full)
         spk_wav_tt = ttnn.from_torch(
@@ -271,7 +331,10 @@ def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed
             # distinct-but-reproducible-ish seed per take (ttnn sampling isn't bit-exact across
             # runs regardless, so takes differ even without this).
             ttnn.manual_seed(args.seed + seed_offset, device=device)
-        return _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args)
+        if len(chunks) == 1:
+            wav_np, codes, dt, compile_s = _generate_one(tt, chunks[0][1], cond_wav, spk_wav_tt, args)
+            return [(wav_np, codes, dt)], compile_s
+        return _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, args)
     finally:
         ttnn.close_device(device)
 
@@ -361,14 +424,16 @@ def main():
     # Text that fits ONE pass stays a single pass (the fast path); only text over the single-pass
     # budget is split at sentence boundaries into several passes that are joined back together.
     chunk_texts = _split_into_chunks(args.text, args.lang)
-    chunks = []
-    for ct in chunk_texts:
-        clean = re.sub(r"[.!?]+\s*$", "", ct.strip())
-        w = wrap_text_ids(preprocess_text(clean, lang=args.lang))
-        pad = (-w.shape[1]) % TILE
-        if pad:
-            w = F.pad(w, (0, pad), value=STOP_TEXT_TOKEN)
-        chunks.append((clean, w))
+    wrapped_chunks = [
+        (clean, wrap_text_ids(preprocess_text(clean, lang=args.lang)))
+        for clean in (re.sub(r"[.!?]+\s*$", "", ct.strip()) for ct in chunk_texts)
+    ]
+    # Pad to a COMMON length (not just each to its own tile): chunks are replayed off one capture,
+    # whose prompt_len — and so the whole KV geometry — is fixed at capture time. The padding is
+    # STOP_TEXT_TOKEN, which the model already reads as end-of-text, so a chunk padded past its own
+    # length behaves exactly as it did when padded only to its own tile.
+    pad_to = -(-max(w.shape[1] for _, w in wrapped_chunks) // TILE) * TILE
+    chunks = [(clean, F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN)) for clean, w in wrapped_chunks]
     if len(chunks) == 1:
         logger.info(f"text fits ONE pass ({chunks[0][1].shape[1]} tokens): {chunks[0][0]!r}")
     else:
@@ -376,17 +441,14 @@ def main():
         for i, (clean, w) in enumerate(chunks):
             logger.info(f"  [{i + 1}/{len(chunks)}] {w.shape[1]:3d} tokens  {clean!r}")
 
-    # Resolve the STOP-suppression floor, PER CHUNK. Auto (-1) scales with that chunk's text (~2x its
-    # wrapped length), clamped below max-tokens, so a longer prompt is protected from stopping short
-    # while a short one isn't forced to ramble. 0 disables (HF default).
-    def resolve_min_tokens(n_tok):
-        floor = int(2.0 * n_tok) if args.min_tokens < 0 else args.min_tokens
-        return max(0, min(floor, args.max_tokens - 1))
-
-    logger.info(
-        f"min audio codes before STOP allowed: {[resolve_min_tokens(w.shape[1]) for _, w in chunks]} "
-        f"(0 = disabled, per chunk)"
-    )
+    # Resolve the STOP-suppression floor. Auto (-1) scales with the text (~2x the wrapped length),
+    # clamped below the code budget, so a longer prompt is protected from stopping short while a
+    # short one isn't forced to ramble. 0 disables (HF default). One value for the whole take: the
+    # chunks share a padded length, and a chunked take bakes the floor into its capture.
+    budget = args.max_tokens if len(chunks) == 1 else CHUNK_MAX_TOKENS
+    floor = int(2.0 * pad_to) if args.min_tokens < 0 else args.min_tokens
+    args.min_tokens_resolved = max(0, min(floor, budget - 1))
+    logger.info(f"min audio codes before STOP allowed: {args.min_tokens_resolved} (0 = disabled)")
 
     reference = XttsReference(sd)  # supplies decoder/speaker/mel weights (and optional A/B wav)
 
@@ -396,7 +458,7 @@ def main():
         else f"sampled (temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, rep={args.repetition_penalty})"
     )
     n = max(1, args.num_outputs)
-    logger.info(f"generating on device [{mode}], up to {args.max_tokens} codes, {n} take(s) ...")
+    logger.info(f"generating on device [{mode}], up to {budget} codes per pass, {n} take(s) ...")
 
     # Each take runs on its own freshly-opened device (see _take_on_device); best-of-N keeps
     # the lowest-CER take. A single take (default) is just one open/generate/close.
@@ -404,16 +466,15 @@ def main():
     best_wall_s, best_ttfc_s, best_compile_s = None, None, None
     gap = np.zeros(int(0.12 * OUTPUT_SAMPLE_RATE), dtype="float32")  # ~120 ms between chunks
     for i in range(n):
-        pieces, code_parts, dt, compile_s = [], [], 0.0, 0.0
         t_take0 = time.time()
-        ttfc_s = None  # replay time until first audio piece is available
-        for j, (clean, w) in enumerate(chunks):
-            args.min_tokens_resolved = resolve_min_tokens(w.shape[1])
-            wav_j, codes_j, dt_j, compile_j = _take_on_device(sd, reference.decoder_full, w, wav, spk_wav, args, i)
+        # The whole take on ONE device: a single pass generates once, a chunked take captures once
+        # and replays every chunk off that capture.
+        results, compile_s = _take_on_device(sd, reference.decoder_full, chunks, wav, spk_wav, args, i)
+        pieces, code_parts = [], []
+        dt = 0.0
+        ttfc_s = results[0][2]  # first chunk/pass replay → analogue of time-to-first-chunk
+        for j, (wav_j, codes_j, dt_j) in enumerate(results):
             dt += dt_j
-            compile_s += compile_j
-            if ttfc_s is None:
-                ttfc_s = dt_j  # first chunk/pass replay → analogue of time-to-first-chunk
             pieces.append(wav_j.astype("float32"))
             code_parts.append(codes_j)
             nc = codes_j.shape[1]
@@ -422,7 +483,7 @@ def main():
             if len(chunks) > 1:
                 logger.info(
                     f"  take {i + 1}/{n} chunk {j + 1}/{len(chunks)}: {nc} codes "
-                    f"({'stop' if nc < args.max_tokens else 'max'}), "
+                    f"({'stop' if nc < budget else 'max'}), "
                     f"audio {audio_j_s:.2f}s, replay {dt_j:.3f}s, RTF {rtf_j:.3f}"
                 )
         latency = time.time() - t_take0
@@ -434,7 +495,7 @@ def main():
         )
         codes_i = torch.cat(code_parts, dim=1)
         n_codes = codes_i.shape[1]
-        stopped = n_codes < args.max_tokens
+        stopped = all(c.shape[1] < budget for c in code_parts)
         audio_s = _audio_duration_s(wav_i)
         score, detail = _score_take(wav_i, args.text, codes_i) if n > 1 else (0.0, "")
         logger.info(
