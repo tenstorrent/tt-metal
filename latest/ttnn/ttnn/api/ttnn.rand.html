@@ -349,21 +349,23 @@
 </dt>
 <dd>
 <p>Generates a tensor with the given shape, filled with random values from a uniform distribution.
-based on the specified data type:</p>
+Output semantics depend on the specified data type:</p>
 <ul class="simple">
 <li>
 <dl class="simple">
-<dt>DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:</dt>
+<dt>DataType.float32 / bfloat16:</dt>
 <dd>
-<p>Floating-point values in range [0.0, 1.0)</p>
+<p>Values are generated natively in the half-open range [<cite>low</cite>, <cite>high</cite>).</p>
 </dd>
 </dl>
 </li>
 <li>
 <dl class="simple">
-<dt>Integer data types:</dt>
+<dt>DataType.bfloat4_b / bfloat8_b / int8 / int32 / uint16 / uint32:</dt>
 <dd>
-<p>Not supported for uniform random generation.</p>
+<p>These legacy outputs are generated in float32 and then typecast. Typecast rounding applies, so the
+converted values are not guaranteed to remain in [<cite>low</cite>, <cite>high</cite>). Integer output is not a discrete
+uniform distribution. DataType.uint8 and fp8_e4m3 are not supported.</p>
 </dd>
 </dl>
 </li>
