@@ -2021,6 +2021,30 @@ which is an independent confirmation of bit-exactness by a different route.
 `from_torch` WITHOUT `device=`, then writes them with `copy_host_to_device_tensor` into buffers
 that already exist. Adding any `device=` there reintroduces the hazard above.
 
+### [gpt-28] `sharded_norm` — the decode RMSNorm is width-sharded again
+
+**+5.399 ms/frame, RTF 0.4415 → 0.3647**, and WER improved from 1 wrong of 596 to **0**.
+§6.39/§6.40 rejected this at +4.4 ms WORSE and were right at the time.
+
+**Why the interleaved one is slow at decode, which §6.39 did not identify**: its factory calls
+`split_work_to_cores(..., num_tile_rows, row_wise=true)` — it parallelises over ROWS. Decode has
+exactly one row, so the whole 3072-wide reduction lands on **ONE core** while the other 129 idle.
+Sharding splits along WIDTH, the only axis that exists at batch 1: 32 cores reduce 96 numbers
+each, exchange 32 partials, and scale their own shard in place.
+
+**Why it lost before**: the two reshards cost ~68 µs each of host launch, ~136 µs against the
+~56 µs the norm saved. §6.65's trace removed that launch cost (a comparable op, `concat`, dropped
+from 144.7 µs to 2.6), so the 32-way split is left standing on its own.
+
+**DECODE ONLY.** The shard spec fixes the height at one tile, so prefill's `[1, Sp, 3072]` fails
+outright with *"Shard height 32 must match physical height 384"*. `sharded_norm` falls back to
+interleaved above one tile of rows — which is also correct on the merits, since prefill has many
+rows and the row-wise split works fine there. Same constraint as [gpt-26] and [gpt-27].
+
+**Legality is a property of the tensor and is unchanged from §6.39**: 3072 wide is 96 tiles, a
+tile is indivisible, so `cores × block_w` must be 96. The grid barely matters — 16 to 96 cores all
+measured within 0.1 ms of each other.
+
 ### [gpt-27] `_layer_step` / `_mlp` — the residual rides in as the matmul's bias
 
 Both Block 1 residuals become `linear(..., bias=x)` instead of `add_(x, linear(...))`.

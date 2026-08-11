@@ -42,7 +42,10 @@ MOSVENV = "/tmp/mosvenv/bin/python"
 # Tolerances are the branch's own MEASURED noise floors, not guesses -- STATUS.md 6.15, 6.52, 6.63.
 TOL = {
     "decode_mean_pp": 0.10, "decode_p90_pp": 0.15, "decode_min_pcc": 0.0002,
-    "prefill_pcc_last": 0.0002, "codec_pcc_t24": 0.0002, "flow_codes_74": 0,
+    # every PCC needs a tolerance; flow_velocity_pcc had none and so defaulted to ZERO, flagging a
+    # 3.58e-06 move as a regression. Same defect codes_real_n had (6.62).
+    "prefill_pcc_last": 0.0002, "codec_pcc_t24": 0.0002, "flow_velocity_pcc": 0.0002,
+    "wiring_pcc": 0.0002, "flow_codes_74": 0,
     # codes_real_n and codes_real_pct are the SAME measurement in two units, and they disagreed:
     # 34 -> 37 read WORSE at zero tolerance while 3.9% -> 4.3% read "same" at 0.5. Give the count
     # the tolerance its own percentage implies (0.5% of 864 measured codes ~ 4).

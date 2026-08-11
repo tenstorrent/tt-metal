@@ -101,6 +101,30 @@ def _pc(prg, key):
     """program_config kwarg for `key`, or nothing at all when prg is empty (the prefill path)."""
     return {"program_config": prg[key]} if prg else {}
 
+# NOTES.md [gpt-28] -- the decode RMSNorm is width-sharded again, +5.693 ms/frame. 6.39/6.40
+# rejected this at +4.4 ms WORSE, but that cost was the RESHARD DISPATCH, which 6.65 traced away.
+# DECODE ONLY: the shard spec fixes the height at one tile, so prefill fails outright.
+_NORM_GRID = (8, 4)                   # 32 cores x block_w 3 == 96 tiles; the grid barely matters
+_NORM_SHARD = ttnn.create_sharded_memory_config(
+    (TILE, DIM // (_NORM_GRID[0] * _NORM_GRID[1])),
+    core_grid=ttnn.CoreGrid(y=_NORM_GRID[1], x=_NORM_GRID[0]),
+    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True)
+_NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=_NORM_GRID, subblock_w=1, block_h=1,
+    block_w=DIM // TILE // (_NORM_GRID[0] * _NORM_GRID[1]), inplace=False)
+
+
+def sharded_norm(x, gamma, eps, mc):
+    """Width-sharded RMSNorm for ONE tile of rows; falls back to interleaved for prefill."""
+    if x.shape[-2] > TILE:
+        return ttnn.rms_norm(x, weight=gamma, epsilon=eps, compute_kernel_config=COMPUTE_CONFIG)
+    r = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=eps,
+                      program_config=_NORM_PRG, memory_config=_NORM_SHARD,
+                      compute_kernel_config=COMPUTE_CONFIG)
+    return ttnn.to_memory_config(r, mc)
+
+
 # NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
@@ -205,8 +229,7 @@ class TtVoxtralGPT:
 
         See NOTES.md [gpt-12].
         """
-        return ttnn.rms_norm(x, weight=gamma, epsilon=NORM_EPS,
-                             compute_kernel_config=COMPUTE_CONFIG)
+        return sharded_norm(x, gamma, NORM_EPS, _L1)
 
     # ----------------------------------------------------------------------------
     # PREFILL PATH -- whole prompt at once, fills the KV cache

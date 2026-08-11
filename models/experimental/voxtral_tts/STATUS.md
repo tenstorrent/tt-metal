@@ -4211,6 +4211,63 @@ fallback path produces codes **identical** to the traced path — an independent
 **Comment cleanup**: no block of 5+ comment lines remains anywhere in `tt/`, `scripts/` or
 `tests/` that this fork wrote. What was left duplicated STATUS or NOTES and is now a pointer.
 
+### 6.67 — the sharded decode norm REVERSES BACK: +5.399 ms/frame, RTF 0.4415 → 0.3647, WER 1 → 0
+
+Asked to look for further optimisation without touching the model. The op map pointed at two
+candidates and **the eager map ranked them backwards**:
+
+| op | eager map | measured INSIDE the trace | calls/frame | traced cost |
+|---|---|---|---|---|
+| `concat` | 144.7 µs — the most expensive per call | **2.6 µs** | 14 | **0.04 ms — a ghost** |
+| `rms_norm` | 101 µs | **63.5 µs** — real device time | 102 | **~6.5 ms, ~20% of the frame** |
+
+`concat` was 98% launch cost, which §6.65 had already removed. **An eager map ranks ops by launch
+cost, not by what they cost in the shipped path** — §6.63's rule, and it would have sent a day
+after the wrong op.
+
+**§6.39/§6.40 REVERSE. Fifth stale rejection of the same kind.** They removed the width-sharded
+norm at **+4.4 ms/step WORSE**, and were right eagerly: the cost was the two reshards at ~68 µs of
+launch each, ~136 µs against the ~56 µs the norm saved. §6.65 traced that launch cost away.
+
+**WHY THE INTERLEAVED NORM IS SLOW AT DECODE — which §6.39 never identified.** Its factory calls
+`split_work_to_cores(..., num_tile_rows, row_wise=true)`: it parallelises over **ROWS**. Decode has
+exactly ONE row, so the entire 3072-wide reduction runs on **one core** while the other 129 idle.
+More cores cannot help work that has no second axis to split — §6.53's theme exactly. Sharding
+splits along WIDTH, the only axis batch 1 has: 32 cores reduce 96 numbers each, exchange 32
+partials (the kernel's `cb_ex_partial` → `cb_ex` → `cb_ex_global`, two-stage when the core count is
+large), and scale their own shard in place.
+
+**Paired `--tier audio`, both arms, 2 seeds:**
+
+| | before | after | |
+|---|---|---|---|
+| **ms/frame** | 33.122 | **27.723** | **−5.399** |
+| **RTF** | 0.4415 | **0.3647** | −0.0768 |
+| **long-form WER** | 1 of 596 | **0 of 596** | BETTER |
+| MOS min / mean | 2.2548 / 3.9154 | **2.6597 / 3.9972** | BETTER |
+| MOS long-form | 4.6295 | 4.6050 | within tolerance |
+| clicks / terminated | 53 / 30 | 52 / 30 | |
+
+**The only real flag is `codes_real_n` 37 → 45 (4.3% → 5.2%).** The sharded kernel reduces in a
+different order, so slightly more divergence from the fp32 reference is expected — and it is not
+evidence about audio, which WER (1 → 0) and MOS (min +0.40) both say improved. A third flag,
+`flow_velocity_pcc` moving 3.58e-06, was a harness defect: it had no tolerance entry and so
+defaulted to ZERO. Every PCC now carries one — the same defect `codes_real_n` had in §6.62.
+
+**DECODE ONLY, and prefill says so loudly.** The shard spec fixes the height at one tile, so
+prefill's `[1, Sp, 3072]` fails outright: *"Shard height 32 must match physical height 384"*.
+`sharded_norm` falls back to interleaved above one tile of rows — correct on the merits too, since
+prefill has many rows and the row-wise split is fine there. **Third time this exact constraint has
+appeared** (§6.52's configs, §6.62's bias, now this), and the first where the op refused rather
+than silently doing the wrong thing.
+
+`test_no_width_sharded_norms_anywhere` was §6.39's guard and correctly BLOCKED this change. It is
+replaced by `test_sharded_norm_is_decode_only_and_legally_shaped`, which asserts the prefill
+fallback exists and that `cores × block_w == 96`.
+
+**RTF 0.3647 meets the 0.40 target with the model untouched** — `N_DECODING_STEPS` stays 7, so the
+port remains a faithful reproduction of the fp32 reference.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
