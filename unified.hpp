@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <tuple>
+#include <utility>
 
 // This header proposes a unified/single-threaded programming model
 // built on top of the existing metal programming model.  Metal
@@ -11,6 +13,13 @@ namespace tt {
 namespace unified {
 
 class Tensor;
+struct Block;
+
+template <template <typename...> class Derived, typename... Fusions>
+class FusionBase;
+
+template <typename... Fusions>
+struct NaryFusion;
 
 struct Coord {
     int y;
@@ -35,54 +44,51 @@ struct Storage {
     Storage& operator=(Storage&&) = delete;
     Storage& operator=(const Storage&) = delete;
 
-    Block store(const Fusion& fusion) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_reserve for (int i = 0; i < num_tiles; ++i) {
-            tile_regs_acquire();
-            fusion.invoke(std::index_sequence_for<Blocks...>{}, i);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile();
-            tile_regs_release();
-        }
-        cb_push
-#endif
-            return Block(cb_id, num_tiles);
-    }
+    // Defined out-of-line below: needs Block and Fusion complete.
+    template <template <typename...> class D, typename... Fusions>
+    Block store(const FusionBase<D, Fusions...>& fusion);
 
     int cb_id;
     int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
-template <typename... Fusions>
-class Fusion {
+// CRTP-style base: `Derived` is a template-template parameter so that
+// append()/concat() rebuild the *derived* fusion type rather than decaying to
+// the base. That is what keeps `x + y + z` chainable.
+template <template <typename...> class Derived, typename... Fusions>
+class FusionBase {
 public:
-    explicit Fusion(int dst_index, Fusions... fusions) : dst_index(dst_index), fusions_(std::move(fusions)...) {}
+    explicit FusionBase(int dst_index, Fusions... fusions) : fusions_(std::move(fusions)...), dst_index_(dst_index) {}
 
     // Runs every compute fusion, in order.
     void run() { invoke(std::index_sequence_for<Fusions...>{}); }
 
-    // Returns a *new* Fusion with `lambda` appended after this one's
-    // fusions. The tuple size is fixed at compile time, so appending can't
-    // mutate `*this` -- it produces a Fusion<Fusions..., Lambda>.
+    // DST slot holding this fusion's result.
+    int dst() const { return dst_index_; }
+
+    // Append one op, with `new_dst` becoming the result slot.
     template <typename Lambda>
-    Fusion<Fusions..., Lambda> append(Lambda lambda) const {
-        return appendImpl(std::index_sequence_for<Fusions...>{}, std::move(lambda));
+    Derived<Fusions..., Lambda> append(Lambda lambda, int new_dst) const {
+        return appendLambda(std::index_sequence_for<Fusions...>{}, std::move(lambda), new_dst);
     }
 
-    // Returns a new Fusion with every fusion from `other` appended
-    // after this one's, i.e. combines two Fusions into one.
-    template <typename... OtherFusions>
-    Fusion<Fusions..., OtherFusions...> append(const Fusion<OtherFusions...>& other) const {
-        return appendOther(std::index_sequence_for<Fusions...>{}, std::index_sequence_for<OtherFusions...>{}, other);
+    // Concatenate another fusion's ops after this one's.
+    template <template <typename...> class D2, typename... Others>
+    Derived<Fusions..., Others...> concat(const FusionBase<D2, Others...>& other, int new_dst) const {
+        return concatImpl(std::index_sequence_for<Fusions...>{}, std::index_sequence_for<Others...>{}, other, new_dst);
     }
 
-private:
-    template <typename...>
-    friend class Fusion;
+    template <template <typename...> class D2, typename... Others>
+    int next_dst_idx(const FusionBase<D2, Others...>& other) const {
+        return std::max(dst_index_, other.dst()) + 1;
+    }
+
+protected:
+    template <template <typename...> class, typename...>
+    friend class FusionBase;
 
     std::tuple<Fusions...> fusions_;
-    int dst_index;
+    int dst_index_;
 
     template <std::size_t... Is>
     void invoke(std::index_sequence<Is...>) {
@@ -93,58 +99,45 @@ private:
     }
 
     template <std::size_t... Is, typename Lambda>
-    Fusion<Fusions..., Lambda> appendImpl(std::index_sequence<Is...>, Lambda lambda) const {
-        return Fusion<Fusions..., Lambda>(std::get<Is>(fusions_)..., std::move(lambda));
+    Derived<Fusions..., Lambda> appendLambda(std::index_sequence<Is...>, Lambda lambda, int d) const {
+        return Derived<Fusions..., Lambda>(d, std::get<Is>(fusions_)..., std::move(lambda));
     }
 
-    template <std::size_t... Is, std::size_t... Js, typename... OtherFusions>
-    Fusion<Fusions..., OtherFusions...> appendOther(
-        std::index_sequence<Is...>, std::index_sequence<Js...>, const Fusion<OtherFusions...>& other) const {
-        return Fusion<Fusions..., OtherFusions...>(std::get<Is>(fusions_)..., std::get<Js>(other.fusions_)...);
-    }
-
-protected:
-    template <typename... FusionsA>
-    int next_dst_idx(const Fusion<FusionsA...>& other) {
-        return std::max(dst_index, other.dst_index) + 1;
+    template <std::size_t... Is, std::size_t... Js, template <typename...> class D2, typename... Others>
+    Derived<Fusions..., Others...> concatImpl(
+        std::index_sequence<Is...>, std::index_sequence<Js...>, const FusionBase<D2, Others...>& o, int d) const {
+        return Derived<Fusions..., Others...>(d, std::get<Is>(fusions_)..., std::get<Js>(o.fusions_)...);
     }
 };
 
 template <typename... Fusions>
-struct NaryFusion : Fusion<Fusions...> {
-    using Fusion<Fusions...>;
+struct NaryFusion : FusionBase<NaryFusion, Fusions...> {
+    using FusionBase<NaryFusion, Fusions...>::FusionBase;
 
-    template <typename... FusionsA, typename... FusionsB>
-    NaryFusion<FusionsA...> add(const NaryFusion<FusionsB...>& a, int dst_idx) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        return NaryFusion(dst_idx, [=]() { sfpu_add(dst_idx_a, dst_idx_b, dst_idx_out); });
-#endif
+    template <template <typename...> class D2, typename... Fs2>
+    auto add(const FusionBase<D2, Fs2...>& other, int dst_out) const {
+        const int a = this->dst(), b = other.dst();
+        return this->concat(other, dst_out).append([a, b, dst_out]() { sfpu_add(a, b, dst_out); }, dst_out);
     }
 
-    template <typename... FusionsA, typename... FusionsB>
-    NaryFusion<FusionsA...> add(const NaryFusion<FusionsB...>& a) {
-        return add(a, next_dst_idx(a));
-    }
-
-    template <typename... FusionsA, typename... FusionsB>
-    NaryFusion<FusionsA...> operator+(const Fusion<FusionsA...>& other) {
-        return add(other);
-    }
-
-    template <typename... FusionsA>
-    NaryFusion<FusionsA...> operator+(const Block& other) {
-        return add(other);
+    template <template <typename...> class D2, typename... Fs2>
+    auto operator+(const FusionBase<D2, Fs2...>& other) const {
+        return add(other, this->next_dst_idx(other));
     }
 };
 
-// Deduction guide: lets callers write NaryFusion fb(lambda1, lambda2, ...)
-// and have each lambda's exact closure type deduced automatically.
+// C++17 does not consider inherited constructors for CTAD, so the guides are
+// spelled out rather than relying on `using FusionBase::FusionBase`.
 template <typename... Fusions>
-NaryFusion(Fusions...) -> NaryFusion<Fusions...>;
+NaryFusion(int, Fusions...) -> NaryFusion<Fusions...>;
 
-struct MatmulFusion : Fusion<Fusions...> {
-    using Fusion<Fusions...>;
+template <typename... Fusions>
+struct MatmulFusion : FusionBase<MatmulFusion, Fusions...> {
+    using FusionBase<MatmulFusion, Fusions...>::FusionBase;
 };
+
+template <typename... Fusions>
+MatmulFusion(int, Fusions...) -> MatmulFusion<Fusions...>;
 
 struct Block {
     explicit Block(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
@@ -168,29 +161,46 @@ struct Block {
     int num_tiles;  // This could eventually be N dimensional (maybe via template params?)
 };
 
+template <template <typename...> class D, typename... Fusions>
+Block Storage::store(const FusionBase<D, Fusions...>& fusion) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    cb_reserve(cb_id);
+    for (int i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        fusion.invoke(i);  // TODO: invoke is private and takes no tile index
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile();
+        tile_regs_release();
+    }
+    cb_push(cb_id);
+#endif
+    return Block(cb_id, num_tiles);
+}
+
 class ComputeBlock {
 public:
     ComputeBlock(Block block) : cb_id(block.cb_id), num_tiles(block.num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_wait
+        cb_wait(cb_id);
 #endif
     }
 
     ~ComputeBlock(){
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_pop
+        cb_pop(cb_id);
 #endif
     }
 
     ComputeBlock(const ComputeBlock&) = delete;
     ComputeBlock& operator=(const ComputeBlock&) = delete;
-    ComputeBlock(const ComputeBlock&&) = delete;
-    ComputeBlock& operator=(const ComputeBlock&&) = delete;
+    ComputeBlock(ComputeBlock&&) = delete;
+    ComputeBlock& operator=(ComputeBlock&&) = delete;
 
     template <typename... Fusions>
     NaryFusion<Fusions...> ld(int dst_idx) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        return NaryFusion(dst_idx, [= this]() { copy_tile(this->cb_id, i, dst_idx); });
+        return NaryFusion(dst_idx, [=]() { copy_tile(this->cb_id, i, dst_idx); });
 #endif
     }
 
@@ -210,7 +220,7 @@ Block noc_load(const Storage& storage, const Tensor& t, int idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve(storage.cb_id);
-        noc_read;
+        noc_read();
         cb_push(storage.cb_id);
     }
 #endif
@@ -225,7 +235,7 @@ void noc_store(Block block, const Tensor& t, int idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
-        noc_write;
+        noc_write();
         cb_pop(block.cb_id);
     }
 #endif
@@ -237,7 +247,7 @@ Block noc_read(const Storage& storage, Block block, Coord coord, int offset) {
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
         cb_reserve(storage.cb_id);
-        noc_read;
+        noc_read();
         cb_push(storage.cb_id);
         cb_pop(block.cb_id);
     }
@@ -251,7 +261,7 @@ Block noc_write(const Storage& storage, Block block, Coord coord, int offset) {
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait(block.cb_id);
         cb_reserve(storage.cb_id);
-        noc_write;
+        noc_write();
         cb_push(storage.cb_id);
         cb_pop(block.cb_id);
     }
