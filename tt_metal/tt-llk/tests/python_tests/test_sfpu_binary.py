@@ -25,7 +25,12 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
+from helpers.sfpu_domains import (
+    _OP_DOMAIN_REGISTRY,
+    _SFPU_BINARY_OPS,
+    exclude_undefined_pair,
+    for_op,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -69,9 +74,9 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
 # =============================================================================
 # Shared crafted-stimuli helpers
 #
-# Several predicate/paired ops (mask, isclose, eq/ne) need operand tiles filled
-# from *different* per-position data, which the default random sweep can't
-# express. These builders produce those StimuliSpecs. (logsigmoid also lives
+# Several predicate/paired ops (mask, isclose, eq/ne, lt/gt/le/ge) need operand
+# tiles filled from *different* per-position data, which the default random sweep
+# can't express. These builders produce those StimuliSpecs. (logsigmoid also lives
 # here, but it is a plain single-distribution spec that never reads in1.)
 # =============================================================================
 
@@ -105,6 +110,18 @@ def _face_spec(dist):
     return StimuliSpec(distribution=dist, seed=0)
 
 
+def _positions_and_ramp(size):
+    """The (positions, 1..8 ramp) pair every paired builder below is built from.
+
+    `size` is whatever the generator passes per face (256 for a 16x16 face), so the
+    builders never assume a face size. The ramp repeats 1..8: non-zero everywhere, so
+    mask's passthrough is detectable, and of order 1, so the +/-1.0 and +2.0 offsets the
+    other operand adds are unambiguous against any rounding.
+    """
+    positions = torch.arange(size, dtype=torch.float32)
+    return positions, 1.0 + (positions % 8)
+
+
 # =============================================================================
 # Which ops take their domain from _OP_DOMAIN_REGISTRY
 #
@@ -113,8 +130,9 @@ def _face_spec(dist):
 # {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
 # eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
 #
-# Everything else stays on generate_stimuli's positive-only uniform(0.1, 1.1) default
-# and is listed in _UNREGISTERED_BINARY_OPS, so the fallback is a declared set.
+# Everything else this suite drives is declared too -- in _UNREGISTERED_BINARY_OPS if it
+# has no registry entry, or _INT_ONLY_REGISTERED_OPS if it has one that integer stimuli
+# never consult -- so every op's domain decision is written down rather than defaulted to.
 # =============================================================================
 
 _REGISTRY_DOMAIN_OPS = frozenset(
@@ -170,19 +188,42 @@ _UNREGISTERED_BINARY_OPS = frozenset(
     }
 )
 
+# Registered ops this suite only ever drives under an integer format, where sfpu_binary's
+# `not is_integer()` conjunct blocks registry routing regardless of membership (a float
+# domain like uniform(-1, 1) would collapse to {-1, 0, 1} under Int32). They belong in
+# neither set above: not rerouted, but not unregistered either. Declared so the
+# completeness check below can account for every op the file drives.
+_INT_ONLY_REGISTERED_OPS = frozenset(
+    {
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    }
+)
+
+_DECLARED_BINARY_OPS = (
+    _REGISTRY_DOMAIN_OPS | _UNREGISTERED_BINARY_OPS | _INT_ONLY_REGISTERED_OPS
+)
+
 
 def _assert_domain_sets_consistent():
-    """The rerouted ops must be registered, and the fallback ops must not be.
+    """The rerouted ops must be registered, the fallback ops must not be, and every
+    binary SFPU op must sit in exactly one of the three sets.
 
-    Both halves fail quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no registry
-    entry raises deep inside the driver mid-sweep, and an op that gains a domain while
-    sitting in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default.
+    All three halves fail quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no
+    registry entry raises deep inside the driver mid-sweep; an op that gains a domain
+    while sitting in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default;
+    and an op in none of the sets is the same silent default with nothing even claiming
+    responsibility for it -- which is how the shift ops went 39-declared-against-42-driven
+    until this check existed.
     """
     missing = sorted(
-        op.name for op in _REGISTRY_DOMAIN_OPS if op not in _OP_DOMAIN_REGISTRY
+        op.name
+        for op in _REGISTRY_DOMAIN_OPS | _INT_ONLY_REGISTERED_OPS
+        if op not in _OP_DOMAIN_REGISTRY
     )
     assert not missing, (
-        "these ops are routed to the domain registry but have no entry in "
+        "these ops are declared as registered but have no entry in "
         f"sfpu_domains._OP_DOMAIN_REGISTRY: {missing}"
     )
     now_registered = sorted(
@@ -190,11 +231,34 @@ def _assert_domain_sets_consistent():
     )
     assert not now_registered, (
         "these ops now have a domain in _OP_DOMAIN_REGISTRY but are still on the "
-        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops) or "
-        f"drop them from _UNREGISTERED_BINARY_OPS: {now_registered}"
+        "positive-only fallback list; move them to _REGISTRY_DOMAIN_OPS (float ops), "
+        "_INT_ONLY_REGISTERED_OPS (integer-only ops), or drop them from "
+        f"_UNREGISTERED_BINARY_OPS: {now_registered}"
     )
-    overlap = _REGISTRY_DOMAIN_OPS & _UNREGISTERED_BINARY_OPS
-    assert not overlap, sorted(op.name for op in overlap)
+    for left, right in (
+        ("_REGISTRY_DOMAIN_OPS", "_UNREGISTERED_BINARY_OPS"),
+        ("_REGISTRY_DOMAIN_OPS", "_INT_ONLY_REGISTERED_OPS"),
+        ("_UNREGISTERED_BINARY_OPS", "_INT_ONLY_REGISTERED_OPS"),
+    ):
+        overlap = globals()[left] & globals()[right]
+        assert not overlap, (
+            f"{left} and {right} must be disjoint, but share: "
+            f"{sorted(op.name for op in overlap)}"
+        )
+    # SfpuAddTopRow is the one member of the binary family that never reaches
+    # sfpu_binary (test_sfpu_binary_add_top_row builds its own stimuli), so it has no
+    # domain decision to declare.
+    undeclared = sorted(
+        op.name
+        for op in _SFPU_BINARY_OPS
+        - {MathOperation.SfpuAddTopRow}
+        - _DECLARED_BINARY_OPS
+    )
+    assert not undeclared, (
+        "these ops are in sfpu_domains._SFPU_BINARY_OPS but are in none of this "
+        "suite's three domain sets, so nothing states what they are fed: "
+        f"{undeclared}"
+    )
 
 
 _assert_domain_sets_consistent()
@@ -204,11 +268,11 @@ def _mask_stimuli_specs():
     # mask zeroes data (in0) where mask (in1) is 0. Data and mask are separate tiles: keep
     # data strictly non-zero (1..8) and zero ~1/3 of the mask, so a passthrough kernel fails.
     def data_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8, always non-zero
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8, always non-zero
 
     def mask_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
+        j, _ = _positions_and_ramp(size)
         return torch.where(j % 3 == 0, 0.0, 1.0).to(dtype)  # ~1/3 exact zeros
 
     return _face_spec(data_face), _face_spec(mask_face)
@@ -219,13 +283,12 @@ def _isclose_stimuli_specs():
     # from different data so even p -> identical (isclose 1), odd p -> differ by 2.0
     # (isclose 0); the 2.0 gap dwarfs the tolerance so the decision is unambiguous.
     def a_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8, strictly positive
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8, strictly positive
 
     def b_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        base = 1.0 + (j % 8)
-        return (base + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
+        j, ramp = _positions_and_ramp(size)
+        return (ramp + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
 
@@ -234,13 +297,12 @@ def _eq_ne_stimuli_specs():
     # Eq/Ne compare paired operands (a = tile0, b = tile1). Fill the two tiles so even p ->
     # identical (Eq 1), odd p -> differ by 1.0 (Eq 0), a clean ~50/50 mix.
     def a_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8
 
     def b_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        base = 1.0 + (j % 8)
-        return (base + torch.where(j % 2 == 0, 0.0, 1.0)).to(dtype)
+        j, ramp = _positions_and_ramp(size)
+        return (ramp + torch.where(j % 2 == 0, 0.0, 1.0)).to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
 
@@ -256,15 +318,14 @@ def _comparison_stimuli_specs():
     """
 
     def a_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        return (1.0 + (j % 8)).to(dtype)  # 1..8
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)  # 1..8
 
     def b_face(size, dtype, generator):
-        j = torch.arange(size, dtype=torch.float32)
-        base = 1.0 + (j % 8)
+        j, ramp = _positions_and_ramp(size)
         # j % 3 == 0 -> equal, 1 -> b greater (a < b), 2 -> b smaller (a > b)
         delta = torch.where(j % 3 == 0, 0.0, torch.where(j % 3 == 1, 1.0, -1.0))
-        return (base + delta).to(dtype)
+        return (ramp + delta).to(dtype)
 
     return _face_spec(a_face), _face_spec(b_face)
 
@@ -299,6 +360,16 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
 ):
+
+    # Every op driven through here must have declared what it is fed. The collection-time
+    # check above covers the registered ops; this covers the rest, so a new op added to a
+    # `mathop` list and to neither set fails loudly instead of silently inheriting
+    # generate_stimuli's positive-only uniform(0.1, 1.1).
+    assert mathop in _DECLARED_BINARY_OPS, (
+        f"{mathop.name} is driven through sfpu_binary but appears in none of "
+        "_REGISTRY_DOMAIN_OPS / _UNREGISTERED_BINARY_OPS / _INT_ONLY_REGISTERED_OPS; "
+        "add it to the set that describes the domain it should get"
+    )
 
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
     # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
