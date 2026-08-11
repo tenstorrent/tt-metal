@@ -1064,19 +1064,29 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             distributed::ReplicatedBufferConfig cfg{.size = static_cast<uint64_t>(npages) * ring_bytes};
             ctx.dram_ring = distributed::MeshBuffer::create(cfg, dram_config, mesh_device.get());
             ctx.dram_addr = static_cast<uint32_t>(ctx.dram_ring->address());
+            // Report what the ALLOCATOR RESERVES, not what we address. The DRAM allocator is lock-step: it
+            // reserves the same offset in every bank, so an interleaved buffer with page_size == ring_bytes
+            // costs `ring_bytes * num_banks` no matter how few pages we actually use. Printing
+            // `npages * ring_bytes` understated the real cost ~4x (191 MiB for a 448 MiB reservation) and
+            // anyone budgeting DRAM from that line was off by 257 MiB. See FINDINGS §N+39.
+            const uint64_t reserved_bytes = static_cast<uint64_t>(ring_bytes) * alloc_banks;
+            const uint64_t addressed_bytes = static_cast<uint64_t>(ring_bytes) * kNFillers;
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] role split: {} DRAM rings of {} frames ({:.1f} MiB each) at bank-relative "
-                "0x{:x}, banks [{}, {}]; {} MiB allocated ({} pages, {} unused)",
+                "0x{:x}, banks [{}, {}]; {} MiB of DRAM RESERVED ({:.1f} MiB per bank x {} banks, lock-step), of "
+                "which {} MiB is addressed and {} MiB is lock-step waste",
                 kNFillers,
                 ctx.dram_frames,
                 ring_bytes / (1024.0 * 1024.0),
                 ctx.dram_addr,
                 ringbank[0],
                 ringbank[kNFillers - 1],
-                (static_cast<uint64_t>(npages) * ring_bytes) / (1024 * 1024),
-                npages,
-                npages - kNFillers);
+                reserved_bytes / (1024 * 1024),
+                ring_bytes / (1024.0 * 1024.0),
+                alloc_banks,
+                addressed_bytes / (1024 * 1024),
+                (reserved_bytes - addressed_bytes) / (1024 * 1024));
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
