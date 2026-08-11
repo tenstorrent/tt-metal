@@ -40,7 +40,7 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_device_tensor(in.tap2, "tap2", Layout::TILE);
     check_device_tensor(in.tap3, "tap3", Layout::TILE);
 
-    const auto input_device = in.input.device();
+    auto* const input_device = in.input.device();
     for (const auto* tensor : std::array{&in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3}) {
         TT_FATAL(tensor->device() == input_device, "qkv_causal_conv1d_silu: all inputs must be on the same device");
     }
