@@ -38,12 +38,15 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_neighbor_pad_halo PRIVATE ${FixmeOpIncDirs})
+# The api header set is verified as a standalone TU, which sees only this target's interface —
+# so the ttnn/api include root TTNN::Core carries has to be PUBLIC, not just used by the sources.
 target_link_libraries(
     ttnn_op_experimental_neighbor_pad_halo
     PRIVATE
         TT::Metalium
-        TTNN::Core
         TTNN::Ops::Experimental::CCL
+    PUBLIC
+        TTNN::Core
 )
 
 install(
