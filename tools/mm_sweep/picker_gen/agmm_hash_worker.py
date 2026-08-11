@@ -10,7 +10,11 @@ PCC there -- which is exactly why the earlier phases need this: it separates "pl
 
 Deterministic by construction: fixed seed, one iteration, no program-cache replay.
 
-argv: M K N tp topology      topology = ring | line
+PCC IS ALSO REPORTED, against a torch reference, because replica agreement alone is not correctness: all
+`tp` devices computing the same WRONG answer agrees perfectly. The hash catches "numerics moved", the PCC
+catches "numerics are wrong", and a pinned config needs both.
+
+argv: M K N tp topology [config]     topology = ring | line; config = "Pk,Ns,Sm,kb,nsb" or "auto"
 """
 import hashlib
 import json
@@ -22,6 +26,9 @@ import ttnn
 M, K, N = (int(x) for x in sys.argv[1:4])
 TP = int(sys.argv[4])
 TOPO = sys.argv[5]
+# Pin the parallel config so a measurement taken at one config can be validated at that same config; the
+# picker's choice is not always the one being benchmarked (nsb in particular).
+CFG = sys.argv[6] if len(sys.argv) > 6 else "auto"
 
 
 def mesh_geometry(tp):
@@ -34,7 +41,7 @@ def mesh_geometry(tp):
 
 
 def main():
-    res = {"M": M, "K": K, "N": N, "tp": TP, "topology": TOPO, "outcome": "runtime", "err": ""}
+    res = {"M": M, "K": K, "N": N, "tp": TP, "topology": TOPO, "cfg": CFG, "outcome": "runtime", "err": ""}
     geom = mesh_geometry(TP)
     if geom is None:
         res["err"] = f"need >= {TP} devices"
@@ -51,6 +58,10 @@ def main():
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
     )
+    cfg = None
+    if CFG != "auto":
+        pk, ns, sm, kbt, nsb = (int(x) for x in CFG.split(","))
+        cfg = ttnn.RegimeAMatmulConfig(k_slices=pk, n_slices=ns, m_slices=sm, k_block_tiles=kbt, n_subblock_tiles=nsb)
     parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
     try:
         sub = [1, 1]
@@ -101,7 +112,7 @@ def main():
             num_links=2,
             topology=topology,
             cluster_axis=cluster_axis,
-            config=None,
+            config=cfg,
         )
         ttnn.synchronize_device(mesh)
         stacked = ttnn.to_torch(
@@ -115,6 +126,16 @@ def main():
             hashlib.sha256(r.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
             for r in torch.chunk(stacked, TP, dim=cluster_axis)
         ]
+        # PCC per replica against the full-K reference. The gather makes all of K available on every device,
+        # so each replica must be the whole a@b, not a shard of it.
+        ref = (a.float() @ b.float()).flatten()
+        res["pcc"] = []
+        for r in torch.chunk(stacked, TP, dim=cluster_axis):
+            v = r.float().flatten()
+            res["pcc"].append(
+                round(float(torch.corrcoef(torch.stack([v, ref]))[0, 1]), 6) if v.numel() == ref.numel() else -1.0
+            )
+        res["pcc_min"] = min(res["pcc"])
         res["outcome"] = "ok"
     except Exception as e:  # noqa: BLE001
         res["err"] = str(e)[:300]
