@@ -39,11 +39,7 @@ GEN = os.path.join(HERE, "generated")
 GATES = os.path.join(HERE, "tests", "tt_gates.py")
 MOSVENV = "/tmp/mosvenv/bin/python"
 
-# metric -> (regex, group, higher_is_better or None for "just report")
-#
-# The noise floors are the branch's own, measured: 6.52 put the whole-block timing floor at
-# 0.070 ms, 6.15 put the decode gate's PROMPT-TO-PROMPT spread at 0.45 pp (larger than any change
-# ever gated with it), and 6.7 records short-bucket WER as seed noise.
+# Tolerances are the branch's own MEASURED noise floors, not guesses -- STATUS.md 6.15, 6.52, 6.63.
 TOL = {
     "decode_mean_pp": 0.10, "decode_p90_pp": 0.15, "decode_min_pcc": 0.0002,
     "prefill_pcc_last": 0.0002, "codec_pcc_t24": 0.0002, "flow_codes_74": 0,
@@ -74,17 +70,9 @@ EXPECTED = {
 MOS_KEYS = ["mos_mean", "mos_longform", "mos_min"]
 
 
-# REPORTED BUT NOT GATED. Both were gated once and both are unfit for it:
-#   codes_synth_n -- 6.59 measured it NON-MONOTONIC in precision (bf16 FF weights, unambiguously
-#     more precise, made it WORSE). A metric that degrades when the implementation improves cannot
-#     rank configurations, and 6.59 says in as many words "never rank a config on the synthetic
-#     block". Gating on it contradicted that finding.
-#   mos_mean / mos_min -- dominated by short and adversarial prompts, which 6.7 already treats as
-#     seed noise and which score_quality_set excludes from the WER gate for the same reason. One
-#     draw of a one-word prompt swings 2.29..4.17 WITHIN a single arm, so an all-bucket mean lets
-#     it veto a real improvement. mos_longform is what a listener hears and stays gated.
-# Tail risk is not dropped, it is measured better: tests/probes/tail_probe.py counts FAILURES over
-# many seeds on the low-scoring prompts, which is the question mos_min was gesturing at.
+# Reported but NOT gated -- STATUS.md 6.62. codes_synth_n is non-monotonic in precision (6.59) and
+# mos_mean/mos_min are dominated by short prompts, which 6.7 treats as seed noise. Tail risk is
+# measured by tests/probes/tail_probe.py instead, which counts failures over many seeds.
 REPORT_ONLY = ("codes_synth_n", "mos_mean", "mos_min")
 
 

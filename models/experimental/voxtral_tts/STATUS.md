@@ -4183,6 +4183,34 @@ half stays exactly 0.000. Had that been "fixed" instead, the real bug would have
 WORSE, because six utterances stopped terminating and ran to the frame cap. **If those two ever
 disagree, something is broken rather than fast.**
 
+### 6.66 — review pass after §6.65: four defects, three of them on paths no test reaches
+
+Asked to re-read the code rather than add to it. The comment cleanup was the smaller half; the
+review found four real defects in the traced loop, all shipped in §6.65:
+
+1. **A wasted frame per capped utterance.** The loop appended `codes` then computed the next one
+   unconditionally, so on the final iteration it did a whole Block 1 + Block 2 (~33 ms) that could
+   never be appended. **A regression the traced rewrite introduced** — the pre-trace loop wasted
+   only a Block 1 step. Fires only when `max_frames` is hit rather than `[END_AUDIO]`, which is
+   30/30 utterances in the current quality set, so it cost nothing measured — but it is exactly
+   the kind of thing that hides until a prompt stops terminating.
+2. **`traced` was read from a module constant, not the device.** `open_device(trace_region_size=0)`
+   followed by `generate()` would still try to capture. It happens to work (ttnn tolerates it), so
+   this was fragile rather than broken. Now it attempts the capture and falls back to eager,
+   printing why — the decision matches reality instead of describing an assumption.
+3. **`_traced_frame` took a `cfg_alpha` it never used.** The value is baked into the trace at
+   capture time, so a caller varying it per frame would have been silently ignored. Removed, so the
+   signature cannot promise something it does not honour.
+4. **A leaked trace id.** If `_trace_capture` died between `end_trace_capture` and its return, the
+   id was never registered and never released. `self._tr` is now set the instant the capture closes.
+
+**The eager fallback turns out to be a free correctness check.** Forcing a capture failure, the
+fallback path produces codes **identical** to the traced path — an independent confirmation of
+§6.65's bit-exactness by a completely different route, and it now runs whenever tracing fails.
+
+**Comment cleanup**: no block of 5+ comment lines remains anywhere in `tt/`, `scripts/` or
+`tests/` that this fork wrote. What was left duplicated STATUS or NOTES and is now a pointer.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

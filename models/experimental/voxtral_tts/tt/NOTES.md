@@ -2001,6 +2001,22 @@ which also records why a single-frame correctness check did not catch it.
   the capture open and wedges the card for every later run in every later process, not just this
   one.
 
+**Four defects found reviewing this after it shipped**, none caught by any test because three are
+error paths (STATUS.md §6.66):
+
+- The loop computed a frame it could never append when `max_frames` was hit — a whole Block 1 +
+  Block 2 (~33 ms) discarded per capped utterance. The pre-trace loop wasted only a Block 1 step,
+  so this was a regression the traced rewrite introduced.
+- `traced` was decided from the `TRACE_REGION_SIZE` constant rather than from the device, which a
+  caller can open differently. It now TRIES to capture and falls back to eager on failure.
+- `_traced_frame` took a `cfg_alpha` it never used — the value is baked into the trace at capture,
+  so passing it again invited a silent mismatch. Removed.
+- A capture that died after `end_trace_capture` leaked the trace id. `self._tr` is now registered
+  immediately after the capture closes, so there is always something to release.
+
+**The eager fallback is a free correctness check**: it produces codes IDENTICAL to the traced path,
+which is an independent confirmation of bit-exactness by a different route.
+
 **The per-frame replay must not allocate.** `_traced_frame` builds its host tensors with
 `from_torch` WITHOUT `device=`, then writes them with `copy_host_to_device_tensor` into buffers
 that already exist. Adding any `device=` there reintroduces the hazard above.
