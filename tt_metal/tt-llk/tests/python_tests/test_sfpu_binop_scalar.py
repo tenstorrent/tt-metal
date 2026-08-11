@@ -14,6 +14,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_domains import SPECIALS_READY_OPS, edge_spec, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -58,15 +59,29 @@ def _scalar_bits_for(mathop, scalar):
     return _bits(scalar)
 
 
+# Keep inputs small and bounded so the bf16 result stays accurate across all five scalar
+# ops (add/sub/mul/div/rsub) and both dest-accumulation modes.
+_DEFAULT_TENSOR_SPEC = StimuliSpec.uniform(low=-1.0, high=1.0)
+
+
 def _run_sfpu_binop_scalar(
-    formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, input_dimensions=[32, 32]
+    formats,
+    dest_acc,
+    mathop,
+    scalar=_PRESUBMIT_SCALAR,
+    input_dimensions=[32, 32],
+    spec_A=None,
 ):
+    """Drive one scalar binop variant.
+
+    *spec_A* overrides the tensor operand. The scalar axis has been swept since the
+    presubmit/nightly split, but the tensor operand had no knob at all and was pinned to
+    the default above, so the only way to reach an edge on it was to edit this function.
+    """
     torch.manual_seed(0)
     scalar_bits = _scalar_bits_for(mathop, scalar)
 
-    # Keep inputs small and bounded so the bf16 result stays accurate across all
-    # five scalar ops (add/sub/mul/div/rsub) and both dest-accumulation modes.
-    spec_a = StimuliSpec.uniform(low=-1.0, high=1.0)
+    spec_a = _DEFAULT_TENSOR_SPEC if spec_A is None else spec_A
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -169,3 +184,49 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
     """The rest of the scalar axis: zero, unity, a sign flip and a fractional multiplier."""
     _skip_unsupported(formats, dest_acc, mathop, scalar)
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+)
+def test_sfpu_binop_scalar_edges(request, formats, dest_acc, mathop):
+    """The scalar axis' counterpart: edge values on the *tensor* operand.
+
+    All five ops are x (+|-|*|/) c for a compile-time c, which is smooth in x -- no pole,
+    no knee -- so cat A and cat D contribute nothing and edge_spec() returns None. What is
+    left is cat B, and that is gated per op on SPECIALS_READY_OPS, which is empty until the
+    goldens define a result for non-finite inputs. So today every variant skips, and each
+    one starts running the moment its op joins that set.
+
+    The wrapper is here rather than waiting for the goldens because it is what makes the
+    spec_A knob reachable: without it the tensor operand is only overridable by editing
+    _run_sfpu_binop_scalar, which is how it stayed pinned to uniform(-1, 1) while the
+    scalar axis was being swept.
+
+    Deliberately not swept here: |scalar| > 8 and the +/-tiny, +/-large tensor values. Both
+    need a per-op tolerance first -- the default bf16 tolerance is only meaningful while
+    the result stays in range -- which is its own piece of work.
+    """
+    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+
+    specials = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    spec_A = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        specials=specials,
+    )
+    if spec_A is None:
+        pytest.skip(
+            reason=f"{mathop.name} has no edge values for the tensor operand "
+            f"(smooth in x; cat B gated on SPECIALS_READY_OPS)"
+        )
+
+    _run_sfpu_binop_scalar(
+        formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, spec_A=spec_A
+    )
