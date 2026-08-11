@@ -109,16 +109,16 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
     std::vector<std::uint32_t> result_init(expected_result.size(), 0);
     detail::WriteToDeviceL1(device, WORKER_CORE, result_l1_addr, result_init);
 
-    // num_threads_per_cluster = 6: the temp-API DM allocator keeps the lowest-numbered DM cores,
-    // and DM0/DM1 are reserved (cluster orchestrator / DFB init) -- user kernels only execute on
-    // DM2..DM7. With 1 the kernel lands on DM0 and never runs. The kernel gates on hartid == 2 so
-    // exactly one DM core performs the writes.
+    // num_threads_per_cluster = 1: the temp-API DM allocator skips reserved DM0/DM1 (cluster
+    // orchestrator / DFB init -- see GetProcessorsPerClusterQuasar) and hands out the lowest free
+    // DM core, i.e. DM2. The kernel gates on hartid == 2 so exactly that one core performs the
+    // writes.
     experimental::quasar::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_dm_mailbox_scratch_writer.cpp",
         WORKER_CORE,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 6,
+            .num_threads_per_cluster = 1,
             .compile_args = {DM_MBX_VAL_UNPACK, DM_MBX_VAL_MATH, DM_MBX_VAL_PACK},
         });
 

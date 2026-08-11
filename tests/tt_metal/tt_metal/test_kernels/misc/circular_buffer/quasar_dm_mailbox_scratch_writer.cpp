@@ -27,10 +27,9 @@
 // on Zebu: if a mailbox MMIO store hangs or faults, the missing 0x0BBBBBBB localizes the failure
 // to the mailbox accesses themselves.
 void kernel_main() {
-    // The Quasar DM allocator (GetProcessorsPerClusterQuasar) keeps the lowest-numbered DM
-    // cores, so the host asks for 6 threads to place this kernel on DM0..DM5. DM0 is the
-    // cluster orchestrator and DM1 runs DFB init only -- neither executes user kernels
-    // (dm.cc). Gate on DM2 so exactly one core performs the writes.
+    // The Quasar DM allocator (GetProcessorsPerClusterQuasar) skips reserved DM0/DM1, so the
+    // host's request for one DM thread places this kernel on DM2 only. Gate on hartid == 2
+    // defensively so exactly one core performs the writes even if the allocation grows.
     if (internal_::get_hw_thread_idx() != 2) {
         return;
     }
