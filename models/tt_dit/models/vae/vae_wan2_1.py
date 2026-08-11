@@ -1945,8 +1945,15 @@ class WanDecoder3d(Module):
         _level_stats("post_mid_block", x_BTHWC)
 
         ## upsamples
-        for _, up_block in enumerate(self.up_blocks):
-            x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        for up_block in self.up_blocks:
+            # WanResidualUpBlock's avg_shortcut is temporal-causal and needs first_chunk;
+            # without it the shortcut T-size mismatches x on the residual add (binary_ng).
+            if isinstance(up_block, WanResidualUpBlock):
+                x_BTHWC, logical_h, logical_w = up_block(
+                    x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w, first_chunk=first_chunk
+                )
+            else:
+                x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
