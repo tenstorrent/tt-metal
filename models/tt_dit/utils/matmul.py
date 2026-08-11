@@ -158,6 +158,14 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
+# AG+MM on BH Galaxy: power-clamped (10,10) grid minus the collective row = 10x9.
+# Ring topology requires K_block to divide K_tiles_per_device = 20.
+grid_10_9_configs = {
+    (22144, 5120, 6400): (8, 4, 8, (2, 1)),
+    (22144, 5120, 1024): (8, 4, 8, (2, 1)),
+    (22144, 5120, 128): (8, 4, 2, (2, 1)),
+}
+
 grid_12_9_configs = {
     (9472, 5120, 1280): (10, 8, 8, (2, 1)),
     (2368, 5120, 1280): (10, 8, 6, (2, 1)),
@@ -202,6 +210,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         (8, 8): grid_88_configs,
         (8, 9): grid_89_configs,
         (13, 9): grid_13_9_configs,
+        (10, 9): grid_10_9_configs,
         (12, 10): grid_12_10_configs,
         (11, 10): grid_11_10_configs,
         (12, 9): grid_12_9_configs,
@@ -284,7 +293,29 @@ fused_mmrs_configs = {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
     },
+    # Cosmos3 trunk on BH Galaxy (grid power-clamped to 10x10): mm on rows 0-7,
+    # RS zone rows 8-9 (20 cores). down_proj (M=22144, K=3200) only. Blocking
+    # follows the tuned (9472, 3456, 5120) entry above.
+    # Do NOT add the other trunk RowParallel shapes — both pass the op's unit
+    # test in isolation (including 35-replay trace and two-instance adjacency)
+    # but corrupt the full trunk output:
+    #  - und stream (M=2720): 9-step latent std 7.3 vs 0.7, and at 12% of the
+    #    gen RS payload the fusion win is negligible anyway.
+    #  - gen to_out/to_add_out (22144, 1024, 5120): 35-step visual smear
+    #    (frame std 46 vs 71 gold) isolated by per-shape trunk bisect; the
+    #    mechanism is trunk-context-dependent and unreproduced at unit level.
+    # Repro suite: tests/nightly/tg/ccl/test_mmrs_cosmos3_repro.py.
+    ttnn.CoreCoord(10, 10): {
+        (22144, 3200, 5120): FusedMMRSConfig(ttnn.CoreCoord(10, 8), 8, 4, 8, 2, 1, None, 1),
+    },
 }
+
+
+def has_fused_mmrs_config(M, K, N, device_core_grid):
+    """True when an exact tuned entry exists — callers use this to keep untuned
+    shapes on the non-fused matmul + reduce_scatter path instead of running the
+    fused op with the default config, which measures no faster."""
+    return (M, K, N) in fused_mmrs_configs.get(device_core_grid, {})
 
 
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):

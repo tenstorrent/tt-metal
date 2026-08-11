@@ -10,7 +10,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid, has_fused_mmrs_config
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -248,7 +248,9 @@ class ColParallelLinear(Module):
 
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
-            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            # Respect the BH-Galaxy power clamp: the raw device grid here trips tray PDUs
+            # on multi-chip Blackhole (same hazard get_matmul_core_grid exists to prevent).
+            full_grid = get_matmul_core_grid(self.mesh_device)
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
@@ -419,15 +421,19 @@ class RowParallelLinear(Module):
             and self.ccl_manager is not None
             and self.ccl_manager.topology == ttnn.Topology.Ring
             and _os_for_fidelity.environ.get("TT_COSMOS3_RS_FUSED") in ("1", "true", "True")
+            and has_fused_mmrs_config(M, K, N, core_grid)
         ):
             needs_reshape = len(x.shape) <= 3
             if needs_reshape:
                 x = ttnn.unsqueeze(x, 0)
+            # Fused pool, not the plain-RS pool: the M=64 modulation-stream RowParallels
+            # stay non-fused and draw from get_rs_ping_pong_semaphore; sharing one
+            # 2-cycle pool across both op types collides while CCLs overlap in flight.
             _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor=x,
                 weight_tensor=weight,
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore_fused(self.mesh_axis),
                 **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
                 bias=self.bias.data if self.bias is not None else None,
                 memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
