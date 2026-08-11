@@ -1136,7 +1136,7 @@ uint32_t experimental::quasar::DispatchEngineKernel::get_kernel_processor_type(i
 
 std::vector<uint32_t> experimental::quasar::DispatchEngineKernel::get_processor_indices_for_binary(
     int binary_index) const {
-    TT_ASSERT(binary_index == 0, "binary_index out of bounds");
+    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
     const auto& hal = MetalContext::instance().hal();
     const auto core_type = this->get_kernel_programmable_core_type();
     const auto proc_class = this->get_kernel_processor_class();
