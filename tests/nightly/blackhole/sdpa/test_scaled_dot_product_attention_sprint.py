@@ -176,22 +176,14 @@ INPUT_SHAPES = [
     # batch, num_heads, sequence_length, head_dim
     [1, 10, 9472, 128],  # WAN 2.2: 1x Galaxy analog (single device seq len)
     [1, 10, 2368, 128],  # WAN 2.2: 4x Galaxy analog (per-device seq len)
-    # MiniMax-H3 768P 5s, per-chip: 14 heads (56 / TP=4), the SP-local packed sequence length. Single
-    # chip and square (K == Q), so no fabric and no ring -- the point of comparison is the FPU
-    # utilisation the same shape class reaches when the collective is absent. Ring joint SDPA at this
-    # per-device Q reaches 56.6% on 110 compute cores.
-    [1, 14, 4768, 128],
 ]
 INPUT_IDS = [
     "wan2_2_1xGLX_analog",
     "wan2_2_4xGLX_analog",
-    "minimax_h3_5s_perchip",
 ]
 
-# 320 / 384 added so the MiniMax-H3 sweep covers the (q=320, k=384) the ring op actually runs, plus
-# neighbours on both sides.
-Q_CHUNK_SIZES = [224, 256, 288, 320, 384]
-K_CHUNK_SIZES = [128, 256, 384, 512]
+Q_CHUNK_SIZES = [224, 256, 288]
+K_CHUNK_SIZES = [128, 256, 512]
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
@@ -323,23 +315,21 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             core_count = int(r["CORE COUNT"][0])
             duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
 
-            # Work distribution: the factory flattens (b, h, q_chunk) into one list and splits it over
-            # the whole grid, so cores are not partitioned per head. Matches test_ring_joint_sdpa.
+            # Compute parallelization factors
             B = 1
-            k_num_chunks = math.ceil(s / k_chunk_size)
-            q_num_chunks = math.ceil(s / q_chunk_size)
-            total_work_items = B * nh * q_num_chunks
+            batch_parallel = min(B, num_cores)
+            nh_parallel = min(num_cores // batch_parallel, nh)
+            max_q_parallel = num_cores // (batch_parallel * nh_parallel)
 
             cores_used = compute_cores_used(s, q_chunk_size, compute_cores=num_cores, num_heads=nh)
             cores_idle = num_cores - cores_used
             core_util_pct = (cores_used * 100.0) / num_cores
 
-            # The critical path is the most-loaded core, so slot waste is the leftover capacity once
-            # every core is given that many chunks.
-            q_per_core = math.ceil(total_work_items / num_cores)
+            # Compute iterations per core
+            k_num_chunks = math.ceil(s / k_chunk_size)
+            q_num_chunks = math.ceil(s / q_chunk_size)
+            q_per_core = math.ceil(q_num_chunks / max_q_parallel)
             iters_per_core = q_per_core * k_num_chunks
-            total_q_slots = q_per_core * num_cores
-            slot_waste_pct = (max(0, total_q_slots - total_work_items) / total_q_slots) * 100
 
             # Compute padding waste
             q_padded_total = q_num_chunks * q_chunk_size
@@ -347,6 +337,11 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             actual_work = s * s
             padded_work = q_padded_total * k_padded_total
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
+
+            # Compute work distribution (slot) waste
+            total_q_slots = max_q_parallel * q_per_core
+            wasted_q_slots = total_q_slots - q_num_chunks
+            slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
 
             utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
 
