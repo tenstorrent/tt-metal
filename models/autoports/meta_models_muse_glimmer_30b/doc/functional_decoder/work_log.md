@@ -257,7 +257,7 @@ the same in the evidence and in the model.
 |---|---|---|---|
 | sliding prefill SDPA | 11x10, q=128, k=128 | 11x10, q<=256, k<=256 (largest divisor of the length) | 12.02 ms -> 7.46 ms per 8192-token call |
 | chunked prefill SDPA | 11x10, q<=128 | 11x10, q<=256, k<=256 | 12.16 ms -> 7.55 ms per 8192-token call |
-| decode SDPA | 11x10, k=64 | 8x4 while `cores >= batch * kv_heads`, k=64 everywhere, with the page table sized to a whole number of K chunks (section 9) | batch 1: 52.29 us -> 43.30 us (sliding), 67.32 us -> 50.90 us (full). k=64 is the batch-**32** optimum for both kinds; at batch 1 it costs a few us against 8x4/k=256 |
+| decode SDPA | 11x10, k=64 | 8x4 while `cores >= batch * kv_heads`, k=64 everywhere, with the page table sized to a whole number of K chunks (section 9) | batch 1: 52.29 us -> 43.30 us (sliding), 67.32 us -> 50.90 us (full). k=64 is the batch-**32** optimum for both kinds; at batch 1 it costs 2.8 us against 8x4/k=256 on the sliding call site (43.30 vs 40.51 us) and *gains* 2.8 us on the full one (50.90 vs 53.74 us) |
 
 `q_chunk=512` is *slower* than 256 under this policy (10.31-10.34 ms) and 128 is slower
 still, so 256 is the measured optimum rather than "as large as possible". Bigger is not even
@@ -270,7 +270,7 @@ than 256/256's 7.55 ms.)
 The k-chunk axis was extended after a review noted it was under-swept: `k_chunk=256` with
 `q_chunk=256` is a further ~12% (8.44-8.59 ms -> 7.46-7.55 ms) and is the shipped default. For prefill the full 11x10
 grid is simply the fastest measured grid on both call sites: 7.459 ms (sliding) and 7.546 ms
-(chunked), against 8.708 / 8.337 ms on 11x8 (11-17% slower) and 11.004 / 10.613 ms on the
+(chunked), against 8.708 / 8.337 ms on 11x8 (10-17% slower) and 11.004 / 10.613 ms on the
 Wormhole-shaped 8x8 (41-48% slower). It is also what `compute_with_storage_grid_size()`
 returns, so nothing is hard-coded. (The "~1% between 11x10 and 11x8" figure belongs to
 **batch-32 decode**, where the CSV has 209.46 us vs 206.49 us — that is the comparison quoted
@@ -510,12 +510,15 @@ was pushed.
 
 | repo | branch | commit | contents |
 |---|---|---|---|
-| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — the implementation (including the decode page-table capacity guard, the `layer_rope_theta` assertion, the HF-snapshot fix and the tightened multi-chunk bar, all of which predate this commit), the host reference, the tests, the scripts and the evidence at that point |
+| tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — the implementation (including the decode page-table capacity guard, the `layer_rope_theta` assertion, the HF-snapshot fix and the tightened multi-chunk bar, all of which were already present in this commit — it is the commit that introduces them, even though `6b9aa772d56`'s message wrongly claims them), the host reference, the tests, the scripts and the evidence at that point |
 | tt-metal | same | `6c3a6236d44` | this section |
 | tt-metal | same | `6b9aa772d56` | round-4 review remediation: `scripts/render_evidence.py` gains the decode-core-count gate and the gzip-aware reader, `tests/test_functional_decoder_perf.py` switches to `decoder.blocks_per_seq`, the doc corrections the review required, and **all** evidence re-collected on the resulting code (both suite logs, watcher, 8 perf artifact sets) |
 | tt-metal | same | `fcba707fe0c` | the `6b9aa772d56` SHA in this table |
 | tt-metal | same | `ee0b9e5e8a3` | the round-5 review's two doc corrections: this table's contents column and §6's grid comparison |
-| tt-metal | same | `PENDING` | the SHA of the row above (a commit cannot contain its own hash, so the SHA of a doc-only correction always lands one commit later) |
+| tt-metal | same | `2235d5b0d70` | the SHA of the row above |
+| tt-metal | same | branch tip | the round-6 review's non-gating precision fixes: the 10-17% bound, the batch-1 k=64 figures per layer kind, and this row |
+
+A table inside a commit cannot contain that commit's own hash, so the tip row is named rather than hashed; `git log --oneline origin/main..HEAD` on this branch is the authority for the final SHA.
 
 `tt/functional_decoder.py`, `reference/hf_reference.py` and `tests/test_functional_decoder.py`
 are byte-identical between `c24bb9de468f` and HEAD: the only post-`c24bb9de468f` code changes
