@@ -132,6 +132,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.timeout(0)
 def test_prefill_block_loop(
     mesh_device,
@@ -146,6 +147,7 @@ def test_prefill_block_loop(
     hf_config,
     state_dict,
     tokenizer,
+    compressed_fp8_dispatch,
 ):
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
@@ -230,6 +232,11 @@ def test_prefill_block_loop(
     # gate_fallback_mode is irrelevant for dense layers — skip duplicate runs
     if is_dense and gate_fallback_mode != GateComputeMode.DEVICE:
         pytest.skip("gate_fallback_mode only applies to MoE layers")
+    # Same for the dispatch mode: a dense layer runs no MoE dispatch, so fp8 would duplicate bf16
+    if is_dense and compressed_fp8_dispatch:
+        pytest.skip("compressed_fp8_dispatch only applies to MoE layers")
+    if compressed_fp8_dispatch and not DSV3.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     # For uniform/zero experts, HOST=DEVICE (proven), skip HOST to save time
     if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE:
         pytest.skip("uniform/zero experts: DEVICE=HOST (proven), skipping HOST")
@@ -493,7 +500,7 @@ def test_prefill_block_loop(
     block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
-        block_kwargs["compressed_fp8_dispatch"] = DSV3.resolve_compressed_fp8_dispatch()
+        block_kwargs["compressed_fp8_dispatch"] = compressed_fp8_dispatch
         if not skip_reference:
             # bf16 everywhere for clean PCC comparison; skip_reference (perf mode) keeps
             # production defaults (bfp8 activations, bfp4 routed weights, bfp8 shared weights)

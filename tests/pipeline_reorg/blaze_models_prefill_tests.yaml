@@ -110,7 +110,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d and pretrained" -vvv --tb=short --timeout=900
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d and pretrained and bf16_dispatch" -vvv --tb=short --timeout=900
     '
   test_type: prefill_block
   test_group: module
@@ -131,7 +131,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and notrace" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and notrace and bf16_dispatch" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
   test_group: module
@@ -158,7 +158,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and traced" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and traced and bf16_dispatch" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
   test_group: module
@@ -295,8 +295,8 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained and bf16_dispatch" -vvv --tb=short --timeout=1320
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained and bf16_dispatch" -vvv --tb=short --timeout=1320
     '
 
   test_type: kimi_prefill_block
@@ -320,7 +320,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained and bf16_dispatch" -vvv --tb=short --timeout=900
     '
 
   test_type: prefill_block_determinism
@@ -343,7 +343,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=2940
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad and bf16_dispatch" -vvv --tb=short --timeout=2940
     '
   test_type: prefill_transformer_determinism
   test_group: module
@@ -418,7 +418,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and notrace and bf16_dispatch" -xvs
     '
   test_type: kimi_chunked
   test_group: module
@@ -452,7 +452,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and traced and bf16_dispatch" -xvs
     '
   test_type: kimi_chunked
   test_group: module
@@ -474,7 +474,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm52-mesh-8x4-L78-preload0-chunks_eleven-ten_iters] -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-bf16_dispatch-glm52-mesh-8x4-L78-preload0-chunks_eleven-ten_iters] -xvs
     '
   test_type: glm_chunked
   test_group: module
@@ -494,7 +494,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and 8x4 and L78 and warm_cache" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and 8x4 and L78 and warm_cache and bf16_dispatch" -xvs
     '
   test_type: glm_chunked_accuracy
   test_group: module
@@ -539,6 +539,8 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
+      # TEMP(fp8-e2e): the runner picks its mode from env, not a test param; pin bf16 until fp8 is validated e2e.
+      export PREFILL_COMPRESSED_FP8_DISPATCH=0
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner

@@ -98,7 +98,12 @@ def run_model(
     determinism_check: bool = False,
     num_iterations: int = 1,
     use_pretrained: bool = False,
+    *,
+    compressed_fp8_dispatch: bool,
 ):
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
+
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
@@ -339,7 +344,7 @@ def run_model(
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
         is_balanced=is_balanced,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -677,6 +682,7 @@ def run_model(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.timeout(750)
@@ -702,6 +708,7 @@ def test_ds_prefill_block(
     num_iterations,
     use_pretrained,
     request,
+    compressed_fp8_dispatch,
 ):
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
     # xfail this exact combo (keeping the real threshold for every other config) until it is fixed;
@@ -741,6 +748,7 @@ def test_ds_prefill_block(
         num_iterations=num_iterations,
         thresholds=DSV3_THRESHOLDS,
         use_pretrained=use_pretrained,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -780,6 +788,7 @@ def test_ds_prefill_block(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
@@ -806,6 +815,7 @@ def test_kimi_prefill_block(
     num_iterations,
     use_pretrained,
     request,
+    compressed_fp8_dispatch,
 ):
     run_model(
         variant,
@@ -829,6 +839,7 @@ def test_kimi_prefill_block(
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
         use_pretrained=use_pretrained,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 

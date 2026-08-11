@@ -140,11 +140,23 @@ def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 def run_chunked_block(
-    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    *,
+    compressed_fp8_dispatch,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -217,7 +229,7 @@ def run_chunked_block(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -379,6 +391,7 @@ def run_chunked_block(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(1800)
 def test_ds_prefill_block_chunked(
@@ -392,6 +405,7 @@ def test_ds_prefill_block_chunked(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block(
         variant,
@@ -403,11 +417,22 @@ def test_ds_prefill_block_chunked(
         gate_fallback_mode,
         num_links,
         topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
 def run_chunked_block_multiuser(
-    variant, config, mesh_device, weight_cache_path, num_users, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    num_users,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    *,
+    compressed_fp8_dispatch,
 ):
     """Multi-user slot routing: prefill ONE chunk into a single target slot of an num_users-slot KV
     cache, then assert (a) that slot un-rotates to the golden kv_post_transform and (b) every other
@@ -418,6 +443,8 @@ def run_chunked_block_multiuser(
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -465,7 +492,7 @@ def run_chunked_block_multiuser(
         is_chunked=True,
         slot_num=num_users,
         layer_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -561,6 +588,7 @@ def run_chunked_block_multiuser(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(1800)
 def test_ds_prefill_block_chunked_multiuser(
@@ -574,6 +602,7 @@ def test_ds_prefill_block_chunked_multiuser(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block_multiuser(
         variant,
@@ -585,11 +614,22 @@ def test_ds_prefill_block_chunked_multiuser(
         gate_fallback_mode,
         num_links,
         topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
 def run_chunked_block_padded(
-    variant, config, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    splits,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    *,
+    compressed_fp8_dispatch,
 ):
     """Variable/partial chunked prefill: a single prompt of sum(splits) real tokens fed in chunks of
     variable real length `splits` (e.g. [1024, 4096]), each run as a full CHUNK-wide tile padded with
@@ -599,6 +639,8 @@ def run_chunked_block_padded(
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -683,7 +725,7 @@ def run_chunked_block_padded(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -850,6 +892,7 @@ def run_chunked_block_padded(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(3600)
 def test_ds_prefill_block_chunked_padded(
@@ -863,9 +906,19 @@ def test_ds_prefill_block_chunked_padded(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block_padded(
-        variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        splits,
+        layer_idx,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -904,6 +957,7 @@ def test_ds_prefill_block_chunked_padded(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(1800)
 def test_kimi_prefill_block_chunked(
@@ -917,6 +971,7 @@ def test_kimi_prefill_block_chunked(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block(
         variant,
@@ -928,6 +983,7 @@ def test_kimi_prefill_block_chunked(
         gate_fallback_mode,
         num_links,
         topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -955,6 +1011,7 @@ def test_kimi_prefill_block_chunked(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(3600)
 def test_kimi_prefill_block_chunked_padded(
@@ -968,9 +1025,19 @@ def test_kimi_prefill_block_chunked_padded(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block_padded(
-        variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        splits,
+        layer_idx,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -986,10 +1053,21 @@ def test_kimi_prefill_block_chunked_padded(
 
 
 def run_chunked_block_glm_indexer(
-    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    num_links,
+    topology,
+    *,
+    compressed_fp8_dispatch,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     if not resolve_has_indexer(config):
         pytest.skip("indexer-K teacher-forced test is DSA-only (glm_5_1 / glm_5_2)")
     trace_dir = _resolve_trace_dir(variant)
@@ -1055,7 +1133,7 @@ def run_chunked_block_glm_indexer(
         slot_num=1,
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -1167,11 +1245,29 @@ def run_chunked_block_glm_indexer(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block_indexer_teacher_forced(
-    variant, config_only, mesh_device, device_params, weight_cache_path, n_chunks, layer_idx, num_links, topology
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    num_links,
+    topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_block_glm_indexer(
-        variant, config_only, mesh_device, weight_cache_path, n_chunks, layer_idx, num_links, topology
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        n_chunks,
+        layer_idx,
+        num_links,
+        topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )

@@ -405,6 +405,8 @@ def run_chunked_transformer_padded(
     num_links,
     topology,
     routing_use_l1_small_for_semaphores=False,
+    *,
+    compressed_fp8_dispatch,
 ):
     """Chunked prefill through num_layers with VARIABLE/partial chunks `splits` (each run as a full
     CHUNK-wide tile padded with a pad token). Exercises the rotated + partial MLA path across the full
@@ -412,6 +414,8 @@ def run_chunked_transformer_padded(
     VALID rows, and PCC the valid region [kv_actual:valid_end) against the trace."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -480,7 +484,7 @@ def run_chunked_transformer_padded(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -600,9 +604,13 @@ def run_chunked_transformer(
     topology,
     routing_use_l1_small_for_semaphores=False,
     preload_isl=0,
+    *,
+    compressed_fp8_dispatch,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -666,7 +674,7 @@ def run_chunked_transformer(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -864,6 +872,7 @@ def run_chunked_transformer(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer_chunked(
@@ -876,6 +885,7 @@ def test_ds_prefill_transformer_chunked(
     n_chunks,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_transformer(
         variant,
@@ -887,6 +897,7 @@ def test_ds_prefill_transformer_chunked(
         GateComputeMode.DEVICE,
         num_links,
         topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -912,6 +923,7 @@ def test_ds_prefill_transformer_chunked(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer_chunked_padded(
@@ -924,6 +936,7 @@ def test_ds_prefill_transformer_chunked_padded(
     splits,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_transformer_padded(
         variant,
@@ -935,6 +948,7 @@ def test_ds_prefill_transformer_chunked_padded(
         GateComputeMode.DEVICE,
         num_links,
         topology,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -999,6 +1013,7 @@ _PADDED_MODES = ["notrace", "traced"]
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_padded(
@@ -1012,6 +1027,7 @@ def test_kimi_prefill_transformer_chunked_padded(
     num_links,
     topology,
     mode,
+    compressed_fp8_dispatch,
 ):
     """Padded/rotated chunked prefill, traced vs untraced (see _PADDED_MODES). Both modes exercise
     padding-aware MoE over the same `splits` and assert per-layer KV-cache PCC against the golden, so
@@ -1032,6 +1048,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         *common,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1072,6 +1089,7 @@ def test_kimi_prefill_transformer_chunked_padded(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked(
@@ -1085,6 +1103,7 @@ def test_glm_prefill_transformer_chunked(
     preload_isl,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_transformer(
         variant,
@@ -1098,6 +1117,7 @@ def test_glm_prefill_transformer_chunked(
         topology,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1118,6 +1138,8 @@ def run_chunked_transformer_updated(
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
+    *,
+    compressed_fp8_dispatch,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1144,6 +1166,8 @@ def run_chunked_transformer_updated(
     table is record-only (perf-exploration combos)."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
 
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
@@ -1294,7 +1318,7 @@ def run_chunked_transformer_updated(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
         # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
         # output, so the tail is dead work that would otherwise land inside the measured per-chunk
         # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
@@ -1714,6 +1738,7 @@ def run_chunked_transformer_updated(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1734,6 +1759,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     perf_margin,
     use_trace,
     preload_isl,
+    compressed_fp8_dispatch,
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
@@ -1760,6 +1786,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1810,6 +1837,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked(
@@ -1826,6 +1854,7 @@ def test_kimi_prefill_transformer_chunked(
     perf_margin,
     use_trace,
     preload_isl,
+    compressed_fp8_dispatch,
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
@@ -1852,6 +1881,7 @@ def test_kimi_prefill_transformer_chunked(
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
         use_trace=use_trace,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1887,6 +1917,7 @@ def test_kimi_prefill_transformer_chunked(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer_chunked_no_pcc(
@@ -1900,6 +1931,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     num_iters,
     num_links,
     topology,
+    compressed_fp8_dispatch,
 ):
     run_chunked_transformer_updated(
         variant,
@@ -1913,6 +1945,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=False,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1966,6 +1999,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1984,6 +2018,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_links,
     topology,
     preload_isl,
+    compressed_fp8_dispatch,
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
@@ -2000,6 +2035,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -2015,6 +2051,8 @@ def run_chunked_transformer_padded_trace(
     topology,
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
+    *,
+    compressed_fp8_dispatch,
 ):
     """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
     param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
@@ -2037,6 +2075,8 @@ def run_chunked_transformer_padded_trace(
         correctly across chunks."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
@@ -2095,7 +2135,7 @@ def run_chunked_transformer_padded_trace(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
         # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,

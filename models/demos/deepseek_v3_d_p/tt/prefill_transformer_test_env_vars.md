@@ -154,8 +154,18 @@ Default `~/.cache/huggingface`.
 
 ### `PREFILL_COMPRESSED_FP8_DISPATCH`
 Kill switch for **compressed FP8 MoE dispatch** (e4m3 compression of x around dispatch,
-per-token fp32 scales in the metadata tail). The test resolves it via
-`variant.resolve_compressed_fp8_dispatch()`; the env var can only disable, never enable:
+per-token fp32 scales in the metadata tail). The env var can only disable, never enable.
+
+> **This var has NO effect on the tests in this file.** The dispatch mode is a parametrize axis
+> (`compressed_fp8_dispatch`, ids `fp8_dispatch` / `bf16_dispatch`) — select it with
+> `-k fp8_dispatch` or `-k bf16_dispatch`. The tests gate on
+> `variant.can_compressed_fp8_dispatch()` (validated model + Blackhole, capability only), so an
+> `fp8_dispatch` case skips only when the hardware/model genuinely cannot run it. It is listed
+> here because it is a `PREFILL_*` var you will meet elsewhere: it selects the mode for the
+> **runner / producer**, which resolves it (`resolve_compressed_fp8_dispatch()`) inside its own
+> process, where no pytest param can reach.
+
+What the runner-side resolver returns:
 
 - **unset (default)**: ON for validated models (DSV3, Kimi) **on Blackhole**; OFF everywhere
   else (Wormhole, GLM). This changes the numerics the PCC checks measure on BH.

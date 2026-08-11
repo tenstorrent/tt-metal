@@ -90,6 +90,17 @@ If your adapter sets `supports_compressed_fp8_dispatch = True`, the model runs F
 dispatch whenever it is on Blackhole. If you don't set it, the model always uses bf16
 dispatch. Kill switch: `PREFILL_COMPRESSED_FP8_DISPATCH=0` forces bf16 for a run.
 
+Two accessors, and which one you want depends on whether the caller can be told the mode:
+
+- `can_compressed_fp8_dispatch()` — capability only (your `supports_` flag + Blackhole). **Tests
+  use this.** They take the mode as a `compressed_fp8_dispatch` parametrize axis (`fp8_dispatch` /
+  `bf16_dispatch` ids), so the mode is already chosen; this only decides whether a requested fp8
+  case is runnable, and a model without `supports_compressed_fp8_dispatch` skips its fp8 instances
+  instead of silently running bf16 under an fp8 test id. The kill switch is not consulted.
+- `resolve_compressed_fp8_dispatch()` — capability + the kill switch. This is for callers with no
+  parametrization to pick a mode: the **runner** (`build_runtime`) and the **producer**, each
+  resolving inside its own process.
+
 Test-only metadata (HF download coordinates, reference-model classes, PCC
 thresholds) is optional and only needed if you wire pytest coverage; see the
 attributes and lazy `reference_*_cls` properties on `PrefillModelAdapter`. Keep the

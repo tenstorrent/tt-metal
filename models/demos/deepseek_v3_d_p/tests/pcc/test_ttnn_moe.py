@@ -85,8 +85,6 @@ def run_model(
     gate_fallback_mode,
     request,
     compressed_fp8_dispatch,
-    is_ci_env,
-    is_ci_v2_env,
     is_balanced=False,
     padded_percent=0,
 ):
@@ -143,18 +141,11 @@ def run_model(
 
     logger.info(f"compressed_fp8_dispatch={compressed_fp8_dispatch} for this run (dispatch path under test)")
 
-    if compressed_fp8_dispatch and not is_blackhole():
-        pytest.skip("compressed fp8 dispatch ops are Blackhole-only")
-    if compressed_fp8_dispatch and not variant.supports_compressed_fp8_dispatch:
-        pytest.skip(f"{variant.name} does not support compressed fp8 dispatch")
-    if (
-        (is_ci_env or is_ci_v2_env)
-        and is_blackhole()
-        and not compressed_fp8_dispatch
-        and variant.supports_compressed_fp8_dispatch
-    ):
-        logger.warning(f"{variant.name} runs fp8 dispatch in production — skipping bf16 dispatch entry in CI")
-        pytest.skip(f"{variant.name} production path is fp8 dispatch; bf16 fallback not exercised in CI")
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip(
+            f"compressed fp8 dispatch unrunnable: needs Blackhole (is_blackhole={is_blackhole()}) and a "
+            f"validated model ({variant.name}.supports={variant.supports_compressed_fp8_dispatch})"
+        )
 
     (
         experts_per_chip,
@@ -729,8 +720,6 @@ def test_ds_moe(
     gate_fallback_mode,
     request,
     padded_percent,
-    is_ci_env,
-    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -751,8 +740,6 @@ def test_ds_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         compressed_fp8_dispatch=compressed_fp8_dispatch,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
     )
 
 
@@ -800,8 +787,6 @@ def test_glm_moe(
     gate_fallback_mode,
     request,
     padded_percent,
-    is_ci_env,
-    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -822,8 +807,6 @@ def test_glm_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         compressed_fp8_dispatch=compressed_fp8_dispatch,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
     )
 
 
@@ -903,8 +886,6 @@ def test_kimi_moe(
     topology,
     gate_fallback_mode,
     request,
-    is_ci_env,
-    is_ci_v2_env,
 ):
     run_model(
         variant,
@@ -923,6 +904,4 @@ def test_kimi_moe(
         gate_fallback_mode,
         request,
         compressed_fp8_dispatch=compressed_fp8_dispatch,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
     )

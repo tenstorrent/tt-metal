@@ -156,11 +156,15 @@ def run_model(
     is_ci_v2_env,
     tokenizer,
     request,
+    compressed_fp8_dispatch,
 ):
     torch.manual_seed(42)
 
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name}: pretrained weights not wired")
+
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -425,7 +429,7 @@ def run_model(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -941,6 +945,7 @@ def run_model(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer(
     variant,
@@ -967,6 +972,7 @@ def test_ds_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    compressed_fp8_dispatch,
 ):
     run_model(
         variant,
@@ -993,6 +999,7 @@ def test_ds_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1059,6 +1066,7 @@ def test_ds_prefill_transformer(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer(
     variant,
@@ -1085,6 +1093,7 @@ def test_kimi_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    compressed_fp8_dispatch,
 ):
     run_model(
         variant,
@@ -1111,6 +1120,7 @@ def test_kimi_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
 
@@ -1161,6 +1171,7 @@ def test_kimi_prefill_transformer(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
@@ -1187,6 +1198,7 @@ def test_glm_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    compressed_fp8_dispatch,
 ):
     # Full-transformer end-to-end validates against the GPU trace (variant.test_prefill_trace_default;
     # approach B) — MLA/DSA + MoE correctness live in their op-level tests.
@@ -1215,4 +1227,5 @@ def test_glm_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )

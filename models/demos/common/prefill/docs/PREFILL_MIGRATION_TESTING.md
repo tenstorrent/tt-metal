@@ -276,7 +276,8 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
-`0.93` — note this differs from the runner's `0.88` default for the same variable).
+`0.93`, or `0.927` when FP8 MoE dispatch is active — note this differs from the runner's `0.88` default
+for the same variable).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
 serialises the device map there too — `serialize_device_map` is called from **both** the

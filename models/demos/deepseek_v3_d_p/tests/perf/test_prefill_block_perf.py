@@ -83,7 +83,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # 2D parametrize ids in test_prefill_block_loop.py (substring `mesh-8x4`/`mesh-2x4`
         # would otherwise match both 1D and 2D variants).
         (
-            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k and not fabric2d-'",
+            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k and not fabric2d- and bf16_dispatch'",
             19_378_393,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (deepseek_v3_d_p perf run); FABRIC_1D.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense",
@@ -93,7 +93,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and not fabric2d-'",
+            f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and not fabric2d- and bf16_dispatch'",
             71_888_628,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (deepseek_v3_d_p perf run); FABRIC_1D.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe",
@@ -103,7 +103,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer3_moe_real_weights",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
+            f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4 and bf16_dispatch'",
             35_655_993,  # Re-centered 2026-07-27 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (drop the separate output buffer + per-layer fill;
             # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
@@ -121,7 +121,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # BH Galaxy (~149.6 ms measured); the other two are still uncalibrated placeholders
         # with a wide margin so the first run will pass and surface the measured number.
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             23_148_850,  # Recalibrated 2026-07-30 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_fabric2d",
@@ -131,7 +131,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights_fabric2d",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             73_816_910,  # Recalibrated 2026-07-27 (perf improvement, was 76_706_230).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d",
@@ -141,7 +141,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer3_moe_real_weights_fabric2d",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4 and bf16_dispatch'",
             48_977_160,  # Recalibrated 2026-07-29 from 3 measured 2x4-2link runs (48.99, 48.94,
             # 49.00 ms; mean 48.977 ms, spread ~0.13%), matching the CI-observed 48.967 ms.
             "deepseek_v3_prefill_block",
@@ -157,7 +157,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # degenerates to Linear. All entries calibrated 2026-06-26 on the 110-c78 BH galaxy at the
         # standard 0.03 margin (real weights).
         (
-            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer0 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             25_236_993,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer0 dense, isl_25k).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_y",
@@ -167,7 +167,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights_torus_y",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer3 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             67_193_413,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer3 MoE, device gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_y",
@@ -193,7 +193,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # forced with DS_4X4_FULL_EXPERTS=1, but that path currently stalls on the ring (the reason
         # moe-gate_host_all was added) and is deliberately NOT exercised here.
         (
-            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_12k8 and bf16_dispatch'",
             17_978_418,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer0 dense, 3200 tok/chip).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer0_dense_torus_y",
@@ -203,7 +203,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "subtorus_4x4_layer0_dense_real_weights_torus_y_isl12k8",
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8 and bf16_dispatch'",
             56_528_886,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 128 experts / HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y",  # 128 experts / HOST gate (see note above)
@@ -216,7 +216,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # 4x4 sub-torus at isl_2k56 (2560 = half of 5k -> 640 tokens/chip on the 4-wide SP axis).
         # Same 128-expert / HOST-gate behavior as the isl_12k8 layer3 entry above (see note).
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56 and bf16_dispatch'",
             15_570_232,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 640 tok/chip, HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_isl2k56",  # 128 experts / HOST gate
@@ -231,7 +231,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # gate), Linear on the SP-axis MoE dispatch/combine. Baselines calibrated 2026-07-01 on the
         # 110-c910 BH galaxy at the standard 0.03 margin (real weights).
         (
-            f"pytest {_TEST_PATH} -k 'torus-x-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-x-8x4 and layer0 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             22_656_265,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_X Ring (layer0 dense, isl_25k). Faster than torus_y (TP collectives ring).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_x",
@@ -241,7 +241,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights_torus_x",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'torus-x-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-x-8x4 and layer3 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             75_154_221,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_X (layer3 MoE, isl_25k). Slower than torus_y: SP dispatch/combine run Linear (X-ring doesn't wrap the SP axis).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_x",
@@ -252,7 +252,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         # FABRIC_2D_TORUS_XY (both axes ring) on the full 8x4 galaxy.
         (
-            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             18_157_603,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_XY (layer0 dense, isl_25k). Fastest dense: both axes ring, incl. the SP-axis ring-attention SDPA.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_xy",
@@ -262,7 +262,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights_torus_xy",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer3 and gate_device and no_ref and isl_25k and bf16_dispatch'",
             60_634_662,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_XY (layer3 MoE, isl_25k). Fastest MoE: SP dispatch/combine AND TP collectives all ring.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_xy",
@@ -276,7 +276,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # SKIPPED: host-gate device-perf doesn't track the device-kernel baseline; see
         # _SUBTORUS_4X4_HOSTGATE_SKIP above. (The torus_y 4x4 entries share this host-gate path.)
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-x-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-x-4x4 and layer3 and gate_device and no_ref and isl_12k8 and bf16_dispatch'",
             54_804_819,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_X Ring-4 (layer3 MoE, 128 experts / HOST gate, isl_12k8).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_x",
@@ -287,7 +287,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             marks=_SUBTORUS_4X4_HOSTGATE_SKIP,
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-xy-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-xy-4x4 and layer3 and gate_device and no_ref and isl_12k8 and bf16_dispatch'",
             52_978_544,  # Calibrated 2026-07-01 on 110-c910 BH galaxy; TORUS_XY Ring-4 (layer3 MoE, 128 experts / HOST gate, isl_12k8).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_xy",

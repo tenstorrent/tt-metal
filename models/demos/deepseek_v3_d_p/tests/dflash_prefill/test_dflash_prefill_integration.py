@@ -85,6 +85,7 @@ MAX_RANDOM_LAYERS = 12
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("compressed_fp8_dispatch", [True, False], ids=["fp8_dispatch", "bf16_dispatch"])
 @pytest.mark.timeout(0)
 def test_dflash_prefill_integration(
     variant,
@@ -105,7 +106,11 @@ def test_dflash_prefill_integration(
     drafter_cfg,
     drafter_state_dict,
     hf_context_kv,
+    compressed_fp8_dispatch,
 ):
+    if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
+        pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")
+
     if not use_pretrained and num_layers > MAX_RANDOM_LAYERS:
         pytest.skip(
             f"random verifier at {num_layers} layers materializes the whole Kimi model in host RAM "
@@ -227,9 +232,9 @@ def test_dflash_prefill_integration(
         weight_cache_path=effective_cache_path,  # real cache (pretrained) or None (random)
         lm_head_is_column_parallel=True,
         # PCC_THRESHOLD (0.999) has not been re-validated with the e4m3 dispatch round-trip in the
-        # verifier; if the fp8 run undershoots it, calibrate against a PREFILL_COMPRESSED_FP8_DISPATCH=0
+        # verifier; if the fp8_dispatch case undershoots it, calibrate against the bf16_dispatch
         # control run before touching the bar.
-        compressed_fp8_dispatch=variant.resolve_compressed_fp8_dispatch(),
+        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     del verifier_state_dict
     gc.collect()

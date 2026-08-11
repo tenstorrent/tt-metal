@@ -472,6 +472,12 @@ class ProducerConfig:
     # chunk draw + mid_chunk_end when set (each slot pushes exactly its prompt). None => synthetic depth.
 
 
+def _default_chunked_pcc() -> str:
+    """FP8 MoE dispatch loses ~0.003 KV PCC by layer 61 (Kimi 56320 tokens: fp8 0.929323, bf16
+    0.932384), so each mode gets its own gate instead of one loosened enough for both."""
+    return "0.927" if ADAPTER.resolve_compressed_fp8_dispatch() else "0.93"
+
+
 def _config_from_env() -> ProducerConfig:
     """Build a ProducerConfig from the flat PREFILL_PRODUCER_* env vars (every knob independent)."""
     max_chunks = MAX_SEQ_LEN // CHUNK_SIZE  # a request can't exceed the per-user cache
@@ -496,7 +502,7 @@ def _config_from_env() -> ProducerConfig:
         mid_chunk_end_prob=float(os.environ.get("PREFILL_PRODUCER_MID_END_PROB", "0.0")),
         seed=int(os.environ.get("PREFILL_PRODUCER_SEED", "1234")),
         verify=os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1",
-        pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
+        pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", _default_chunked_pcc())),
         interleave=interleave,
     )
 
