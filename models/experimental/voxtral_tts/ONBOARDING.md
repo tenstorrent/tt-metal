@@ -229,7 +229,7 @@ Weakest to strongest. Every claim in STATUS names which rungs it cleared.
 
 | rung | cost | what it establishes |
 |---|---|---|
-| `pytest tests/` | 45 s | structure, shapes, invariants. 122 tests |
+| `pytest tests/` | 70 s | structure, shapes, invariants. 132 tests |
 | `--gate flow` / `--gate codec` | ~1 min | one block vs the fp32 reference |
 | `--gate codes` | ~1 min | integer codes, blocks 1+2, 8 frames |
 | `--gate decode` | ~4 min | Block 1 precision, 15 prompts × 22 frames |
@@ -393,7 +393,10 @@ writing `ttnn.silu()` yourself, because that is effectively what it does. Only a
 slightly *more* accurate. Both blocks now use `DECODE_PRG` (`§6.52`, `[gpt-26]`). If you write a
 new matmul with an activation, **do not use the kwarg**.
 
-**⚠ THE SEVEN THAT REVERSED.** These were settled on the N150 and are settled the OTHER WAY
+**⚠ NINE HAVE REVERSED**, five of them because §6.65 traced the frame and removed the per-op
+launch cost their reasoning rested on (§6.68 closes that line).
+
+**⚠ THE FIRST SEVEN.** These were settled on the N150 and are settled the OTHER WAY
 here. The parent branch's verdict is wrong on this chip; do not restore any of them.
 
 | N150 verdict | p150 verdict |

@@ -52,7 +52,7 @@ Branch: `lserbedzija/voxtral-tts-ttnn_p150` (pushed). All work is under
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
 | Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, long-form RTF 0.57-0.64 |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works** — **27.7 ms/frame, RTF 0.365**, long-form WER **0 of 596**, MOS long-form 4.61 (§6.67) |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 **Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
@@ -489,6 +489,50 @@ host-dispatch bound. Tracing Block 1 AND Block 2 together also works now and is 
 (0 differing codes of 2849) after fixing the capture ORDER — all warm-ups before any capture —
 but costs ~6 ms/frame, so both stay off. The `ign/voxtral_p150_qb2` branch reports decode as
 dispatch-bound; that is Blackhole, and it does not transfer to this N150 — see §6.5.
+
+### 6.0 — INDEX of the p150 fork (§6.39 onward)
+
+The sections below are chronological. This is the map; each line is one experiment and its
+verdict, so you can jump rather than read 3,900 lines.
+
+- **§6.39** — the sharded norm REVERSES. Block 1 drops it, +4.6 ms/frame  ⟵ **SUPERSEDED by §6.67**
+- **§6.40** — the same reversal in Block 2  ⟵ **SUPERSEDED by §6.67**
+- **§6.41** — the DRAM ceiling is ~360 GB/s, not 194–202. Re-derive before ranking anything
+- **§6.42** — w1+w3 fusion re-tested. Still rejected, for an entirely different reason
+- **§6.43** — `_WO_PRG` deleted. Bit-exact, and no instrument can find a speed difference
+- **§6.44** — the fused cache write LOSES, and _V_SHARD goes with it
+- **§6.45** — a small op costs 3.4x more, and THREE op-count decisions reverse
+- **§6.46** — `_SDPA_PRG` swept and KEPT. The one N150 program config that survived
+- **§6.47** — in-place elementwise, +0.929 ms/step. Residual-as-bias rejected  ⟵ that rejection **EXPIRED, see §6.62**
+- **§6.48** — and the L1 trap inside it
+- **§6.49** — host dispatch is 3-4% in a TIGHT LOOP  ⟵ **SUPERSEDED by §6.64/§6.65**: 13.3% in Block 2 once §6.52 exposed it
+- **§6.50** — the three host steps stay on host. Device is 7-29x slower
+- **§6.51** — what the rest of the repo and `ign/voxtral_p150_qb2` actually have
+- **§6.52** — decode matmul program configs, −4.24 ms/frame. And `activation="silu"` never fused
+- **§6.53** — why a "much more powerful" p150 was only ~7% faster than the N150
+- **§6.54** — the codes gate's "29.5% of codes differ" is a synthetic-input artefact, and always was
+- **§6.55** — prefill is where the synthetic error lives, and there is no lever worth pulling
+- **§6.56** — higher-precision PREFILL: the weights do nothing, the activations do, and it still loses
+- **§6.57** — fp32 cache is unreachable, and bf16 decode weights cost 29% for nothing
+- **§6.58** — full ship-readiness pass on HEAD, and the one defect traced to the model
+- **§6.59** — an automated MOS eval, and an MCD that failed calibration and was discarded
+- **§6.60** — every check behind one command, with paired comparison
+- **§6.61** — `out_subblock_w`'s candidate list had a hole in it
+- **§6.62** — residual as matmul bias, −1.918 ms/step. And a rejection that EXPIRED
+- **§6.63** — the block A/B does not predict the frame: 10 host crossings, 2.8 ms of drain
+- **§6.64** — tracing Block 2 is worth 2.29 ms and needs an allocation refactor to collect it
+- **§6.65** — the frame loop is TRACED: −4.244 ms/frame, RTF 0.4931 → 0.4514, every quality metric identical
+- **§6.66** — review pass after §6.65: four defects, three of them on paths no test reaches
+- **§6.67** — the sharded decode norm REVERSES BACK: +5.399 ms/frame, RTF 0.4415 → 0.3647, WER 1 → 0
+- **§6.68** — the stale-rejection sweep comes back EMPTY, and that is the useful result
+
+**Shipped, in order of size:** §6.65 traced frame loop (−4.2 ms), §6.67 sharded decode
+norm (−5.4), §6.52 matmul program configs (−4.2), §6.62 residual-as-bias (−1.9, block only),
+§6.45 fused head split + sdpa (−6.6), §6.39/§6.40 (superseded by §6.67), §6.47/§6.48 in-place.
+
+**The four rules that cost the most to learn:** §6.63 (a block A/B is a screen),
+§6.67 (an eager op map ranks by launch cost), §6.54 (the synthetic codes gate cannot rank
+configs), §6.68 (a rejection is stale when its premise is a cost someone has since removed).
 
 ### 6.5 — `ign/voxtral_p150_qb2`, measured
 
@@ -4320,46 +4364,47 @@ line of enquiry rather than opening another.
 
 ## 7. Suggested order when resuming
 
-**REWRITTEN FOR THE p150 FORK.** The N150 version of this section is in the parent branch; it
-pointed at Block 3 as "~9% of wall and least explored", a figure §6.10 had already corrected to
-**0.4%**, and quoted a 77 ms frame that three sweeps had superseded. Do not resurrect it.
+**Current, §6.67:** **27.7 ms/frame, RTF 0.365** — Block 1 ~15.9 ms, Block 2 ~15.0, host ~2.
+Long-form WER **0 of 596**, MOS long-form 4.61, 132 tests. Real time is 80 ms/frame, so this is
+~2.9x faster than playback. `N_DECODING_STEPS` is 7 and the port reproduces the fp32 reference.
 
-Per frame, steady state on this p150: **Block 1 ~21.4 ms, Block 2 ~32.8 ms, ~57 ms total,
-long-form RTF 0.71–0.78.** Real time is 80 ms/frame.
+### Read these four things and you can work
 
-1. Re-read §1's fork banner. `PYTHONPATH` needs `ttnn` and `tools` on it, not just the repo root
-   (§1). Run the tests (122), then `generate_quality_set.py --cases 0,2` to confirm the device
-   path still speaks.
-2. **BLOCK 2 IS THE WHOLE REMAINING GAP.** After §6.39, Block 1 is 21.4 ms against the N150's
-   23.15 — *faster* than Wormhole. Block 2 is 32.8 ms against the N150's 20.8. Start with
-   §6.40's interleaved norm (+4.17 ms/frame, swept, gate not yet run), then re-derive the rest
-   of Block 2's constants, all of which were tuned against a 194 GB/s roofline that does not
-   apply to GDDR6.
-3. **EVERY "AT THE ROOFLINE" CLAIM IN §1–§6.38 IS SUSPECT HERE.** The floor method is still the
-   right method, but 194–202 GB/s is an N150 measurement. Re-measure the ceiling on this card
-   before ranking anything by `overhead x calls`, or you will rank against the wrong floor —
-   §6.25's near-miss is what that costs.
-4. **Two constants that ARE now questionable and were never re-swept**: `_WO_PRG`'s
-   `in0_block_w=2` (§6.25 swept it on an 8x8 grid) and `_SDPA_PRG`'s `k_chunk_size=512` / 8x2
-   grid (§6.27, and §6.27's own warning stands — a position sweep, not a gate run, is what makes
-   an sdpa config safe).
-5. **§6.35's 3.4x batching lead is more attractive here, not less.** 130 cores and the same 32
-   unused tile rows. The blocker §6.38 named — a row-count-aware norm shard — partly dissolves if
-   §6.40 lands, since an interleaved norm has no hardcoded shard shape to raise on 48 rows.
-6. **Gate on the DETERMINISTIC metrics, not on WER.** This is the most expensive lesson in the
-   file and it was learned twice. End-to-end WER cannot resolve a numerical change: the same code
-   at seeds 0/1/2 spans 0.88–2.06% (§6.7). Worst-sample read as a MAX is also unreliable — it
-   moved 1.28–4.28% non-monotonically across configs (§6.8). What works: teacher-forced MEAN and
-   P90 worst-sample against the fp32 reference (`tests/tt_gates.py`), long-form WER for gross
-   breakage, and integer-code counts over several draws for Block 2. Both §6.39 arms were run in
-   ONE session with one process per (arm, seed); anything less is not a valid A/B here.
-7. `tests/test_tt_defaults.py` pins the shipped configuration with the reason for each choice. If
-   you change a default, change that test in the same commit.
+1. **§2** for `PYTHONPATH` (needs `ttnn` AND `tools`, not just the repo root) and `--noconftest`.
+2. **`scripts/quality_report.py`** is the whole test story: `--tier fast|full|audio --tag X`, then
+   `--compare A B`. It takes TWO tags on purpose — never judge against a recorded number (§6.63).
+3. **§5 traps**, plus the three rules that have each cost a day:
+   - **A block A/B is a SCREEN, `ms_per_frame` decides** (§6.63). Device time and frame time are
+     not the same thing.
+   - **An EAGER op map ranks by launch cost**, which is not what ships now the frame is traced. It
+     ranked concat (a 2.6 µs ghost) above rms_norm (63.5 µs, 20% of the frame) — §6.67.
+   - **Decode is ONE tile of rows; prefill is many.** Program configs (§6.52), residual-as-bias
+     (§6.62) and the sharded norm (§6.67) are all decode-only, and two of the three would be
+     SILENTLY wrong on prefill rather than erroring.
+4. **§6.68** for why the optimisation line stopped where it did.
 
-**Deferred and still worth doing:**
-- A **listening pass** — WER cannot see timbre, and nobody has A/B'd the current build.
-- **Report the ttnn hang upstream** (§6, Block 1). A silent hang needing a board reset is their
-  bug regardless of what we feed it, and we have a ~90 s repro.
-- **Prefill beyond ~1024 tokens** needs chunked prefill.
-- A **like-for-like comparison against `ign/voxtral_p150_qb2` on THEIR hardware** — see below for
-  what we could and could not settle.
+### What is actually left
+
+**Single-stream is close to done.** 6.698 GB/frame against a measured 367 GB/s ceiling is an
+18.25 ms floor; we are at 27.7. Everything found in the last sweep was worth 3–6%, and §6.68
+closed the last three candidates.
+
+1. **BATCHING is the only order-of-magnitude lever** (§6.53). Rows 1→32 cost the SAME time — the
+   ALUs are 99.6% idle at batch 1 — so ~20–30x aggregate throughput is available for ~1.1x
+   per-stream latency. Nothing measured since has changed that, and it has never been attempted.
+2. **Prefill's `repeat_interleave`** (`gpt.py:254`) is 11.8% of prefill and the one shipped path
+   with a large structural cost a known-better op would remove — `sdpa` handles GQA natively and
+   Block 2 already uses it. Prefill is only ~0.5% of an utterance, so this matters only if
+   chunked prefill or long prompts do.
+3. **Chunked prefill** for prompts over ~1024 tokens. Still unimplemented.
+4. **A human MOS eval.** §6.59's DistillMOS is a predictor, not raters, and §3 has said from the
+   start that naturalness has never been properly evaluated.
+
+### Do NOT redo these
+
+- The **stale-rejection sweep is finished** (§6.68). Five reversed because tracing removed the
+  per-op launch cost their reasoning rested on; the remaining three were checked and stand.
+- **Weight precision** is settled at both ends (§6.55, §6.57): raising it buys nothing,
+  non-monotonically, and bf4 costs 5.4x the accuracy for 0.9 ms.
+- **Fewer Euler steps** reaches RTF 0.411 but is a MODEL change and was declined — the reference
+  uses 7, so taking 5 would end the like-for-like comparison. Measured in §6.66-era notes.
