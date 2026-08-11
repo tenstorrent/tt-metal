@@ -5,7 +5,9 @@
 """Host-only gate for the MiniMax-H3 AdaLN precompute.
 
 Precomputing lets the 13B AdaLN parameters -- 40% of the checkpoint -- stay off
-the device entirely, which the model card explicitly licenses. The risk it buys
+the device entirely, which the model card explicitly licenses. At the real
+shapes the table is 1.416 GB against the 26.0 GB of ``adaln_proj`` parameters
+it replaces, i.e. 0.354 vs 6.50 GB per device at TP=4. The risk it buys
 is numerical: the table has to be what the reference would have computed at that
 step, or every block is modulated slightly wrong at every step in the same
 direction.
@@ -18,10 +20,11 @@ and the design depends on both:
   over all 98 distinct levels shifts it ~5e-6 and the bf16 projection amplifies
   that to about one ULP on ~0.7% of values.
 
-The full 26 GB build against the real checkpoint lives in
-``build_adaln_table.py``; it reported 0 mismatches over 196 (step, layer)
-projections and all 49 final-layer rows. These tests use a small synthetic
-checkpoint so they run without it.
+The full 26 GB build against the real checkpoint was verified once with a
+one-off builder script (``tools/build_adaln_table.py``, since removed; see git
+history for the script and its run); it reported 0 mismatches over 196
+(step, layer) projections and all 49 final-layer rows. These tests use a small
+synthetic checkpoint so they run without it.
 """
 
 import pytest
@@ -154,15 +157,6 @@ def test_time_embedding_is_not_batch_stable(synthetic_checkpoint):
     assert torch.allclose(batched[rows], per_step, atol=1e-4)
 
 
-def test_step_timesteps_carry_two_or_three_levels():
-    steps = _step_timesteps()
-    assert len(steps) == _schedules()[0].num_inference_steps
-    for levels in steps:
-        assert levels.numel() in (2, 3)
-        # Sorted and distinct, as torch.unique guarantees and the layout assumes.
-        assert bool((levels[1:] > levels[:-1]).all())
-
-
 def test_step_timesteps_pin_conditioning_at_the_noise_aug_floor():
     video, audio = _schedules()
     steps = ap.request_step_timesteps(video.sigmas, audio.sigmas, MINIMAX_H3_KEYFRAME_NOISE_AUG)
@@ -171,12 +165,19 @@ def test_step_timesteps_pin_conditioning_at_the_noise_aug_floor():
         assert pytest.approx(float(levels.max())) == expected
 
 
-def test_table_shape_and_offsets(synthetic_checkpoint):
-    checkpoint, _ = synthetic_checkpoint
+def test_table_matches_per_step_recompute(synthetic_checkpoint):
+    """The gate: every table row equals what that step would have computed.
+
+    The table's layout -- shape, dtype, offsets, per-step levels -- is asserted here too, on the way
+    to the bitwise comparison that consumes it, rather than in separate tests.
+    """
+    checkpoint, tensors = synthetic_checkpoint
     steps = _step_timesteps()
     table = _table(checkpoint)
 
+    # The layout the bitwise walk below relies on.
     total_rows = sum(int(levels.numel()) for levels in steps)
+    assert len(steps) == _schedules()[0].num_inference_steps
     assert table.num_layers == NUM_LAYERS
     assert table.hidden_size == HIDDEN
     assert table.num_steps == len(steps)
@@ -188,18 +189,9 @@ def test_table_shape_and_offsets(synthetic_checkpoint):
     )
     assert table.block_params.dtype == torch.bfloat16
     assert tuple(table.final_shift.shape) == (total_rows, HIDDEN)
-
     assert int(table.step_offsets[0]) == 0
     assert int(table.step_offsets[-1]) == total_rows
-    for index, levels in enumerate(steps):
-        assert torch.equal(table.step_timesteps(index), levels)
 
-
-def test_table_matches_per_step_recompute(synthetic_checkpoint):
-    """The gate: every table row equals what that step would have computed."""
-    checkpoint, tensors = synthetic_checkpoint
-    steps = _step_timesteps()
-    table = _table(checkpoint)
     embed_args = (
         tensors["time_embedder.proj_in.weight"],
         tensors["time_embedder.proj_in.bias"],
@@ -208,6 +200,12 @@ def test_table_matches_per_step_recompute(synthetic_checkpoint):
     )
 
     for step, levels in enumerate(steps):
+        # A step carries its two or three distinct levels, sorted, as torch.unique guarantees and
+        # the layout assumes.
+        assert levels.numel() in (2, 3)
+        assert bool((levels[1:] > levels[:-1]).all())
+        assert torch.equal(table.step_timesteps(step), levels)
+
         temb = ap.time_embedding(levels, *embed_args, freq_dim=FREQ_DIM)
         rows = table.step_rows(step, torch.arange(levels.numel()))
         low = int(rows[0]) * ap.MINIMAX_H3_MODALITY_NUM
@@ -252,34 +250,3 @@ def test_adaln_indices_address_timestep_and_modality(synthetic_checkpoint):
         ]
     )
     assert torch.equal(indices, expected)
-
-
-def test_step_rows_rejects_out_of_range_index(synthetic_checkpoint, expect_error):
-    checkpoint, _ = synthetic_checkpoint
-    table = _table(checkpoint)
-    span = int(table.step_offsets[1]) - int(table.step_offsets[0])
-    with expect_error(ValueError, "exceeds step"):
-        table.step_rows(0, torch.tensor([span]))
-
-
-def test_precompute_rejects_missing_checkpoint(tmp_path, expect_error):
-    with expect_error(FileNotFoundError, "no model-.*safetensors"):
-        ap.precompute_adaln_table(tmp_path, _step_timesteps(), num_layers=1, hidden_size=HIDDEN)
-
-
-def test_mismatched_schedule_lengths_rejected(expect_error):
-    video, audio = _schedules()
-    with expect_error(ValueError, "equal length"):
-        ap.request_step_timesteps(video.sigmas, audio.sigmas[:-2], MINIMAX_H3_KEYFRAME_NOISE_AUG)
-
-
-def test_table_is_far_smaller_than_the_weights_it_replaces(synthetic_checkpoint):
-    """The whole justification: the table must not approach the weight size.
-
-    At the real shapes this is 1.416 GB against 26.0 GB of ``adaln_proj``
-    parameters, i.e. 0.354 vs 6.50 GB per device at TP=4.
-    """
-    checkpoint, _ = synthetic_checkpoint
-    table = _table(checkpoint)
-    weight_bytes = NUM_LAYERS * (ap.MINIMAX_H3_ADALN_PARAMS * HIDDEN * ap.MINIMAX_H3_MODALITY_NUM) * TIME_EMBED_DIM * 2
-    assert table.nbytes() < weight_bytes

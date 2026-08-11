@@ -130,8 +130,11 @@ def _reference_lm(path: str):
     return lm.eval()
 
 
-# Galaxy (32 chips). Both configs put TP on the size-8 axis, so the ~32B conditioner shards to
-# ~7.5 GiB/device; TP on axis 0 and axis 1 take different CCL paths, which is what the two cover.
+# Galaxy (32 chips). TP on the size-8 axis -- axis 1, the config the pipeline runs -- shards the
+# ~32B conditioner to ~7.5 GiB/device. A tp8_axis0 variant used to run here too; the axis choice
+# only changes which CCL path the collectives take, and that path is covered by
+# `tests/encoders/qwen3vl/test_qwen3vl_decoder_block.py`'s tp8_axis0 case without a second ~32B
+# weight load.
 #
 # No FSDP: `is_fsdp` stays at its False default, so weights are replicated on the non-TP axis rather
 # than sharded across it. FSDP was required on a Wormhole 2x4, where TP=4 puts 14.9 GiB of weights on
@@ -145,7 +148,6 @@ def _reference_lm(path: str):
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
     [
         pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
-        pytest.param((8, 4), (8, 4), 0, 2, id="tp8_axis0"),
     ],
     indirect=["mesh_device"],
 )

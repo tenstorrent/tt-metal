@@ -5,9 +5,11 @@
 # =============================================================================
 # Qwen3-VL vision transformer block, on device, against the HF reference.
 #
-# One test, parametrized over seven grids and three parallel configurations. It
+# One test, parametrized over two grids and three parallel configurations. It
 # runs the whole pre-norm block -- LayerNorm, attention, residual, LayerNorm, MLP,
 # residual -- so the submodules are covered through it rather than separately.
+# This file exists for block-level debugging granularity; the shape/aspect sweep,
+# the capacity grids and the perf mode all live in test_qwen3vl_vision_tower.py.
 #
 # The tower's rotary is spatial only: `(row, col)` within one image, no temporal
 # axis, and so a different grid from the decoder's 3-axis M-RoPE.
@@ -60,22 +62,21 @@ HIDDEN_ACT = "gelu_pytorch_tanh"
 #     so 128 patches on the short edge, and up to 512 on the long one at 4:1.
 #
 # The block sees a flat row sequence plus per-row cos/sin, so the aspect ratio changes the rope *values*
-# but not the arithmetic path; the 14-way aspect sweep therefore lives in the tower test, where the
+# but not the arithmetic path; the aspect sweep therefore lives in the tower test, where the
 # position table and the merge reshape actually consume `h` and `w`. What does matter here is sequence
 # LENGTH and BLOCK STRUCTURE: `cu_seqlens` is passed straight through to the attention, which loops one
 # SDPA per block, so the number and sizes of blocks change control flow.
+#
+# Two grids cover the block's distinct code paths -- the padded-head-dim scale runs on every grid, so
+# what differentiates them is the cu_seqlens loop:
+#   - `canvas_1to1`: the cheapest real shape, one block, the single-SDPA baseline;
+#   - `image_and_video`: multiple blocks of unequal length from BOTH sizing rules (one reference image
+#     plus three video frames), so a block that ignored the boundaries fails here.
+# The other real shapes -- the aspect pairs, the 65536-row single blocks and the 18-block `max_load`
+# ceiling -- run through test_qwen3vl_vision_tower.py, where capacity and perf belong.
 GRIDS = {
     "canvas_1to1": [[1, 48, 48]],  # 2304 rows, 1 block -- cheapest real shape
-    "ref_1to1": [[1, 128, 128]],  # 16384, 1 block -- reference-image sizing
-    "ref_4to1": [[1, 128, 512]],  # 65536, 1 block -- longest single block
-    "video_3_frames": [[3, 48, 48]],  # 6912, 3 blocks from ONE grid row
-    "two_refs": [[1, 128, 128], [1, 128, 170]],  # 38144, 2 blocks of unequal length
     "image_and_video": [[1, 128, 128], [3, 48, 48]],  # 23296, 4 blocks, both sizing rules
-    # The documented ceiling: nine reference images and three reference videos. 18 blocks, and the
-    # longest sequence the block will ever see. Under `single` nothing is sharded, so the MLP
-    # intermediate alone is 168192 x 4304 x 2 B ~= 1.45 GiB in one tensor -- this is the case that
-    # tests capacity and dispatch rather than arithmetic.
-    "max_load": [[1, 128, 128]] * 9 + [[3, 48, 48]] * 3,  # 168192, 18 blocks
 }
 
 
@@ -140,16 +141,9 @@ _PARAMS = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
-# `check` computes the CPU golden and asserts PCC; `perf` skips both and runs only our implementation,
-# asserting shape and finiteness. Same ids as the other tt_dit tests -- see
-# models/wan2_2/test_all_gather_minimal_matmul_async.py.
-#
-# `perf` is what makes the large grids usable. The golden's attention is quadratic within each block, so
-# `max_load` (18 blocks, the largest 16384 patches) and the 65536-row grids are dominated by it, and they
-# exist to exercise capacity, tiling and dispatch rather than arithmetic -- accuracy is established by
-# the smaller grids. It is also the mode to use under `python -m tracy`, where the CPU forward would
-# otherwise swamp the capture. A green `perf` run says nothing about accuracy.
-_MODE = pytest.mark.parametrize("check_pcc", [True, False], ids=["check", "perf"])
+# Every case here checks PCC against the CPU golden; both grids are small enough that the quadratic
+# CPU attention is affordable. The `perf` mode (no golden, shape/finiteness only, for the capacity
+# grids and `python -m tracy`) lives in test_qwen3vl_vision_tower.py.
 
 
 def _parallel(submesh, tp_axis, sp_axis, num_links):
@@ -190,8 +184,7 @@ def _sp_shard(x, submesh, sp_axis):
 
 @_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-@_MODE
-def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
+def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     """The whole pre-norm block: LayerNorm + attention + LayerNorm + MLP, both residuals.
 
     `cu_seqlens` is passed on both sides, so the multi-block grids exercise the per-block SDPA loop in
@@ -222,15 +215,13 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
 
     torch.manual_seed(0)
     x = torch.randn(total, HIDDEN_SIZE)
-    golden = None
-    if check_pcc:
-        cos, sin = _golden_pos_embeds(grid)
-        with torch.no_grad():
-            golden = reference.blocks[0](
-                x,
-                cu_seqlens=torch.tensor(list(cu_seqlens), dtype=torch.int32),
-                position_embeddings=(cos, sin),
-            ).float()
+    cos, sin = _golden_pos_embeds(grid)
+    with torch.no_grad():
+        golden = reference.blocks[0](
+            x,
+            cu_seqlens=torch.tensor(list(cu_seqlens), dtype=torch.int32),
+            position_embeddings=(cos, sin),
+        ).float()
 
     block = Qwen3VlVisionBlock(
         hidden_size=HIDDEN_SIZE,
@@ -252,11 +243,5 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     )
     print("Block Done")
     actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
-
-    if not check_pcc:
-        # `perf`: no golden was computed, so only what can be checked without one.
-        assert actual.shape[-1] == HIDDEN_SIZE, f"{tuple(actual.shape)}"
-        assert torch.isfinite(actual[:total]).all(), "our output contains NaN or Inf"
-        return
 
     assert_quality(golden, actual, pcc=0.99)

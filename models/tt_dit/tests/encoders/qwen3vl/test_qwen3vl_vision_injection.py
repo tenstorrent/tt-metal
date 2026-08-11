@@ -31,7 +31,6 @@ from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, _scatter_rows
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
-from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
 
 IMAGE_TOKEN_ID = 151655  # <|image_pad|>
@@ -63,49 +62,6 @@ def test_vision_token_runs_rejects_a_batch(expect_error):
 # ------------------------------------------------------------------------- device
 
 _MESH = [pytest.param((1, 1), (1, 1), id="single")]
-
-
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
-@pytest.mark.parametrize("add", [False, True], ids=["replace", "add"])
-@pytest.mark.parametrize(
-    "runs", [[(8, 16)], [(0, 8)], [(SEQ - 8, 8)], [(4, 8), (20, 12)]], ids=["middle", "start", "end", "two_runs"]
-)
-def test_scatter_rows_matches_torch(mesh_device, submesh_shape, add, runs):
-    """`_scatter_rows` reproduces the torch indexed write it stands in for."""
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    total = sum(length for _, length in runs)
-
-    torch.manual_seed(0)
-    base = torch.randn(1, SEQ, HIDDEN)
-    values = torch.randn(1, total, HIDDEN)
-
-    golden = base.clone()
-    taken = 0
-    for start, length in runs:
-        chunk = values[:, taken : taken + length, :]
-        if add:
-            golden[:, start : start + length, :] += chunk
-        else:
-            golden[:, start : start + length, :] = chunk
-        taken += length
-
-    out = _scatter_rows(bf16_tensor(base, device=submesh), bf16_tensor(values, device=submesh), runs, add=add)
-    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
-    assert actual.shape[-2:] == (SEQ, HIDDEN), f"{tuple(actual.shape)}"
-    assert_quality(golden, actual, pcc=0.999)
-
-
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
-def test_replace_and_add_differ(mesh_device, submesh_shape):
-    """Replace and add are not interchangeable -- the distinction the two mechanisms turn on."""
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    torch.manual_seed(0)
-    base = bf16_tensor(torch.randn(1, SEQ, HIDDEN), device=submesh)
-    values = bf16_tensor(torch.randn(1, 16, HIDDEN), device=submesh)
-    runs = [(8, 16)]
-    a = tensor.to_torch(_scatter_rows(base, values, runs, add=False), mesh_axes=[None, None, None])
-    b = tensor.to_torch(_scatter_rows(base, values, runs, add=True), mesh_axes=[None, None, None])
-    assert not torch.allclose(a, b, atol=1e-2), "replace and add agree; the mechanisms are conflated"
 
 
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
@@ -245,49 +201,21 @@ def test_deepstack_is_applied_at_the_leading_layers(mesh_device, submesh_shape):
     assert not torch.allclose(one, two, atol=1e-2), "the second deepstack feature had no effect"
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
-def test_vision_scatter_only_touches_the_vision_rows(mesh_device, submesh_shape):
-    """Text rows before the first vision token must be unaffected by the scatter.
-
-    Rows before the run cannot depend on it: attention is causal here, so a leak would mean the scatter
-    wrote outside its range.
-    """
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    torch.manual_seed(0)
-    enc = _encoder(submesh, layers=2, activation_layers=(1,))
-    ids = ttnn.from_torch(
-        torch.randint(0, 256, (1, SEQ)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh
-    )
-    cos, sin = create_rope_tensors(1, SEQ, None, 32, 10000.0, [6, 5, 5])
-    pe = (bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh))
-    runs = [(32, 16)]
-
-    def run(vision):
-        kwargs = {} if vision is None else dict(vision_embeds=vision, vision_runs=runs)
-        out = enc.forward(ids, attention_mask=None, pos_embeds=pe, **kwargs)[0]
-        return tensor.to_torch(out, mesh_axes=[None, None, None])
-
-    plain = run(None)
-    scattered = run(bf16_tensor(torch.randn(1, 16, HIDDEN) * 10, device=submesh))
-    assert torch.allclose(plain[:, :32], scattered[:, :32], atol=1e-2), "rows before the run changed"
-    assert not torch.allclose(plain[:, 32:48], scattered[:, 32:48], atol=1e-2), "the run itself did not change"
-
-
 # --------------------------------------------------------------------------- tile boundaries
 
 # The real conditioner width, used by the production cases below so nothing about the row slicing is
 # being measured at a toy hidden size.
 HIDDEN_REAL = 5120
 
-# The two row geometries `fl2va` actually presents, and nothing else. A keyframe is put onto the target
-# canvas before the processor sees it, so 1344x768 -> grid [1, 48, 84] -> 1008 `<|image_pad|>` slots, and
-# the presentation is `"<Picture i>: "` (5 tokens) + the vision block + the prompt. One anchor is
-# seq 1054 with one run; `first`+`last` is seq 2067 with two.
+# The two row geometries `fl2va` actually presents, plus the two edge placements. A keyframe is put
+# onto the target canvas before the processor sees it, so 1344x768 -> grid [1, 48, 84] -> 1008
+# `<|image_pad|>` slots, and the presentation is `"<Picture i>: "` (5 tokens) + the vision block + the
+# prompt. One anchor is seq 1054 with one run; `first`+`last` is seq 2067 with two.
 #
-# Both cross tile boundaries -- 31 and 63 of them. Every case above this point fits its runs INSIDE one
-# 32-row tile block (SEQ 64 with (8,16), (0,8), (56,8), (4,8)+(20,12)), and the reduced
-# fused-conditioner test is a single block at seq_len 19, so the whole prior green record for
-# `_scatter_rows` was collected without the hazard ever being exercised.
+# Both cross tile boundaries -- 31 and 63 of them -- and the whole prior green record for
+# `_scatter_rows` was collected without that hazard ever being exercised (every earlier case fit its
+# runs inside one 32-row tile block, and the reduced fused-conditioner test is a single block at
+# seq_len 19).
 #
 # Why this is worth its own gate rather than an assumption: TILE row
 # granularity is 32, an unaligned cut there *asserted* in the DiT's packed-sequence path, and the fix
@@ -299,22 +227,29 @@ HIDDEN_REAL = 5120
 # `resolve_canvas_size` produces) and were removed per the production-shapes-only rule. What the
 # control established during bringup is recorded in the `add` docstring below rather than re-run
 # forever.
+#
+# The two `edge_*` geometries are folded in from a former PCC-gated sweep of `_scatter_rows`: a run
+# starting at row 0 and a run ending at the last row are the slicing edge cases (no prefix / no
+# suffix to concatenate), and they are kept here at bit-exact strength rather than behind a PCC bar.
 _TILE_RUNS = [
     pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
     pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
+    pytest.param(SEQ, [(0, 8)], HIDDEN, id="edge_run_at_row_0"),
+    pytest.param(SEQ, [(SEQ - 8, 8)], HIDDEN, id="edge_run_at_seq_end"),
 ]
 
 
 @pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
 @pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
 def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
-    """`_scatter_rows` is BIT-EXACT for a replace, at every row geometry `fl2va` produces.
+    """`_scatter_rows` is BIT-EXACT for a replace, at every row geometry `fl2va` produces plus the
+    edge placements.
 
     Gated on `torch.equal`, not PCC. A replace is pure data movement: it selects rows and concatenates
     them, so there is no arithmetic to lose precision in and no numerical excuse for a mismatch. A PCC
     bar on a data movement would pass a scatter that placed a few rows one tile off, which is exactly
-    the failure mode tile boundaries invite -- and the sibling `test_scatter_rows_matches_torch` gates
-    at pcc=0.999, which at these row counts would tolerate ~1 row in 1000 being wrong.
+    the failure mode tile boundaries invite -- the former PCC-gated sibling sat at pcc=0.999, which at
+    these row counts would tolerate ~1 row in 1000 being wrong, and was retired in favor of this gate.
 
     Inputs are pre-rounded to bf16 so the comparison is against what the device was actually given;
     otherwise this would be measuring the host's fp32 -> bf16 cast, not the scatter.

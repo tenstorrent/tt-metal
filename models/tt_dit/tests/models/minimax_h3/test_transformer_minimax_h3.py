@@ -177,79 +177,62 @@ def _modality_metadata(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "weights",
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
     [
-        pytest.param("random", id="random_weights"),
-        # Real checkpoint values at reduced depth. Random weights cannot exercise the trained
-        # distribution, and they hide norm-weight loading entirely unless `randomize_norm_weights`
-        # runs, `nn.RMSNorm` initialising to ones. Skipped unless MINIMAX_H3_MODEL_PATH is set.
-        pytest.param("checkpoint", id="real_weights"),
-    ],
-)
-@pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "cond_spec"),
-    [
-        # The three tile-aligned cases: every modality is a multiple of TILE (32), so the packed
+        # The two tile-aligned cases: every modality is a multiple of TILE (32), so the packed
         # sequence is assembled directly in TILE_LAYOUT. This is the cheap path and stays covered.
-        pytest.param(512, 256, 1280, (8, 8), (), id="small_s2048"),  # 2048: already aligned, no padding
+        pytest.param(512, 256, 1280, (8, 8), (), "random", id="small_s2048"),  # 2048: aligned, no padding
         # 2112 is a multiple of TILE but not of SP * TILE, so this one exercises the tail padding.
-        pytest.param(512, 256, 1344, (8, 8), (), id="unaligned_s2112"),  # 2112 -> padded to 2304
-        pytest.param(512, 256, 20736, (8, 8), (), id="s21504"),
+        pytest.param(512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"),  # 2112 -> padded to 2304
         # The shape that ships: 1344x768 / 124 frames, 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows (== 16 mod 32) and 207 audio latents x 2 channels =
         # 414 audio rows (== 30 mod 32), so this is the ROW_MAJOR assembly path -- and before that
         # path existed, this case asserted rather than ran.
         #
-        # The three cases above are tile-aligned by construction and cannot reach it. They are kept
+        # The two cases above are tile-aligned by construction and cannot reach it. They are kept
         # as the cheap regression net for the TILE path, but this is the one that gates what ships.
-        pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),  # 38222 -> padded to 38400
+        pytest.param(512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"),  # 38222 -> padded to 38400
+        # Real checkpoint values at reduced depth, on the production shape only -- the key-map and
+        # trained-distribution check does not vary by shape, so one case carries it for the whole
+        # list. Random weights cannot exercise the trained distribution, and they hide norm-weight
+        # loading entirely unless `randomize_norm_weights` runs, `nn.RMSNorm` initialising to ones.
+        # Skipped unless MINIMAX_H3_MODEL_PATH is set.
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", id="prod_768p_5s_real_weights"),
         # ---- fl2va: a keyframe conditioning block between text and audio ----
         #
         # The shape that ships for fl2va: one "first" anchor adds rows_per_frame = 1008 condition rows,
         # so 39230 -> padded to 39424. Both the condition block (1008 == 16 mod 32) and the target video
         # (37296 == 16 mod 32) are unaligned, so this is the ROW_MAJOR path.
-        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), id="prod_768p_5s_fl2va"),
+        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", id="prod_768p_5s_fl2va"),
         # Both fl2va anchors: 40238 -> padded to 40448. The condition block is 2016 rows (== 0 mod 32)
         # here while one anchor gives 1008 (== 16), so the two production fl2va cases cover both
         # residues of the condition stream without inventing a shape to do it.
-        pytest.param(512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), id="prod_768p_5s_fl2va_first_last"),
+        pytest.param(
+            512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", id="prod_768p_5s_fl2va_first_last"
+        ),
         # ---- ref2va: a MODALITY-INTERLEAVED conditioning region ----
         #
-        # The shape a single 2048x2048 image reference ships at, measured against the reference
-        # packing: 4104 presentation tokens (4096 of them one vision block) and
-        # 4096 condition rows, giving 45910 -> padded to 46080. All-video conditioning, so what this
-        # adds over fl2va is scale (1.22x t2va's packed length) and a condition block whose 64x64
-        # spatial grid is NOT the target's 24x42 -- a reference is prepared at its own resolution.
-        # This one does fit the CPU reference inside the per-test budget; the two longer ref2va shapes
-        # do not, which is why the interleaved cases below run at production residues instead.
-        pytest.param(4104, 414, 37296, (24, 42), (("video", 4096, (64, 64)),), id="prod_ref2va_1image"),
-        # A video reference WITH its soundtrack: audio rows packed immediately BEFORE its video rows,
-        # so the region is `[audio | video]` and the two projections apply per block. Also the first
-        # case with four distinct timestep levels, audio conditioning being a literal t = 1.0.
+        # One case carries all the ref2va ordering traps: an image-shaped block on its OWN 64x64 grid
+        # (a 2048x2048 image reference is prepared at its own resolution -- 4096 rows, measured
+        # against the reference packing -- NOT the target's 24x42), then a video block, then a
+        # standalone audio block LAST rather than paired with a video. So a split that assumed
+        # "audio always precedes video" is caught, as is one that used the target grid for every
+        # block. The audio block also makes this the case with four distinct timestep levels, audio
+        # conditioning being a literal t = 1.0, where t2va and fl2va address three.
         #
-        # Production RESIDUES, not production length -- audio cond 414 (30 mod 32), video cond 1008
-        # (16), target audio 414 (30), target video 3024 (16), sequence 5372 rather than 81488. What
-        # the interleaved region can get wrong is which projection a block takes and which rows it
-        # lands on, both residue- and order-sensitive rather than length-sensitive. The full lengths
-        # cost more than the budget allows here because the torch reference's attention is O(n^2) on
-        # CPU; they are covered at full depth by the real-weights test below.
-        pytest.param(
-            512,
-            414,
-            3024,
-            (24, 42),
-            (("audio", 414, None), ("video", 1008, (24, 42))),
-            id="ref2va_interleaved_audio_video",
-        ),
-        # The ordering trap: an image-shaped block on its OWN 64x64 grid, then a video block, then a
-        # standalone audio block LAST rather than paired with a video -- so a split that assumed
-        # "audio always precedes video" is caught, as is one that used the target grid for every block.
+        # Production RESIDUES, not production lengths -- audio cond 414 (30 mod 32), video cond 1008
+        # (16), target audio 414 (30), target video 3024 (16). What the interleaved region can get
+        # wrong is which projection a block takes and which rows it lands on, both residue- and
+        # order-sensitive rather than length-sensitive. The full ref2va lengths cost more than the
+        # budget allows here because the torch reference's attention is O(n^2) on CPU; they are
+        # covered at full depth by the real-weights test below.
         pytest.param(
             512,
             414,
             3024,
             (24, 42),
             (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
+            "random",
             id="ref2va_interleaved_audio_last",
         ),
     ],
@@ -636,36 +619,30 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
 @pytest.mark.parametrize(
     ("num_text", "num_audio", "num_video", "grid", "cond_spec"),
     [
-        pytest.param(512, 256, 1280, (8, 8), (), id="small_s2048"),
-        pytest.param(512, 256, 20736, (8, 8), (), id="s21504"),
         # The shape that ships: 1344x768 / 124 frames / 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows, 207 audio latents x 2 channels = 414 audio rows,
-        # total 38222 padded to 38400 -- 4800 rows per device at SP=8. Neither of the two cases
-        # above reaches this: they are tile-aligned by construction and 1.8x smaller, so they ask
-        # neither the ROW_MAJOR assembly question nor the residency one at full depth.
+        # total 38222 padded to 38400 -- 4800 rows per device at SP=8. The tile-aligned shapes the
+        # 2-layer test also runs (2048, 21504 packed) are strictly smaller and are implied by this
+        # one fitting: fit is monotone in padded length, and only this case asks the ROW_MAJOR
+        # assembly question at full depth.
         pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),
         # ---- ref2va: does it fit? ----
         #
-        # The ref2va shape probe. Its packed lengths were measured host-only against the
-        # reference packing and run 1.2x-3.0x t2va's, which is a residency question the
-        # 2-layer correctness test cannot answer and the t2va shape above does not reach. These three
-        # run the real 50 layers with the real checkpoint at the real padded lengths, so what they
-        # answer is exactly "does the shape the e2e gate will ask for fit on the mesh".
+        # The ref2va shape probe, run at its ceiling. ref2va packed lengths were measured host-only
+        # against the reference packing and run 1.2x-3.0x t2va's -- one 2048x2048 image reference
+        # pads to 46080, one video reference with soundtrack to 81664 -- which is a residency
+        # question the 2-layer correctness test cannot answer and the t2va shape above does not
+        # reach. This runs the real 50 layers with the real checkpoint at the largest padded length
+        # ref2va can ask for at this target resolution, so what it answers is exactly "does the
+        # shape the e2e gate will ask for fit on the mesh"; fit being monotone in padded length,
+        # the intermediate ref2va shapes above come with it.
         #
         # There is no reference here and no PCC; the shape/finiteness checks are the whole gate. The
         # verdict sets the e2e case list -- a case that does not fit becomes a documented gap with a
         # measured reason instead of a surprise at the end.
-        pytest.param(4104, 414, 37296, (24, 42), (("video", 4096, (64, 64)),), id="ref2va_1image_s46080"),
-        pytest.param(
-            6068,
-            414,
-            37296,
-            (24, 42),
-            (("audio", 414, None), ("video", 37296, (24, 42))),
-            id="ref2va_1video_s81664",
-        ),
+        #
         # Nine 2048x2048 image references: the documented ceiling on images, 111616 padded, 13952 rows
-        # per device. The largest shape ref2va can ask for at this target resolution.
+        # per device.
         pytest.param(
             36872,
             414,
@@ -914,10 +891,11 @@ def _packed_position_ids(T: int, H: int, W: int) -> torch.Tensor:
 @pytest.mark.parametrize(
     ("T", "H", "W"),
     [
-        # Grids chosen so seq_len is divisible by sp_factor * TILE (8 * 32 = 256). A padless packed
-        # sequence needs no attention mask, which is what the reference's fast path assumes.
+        # Grid chosen so seq_len is divisible by sp_factor * TILE (8 * 32 = 256). A padless packed
+        # sequence needs no attention mask, which is what the reference's fast path assumes. One
+        # small shape: the module is length-agnostic, and the long-sequence question is answered by
+        # the transformer tests above.
         pytest.param(4, 32, 32, id="small_s1024"),
-        pytest.param(21, 64, 64, id="s21504"),
     ],
 )
 def test_minimax_h3_attention(
@@ -932,7 +910,8 @@ def test_minimax_h3_attention(
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
-    # Measured 0.9997 on both params at bringup; 0.995 leaves margin without being a rubber stamp.
+    # Measured 0.9997 at bringup on both this shape and the since-dropped s21504 (T21 H64 W64);
+    # 0.995 leaves margin without being a rubber stamp.
     MIN_PCC = 0.995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -1116,9 +1095,10 @@ def _packed_layout(num_text: int, num_audio: int, num_video: int) -> tuple[torch
     ("num_text", "num_audio", "num_video"),
     [
         # seq_len must be divisible by sp_factor * TILE (8 * 32 = 256) so the packed sequence is
-        # padless and needs no attention mask.
+        # padless and needs no attention mask. One small shape: the AdaLN gather this test exists to
+        # gate (see the measured bug bounds below) is per-row and length-independent, and the long
+        # sequences run in the transformer tests above.
         pytest.param(512, 256, 1280, id="small_s2048"),
-        pytest.param(512, 256, 20736, id="s21504"),
     ],
 )
 def test_minimax_h3_transformer_block(
@@ -1142,7 +1122,8 @@ def test_minimax_h3_transformer_block(
     #   off-by-one modality        0.9962      timestep ignored           0.9973
     #   tags/timesteps swapped     0.9967      modality ignored           0.9984
     # A loose threshold (0.99, say) would therefore pass a completely broken AdaLN gather. The real
-    # implementation measures 0.999995 on both params, so 0.9995 sits clear of both bounds.
+    # implementation measures 0.999995 on both this shape and the since-dropped s21504, so 0.9995
+    # sits clear of both bounds.
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -1300,8 +1281,8 @@ def test_minimax_h3_transformer_block(
 @pytest.mark.parametrize(
     "prompt_seq_len",
     [
+        # 512 is the production prompt length; the refiner is length-agnostic beyond tile alignment.
         pytest.param(512, id="l512"),
-        pytest.param(1024, id="l1024"),
     ],
 )
 def test_minimax_h3_token_refiner(

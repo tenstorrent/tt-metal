@@ -4,6 +4,16 @@
 
 """End-to-end `t2va`: a prompt in, an mp4 with a soundtrack out, at the production working point.
 
+One test carries both the fully-warm latency measurement and the quality gates, folded into a
+single weight load: build the pipeline once, run one full warmup generation at the target shape
+(`MiniMaxH3Pipeline.warmup`, the analogue of `LTXPipeline.warmup_buffers`), then run the timed
+generation and gate *its* output. The timing method is `pipelines/ltx`'s, so the numbers stay
+comparable: prepares and export excluded, `Total (compute)` = the sum of `pipeline.last_timings`
+rows, and only the fully-warm second call is quoted. There is no tuned perf target yet -- the
+bringup directive was "current perf, no tuning" -- so `EXPECTED_TOTAL_S` is a loose
+did-something-collapse bar, not a performance target. Duration scaling (10 s / 15 s) is covered by
+the block-level test in `test_performance_minimax_h3.py`, not here.
+
 There is no torch reference for a whole generation -- 50 layers over 38222 rows for 49 steps is not
 a CPU computation -- so correctness here is established by the tiers that do not need one, in the
 order they catch things:
@@ -84,6 +94,10 @@ PROMPT = (
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
+
+# Generous: a regression bar, not a target. Measured fully-warm total is well inside this, and the
+# point is to notice a collapse (a lost cache, a fallback kernel) rather than to police seconds.
+EXPECTED_TOTAL_S = 400.0
 
 # The pipeline's CCLManager runs ring collectives, so the fabric must be FABRIC_1D_RING. Taken from
 # the shared helper rather than hand-written: on a plain FABRIC_1D (line) fabric a ring collective
@@ -170,7 +184,25 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     if run_clip:
         pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is not installed (set RUN_CLIP=0)")
 
+    if not os.environ.get("TT_DIT_CACHE_DIR"):
+        logger.warning(
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
+            "from the total either way, but the run will take far longer than the reported compute."
+        )
+
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir)
+
+    # ---- fully-warm latency, `pipelines/ltx`'s method ----
+    # Warm every program and buffer this shape touches, at the real prompt. Not timed: this is the
+    # warm-window method, not the measurement.
+    pipeline.warmup(
+        prompt=prompt, num_frames=NUM_FRAMES, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS
+    )
+    warm_padded_len = pipeline.last_padded_len
+    # Prime the disk cache so the Encoder row is the cache-hit row every reported number quotes;
+    # `warmup` runs with `use_prompt_cache=False`, so it compiles the conditioner but writes nothing.
+    pipeline.encode_prompt(prompt, use_cache=True)
+
     output = pipeline(
         prompt,
         num_frames=NUM_FRAMES,
@@ -180,14 +212,38 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
         seed=SEED,
     )
 
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
+    )
+
     expected_frames = align_num_frames(NUM_FRAMES)
     logger.info(
         f"generated {output.num_frames} frames ({output.video_seconds:.3f} s) and "
         f"{output.audio_seconds:.3f} s of audio at {output.sampling_rate} Hz"
     )
-    # Latency is recorded, not gated: this is a bringup run at current perf.
-    for name, seconds in output.timings.items():
-        logger.info(f"LATENCY {name}: {seconds:.1f} s")
+
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    logger.info(
+        f"MEASUREMENT t2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "
+        f"| {WIDTH}x{HEIGHT}, {expected_frames} frames @ {MINIMAX_H3_FPS} fps "
+        f"({expected_frames / MINIMAX_H3_FPS:.2f} s), {num_forwards} forwards, padded_len {warm_padded_len} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for label, seconds in rows:
+        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / (expected_frames / MINIMAX_H3_FPS):8.1f} x  (compute / video seconds)")
+    # No tuned target yet (bringup at current perf); this is a loose did-something-collapse bar.
+    assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
 
     frames = _to_uint8_frames(output.video)
 

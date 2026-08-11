@@ -85,9 +85,21 @@ _MESH = [
     pytest.param((4, 8), (4, 8), 1, 2, _FABRIC, id="tp8_axis1"),
     pytest.param((8, 4), (8, 4), 0, 2, _FABRIC, id="tp8_axis0"),
 ]
+# The layer test runs the full matrix; the attention/MLP isolation tests keep debugging granularity
+# but only one representative mesh config. `tp8_axis1` is the (4, 8) mesh the MiniMax-H3 pipeline
+# actually deploys on (every `test_pipeline_*_minimax_h3.py` uses a (4, 8) mesh), and it reproduces
+# the sharded matmul shapes listed in the header; `single` and `tp8_axis0` are still covered at the
+# layer level above.
+_MESH_REPRESENTATIVE = [_MESH[1]]
+
 _PARAMS = pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params"),
     _MESH,
+    indirect=["mesh_device", "device_params"],
+)
+_PARAMS_REPRESENTATIVE = pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params"),
+    _MESH_REPRESENTATIVE,
     indirect=["mesh_device", "device_params"],
 )
 
@@ -180,24 +192,12 @@ def _rope(submesh):
     # checkpoint declares `mrope_interleaved`: the two layouts coincide exactly while all three MRoPE
     # axes carry the same position, which is the text-only case. Verified equal here to 7.6e-6, i.e.
     # the documented `theta ** -x` vs `1 / theta ** x` ulp difference and nothing else.
+    #
+    # Omitting `position_ids` must stay equivalent to passing the token index on all three axes -- the
+    # call Ideogram 4.0 makes through the shared encoder. That equivalence is pinned by the host-only
+    # `test_qwen3vl_mrope.py::test_position_ids_default_is_the_shared_token_index`, so it is not
+    # re-asserted here.
     cos, sin = create_rope_tensors(1, SEQ_LEN, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION)
-
-    # Omitting `position_ids` must stay equivalent to passing the token index on all three axes. This is
-    # the call Ideogram 4.0 makes through the shared encoder, and `test_qwen3vl.py` -- the test that
-    # would otherwise catch a regression -- is pinned to a (2, 4) mesh, so this is the only guard that
-    # currently runs.
-    explicit = create_rope_tensors(
-        1,
-        SEQ_LEN,
-        None,
-        HEAD_DIM,
-        ROPE_THETA,
-        MROPE_SECTION,
-        position_ids=torch.arange(SEQ_LEN).view(1, 1, -1).expand(3, 1, -1),
-    )
-    for a, b, which in zip((cos, sin), explicit, ("cos", "sin")):
-        assert torch.equal(a, b), f"{which}: omitting position_ids no longer matches the shared token index"
-
     return bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)
 
 
@@ -233,7 +233,7 @@ def test_decoder_block_on_device(golden, mesh_device, submesh_shape, tp_axis, nu
     assert_quality(golden["layer_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
 
 
-@_PARAMS
+@_PARAMS_REPRESENTATIVE
 def test_decoder_attention_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
     """Attention alone: fused qkv, per-head QK-RMSNorm, RoPE, SDPA, o_proj. Excludes the residual and
     the input norm, so it attributes the `qkv_proj` / `o_proj` half of the layer's time."""
@@ -259,7 +259,7 @@ def test_decoder_attention_on_device(golden, mesh_device, submesh_shape, tp_axis
     assert_quality(golden["attn_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
 
 
-@_PARAMS
+@_PARAMS_REPRESENTATIVE
 def test_decoder_mlp_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
     """MLP alone: SwiGLU over `intermediate_size` 25600. Three of the layer's four matmuls by FLOPs,
     so this is where the layer's time is expected to sit."""

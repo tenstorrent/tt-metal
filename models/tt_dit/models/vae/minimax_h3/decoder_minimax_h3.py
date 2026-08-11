@@ -224,6 +224,13 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self.norm2 = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device, dtype=dtype)
         inner = dim * ffn_mult
+        # The checkpoint's ``ff.net.0.proj`` packs ``[value; gate]``, which is exactly
+        # tt_dit's swiglu convention, so the halves load as-is. This is unlike the H3
+        # *DiT*, whose ``fc1`` halves must be swapped -- that swap came from the raw
+        # MiniMax layout, not the diffusers-converted one, and applying it here would
+        # silently corrupt every FFN. Verified against ``diffusers.FeedForward``: the
+        # first half is the value (out = W2(first * silu(second))), and the swapped
+        # order does not reproduce the reference, so exactly one order is right.
         self.ff1 = Linear(dim, inner, bias=True, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype)
         self.ff2 = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
         # LayerScale, initialised to zeros in the reference and trained.

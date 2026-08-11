@@ -5,6 +5,7 @@
 """Shared helpers for the MiniMax-H3 bringup tests."""
 
 import json
+import math
 import os
 
 import numpy as np
@@ -80,6 +81,20 @@ def random_decoder_state(config: dict, *, num_layers: int | None = None) -> dict
         norm_eps=config["decoder_norm_eps"],
     )
     return dict(module.state_dict())
+
+
+def psnr(reference: torch.Tensor, test: torch.Tensor) -> float:
+    """Peak signal-to-noise ratio in dB, with the peak taken from the reference's own range.
+
+    The roundtrip quality gates use this rather than PCC alone: PCC per component says the
+    port matches the reference, but a faint vignette or a dull high end sails through a
+    0.99 PCC and shows up as a PSNR drop.
+    """
+    mse = torch.mean((reference.float() - test.float()) ** 2).item()
+    if mse == 0.0:
+        return float("inf")
+    peak = reference.abs().max().item()
+    return float("inf") if peak == 0.0 else 20.0 * math.log10(peak) - 10.0 * math.log10(mse)
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:

@@ -4,16 +4,26 @@
 
 """MiniMax-H3 `fl2va` end to end: a prompt plus a first and/or last keyframe in, video and audio out.
 
-Three cases, the three tasks the reference's `_workflow_map` names:
+ONE combined perf + quality e2e, on the `first_and_last` case: it strictly supersets the lone
+`first` and lone `last` cases on packing and scatter coverage -- two conditioning blocks (2016
+rows), a two-run vision scatter in the conditioner, and both preparation paths (stretch for the
+geometry anchor, cover-crop for the follower). The one behaviour the dropped `last` case gated
+that `first_and_last` cannot -- a lone `last_image` being the geometry anchor and therefore
+*stretched*, not cover-cropped -- is pinned host-side by
+`test_lone_last_keyframe_is_stretched_not_cover_cropped`, for free.
 
-    first            `image=`                   -> fl2va
-    last             `last_image=`              -> fl2va_last_frame
-    first_and_last   both                       -> fl2va with two anchors
+The test folds the fully-warm latency measurement and the quality gates into one weight load:
+warmup at the real shape (keyframes included), prime the prompt cache, then time the measured
+generation and gate its output. The timing method is `pipelines/ltx`'s -- prepares and export
+excluded, `Total (compute)` = the sum of `pipeline.last_timings` rows -- so the number is
+comparable to the t2va row in `test_pipeline_minimax_h3.py`. Three warmth conditions are asserted
+rather than assumed (see the comments in the test); each has bitten a measurement in this model's
+bringup or its sibling's.
 
 A separate file from `test_pipeline_minimax_h3.py` rather than more cases in it, so the
 two e2e gates default to separate processes. One process holding the 50-block DiT's programs *and*
-its CCL persistent buffers at several different padded sequence lengths (37888 for t2va, 39424 and
-40448 for the two fl2va layouts) is a memory risk nobody has measured.
+its CCL persistent buffers at several different padded sequence lengths (37888 for t2va, 40448
+for the two-anchor fl2va layout) is a memory risk nobody has measured.
 
 What this gates beyond the t2va tiers
 -------------------------------------
@@ -127,6 +137,10 @@ ANCHOR_PCC_FLOOR = 0.95
 # generation; an arbitrary keyframe would need its own calibration.
 CLIP_THRESHOLD = 33.0
 
+# Generous: a regression bar, not a target -- same convention as the t2va gate's. There is no tuned
+# perf target yet; the point is to notice a collapse (a lost cache, a fallback kernel).
+EXPECTED_TOTAL_S = 400.0
+
 
 def _weights_dir() -> Path:
     directory = Path(os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS))
@@ -174,26 +188,45 @@ def _first_frame(path: Path) -> Image.Image:
     return Image.fromarray(np.asarray(iio.imread(path, index=0, plugin="pyav"))).convert("RGB")
 
 
-@pytest.mark.timeout(7200)
+@pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(
-    ("anchors", "case"),
-    [
-        pytest.param(("first",), "first", id="first"),
-        # A lone `last_image` is the geometry anchor, so it is *stretched* despite being the "last"
-        # anchor. That looks like a bug in `prepare_keyframe_image` until this case passes.
-        pytest.param(("last",), "last", id="last"),
-        # The only case with two conditioning blocks: 2016 rows, a two-run vision scatter in the
-        # conditioner, and the cover-crop path for the follower keyframe.
-        pytest.param(("first", "last"), "first_and_last", id="first_and_last"),
-    ],
-)
-def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
+def test_fl2va_end_to_end(mesh_device, reset_seeds):
+    """The `first_and_last` case: two conditioning blocks (2016 rows), a two-run vision scatter in
+    the conditioner, and both keyframe-preparation paths -- stretch for the geometry anchor and
+    cover-crop for the follower. Perf and quality on the same timed generation.
+    """
+    case = "first_and_last"
     keyframe = _gated_keyframe()
-    image = keyframe if "first" in anchors else None
-    last_image = keyframe if "last" in anchors else None
+    image = keyframe
+    last_image = keyframe
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+
+    # ---- fully-warm latency, `pipelines/ltx`'s method. Three things have to be right or the
+    # number means nothing:
+    # 1. The warmup must be fl2va-shaped, keyframes included: every program in the 50-block stack
+    #    is keyed on the padded packed length, so a t2va warmup warms nothing for fl2va.
+    # 2. The warmup must run at the same prompt length -- asserted below rather than assumed. t2va
+    #    got away with a one-token "warmup" prompt purely by luck (1 and 39 tokens both round up to
+    #    37888); with two ~1008-row vision blocks that luck is gone.
+    # 3. The embedding cache must be populated: `warmup` runs with `use_prompt_cache=False`, so it
+    #    compiles the conditioner and writes nothing. Without the priming call the measured run
+    #    would pay a full device conditioner encode -- vision tower included -- inside the timed
+    #    Encoder row.
+    pipeline.warmup(
+        prompt=PROMPT,
+        image=image,
+        last_image=last_image,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
+    warm_padded_len = pipeline.last_padded_len
+    # (3): the gated keyframe is already at canvas size (asserted in `_gated_keyframe`), so the
+    # pipeline's preparation is the identity and these are the keyframes its cache key digests.
+    pipeline.encode_prompt(PROMPT, keyframes=[image, last_image], use_cache=True)
+
     output = pipeline(
         PROMPT,
         image=image,
@@ -205,11 +238,39 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
         seed=SEED,
     )
 
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
+    )
+
     expected_frames = align_num_frames(NUM_FRAMES)
     logger.info(
-        f"fl2va[{case}] anchors={anchors} padded_len={pipeline.last_padded_len} "
+        f"fl2va[{case}] padded_len={pipeline.last_padded_len} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
+
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    logger.info(
+        f"MEASUREMENT fl2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "
+        f"| {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
+        f"({expected_frames / output.fps:.2f} s), {num_forwards} forwards, first+last anchors, "
+        f"padded_len {warm_padded_len} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for label, seconds in rows:
+        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / (expected_frames / output.fps):8.1f} x  (compute / video seconds)")
+    # No tuned target yet (bringup at current perf); a loose did-something-collapse bar.
+    assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
     assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 
     frames = (output.video[0].permute(1, 2, 3, 0).clamp(0, 1) * 255).round().to(torch.uint8).numpy()
@@ -301,6 +362,60 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
         "whole-tensor metric averages away, and both are parallelism bugs"
     )
+
+
+# ------------------------------------------------------------------ host: keyframe preparation
+#
+# The one behaviour the dropped lone-`last` e2e case gated that `first_and_last` cannot: which
+# preparation path a lone `last_image` takes. Pinned here on host, for free, instead of with a
+# third 90-second generation.
+
+
+def test_lone_last_keyframe_is_stretched_not_cover_cropped():
+    """A lone `last_image` is the geometry anchor, so it is *stretched* -- not cover-cropped.
+
+    The pipeline keys `stretch` on position in the keyframe list, not on the anchor name:
+    `sources = [k for k in (image, last_image) if k is not None]` followed by
+    `prepare_keyframe_image(k, height, width, stretch=(i == 0))`. With `image=None` a lone
+    `last_image` sits at index 0 and is stretched, despite being the "last" anchor. That looks
+    like a bug in `prepare_keyframe_image` until this rule is read; the e2e `last` case used to
+    prove it end to end, and this pins it host-side.
+
+    The source is 1:1 against the 16:9 canvas with a marker band on its top edge, so the two
+    preparation paths are genuinely distinguishable: a stretch distorts aspect but keeps every
+    source pixel, while a cover-crop (scale by `max(W/w, H/h)`, centre-crop) discards the top and
+    bottom of a 1:1 source outright.
+    """
+    source = np.zeros((512, 512, 3), dtype=np.uint8)
+    source[:64, :, 0] = 255  # top band: red
+    source[-64:, :, 2] = 255  # bottom band: blue
+    source[:, :, 1] = 32  # non-zero interior so the crop is not comparing zeros to zeros
+    keyframe = Image.fromarray(source)
+
+    # The pipeline's own rule, replicated for the lone-last request (image=None).
+    image, last_image = None, keyframe
+    sources = [k for k in (image, last_image) if k is not None]
+    prepared = [prepare_keyframe_image(k, HEIGHT, WIDTH, stretch=(i == 0)) for i, k in enumerate(sources)]
+    assert len(prepared) == 1
+
+    stretched = prepare_keyframe_image(keyframe, HEIGHT, WIDTH, True)
+    cropped = prepare_keyframe_image(keyframe, HEIGHT, WIDTH, False)
+    got = np.asarray(prepared[0])
+
+    # Both paths land on the canvas, and they are genuinely different preparations -- otherwise
+    # this test could not distinguish them and would gate nothing.
+    assert prepared[0].size == stretched.size == cropped.size == (WIDTH, HEIGHT)
+    assert not np.array_equal(np.asarray(stretched), np.asarray(cropped))
+
+    # The rule: the lone-last anchor took the stretch path, bit for bit.
+    assert np.array_equal(got, np.asarray(stretched)), "a lone last_image must be stretched (it is the geometry anchor)"
+
+    # And the semantics that make the distinction matter: the stretch keeps the source's edges
+    # (the marker bands survive), where the cover-crop of a 1:1 source onto 16:9 discards them.
+    assert np.asarray(stretched)[0, :, 0].mean() > 200, "stretch must keep the source's top edge"
+    assert np.asarray(stretched)[-1, :, 2].mean() > 200, "stretch must keep the source's bottom edge"
+    assert np.asarray(cropped)[0, :, 0].mean() < 50, "cover-crop of a 1:1 source must discard the top band"
+    assert np.asarray(cropped)[-1, :, 2].mean() < 50, "cover-crop of a 1:1 source must discard the bottom band"
 
 
 @pytest.mark.timeout(7200)

@@ -185,13 +185,18 @@ _PARAMS = pytest.mark.parametrize(
 # asserting shapes and finiteness. Same ids as the other tt_dit tests -- see
 # models/wan2_2/test_all_gather_minimal_matmul_async.py.
 #
-# `perf` is what makes the large grids usable here. The golden is a 27-layer CPU forward whose attention
-# is quadratic within each block, so `max_load` (18 blocks, the largest 16384 patches) and the 65536-row
-# grids are dominated by it -- and those cases exist to exercise capacity, tiling and dispatch rather than
-# arithmetic, since accuracy is established by the smaller grids. It is also the mode to use under
-# `python -m tracy`, where the CPU forward would otherwise swamp the capture. A green `perf` run says
-# nothing about accuracy.
-_MODE = pytest.mark.parametrize("check_pcc", [True, False], ids=["check", "perf"])
+# `perf` is what makes the large grids usable here, and it runs ONLY on the grids it exists for. The
+# golden is a 27-layer CPU forward whose attention is quadratic within each block, so `max_load` (18
+# blocks, the largest 16384 patches) and the 65536-row grids are dominated by it -- and those cases
+# exercise capacity, tiling and dispatch rather than arithmetic, since accuracy is established by the
+# smaller grids. It is also the mode to use under `python -m tracy`, where the CPU forward would
+# otherwise swamp the capture. A green `perf` run says nothing about accuracy; the small grids get
+# nothing from it, so they run in `check` mode only.
+_PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
+assert all(name in GRIDS for name in _PERF_GRIDS)
+_CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
+    pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS
+]
 
 
 def _parallel_args(submesh, tp_axis, sp_axis, num_links):
@@ -228,8 +233,7 @@ def _shard(x, submesh, sp_axis):
 
 
 @_PARAMS
-@pytest.mark.parametrize("name", list(GRIDS))
-@_MODE
+@pytest.mark.parametrize(("name", "check_pcc"), _CASES)
 def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
     """The full tower: patch embed, position embeddings, every block, all four mergers.
 

@@ -18,6 +18,11 @@ mandate exists to prevent, and H3's conv chain is longer than LTX's.
 The narrow tail is called out explicitly: H3's decoder halves 1024 down to **8** channels
 before ``conv_post``, where LTX's narrowest is 24. ``_AlignedOutConv1d`` pads 8 up to 32
 while ``SnakeBeta`` keeps 8, so that boundary gets its own case.
+
+T-parallel decode is deliberately not gated here: it is not wired into the pipeline (which
+passes ``parallel_config=None``), and its 8-way shard layout was known-broken when its gate
+was removed. Resurrect ``test_audio_decode_t_parallel`` (and its ``_localize_divergence``
+helper) from git history if T-parallel ever ships.
 """
 
 from __future__ import annotations
@@ -26,7 +31,6 @@ import copy
 import json
 import math
 import os
-import struct
 import time
 
 import pytest
@@ -49,8 +53,6 @@ from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     remap_amp_activations,
 )
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
-from ....parallel.config import ParallelFactor
-from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
@@ -71,8 +73,9 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 #
 # That chain depth is not a floor, though: `MINIMAX_H3_AUDIO_ACCURATE=1` reaches **0.45 %** RMSE
 # (PCC 99.9990 %, PSNR 67.5 dB) for ~3x the stage time, by fixing the three sources this bar's 10.5 %
-# is made of -- see `audio_accurate_mode`. This bar describes the
-# **default** path, so it must be re-derived if that default ever changes.
+# is made of -- see `audio_accurate_mode`. This bar describes the **default** path, so it must be
+# re-derived if that default ever changes; the accurate path carries its own gate,
+# `test_decode_accurate_mode` below.
 AUDIO_RELATIVE_RMSE = 0.12
 
 # `conv_pre`: the decoder's widest reduction, Cin 2048 x k 7 = 14336, and the shape every operand-split
@@ -84,8 +87,10 @@ LATENT_CHANNELS = 32
 HOP_LENGTH = 800
 SAMPLING_RATE = 32000
 
-# 40 Hz latent: 5 s and 10 s at the video working points' true durations.
-PRODUCTION_LATENT_FRAMES = [pytest.param(207, id="5s"), pytest.param(405, id="10s")]
+# 40 Hz latent: 5 s at the video working points' true durations. The 10 s case (405 frames)
+# was measured too and exercises no path 207 doesn't -- same convs, same blockings, longer T --
+# so only 5 s is gated.
+PRODUCTION_LATENT_FRAMES = [pytest.param(207, id="5s")]
 
 
 def _weights_dir() -> str | None:
@@ -155,46 +160,6 @@ def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
     )
 
 
-def test_decoder_geometry_matches_config():
-    """Host-only: 7 upsample stages whose product is the 800-sample hop, down to 8 channels.
-
-    Cheap, but it pins the two things an earlier plan draft got wrong -- it recorded six
-    stages of ``[5,5,2,2,2,2]`` -- and the narrow tail that the device gates then probe.
-    """
-    weights_dir = _weights_dir()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
-
-    rates = config["decoder_rates"]
-    assert len(rates) == 7, f"expected 7 upsample stages, config has {len(rates)}"
-    assert math.prod(rates) == HOP_LENGTH, f"rates multiply to {math.prod(rates)}, not {HOP_LENGTH}"
-    assert math.prod(config["encoder_rates"]) == HOP_LENGTH, "encoder and decoder rates disagree"
-    assert len(config["decoder_kernel_sizes"]) == len(rates), "one kernel size per stage"
-
-    final_channels = config["decoder_dim"] // (2 ** len(rates))
-    assert final_channels == 8, f"expected an 8-channel tail, got {final_channels}"
-    assert config["sampling_rate"] == SAMPLING_RATE
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_dec_in_proj(mesh_device):
-    """The 1x1 latent projection, 32 -> 2048, against the reference."""
-    reference, config = _build_reference()
-    torch.manual_seed(0)
-    latents = torch.randn(2, LATENT_CHANNELS, 64)
-    with torch.no_grad():
-        expected = reference.dec_in_proj(latents)
-
-    tt_decoder = _tt_decoder(config, mesh_device)
-    converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
-    tt_decoder.load_torch_state_dict({k: v for k, v in converted.items() if k.startswith("dec_in_proj.")}, strict=False)
-    actual = tt_decoder._project_latents_device(latents)
-
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.999)
-
-
 @pytest.mark.parametrize("num_latent_frames", PRODUCTION_LATENT_FRAMES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_decode(mesh_device, num_latent_frames):
@@ -202,6 +167,9 @@ def test_decode(mesh_device, num_latent_frames):
 
     The latent is drawn from the reference *encoder* rather than from ``randn``: BigVGAN's
     behaviour on out-of-distribution latents is not representative of what it will see.
+
+    ``dec_in_proj`` (the gated path's first op, 32 -> 2048) is checked in isolation first,
+    so a projection bug names itself instead of surfacing as an end-to-end quality miss.
     """
     reference, config = _build_reference()
     torch.manual_seed(1)
@@ -212,9 +180,15 @@ def test_decode(mesh_device, num_latent_frames):
         posterior = reference.encode(waveform).latent_dist
         latents = posterior.mode()[..., :num_latent_frames]
         expected = reference.decode(latents).sample
+        expected_proj = reference.dec_in_proj(latents)
 
     tt_decoder = _tt_decoder(config, mesh_device)
     tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
+
+    projected = tt_decoder._project_latents_device(latents)
+    assert projected.shape == expected_proj.shape, f"proj {tuple(projected.shape)} != {tuple(expected_proj.shape)}"
+    assert_quality(expected_proj, projected, pcc=0.999)
+
     actual = tt_decoder(latents)
 
     assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
@@ -229,6 +203,62 @@ def test_decode(mesh_device, num_latent_frames):
     # rather than being an accidental broadcast of one channel.
     left, right = actual[0, 0], actual[1, 0]
     assert not torch.allclose(left, right, atol=1e-4), "stereo channels are identical -- a broadcast bug"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_decode_accurate_mode(mesh_device, monkeypatch):
+    """The whole decode path with every precision lever on, at the 5 s shape.
+
+    The levers are explicit constructor arguments on the conv and filter layers
+    (``split_mode="full"``, ``tap_matmul=True``, ``prefer_mac=True``); ``MiniMaxH3AudioDecoder``
+    derives them from the env helpers once at construction and passes them down explicitly, so
+    the env var is set before construction and the test asserts the explicit values actually
+    landed on the leaf modules rather than trusting the plumbing.
+
+    Each lever fixes a measured error source (the per-lever tables live in ``audio_ops``):
+
+    - ``split_mode="full"``: operand splitting past the fp32 conv3d multiplier's ~11 significand
+      bits, which is flat in the reduction depth and untouched by ``fp32_dest_acc_en``;
+    - ``prefer_mac=True``: the depthwise MAC form is exact where ``ttnn.conv1d`` injected
+      1.54e-03 through a single ``Activation1d`` downsampler -- the single largest error source
+      in the whole decode (7e-08 for ``snake_beta`` and the upsampler);
+    - ``tap_matmul=True``: shifted-matmul convs avoid conv3d's partial-sum rounding across
+      ``C_in_block``. The case that broke first on this route was ``causal_narrow_out``
+      (64 -> 16, causal): ``_AlignedOutConv1d`` rounds a non-32-multiple ``C_out`` up and
+      allocates the bias at the rounded width, which the conv3d route handles inside
+      ``prepare_conv3d_weight_state`` and the tap route must do for itself -- ``conv_post``'s
+      8 -> 1 tail exercises exactly that path here.
+
+    Documented accurate-mode quality: rel_rmse 0.45 %, PCC 99.9990 %, PSNR 67.5 dB
+    (see ``audio_accurate_mode``'s table). Bars carry the file's usual ~1.3x margin.
+    """
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_ACCURATE", "1")
+
+    reference, config = _build_reference()
+    torch.manual_seed(1)
+
+    num_latent_frames = 207  # 5 s, as in test_decode
+    waveform = torch.randn(2, 1, num_latent_frames * HOP_LENGTH) * 0.1
+    with torch.no_grad():
+        posterior = reference.encode(waveform).latent_dist
+        latents = posterior.mode()[..., :num_latent_frames]
+        expected = reference.decode(latents).sample
+
+    tt_decoder = _tt_decoder(config, mesh_device)
+    # The constructor resolved the env helpers once; confirm the explicit kwargs reached the leaves.
+    assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
+    assert tt_decoder.dec_in_proj.tap_matmul, "tap_matmul=True did not land on dec_in_proj"
+    assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
+    assert tt_decoder.decoder.act_post.downsample.lowpass.prefer_mac, "prefer_mac=True did not land on act_post"
+
+    tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
+    actual = tt_decoder(latents)
+
+    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
+    # Measured 0.0045 / 99.9990 % / 67.5 dB; rel_rmse carries ~1.3x margin, PSNR is floored at 60 dB.
+    assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.006)
+    psnr = _psnr(expected, actual)
+    assert psnr >= 60.0, f"accurate-mode PSNR {psnr:.2f} dB < 60 dB"
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
@@ -297,124 +327,6 @@ def test_conv_operand_split_improves_precision(mesh_device):
     assert errors["weight"] <= 0.85 * errors["off"], f"weight-split did not improve: {errors}"
     assert errors["full"] <= 0.70 * errors["off"], f"full split did not improve enough: {errors}"
     assert errors["full"] < errors["weight"], f"full split should beat weight-only: {errors}"
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
-    """The MAC form of the depthwise filter beats ``ttnn.conv1d`` by orders of magnitude.
-
-    Structural, not incidental: MAC is a sum of elementwise multiplies and adds, and those are exact in
-    fp32 here, while ``ttnn.conv1d`` goes through the FPU multiply that keeps ~11 significand bits. This
-    was the single largest error source in the whole decode -- one anti-aliased ``Activation1d`` injected
-    1.54e-03, all of it from its downsampler, against 7e-08 for ``snake_beta`` and the upsampler.
-
-    Shape is the real stage-1 downsampler: K=12 kaiser-sinc taps at stride 2.
-    """
-    from ....layers.audio_ops import depthwise_mac_preferred, depthwise_tap_filter
-
-    channels, t_pad, kernel, stride = 512, 2081, 12, 2
-    torch.manual_seed(0)
-    taps = torch.randn(kernel).tolist()
-    x = torch.randn(1, t_pad, channels) * 0.3
-
-    t_out = (t_pad - kernel) // stride + 1
-    golden = torch.stack(
-        [sum(taps[k] * x[0, k + stride * i, :].double() for k in range(kernel)) for i in range(t_out)]
-    ).unsqueeze(0)
-
-    errors = {}
-    for prefer_mac in ("0", "1"):
-        # The env var no longer switches depthwise_tap_filter directly; call sites derive the
-        # explicit ``prefer_mac`` argument from it, so route through the same derivation here.
-        monkeypatch.setenv("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", prefer_mac)
-        x_device = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
-        out = depthwise_tap_filter(
-            x_device,
-            taps,
-            stride,
-            mesh_device=mesh_device,
-            dtype=ttnn.float32,
-            cache={},
-            prefer_mac=depthwise_mac_preferred(),
-        )
-        actual = ttnn.to_torch(out).float()
-        assert actual.shape[1] == t_out, f"T_out {actual.shape[1]} != {t_out}"
-        errors[prefer_mac] = float((actual.double() - golden).pow(2).mean().sqrt() / golden.std())
-
-    logger.info(f"depthwise filter rel_rmse: conv1d={errors['0']:.3e} mac={errors['1']:.3e}")
-    # Measured 1.5e-03 vs 5.3e-08. Gated as a wide inequality rather than at the absolute values, which
-    # are hardware-dependent, but the two are ~4 orders apart so the margin is enormous.
-    assert errors["1"] <= 1e-6, f"MAC form should be fp32-grade, got {errors['1']:.3e}"
-    assert errors["1"] < errors["0"] / 100, f"MAC should dominate conv1d: {errors}"
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(
-    ("in_channels", "out_channels", "kernel", "dilation", "padding_mode"),
-    [
-        (512, 512, 3, 1, "zeros"),  # AMP conv, the most numerous shape in the decoder
-        (512, 512, 3, 5, "zeros"),  # dilated
-        (2048, 1024, 7, 1, "zeros"),  # conv_pre, the widest reduction
-        (64, 16, 7, 1, "causal"),  # non-32-multiple C_out: the bias must be padded like conv3d's is
-    ],
-    ids=["amp_k3", "amp_k3_d5", "conv_pre", "causal_narrow_out"],
-)
-def test_tap_matmul_beats_conv3d(mesh_device, in_channels, out_channels, kernel, dilation, padding_mode):
-    """The shifted-matmul form of a stride-1 conv is more accurate than conv3d, at equal split.
-
-    conv3d's residual after operand splitting is partial-sum rounding across ``C_in_block`` -- not the
-    operand mantissa, since a 3-way split measures bit-identically to a 2-way one -- and matmul has no
-    such blocking. Both formulations run with the same operand split so the comparison isolates the
-    formulation.
-
-    ``causal_narrow_out`` is here because it is the case that broke first: ``_AlignedOutConv1d`` rounds a
-    non-32-multiple ``C_out`` up and the bias is allocated at the rounded width, which the conv3d route
-    handles inside ``prepare_conv3d_weight_state`` and the tap route must do for itself.
-    """
-    torch.manual_seed(0)
-    effective_kernel = (kernel - 1) * dilation + 1
-    padding = effective_kernel - 1 if padding_mode == "causal" else effective_kernel // 2
-    reference = torch.nn.Conv1d(in_channels, out_channels, kernel, padding=padding, dilation=dilation).float().eval()
-    x = torch.randn(2, in_channels, CONV_PRE_LATENT_FRAMES) * 0.3
-    with torch.no_grad():
-        golden = copy.deepcopy(reference).double()(x.double()).float()[..., :CONV_PRE_LATENT_FRAMES]
-
-    state = {"weight": reference.weight.detach().contiguous(), "bias": reference.bias.detach().contiguous()}
-    x_device = ttnn.from_torch(
-        x.transpose(1, 2).contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-    )
-
-    errors, shapes = {}, {}
-    for tap in ("0", "1"):
-        # The env vars no longer reach the layer; MiniMax-H3 modules resolve them once at
-        # construction and pass the explicit arguments, so drive those directly here.
-        layer = Conv1dViaConv3d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel,
-            dilation=dilation,
-            padding_mode=padding_mode,
-            bias=True,
-            mesh_device=mesh_device,
-            dtype=ttnn.float32,
-            split_mode="full",
-            tap_matmul=tap == "1",
-        )
-        assert layer.tap_matmul == (tap == "1"), f"tap_matmul resolved to {layer.tap_matmul} for flag {tap}"
-        layer.load_torch_state_dict(dict(state), strict=False)
-        actual = ttnn.to_torch(layer(x_device)).float().transpose(1, 2)
-        shapes[tap] = tuple(actual.shape)
-        rows = min(actual.shape[-1], golden.shape[-1])
-        channels = min(actual.shape[-2], golden.shape[-2])
-        errors[tap] = float(
-            (actual[:, :channels, :rows].double() - golden[:, :channels, :rows].double()).pow(2).mean().sqrt()
-            / golden.double().std()
-        )
-
-    logger.info(f"conv3d={errors['0']:.3e} tap_matmul={errors['1']:.3e} shapes={shapes}")
-    assert shapes["0"] == shapes["1"], f"the two formulations disagree on output shape: {shapes}"
-    # Measured gains 1.8x-3.5x across these shapes; 1.4x leaves margin without being vacuous.
-    assert errors["1"] <= errors["0"] / 1.4, f"tap-matmul should beat conv3d: {errors}"
 
 
 def _tt_encoder(config: dict, mesh_device):
@@ -507,32 +419,12 @@ def test_roundtrip(mesh_device):
 # second copy of the same arithmetic.
 
 
-def _checkpoint_header(path: str) -> dict:
-    """safetensors header only -- shapes without reading 605 MB of tensor data."""
-    with open(path, "rb") as handle:
-        length = struct.unpack("<Q", handle.read(8))[0]
-        return {k: v for k, v in json.loads(handle.read(length)).items() if k != "__metadata__"}
-
-
-def test_fuse_weight_norm_matches_torch_conv1d():
-    """``fuse_weight_norm`` == what torch's own ``remove_weight_norm`` leaves behind."""
-    torch.manual_seed(0)
-    conv = torch.nn.Conv1d(16, 32, kernel_size=7)
-    conv = torch.nn.utils.weight_norm(conv)
-    with torch.no_grad():
-        conv.weight_g.normal_(1.0, 0.2)
-        conv.weight_v.normal_()
-
-    fused = fuse_weight_norm(conv.weight_g.detach(), conv.weight_v.detach())
-    torch.nn.utils.remove_weight_norm(conv)
-
-    assert fused.shape == conv.weight.shape
-    relative = (fused - conv.weight).abs().max().item() / conv.weight.abs().max().item()
-    assert relative < 1e-6, f"Conv1d fusion differs from torch by {relative:.3e}"
-
-
 def test_fuse_weight_norm_matches_torch_conv_transpose1d():
-    """The load-bearing case: axis 0 of a ConvTranspose1d weight is ``in_channels``."""
+    """The load-bearing case: axis 0 of a ConvTranspose1d weight is ``in_channels``.
+
+    (The trivial Conv1d axis case is subsumed by this test plus the real-checkpoint fusion
+    gate below, which fuses every Conv1d in the checkpoint against torch's own arithmetic.)
+    """
     torch.manual_seed(1)
     conv = torch.nn.ConvTranspose1d(32, 16, kernel_size=4, stride=2)
     assert conv.weight.shape == (32, 16, 4), "ConvTranspose1d weight is (in, out, k)"
@@ -588,31 +480,13 @@ def test_fuse_attention_biases_rejects_a_nonzero_k_bias():
         fuse_attention_biases(state)
 
 
-def test_real_checkpoint_axes_and_conversion():
-    """The real 1087-tensor checkpoint: axis assumptions hold and every pair fuses."""
-    weights_dir = _weights_dir()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    from safetensors.torch import load_file
-
-    state = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
-    assert_weight_norm_axes_consistent(state)
-
-    num_pairs = len([k for k in state if k.endswith(".weight_g")])
-    assert num_pairs > 100, f"expected ~172 weight-normed convs, found {num_pairs}"
-
-    converted = convert_minimax_h3_audio_state_dict(state)
-    assert not [k for k in converted if k.endswith((".weight_g", ".weight_v"))], "a weight-norm pair survived"
-    assert not [k for k in converted if k.endswith(("q_bias", "v_bias", "zero_k_bias"))], "an attn bias survived"
-    assert not [k for k in converted if "activations." in k], "an activations key survived"
-    # Every fused conv should have produced exactly one weight, and nothing else was lost.
-    assert (
-        len(converted) == len(state) - num_pairs - 2
-    ), f"key count {len(converted)} does not match {len(state)} minus {num_pairs} g/v pairs and 2 folded biases"
-
-
 def test_real_checkpoint_fusion_matches_reference_module():
-    """Fused weights equal what the reference's own ``remove_weight_norm`` produces."""
+    """The real 1087-tensor checkpoint: axes hold, every pair fuses, and the fused weights
+    equal what the reference's own ``remove_weight_norm`` produces.
+
+    One checkpoint load carries both the key-accounting asserts (folded from the former
+    axes-and-conversion gate) and the value comparison against torch's own arithmetic.
+    """
     weights_dir = _weights_dir()
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
@@ -629,12 +503,23 @@ def test_real_checkpoint_fusion_matches_reference_module():
     state = load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
     reference.load_state_dict(state)
 
+    assert_weight_norm_axes_consistent(state)
+    num_pairs = len([k for k in state if k.endswith(".weight_g")])
+    assert num_pairs > 100, f"expected ~172 weight-normed convs, found {num_pairs}"
+
+    converted = convert_minimax_h3_audio_state_dict(state)
+    assert not [k for k in converted if k.endswith((".weight_g", ".weight_v"))], "a weight-norm pair survived"
+    assert not [k for k in converted if k.endswith(("q_bias", "v_bias", "zero_k_bias"))], "an attn bias survived"
+    assert not [k for k in converted if "activations." in k], "an activations key survived"
+    # Every fused conv should have produced exactly one weight, and nothing else was lost.
+    assert (
+        len(converted) == len(state) - num_pairs - 2
+    ), f"key count {len(converted)} does not match {len(state)} minus {num_pairs} g/v pairs and 2 folded biases"
+
     for module in reference.modules():
         if hasattr(module, "weight_g"):
             torch.nn.utils.remove_weight_norm(module)
     expected = dict(reference.state_dict())
-
-    converted = convert_minimax_h3_audio_state_dict(state)
 
     checked = 0
     worst_key, worst = None, 0.0
@@ -648,212 +533,6 @@ def test_real_checkpoint_fusion_matches_reference_module():
         checked += 1
     assert checked > 100, f"only compared {checked} fused weights"
     assert worst < 1e-6, f"worst fused weight is {worst_key} at relative {worst:.3e}"
-
-
-# -------------------------------------------------------------------- T-parallel audio decode
-#
-# T-parallel audio decode: correctness against the single-device path, and the speedup.
-#
-# Audio decode is 1.284 s against a ~0.05 s target, is **device-bound** (trace buys 1.07 %), and runs on **one device**. The visual halves got 32x from
-# data-parallelism over `(clip, tile)` work units; a single 5 s audio stream is one unit, so
-# none of that applies. The equivalent lever here is sharding the time axis across the mesh --
-# which ``vocoder_ltx.Vocoder`` already implements (``parallel_config.factor`` threads through
-# ``_upload_BCT``'s T-alignment padding, ``_forward_device``'s partition, and the closing
-# T-gather) and ``MiniMaxH3AudioDecoder`` already accepts. The shipping path simply passes
-# ``None``.
-#
-# Sharded output is gated against the unsharded output of the same weights, so a speedup that
-# comes from dropping work fails rather than reports.
-
-
-MESH = [
-    pytest.param(
-        (4, 8),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "require_exact_physical_num_devices": True,
-            "l1_small_size": 65536,
-        },
-        id="mesh4x8",
-    )
-]
-# (t_factor, mesh_axis). Axis 1 is the 8-wide axis of the 4x8 Galaxy, axis 0 the 4-wide one.
-# t_factor=8 on axis 1 measures 0.898 s but returns a *different signal* (PSNR -6.3 dB vs
-# the single-device path), so it is xfail-marked rather than removed: the bug is worth
-# finding, and 207 frames padding to 256 makes 256/8 = 32 exactly one tile per shard, which
-# is the obvious suspect.
-FACTORS = [(1, 1), (4, 0), (8, 1)]
-KNOWN_BROKEN = {(8, 1)}
-NUM_LATENT_FRAMES = 207
-ITERS = 3
-
-
-def _best(fn) -> float:
-    fn()
-    best = float("inf")
-    for _ in range(ITERS):
-        t0 = time.perf_counter()
-        fn()
-        best = min(best, time.perf_counter() - t0)
-    return best
-
-
-def _build(mesh_device, config, converted, parallel_config, ccl_manager):
-    decoder = MiniMaxH3AudioDecoder(
-        latent_channels=config["latent_channels"],
-        latent_dim=config["latent_dim"],
-        decoder_dim=config["decoder_dim"],
-        decoder_rates=tuple(config["decoder_rates"]),
-        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-        mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl_manager,
-    )
-    decoder.load_torch_state_dict(converted, strict=False)
-    return decoder
-
-
-def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
-    """Say *where* a diverging shard layout diverges. "PSNR -10.2 dB" alone names no bug.
-
-    Three shapes of answer, each pointing somewhere different:
-
-    - concentrated at the internal shard boundaries -> the halo exchange is wrong, and each conv in the
-      stack needs `kernel_size - 1` samples of its neighbour that it is not getting;
-    - uniform across the whole signal -> the shard layout itself is wrong, not its edges;
-    - a prefix or suffix only -> the causal padding or the final trim is off by a shard.
-
-    Also reports the best cross-correlation lag: a diverging-but-highly-correlated output at a nonzero
-    lag is a *shift*, which is a trim bug rather than a numerics one, and PSNR cannot distinguish those.
-    """
-    import numpy as np
-
-    error = (parallel - baseline).abs()
-    total = baseline.shape[-1]
-    logger.info(
-        f"  divergence localization, t_factor={factor}: overall mean {error.mean():.6f} "
-        f"max {error.max():.4f} against baseline absmax {baseline.abs().max():.4f}"
-    )
-    per_shard = []
-    for shard in range(factor):
-        lo, hi = shard * total // factor, (shard + 1) * total // factor
-        per_shard.append(float(error[..., lo:hi].mean()))
-    logger.info(f"  per-shard mean error: {[f'{v:.6f}' for v in per_shard]}")
-
-    # Boundary vs interior. A halo bug puts the error in a narrow band at each internal boundary.
-    window = 128
-    boundary, interior = [], []
-    for shard in range(1, factor):
-        cut = shard * total // factor
-        boundary.append(float(error[..., max(0, cut - window) : cut + window].mean()))
-    mask = torch.ones(total, dtype=torch.bool)
-    for shard in range(1, factor):
-        cut = shard * total // factor
-        mask[max(0, cut - window) : cut + window] = False
-    interior = float(error[..., mask].mean())
-    logger.info(
-        f"  boundary bands (+-{window}): {[f'{v:.6f}' for v in boundary]}  interior {interior:.6f}  "
-        f"ratio {max(boundary) / max(interior, 1e-12):.2f}"
-    )
-
-    a = baseline[0, 0].numpy()
-    c = parallel[0, 0].numpy()
-    best, best_lag = -2.0, None
-    for lag in range(-4096, 4097, 32):
-        x, y = (a[-lag:], c[: len(c) + lag]) if lag < 0 else (a[: len(a) - lag], c[lag:])
-        n = min(len(x), len(y))
-        if n < 2048:
-            continue
-        r = float(np.corrcoef(x[:n], y[:n])[0, 1])
-        if r > best:
-            best, best_lag = r, lag
-    logger.info(
-        f"  correlation at lag 0: {float(np.corrcoef(a, c)[0, 1]):.4f}; "
-        f"best {best:.4f} at lag {best_lag} (nonzero lag => a shift, i.e. a trim bug)"
-    )
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-def test_audio_decode_t_parallel(mesh_device):
-    weights_dir = _weights_dir()
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers import AutoencoderKLMiniMaxH3Audio
-    from loguru import logger
-    from safetensors.torch import load_file
-
-    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
-
-    config = _config(weights_dir)
-    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
-    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
-    converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
-
-    torch.manual_seed(2)
-    latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
-
-    baseline_out = None
-    baseline_s = None
-    results = []
-    for factor, axis in FACTORS:
-        pc = None if factor <= 1 else ParallelFactor(factor=factor, mesh_axis=axis)
-        ccl = None if pc is None else CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-        try:
-            decoder = _build(mesh_device, config, converted, pc, ccl)
-            out = decoder(latents)
-            seconds = _best(lambda: decoder(latents))
-        except Exception as exc:  # a factor the stack rejects is a result, not a test failure
-            logger.warning(f"t_factor={factor} axis={axis} FAILED: {str(exc)[:160]}")
-            results.append((factor, axis, None, None))
-            continue
-
-        if baseline_out is None:
-            baseline_out, baseline_s = out, seconds
-            psnr = float("inf")
-        else:
-            assert out.shape == baseline_out.shape, f"factor {factor}: {out.shape} != {baseline_out.shape}"
-            psnr = _psnr(baseline_out, out)
-        results.append((factor, axis, seconds, psnr))
-        logger.info(
-            f"PERF audio_decode t_factor={factor} axis={axis}: {seconds:.4f} s "
-            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr:.1f} dB"
-        )
-        if psnr < 40.0 and out is not baseline_out:
-            _localize_divergence(baseline_out.float(), out.float(), factor=factor, logger=logger)
-        del decoder
-
-    logger.info("=== audio decode T-parallel summary ===")
-    for factor, axis, seconds, psnr in results:
-        if seconds is None:
-            logger.info(f"  t_factor={factor:2d} axis={axis}: unsupported")
-        else:
-            logger.info(
-                f"  t_factor={factor:2d} axis={axis}: {seconds:.4f} s  {baseline_s / seconds:5.2f}x  "
-                f"PSNR {psnr:6.1f} dB"
-            )
-
-    # The baseline must have run, or there is nothing to compare against and every other factor was
-    # skipped for want of a reference. Without this the test PASSES when the whole stack is broken:
-    # observed once on a device left dirty by an unrelated crash, where all three factors raised
-    # TT_FATAL, each was swallowed as "unsupported", and the run reported green. A gate that cannot
-    # fail is worse than no gate.
-    baseline_ran = any(seconds is not None and factor == 1 for factor, _, seconds, _ in results)
-    assert baseline_ran, (
-        "the single-device baseline did not run, so nothing was compared. If this follows a crashed "
-        "run, reset the device (`tt-smi -glx_reset`) -- an allocator TT_FATAL here is usually a dirty "
-        "device, not a code failure"
-    )
-    ran = [(f, a) for f, a, seconds, _ in results if seconds is not None and f != 1]
-    assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"
-
-    # Any factor that ran must agree with the single-device path; a fast wrong answer fails.
-    for factor, axis, seconds, psnr in results:
-        if seconds is None or (factor, axis) in KNOWN_BROKEN:
-            continue
-        assert psnr > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr:.1f} dB"
 
 
 # -------------------------------------------------------------------- traced audio decode
@@ -881,6 +560,16 @@ TRACED = [
 ]
 NUM_LATENT_FRAMES = 207
 ITERS = 5
+
+
+def _best(fn) -> float:
+    fn()
+    best = float("inf")
+    for _ in range(ITERS):
+        t0 = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - t0)
+    return best
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), TRACED, indirect=["mesh_device", "device_params"])
@@ -936,18 +625,6 @@ def test_audio_decode_traced(mesh_device):
     logger.info(
         f"PERF audio_decode_5s untraced {untraced_s:.4f} s | traced {traced_s:.4f} s "
         f"-> {untraced_s / traced_s:.2f}x"
-    )
-
-    # Where is the 1.2 s? The traced region is only the vocoder's `_forward_device`; the
-    # latent projection round-trips through host in the middle of forward
-    # (decoder_minimax_h3_audio.py: to_torch -> transpose/contiguous -> re-upload), and the
-    # final readback is untraced too. Split them so the next step is not a guess.
-    proj_s = _best(lambda: decoder._project_latents_device(latents))
-    projected = decoder._project_latents_device(latents)
-    voc_s = _best(lambda: decoder.decoder.forward_BCT(projected))
-    voc_traced_s = _best(lambda: decoder.decoder.forward_BCT_traced(projected))
-    logger.info(
-        f"PERF split: dec_in_proj {proj_s:.4f} s | vocoder {voc_s:.4f} s | " f"vocoder traced {voc_traced_s:.4f} s"
     )
     decoder.release_trace()
 

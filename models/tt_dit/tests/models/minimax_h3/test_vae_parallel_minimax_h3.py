@@ -62,10 +62,11 @@ FP32_ULP = 1e-6
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}
 
 # (mesh, h_factor, w_factor). Height on mesh axis 0 (width 4), width on axis 1 (width 8).
-# H3's extents are dyadic so every factor here divides all six levels exactly.
+# H3's extents are dyadic so every factor here divides all six levels exactly. Only the
+# full h4w8 sharding is kept: it runs the halo exchange and the global-edge correction on
+# both axes at once, which subsumes the single-axis h4 / w8 cases that used to sit
+# alongside it.
 SHARDINGS = [
-    pytest.param((4, 8), 4, 1, FABRIC, id="h4"),
-    pytest.param((4, 8), 1, 8, FABRIC, id="w8"),
     pytest.param((4, 8), 4, 8, FABRIC, id="h4w8"),
 ]
 
@@ -169,11 +170,21 @@ def _gather_hw(x, mesh_device, h_factor: int, w_factor: int) -> torch.Tensor:
 @pytest.mark.parametrize(
     ("mesh_device", "h_factor", "w_factor", "device_params"), SHARDINGS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("spatial_padding", [1], ids=["pad1"])
-def test_reflect_halo_edges_exact(mesh_device, h_factor, w_factor, spatial_padding):
+@pytest.mark.parametrize(
+    "pad_kind",
+    [
+        # The resnet convs' symmetric pad-1 reflect, and the downsamplers' asymmetric
+        # (0,1,0,1) reflect pre-pad, carried as the conv's trailing_spatial_padding.
+        pytest.param("symmetric", id="pad1"),
+        pytest.param("trailing", id="trailing"),
+    ],
+)
+def test_reflect_halo_edges_exact(mesh_device, h_factor, w_factor, pad_kind):
     """The replicate halo + global-edge correction must equal ``F.pad(mode="reflect")`` exactly.
 
     Runs the pad path alone (no conv) so a border error cannot hide behind a convolution.
+    ``trailing`` is the downsamplers' asymmetric ``(0,1,0,1)`` pre-pad, sharded (the old
+    ``test_trailing_reflect_halo_exact``, folded in as a pad kind).
     """
 
     torch.manual_seed(0)
@@ -182,54 +193,39 @@ def test_reflect_halo_edges_exact(mesh_device, h_factor, w_factor, spatial_paddi
 
     parallel_config = _parallel_config(h_factor, w_factor)
     ccl = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
-    conv = MiniMaxH3CausalConv3d(
-        channels,
-        channels,
-        kernel_size=3,
-        spatial_padding=spatial_padding,
-        mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl,
-    )
+    if pad_kind == "symmetric":
+        conv = MiniMaxH3CausalConv3d(
+            channels,
+            channels,
+            kernel_size=3,
+            spatial_padding=1,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl,
+        )
+        pad = (1, 1)
+    else:
+        conv = MiniMaxH3CausalConv3d(
+            channels,
+            channels,
+            kernel_size=3,
+            stride=(1, 2, 2),
+            spatial_padding=0,
+            trailing_spatial_padding=1,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl,
+        )
+        pad = (0, 1)
 
     padded = conv._halo_pad(_shard_hw(x, mesh_device, h_factor, w_factor))
-    pad = (spatial_padding, spatial_padding)
     worst = _assert_halo_windows(padded, x, mesh_device, h_factor, w_factor, pad, pad)
-    logger.info(f"h{h_factor}w{w_factor} pad{spatial_padding}: worst halo element {worst:.3e}")
+    logger.info(f"h{h_factor}w{w_factor} {pad_kind}: worst halo element {worst:.3e}")
     # Elementwise, not PCC: the one-pixel border is what is under test. The bound is one fp32
     # ulp rather than zero because the correction is a blend, `t + mask * (s - t)`, which is
     # `s` only in exact arithmetic -- measured 2.384e-07 == 2^-22 across every config. Still
     # four orders tighter than anything PCC would notice.
     assert worst <= FP32_ULP, f"halo differs from reflect by {worst:.3e}"
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "h_factor", "w_factor", "device_params"), SHARDINGS, indirect=["mesh_device", "device_params"]
-)
-def test_trailing_reflect_halo_exact(mesh_device, h_factor, w_factor):
-    """The downsamplers' asymmetric ``(0,1,0,1)`` reflect pre-pad, sharded."""
-    torch.manual_seed(0)
-    frames, height, width, channels = 3, 32, 32, 32
-    x = torch.randn(1, frames, height, width, channels)
-
-    parallel_config = _parallel_config(h_factor, w_factor)
-    ccl = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
-    conv = MiniMaxH3CausalConv3d(
-        channels,
-        channels,
-        kernel_size=3,
-        stride=(1, 2, 2),
-        spatial_padding=0,
-        trailing_spatial_padding=1,
-        mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl,
-    )
-
-    padded = conv._halo_pad(_shard_hw(x, mesh_device, h_factor, w_factor))
-    worst = _assert_halo_windows(padded, x, mesh_device, h_factor, w_factor, (0, 1), (0, 1))
-    logger.info(f"h{h_factor}w{w_factor} trailing: worst element {worst:.3e}")
-    assert worst <= FP32_ULP, f"trailing halo differs from reflect by {worst:.3e}"
 
 
 @pytest.mark.parametrize(

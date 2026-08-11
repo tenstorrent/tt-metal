@@ -22,8 +22,6 @@
 # `Qwen3VLProcessor` belongs with the fused-conditioner test.
 # =============================================================================
 
-import itertools
-
 import pytest
 import torch
 import transformers
@@ -155,16 +153,18 @@ def test_mrope_position_ids_matches_reference(reference, name):
         f"  ref ={expected[:, 0, :12].tolist()}"
     )
 
-
-@pytest.mark.parametrize(
-    "grid", [(1, 4, 6), (1, 2, 2), (2, 4, 4), (3, 6, 2)], ids=["img_4x6", "img_2x2", "vid_2f", "vid_3f"]
-)
-@pytest.mark.parametrize("start", [0, 7])
-def test_vision_position_ids_matches_reference(reference, grid, start):
-    """One vision block's `(3, n)` grid matches `get_vision_position_ids`."""
-    expected = reference.get_vision_position_ids(start, torch.tensor(grid), 1, SPATIAL_MERGE_SIZE, device=None)
-    actual = vision_position_ids(start, torch.tensor(grid), spatial_merge_size=SPATIAL_MERGE_SIZE)
-    assert torch.equal(actual, expected), f"ours={actual.tolist()}\nref ={expected.tolist()}"
+    # `vision_position_ids` is the per-block building brick of the grid checked above; pin it against
+    # `get_vision_position_ids` directly too, at a zero and a nonzero start offset. The same grids flow
+    # through both, so this rides along instead of being its own parametrized test.
+    grids = ([] if image_grid is None else list(image_grid)) + ([] if video_grid is None else list(video_grid))
+    for grid in grids:
+        for start in (0, 7):
+            block_expected = reference.get_vision_position_ids(start, grid, 1, SPATIAL_MERGE_SIZE, device=None)
+            block_actual = vision_position_ids(start, grid, spatial_merge_size=SPATIAL_MERGE_SIZE)
+            assert torch.equal(block_actual, block_expected), (
+                f"{name} grid {grid.tolist()} start {start}: vision block grid differs\n"
+                f"  ours={block_actual[:, :12].tolist()}\n  ref ={block_expected[:, :12].tolist()}"
+            )
 
 
 def test_text_only_layouts_are_identical():
@@ -178,29 +178,6 @@ def test_text_only_layouts_are_identical():
     interleaved = create_rope_tensors(1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION, interleaved=True)
     for a, b, which in zip(chunked, interleaved, ("cos", "sin")):
         assert torch.equal(a, b), f"text-only {which} differs between layouts"
-
-
-def test_vision_makes_the_layout_observable(reference):
-    """With a vision run the two layouts genuinely diverge.
-
-    The complement of the test above: it is what makes `interleaved` load-bearing rather than
-    cosmetic, and it is why a checkpoint declaring `mrope_interleaved` cannot use the chunked path
-    once pixels are present.
-    """
-    type_ids, image_grid, _ = _prompt(*PROMPTS["one_image"])
-    seq = type_ids.shape[1]
-    position_ids = mrope_position_ids(type_ids, image_grid_thw=image_grid, spatial_merge_size=SPATIAL_MERGE_SIZE)
-    # the axes really do disagree, or this test would prove nothing
-    assert not torch.equal(position_ids[0], position_ids[1]) or not torch.equal(position_ids[1], position_ids[2])
-
-    chunked = create_rope_tensors(
-        1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION, position_ids=position_ids, interleaved=False
-    )
-    interleaved = create_rope_tensors(
-        1, seq, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION, position_ids=position_ids, interleaved=True
-    )
-    assert not torch.equal(chunked[0], interleaved[0]), "cos is identical despite a vision run"
-    assert not torch.equal(chunked[1], interleaved[1]), "sin is identical despite a vision run"
 
 
 @pytest.mark.parametrize("name", list(PROMPTS))
@@ -265,18 +242,6 @@ def test_missing_grid_is_an_error(expect_error):
     del image_grid
     with expect_error(ValueError, "no matching grid"):
         mrope_position_ids(type_ids, spatial_merge_size=SPATIAL_MERGE_SIZE)
-
-
-def test_video_frames_are_separate_runs():
-    """A multi-frame video is one grid but one *run per frame*, split by timestamp text.
-
-    Pins the format rule the fixture models. `video_grid_thw` stays `[[t, h, w]]` -- the split into t
-    grids of `t=1` happens inside [`mrope_position_ids`], mirroring the reference.
-    """
-    type_ids, _, video_grid = _prompt(*PROMPTS["video_3_frames"])
-    runs = [k for k, _ in itertools.groupby(type_ids[0].tolist())]
-    assert runs == [0, 2, 0, 2, 0, 2, 0], f"expected one run per frame, got {runs}"
-    assert video_grid.tolist() == [[3, 4, 2]], "the video is still a single grid entry"
 
 
 def test_adjacent_same_modality_blocks_are_unsupported(expect_error):

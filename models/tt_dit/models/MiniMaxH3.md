@@ -28,16 +28,17 @@ tests/models/minimax_h3/
 ├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
-├── test_audio_minimax_h3.py          # weight-norm conversion, decode, T-parallel, traced
-├── test_performance_minimax_h3.py    # warm pipeline latency + per-block device time
+├── test_audio_minimax_h3.py          # weight-norm conversion, decode, encode, accurate mode, traced
+├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
-├── test_packing*_minimax_h3.py       # host-only layout parity (t2va/fl2va, and ref2va)
-├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each, one process each
-└── tools/                            # not tests: table builders, golden dumps, perf projection, VBench
+├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
+├── test_references_minimax_h3.py     # ref2va host parity (prep/layout/presentation) + device encode gate
+├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each (perf + quality), one process each
+└── tools/                            # not tests: perf projection, Tracy harnesses, VBench runner
 ```
 
-`test_packing_minimax_h3.py` is kept separate from `test_packing_ref2va_minimax_h3.py` on purpose: its
-golden digests are designed to stand in when the diffusers branch is absent, and the ref2va file
+`test_packing_minimax_h3.py` is kept separate from `test_references_minimax_h3.py` on purpose: its
+golden digests are designed to stand in when the diffusers branch is absent, and the references file
 `importorskip`s that branch at module level, which would turn those tests into skips.
 
 ## Running the transformer tests with real weights
@@ -50,14 +51,15 @@ export MINIMAX_H3_MODEL_PATH=/data/cglagovich/MiniMax-H3-diffusers
 TEST=models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py
 
 # 2 layers, real weights, checked against the torch reference (PCC ~0.9998)
-scripts/run_safe_pytest.sh $TEST -k "real_weights- and small_s2048"
+scripts/run_safe_pytest.sh $TEST -k "prod_768p_5s_real_weights"
 
 # all 50 layers, real weights, device only -- no reference, so shape/finiteness checks only
 scripts/run_safe_pytest.sh $TEST -k "transformer_real_weights"
 ```
 
-Mind the two selectors: `real_weights-` (trailing dash) is the 2-layer parameter, while
-`transformer_real_weights` is the separate full-depth test. Plain `-k real_weights` matches both.
+Mind the two selectors: `prod_768p_5s_real_weights` is the 2-layer checkpoint case (the checkpoint
+weights run only at the production shape), while `transformer_real_weights` is the separate
+full-depth test. Plain `-k real_weights` matches both.
 
 The 2-layer case reads only the first two blocks (62 of 638 tensors) and takes about a minute; the
 50-layer case spends ~145 s loading weights onto the mesh.

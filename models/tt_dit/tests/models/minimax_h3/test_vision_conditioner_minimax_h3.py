@@ -29,10 +29,11 @@
 #     injection is correct. But that script disagrees with this test by 1.3
 #     points on nominally identical work and had two defects of its own, so it is
 #     recorded as a lead, not a finding.
-#   - the reduced-geometry equivalent in
-#     tests/encoders/qwen3vl/test_qwen3vl_fused_conditioner.py passes at
+#   - a reduced-geometry fused-conditioner parity test (4 layers, tap at 3) --
+#     a bring-up test since removed from tests/encoders/qwen3vl/, whose
+#     remaining per-module tests cover the same structure -- passed at
 #     99.9917%, so whatever this is needs the real depth, width or tap index to
-#     show up -- 64 layers and a tap at 50, versus 4 layers and a tap at 3.
+#     show up: 64 layers and a tap at 50, versus 4 layers and a tap at 3.
 #
 # The companion to test_text_encoder_minimax_h3.py, which covers t2va at PCC
 # 99.9993%. Everything above that point was verified with reduced geometry and
@@ -92,9 +93,10 @@ _PATTERNS = [f"{_SUBFOLDER}/*"]
 #
 # 448x448 is absent because it is not a canvas `resolve_canvas_size` yields, so a green run there
 # would be evidence about 448x448 alone. The full 1008-token presentation runs in a few minutes, so
-# the smaller shape buys nothing.
+# the smaller shape buys nothing. The tower gate runs the production keyframe canvas only: the 1:1
+# 768x768 canvas differs from it only in grid extent -- same patching, same position-table
+# interpolation path, same head padding -- so a second full-tower run bought no new coverage.
 KEYFRAME_IMAGE = (1344, 768)
-SQUARE_CANVAS = (768, 768)
 
 # Where the calibrated t2va generation lives; frame 0 of it is the keyframe these tests condition on.
 T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
@@ -223,12 +225,12 @@ def _tower(reference_visual, submesh):
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-@pytest.mark.parametrize("size", [KEYFRAME_IMAGE, SQUARE_CANVAS], ids=["keyframe_768x1344", "square_768"])
+@pytest.mark.parametrize("size", [KEYFRAME_IMAGE], ids=["keyframe_768x1344"])
 def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
     """The released vision tower: merged tokens and all three deepstack features.
 
     `head_dim` is 72 here, the misalignment the padding exists for, and the 48x48 position table is
-    smaller than either grid, so the bilinear interpolation is live in both cases.
+    smaller than the grid, so the bilinear interpolation is live.
     """
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))

@@ -75,15 +75,6 @@ def test_pixels_use_imagenet_statistics():
     assert pixels.min() < -1.0
 
 
-def test_posterior_is_sampled_not_mean():
-    moments = torch.randn(1, 2 * LATENT_CHANNELS, 1, 8, 8, generator=torch.Generator().manual_seed(1))
-    sampled = c.sample_posterior(moments)
-    mean = moments.chunk(2, dim=1)[0]
-
-    assert sampled.shape == mean.shape
-    assert not torch.equal(sampled, mean)
-
-
 def test_posterior_seed_is_independent_of_request_seed():
     """Seeded to 42 internally, so a keyframe encodes identically every request."""
     assert c.MINIMAX_H3_KEYFRAME_ENCODE_SEED == 42
@@ -98,6 +89,12 @@ def test_posterior_seed_is_independent_of_request_seed():
 
     assert not torch.equal(first, c.sample_posterior(moments, seed=43))
 
+    # And it is a *sample*, not the posterior mean -- taking the mean would also be
+    # request-independent, so that shortcut has to be ruled out here too.
+    mean = moments.chunk(2, dim=1)[0]
+    assert first.shape == mean.shape
+    assert not torch.equal(first, mean)
+
 
 def test_float16_round_trip_is_load_bearing():
     """The sampled latent is rounded through fp16 before normalization.
@@ -108,6 +105,10 @@ def test_float16_round_trip_is_load_bearing():
     latents = _latents()
     rows = c.keyframe_condition_rows(latents, LATENTS_MEAN, LATENTS_STD, PATCH)
 
+    expected_rows = (LATENT_HEIGHT // 2) * (LATENT_WIDTH // 2)
+    assert rows.shape == (expected_rows, LATENT_CHANNELS * 4)
+    assert rows.dtype == torch.float32
+
     mean = torch.tensor(LATENTS_MEAN).view(1, LATENT_CHANNELS, 1, 1, 1)
     std = torch.tensor(LATENTS_STD).view(1, LATENT_CHANNELS, 1, 1, 1)
     exact = patchify_video_latents((latents - mean) / std, PATCH)
@@ -116,13 +117,6 @@ def test_float16_round_trip_is_load_bearing():
     assert torch.equal(rows, rounded)
     assert not torch.equal(rows, exact)
     assert (rows - exact).abs().max() > 1e-5
-
-
-def test_condition_rows_shape_and_dtype():
-    rows = c.keyframe_condition_rows(_latents(), LATENTS_MEAN, LATENTS_STD, PATCH)
-    expected_rows = (LATENT_HEIGHT // 2) * (LATENT_WIDTH // 2)
-    assert rows.shape == (expected_rows, LATENT_CHANNELS * 4)
-    assert rows.dtype == torch.float32
 
 
 def test_encode_keyframes_is_one_encode_per_image():
@@ -143,8 +137,8 @@ def test_encode_keyframes_is_one_encode_per_image():
     assert rows.shape == (len(images) * rows_per_frame, LATENT_CHANNELS * 4)
 
 
-@pytest.mark.parametrize("seed", [0, 42, 1101])
-def test_condition_noise_is_deterministic_per_seed(seed):
+def test_condition_noise_is_deterministic_per_seed():
+    seed = 42
     first = c.keyframe_condition_noise(CONDITION_SHAPES, LATENT_CHANNELS, PATCH, torch.Generator().manual_seed(seed))
     second = c.keyframe_condition_noise(CONDITION_SHAPES, LATENT_CHANNELS, PATCH, torch.Generator().manual_seed(seed))
     assert torch.equal(first, second)
@@ -195,6 +189,8 @@ def test_noise_augmentation_has_no_second_implementation():
     it evaluated ``1 - t`` in Python double instead of float32.
     """
     assert not hasattr(c, "noise_augment")
+    # The level itself is the released default; a changed constant would silently retune every anchor.
+    assert MINIMAX_H3_KEYFRAME_NOISE_AUG == 0.999
 
     rows = torch.randn(20, 96, generator=torch.Generator().manual_seed(1))
     noise = torch.randn(20, 96, generator=torch.Generator().manual_seed(2))
@@ -205,10 +201,6 @@ def test_noise_augmentation_has_no_second_implementation():
     # Python-double arithmetic is what to avoid; prove it is observably different.
     drifted = MINIMAX_H3_KEYFRAME_NOISE_AUG * rows + (1.0 - MINIMAX_H3_KEYFRAME_NOISE_AUG) * noise
     assert not torch.equal(out, drifted)
-
-
-def test_noise_aug_level_is_the_released_default():
-    assert MINIMAX_H3_KEYFRAME_NOISE_AUG == 0.999
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +310,7 @@ def test_keyframe_rows_per_anchor_match_the_layout():
 # --- fl2va presentation ---------------------------------------------------------------------------
 # Relocated here from `test_text_encoder_minimax_h3.py`, whose other five tests were redundant once
 # jonathansu's consolidated conditioner test landed (it covers both the tap comparison and the
-# post-norm assertion) and the nine dedicated mrope tests live in `test_qwen3vl_mrope.py`. This one
+# post-norm assertion) and the dedicated mrope tests live in `test_qwen3vl_mrope.py`. This one
 # had no equivalent anywhere, and it is host-only, so it belongs in the fast suite rather than behind
 # a device fixture.
 

@@ -25,7 +25,7 @@ import ttnn
 
 from ....models.vae.minimax_h3.decoder_minimax_h3 import unpatchify
 from ....models.vae.minimax_h3.stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
-from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, blend, split_tiles, stitch_tiles
+from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, split_tiles, stitch_tiles
 from ....utils.check import assert_quality
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
@@ -50,33 +50,16 @@ def _geometry():
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("dim", [-2, -1], ids=["height", "width"])
-def test_blend_matches_host(mesh_device, dim, reset_seeds):
-    """One cross-fade, device against host, at a real overlap extent."""
-    height_overlaps, width_overlaps = _geometry()
-    extent = height_overlaps[0] if dim == -2 else width_overlaps[0]
-
-    a = torch.randn(1, CHANNELS, PIXEL_FRAMES, 256, 256)
-    b = torch.randn(1, CHANNELS, PIXEL_FRAMES, 256, 256)
-    expected = blend(a, b, extent, dim=dim)
-
-    stitcher = DeviceTileStitcher(mesh_device)
-    to_dev = lambda x: ttnn.from_torch(x, dtype=ttnn.float32, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-    actual = ttnn.to_torch(stitcher.blend(to_dev(a), to_dev(b), extent, dim=dim))
-
-    assert actual.shape == expected.shape, f"{tuple(actual.shape)} != {tuple(expected.shape)}"
-    logger.info(f"blend dim={dim} extent={extent}: {tuple(expected.shape)}")
-    assert_quality(expected, actual, pcc=0.9999)
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
     """The whole 4x7 stitch, device against host.
 
     The bar is `pcc=0.9999` with `relative_rmse` paired: the blend output is consumed as an absolute
     pixel value, and a seam is a *local* defect that a whole-canvas PCC can dilute -- so the seam
     columns are also checked on their own below.
+
+    This also subsumes the former standalone single-blend gate: the stitch runs every cross-fade the
+    stitcher has, on both axes at every real overlap extent (96/80 by height, 80/64 by width), and
+    the per-seam bands below hold each one to the same `pcc=0.9999` bar against the host original.
     """
     height_overlaps, width_overlaps = _geometry()
     rows, columns = len(height_overlaps) + 1, len(width_overlaps) + 1

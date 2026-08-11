@@ -17,9 +17,12 @@ Three layers, cheapest first:
    still affordable. A full 1344x768 clip is 28 tiles x ~8 TFLOP, which the torch
    reference cannot do in reasonable time; the geometry test above is what covers the
    difference between 3x3 and 4x7.
-3. **Video chunking against the reference.** ``encode`` pads to a whole number of
-   17-frame clips and drops the trailing ``token_drop`` latent frames; both are easy to
-   get subtly wrong and neither is visible in a single-clip test.
+3. **The roundtrip, chunking included.** ``encode`` pads to a whole number of 17-frame
+   clips and drops the trailing ``token_drop`` latent frames; ``decode`` strides its
+   7-frame chunks by ``token_overlap``, cross-fades them in pixel space and crops the
+   trailing frames. All of that is easy to get subtly wrong and none of it is visible in
+   a single-clip test, so ``test_visual_roundtrip_quality`` runs a 39-frame
+   encode -> decode against the reference's own and gates it with PCC *and* a PSNR floor.
 
 The real checkpoint is used when it is present -- only the ~180 M encoder tensors are
 read, not the whole 10.4 GB -- and the test falls back to reference-initialised random
@@ -30,17 +33,13 @@ import os
 
 import pytest
 import torch
-import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 
 from ....models.vae.minimax_h3.conv_minimax_h3 import MiniMaxH3CausalConv3d
 from ....models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3TransformerBlock, MiniMaxH3ViTDecoder3d, unpatchify
-from ....models.vae.minimax_h3.encoder_minimax_h3 import (
-    MiniMaxH3Downsample3d,
-    MiniMaxH3Encoder3d,
-    MiniMaxH3ResnetBlock3d,
-)
+from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3ResnetBlock3d
 from ....models.vae.minimax_h3.rope_minimax_h3 import (
     head_lane_permutation,
     permuted_rotate,
@@ -50,6 +49,7 @@ from ....models.vae.minimax_h3.rope_minimax_h3 import (
 )
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig, split_tiles
 from ....utils.check import assert_quality
+from .common import psnr
 
 SINGLE_DEVICE = [pytest.param((1, 1), {}, id="single_device")]
 
@@ -153,16 +153,24 @@ def test_tiling_geometry_matches_reference(width, height, num_frames):
 
 
 @pytest.mark.parametrize(
-    ("num_frames", "temporal_taps"),
-    [pytest.param(1, 1, id="keyframe"), pytest.param(17, 3, id="clip")],
+    ("num_frames", "temporal_taps", "expected_latent_frames"),
+    [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
 )
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps):
+def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_latent_frames):
     """Tiled ``encode_clip`` against the reference's own tiled ``_encode_clip``.
 
     512x512 is the smallest frame the solver splits into a 3x3 grid of full 256x256
     tiles, so the tile shape, the tile loop and the overlap cross-fade are all the
-    production ones.
+    production ones -- and each tile runs the full 128..1024 encoder stack at both
+    ``temporal_taps=1`` (keyframe) and ``temporal_taps=3`` (17-frame clip), so this is
+    also the whole-encoder gate. (The weights-free encoder coverage that used to live in
+    ``test_encoder_moments`` was folded in here; whole-encoder coverage therefore skips
+    without ``MINIMAX_H3_DIFFUSERS_DIR``.)
+
+    The 0.99 bar is the encoder's precision floor: ``ttnn.group_norm`` has no fp32 path,
+    so all thirteen norms in the stack are bf16 islands. Per-conv parity at 0.999 is
+    gated in the convolutions section below.
     """
     weights_dir = _weights_dir()
     reference, config = _build_reference(weights_dir)
@@ -177,32 +185,8 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps):
     tt_vae.load_encoder_state(dict(reference.state_dict()))
     actual = tt_vae.encode_clip(x, temporal_taps=temporal_taps)
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99)
-
-
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_video_chunking(mesh_device):
-    """``encode`` against the reference ``_encode``: clip padding and ``token_drop``.
-
-    39 frames is not a multiple of 17, so the last-frame repeat padding runs;
-    the expected latent count is ``ceil(39/17) * 5 - 3 = 12``.
-    """
-    weights_dir = _weights_dir()
-    reference, config = _build_reference(weights_dir)
-    torch.manual_seed(5)
-
-    num_frames, extent = 39, 256
-    x = torch.randn(1, 3, num_frames, extent, extent)
-    with torch.no_grad():
-        expected = reference._encode(x)
-
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device)
-    tt_vae.load_encoder_state(dict(reference.state_dict()))
-    actual = tt_vae.encode(x)
-
-    expected_latent_frames = (num_frames + (-num_frames) % config.clip_length) // config.clip_length
-    expected_latent_frames = expected_latent_frames * config.tokens_chunk_size - config.token_drop
+    # The temporal schedule is part of the contract, so pin it independently of the
+    # reference: 17 frames -> 5 latent frames, one keyframe -> 1.
     assert (
         actual.shape[2] == expected_latent_frames
     ), f"{actual.shape[2]} latent frames, expected {expected_latent_frames}"
@@ -266,23 +250,56 @@ def test_decode_clip_tiled(mesh_device):
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_decode_video_chunking(mesh_device):
-    """``decode`` vs the reference ``_decode``: chunk stride, cross-fade and trailing crop."""
-    reference, config = _shallow_decoder_reference(2)
-    torch.manual_seed(7)
+def test_visual_roundtrip_quality(mesh_device):
+    """Visual encode -> decode against the reference's own round trip, with a PSNR floor.
 
-    latent_extent = 256 // config.spatial_compression_ratio
-    # 12 latent frames is what a 39-frame encode produces, so this pairs with the encode gate.
-    z = torch.randn(1, config.latent_channels, 12, latent_extent, latent_extent)
+    Small (one 256x256 tile, 39 frames) and with a shallow reference decoder:
+    the 36-layer numerics are gated per-tile elsewhere, and running 36 layers over multiple
+    chunks on host would cost tens of TFLOP to prove something already proven. What this
+    adds is that encode and decode compose -- that the latent one produces is the latent the
+    other consumes, including the chunk geometry between them.
+
+    It is also the video-chunking gate (the old ``test_encode_video_chunking`` and
+    ``test_decode_video_chunking`` were folded in): 39 frames is not a multiple of 17, so
+    ``encode`` runs the last-frame repeat padding and must emit
+    ``ceil(39/17) * 5 - token_drop = 12`` latent frames, and decoding those 12 frames runs
+    two overlapping 7-frame chunks (the ``token_overlap`` stride), the pixel-space
+    cross-fade between them, and the trailing-frame crop -- all pinned by the shape and
+    PCC asserts below.
+    """
+    reference, config = _shallow_decoder_reference(2)
+    torch.manual_seed(3)
+
+    num_frames = 39
+    x = torch.randn(1, 3, num_frames, 256, 256) * 0.5
     with torch.no_grad():
-        expected = reference._decode(z)
+        # _encode emits 2 * latent_channels moments; decode consumes the mean.
+        expected_moments = reference._encode(x)
+        expected = reference.decode(expected_moments.chunk(2, dim=1)[0]).sample
 
     tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device)
-    tt_vae.load_decoder_state(dict(reference.state_dict()))
-    actual = tt_vae.decode(z)
+    state = dict(reference.state_dict())
+    tt_vae.load_encoder_state(state)
+    tt_vae.load_decoder_state(state)
 
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
+    moments = tt_vae.encode(x)
+    # Clip padding and token_drop: ceil(39/17) = 3 clips x 5 tokens - 3 dropped = 12.
+    expected_latent_frames = (num_frames + (-num_frames) % config.clip_length) // config.clip_length
+    expected_latent_frames = expected_latent_frames * config.tokens_chunk_size - config.token_drop
+    assert (
+        moments.shape[2] == expected_latent_frames
+    ), f"{moments.shape[2]} latent frames, expected {expected_latent_frames}"
+    assert moments.shape == expected_moments.shape, f"{tuple(moments.shape)} != {tuple(expected_moments.shape)}"
+    # Gate the encode half on its own before composing, so a failure names its path.
+    assert_quality(expected_moments, moments, pcc=0.99)
+
+    actual = tt_vae.decode(moments.chunk(2, dim=1)[0])
+
+    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != {tuple(expected.shape)}"
+    psnr_db = psnr(expected, actual)
+    logger.info(f"ROUNDTRIP visual PSNR: {psnr_db:.2f} dB")
     assert_quality(expected, actual, pcc=0.99)
+    assert psnr_db >= 25.0, f"visual roundtrip PSNR {psnr_db:.2f} dB < 25 dB"
 
 
 # -------------------------------------------------------------------- the convolutions and resnet blocks
@@ -300,11 +317,16 @@ def test_decode_video_chunking(mesh_device):
 #   done locally; reflect differs from replicate only in the outermost pixel, which is
 #   exactly the kind of error that survives a loose PCC bar and reads as a vignette;
 # * the **causal** temporal pad (``kernel_t - 1`` zero frames prepended, nothing
-#   appended) and its degenerate T=1 form, where only ``weight[:, :, -1]`` survives;
+#   appended);
 # * the downsample's **asymmetric** bottom/right pre-pad, which is what makes the
 #   strided output exactly ``ceil(size / 2)``;
 # * ``conv_out`` at **1024 -> 48**, a non-32-multiple output channel count that reaches
 #   ``conv3d`` through the ``max(32, out)`` rule.
+#
+# Everything runs the clip schedule (``temporal_taps=3``). The old keyframe (T=1,
+# ``temporal_taps=1``) axis was dropped as a duplicate: taps=1 is the same code with a
+# shorter causal pad, and the keyframe path is still gated whole-encoder by
+# ``test_encode_clip_tiled``'s keyframe case.
 #
 # Every shape here is taken from the encoder's **real** schedule for the shipping tile, not
 # invented. Spatial tiling fixes the tile at 256x256 and the clip at 17 frames, so 768P and
@@ -349,39 +371,68 @@ def _assert_same(expected: torch.Tensor, actual: torch.Tensor, *, pcc: float) ->
     assert_quality(expected, actual, pcc=pcc)
 
 
-# One case per distinct conv the encoder contains. Spatial extents are the real ones for
-# that level; convs carry no norms, so these are cheap to run at true size.
+# One case per distinct conv the encoder contains, plus the two real downsample sites
+# (folded from the old ``test_downsample``): level 2 is space+time at 64x64 (T=9), level 3
+# is space-only at 32x32 (T=5). Spatial extents are the real ones for that level; convs
+# carry no norms, so these are cheap to run at true size.
 @pytest.mark.parametrize(
-    ("in_channels", "out_channels", "kernel_size", "spatial_padding", "height", "width"),
+    (
+        "in_channels",
+        "out_channels",
+        "kernel_size",
+        "spatial_padding",
+        "stride",
+        "trailing_pad",
+        "num_frames",
+        "height",
+        "width",
+    ),
     [
-        pytest.param(3, 128, 3, 1, 64, 64, id="conv_in_3to128"),
-        pytest.param(256, 256, 3, 1, 64, 64, id="resnet_conv_256"),
-        pytest.param(512, 1024, 1, 0, 16, 16, id="conv_shortcut_k1_512to1024"),
-        pytest.param(1024, 48, 3, 1, 16, 16, id="conv_out_1024to48"),
+        pytest.param(3, 128, 3, 1, (1, 1, 1), 0, 5, 64, 64, id="conv_in_3to128"),
+        pytest.param(256, 256, 3, 1, (1, 1, 1), 0, 5, 64, 64, id="resnet_conv_256"),
+        pytest.param(512, 1024, 1, 0, (1, 1, 1), 0, 5, 16, 16, id="conv_shortcut_k1_512to1024"),
+        pytest.param(1024, 48, 3, 1, (1, 1, 1), 0, 5, 16, 16, id="conv_out_1024to48"),
+        pytest.param(256, 256, 3, 0, (2, 2, 2), 1, 9, 64, 64, id="downsample_L2_space_and_time_64x64"),
+        pytest.param(512, 512, 3, 0, (1, 2, 2), 1, 5, 32, 32, id="downsample_L3_space_only_32x32"),
     ],
-)
-@pytest.mark.parametrize(
-    ("num_frames", "temporal_taps"),
-    [pytest.param(1, 1, id="keyframe_T1"), pytest.param(5, 3, id="clip_T5")],
 )
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_causal_conv3d(
-    mesh_device, in_channels, out_channels, kernel_size, spatial_padding, height, width, num_frames, temporal_taps
+    mesh_device, in_channels, out_channels, kernel_size, spatial_padding, stride, trailing_pad, num_frames, height, width
 ):
-    """One conv per shape the encoder uses, reflect edges and causal pad included."""
-    reference_cls = _reference_module("MiniMaxH3VideoCausalConv3d")
+    """One conv per shape the encoder uses, reflect edges and causal pad included.
+
+    The ``downsample_*`` cases run the stride-2 conv behind the asymmetric bottom/right
+    reflect pre-pad, expressed as the conv's ``trailing_spatial_padding`` -- their
+    reference is the ``MiniMaxH3VideoDownsample3d`` wrapper, whose whole content is that
+    pad-then-strided-conv.
+    """
     torch.manual_seed(0)
 
-    # k1 convs carry no temporal extent; k3 convs prepend kernel_t - 1 = 2 zero frames.
-    temporal_padding = 0 if kernel_size == 1 else 2
-    reference = reference_cls(
-        in_channels,
-        out_channels,
-        kernel_size=kernel_size,
-        spatial_padding=spatial_padding,
-        temporal_padding=temporal_padding,
-        spatial_padding_mode="reflect",
-    ).eval()
+    if trailing_pad:
+        reference_cls = _reference_module("MiniMaxH3VideoDownsample3d")
+        reference = reference_cls(
+            in_channels,
+            out_channels,
+            temporal_stride=stride[0],
+            spatial_stride=stride[1],
+            spatial_padding_mode="reflect",
+        ).eval()
+        # The reference wraps its conv; the tt module under test *is* the conv.
+        state = {k.removeprefix("conv."): v for k, v in reference.state_dict().items()}
+    else:
+        reference_cls = _reference_module("MiniMaxH3VideoCausalConv3d")
+        # k1 convs carry no temporal extent; k3 convs prepend kernel_t - 1 = 2 zero frames.
+        temporal_padding = 0 if kernel_size == 1 else 2
+        reference = reference_cls(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            spatial_padding=spatial_padding,
+            temporal_padding=temporal_padding,
+            spatial_padding_mode="reflect",
+        ).eval()
+        state = dict(reference.state_dict())
 
     x = torch.randn(1, in_channels, num_frames, height, width)
     with torch.no_grad():
@@ -391,57 +442,24 @@ def test_causal_conv3d(
         in_channels,
         out_channels,
         kernel_size=kernel_size,
+        stride=stride,
         spatial_padding=spatial_padding,
-        temporal_taps=temporal_taps,
+        trailing_spatial_padding=trailing_pad,
+        temporal_taps=3,
         mesh_device=mesh_device,
     )
-    tt_conv.load_torch_state_dict(dict(reference.state_dict()))
+    tt_conv.load_torch_state_dict(state)
     actual = _from_device(tt_conv(_to_device(x, mesh_device, tt_conv.in_channels)), out_channels)
-
-    _assert_same(expected, actual, pcc=0.999)
-
-
-# Real downsample sites: level 2 is space+time at 64x64 (T=9), level 3 is space-only at
-# 32x32 (T=5).
-@pytest.mark.parametrize(
-    ("channels", "temporal_stride", "clip_frames", "height", "width"),
-    [
-        pytest.param(256, 2, 9, 64, 64, id="L2_space_and_time_64x64"),
-        pytest.param(512, 1, 5, 32, 32, id="L3_space_only_32x32"),
-    ],
-)
-@pytest.mark.parametrize("keyframe", [pytest.param(True, id="keyframe_T1"), pytest.param(False, id="clip")])
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_downsample(mesh_device, channels, temporal_stride, clip_frames, height, width, keyframe):
-    """Stride-2 conv behind the asymmetric bottom/right reflect pre-pad."""
-    reference_cls = _reference_module("MiniMaxH3VideoDownsample3d")
-    torch.manual_seed(1)
-    num_frames, temporal_taps = (1, 1) if keyframe else (clip_frames, 3)
-
-    reference = reference_cls(
-        channels, channels, temporal_stride=temporal_stride, spatial_stride=2, spatial_padding_mode="reflect"
-    ).eval()
-    x = torch.randn(1, channels, num_frames, height, width)
-    with torch.no_grad():
-        expected = reference(x)
-
-    tt_downsample = MiniMaxH3Downsample3d(
-        channels,
-        channels,
-        temporal_stride=temporal_stride,
-        spatial_stride=2,
-        temporal_taps=temporal_taps,
-        mesh_device=mesh_device,
-    )
-    tt_downsample.load_torch_state_dict(dict(reference.state_dict()))
-    actual = _from_device(tt_downsample(_to_device(x, mesh_device, tt_downsample.conv.in_channels)), channels)
 
     _assert_same(expected, actual, pcc=0.999)
 
 
 # (in_channels, out_channels, T, H, W) drawn from the real encoder schedule for a
 # 17x256x256 tile: level 2 sits at 64x64 with T=9, levels 3-5 at 32x32 and 16x16 with
-# T=5. The keyframe variant is the same stack at T=1.
+# T=5. Clip axis only -- the keyframe (T=1) variant was dropped along with the conv
+# tests' keyframe axis; see the section comment above. Do not "widen" coverage with
+# synthetic shapes: (C=128, T=5, 32x32) deadlocks ttnn.group_norm, and that combination
+# exists only in a synthetic stack.
 REAL_RESNET_SHAPES = [
     pytest.param(256, 256, 9, 64, 64, id="L2_256_64x64"),
     pytest.param(256, 512, 5, 32, 32, id="L3_shortcut_256to512_32x32"),
@@ -450,10 +468,9 @@ REAL_RESNET_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize(("in_channels", "out_channels", "clip_frames", "height", "width"), REAL_RESNET_SHAPES)
-@pytest.mark.parametrize("keyframe", [pytest.param(True, id="keyframe_T1"), pytest.param(False, id="clip")])
+@pytest.mark.parametrize(("in_channels", "out_channels", "num_frames", "height", "width"), REAL_RESNET_SHAPES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_resnet_block(mesh_device, in_channels, out_channels, clip_frames, height, width, keyframe):
+def test_resnet_block(mesh_device, in_channels, out_channels, num_frames, height, width):
     """A whole resnet, so the two GroupNorms and the k1 shortcut are exercised together.
 
     The bar is looser than for a bare conv: ``ttnn.group_norm`` has no fp32 path, so each
@@ -461,7 +478,7 @@ def test_resnet_block(mesh_device, in_channels, out_channels, clip_frames, heigh
     """
     reference_cls = _reference_module("MiniMaxH3VideoResnetBlock3d")
     torch.manual_seed(2)
-    num_frames, temporal_taps = (1, 1) if keyframe else (clip_frames, 3)
+    temporal_taps = 3
 
     reference = reference_cls(
         in_channels, out_channels, norm_num_groups=32, norm_eps=1e-6, spatial_padding_mode="reflect"
@@ -485,171 +502,6 @@ def test_resnet_block(mesh_device, in_channels, out_channels, clip_frames, heigh
     _assert_same(expected, actual, pcc=0.995)
 
 
-# -------------------------------------------------------------------- the encoder, whole
-#
-# Gate M8a.3/M8b: the MiniMax-H3 visual VAE encoder, whole.
-#
-# Two independent layers of evidence, kept apart:
-#
-# * **Host, no device** -- the T=1 collapse claim: a single frame reduces H3's causal 3D
-#   encoder to a 2D one, because ``temporal_padding = kernel_t - 1`` prepends *zeros*, so
-#   only ``weight[:, :, -1]`` survives. If that ever stops holding (a checkpoint with
-#   non-zero temporal padding, say) these fail on their own and say why, instead of
-#   surfacing as a vague PCC drop somewhere in a twelve-resnet stack.
-# * **Device** -- the tt encoder against the pinned diffusers
-#   ``MiniMaxH3VideoEncoder3d``, at both ``temporal_taps=1`` (keyframe) and
-#   ``temporal_taps=3`` (17-frame clip), then the tiled ``encode_clip`` against the
-#   reference's own tiling.
-#
-# The device bar is 0.99 rather than 0.999: ``ttnn.group_norm`` has no fp32 path, so all
-# thirteen norms in the stack are bf16 islands, and that is the encoder's precision floor.
-# Per-conv parity at 0.999 is gated in the convolutions section above.
-
-
-# A single device has no ring partner: requesting a fabric ring makes the ethernet
-# handshake time out before any kernel runs.
-
-# The real encoder configuration, and the real tile shape. Spatial tiling fixes the tile
-# at 256x256 and the clip at 17 frames, so every supported working point -- 768P and
-# 1440P at 5 s and 10 s -- runs exactly these two shapes and differs only in how many
-# tiles and clips there are. Testing a reduced synthetic stack instead would invent
-# channel/spatial pairings the model never produces, and at least one of those,
-# (C=128, T=5, 32x32), deadlocks ttnn.group_norm.
-BLOCK_OUT_CHANNELS = (128, 256, 256, 512, 512, 1024)
-SPATIAL_DOWN = (2, 2, 2, 2, 1, 1)
-TEMPORAL_DOWN = (1, 2, 2, 1, 1, 1)
-LAYERS_PER_BLOCK = 2
-TILE = 256
-CLIP_FRAMES = 17
-LATENT_CHANNELS = 24
-
-
-def _reference_encoder_cls():
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers.models.autoencoders import autoencoder_kl_minimax_h3 as ref
-
-    cls = getattr(ref, "MiniMaxH3VideoEncoder3d", None)
-    if cls is None:
-        pytest.skip("MiniMaxH3VideoEncoder3d missing -- diffusers is not at the pinned commit")
-    return cls
-
-
-def _ref_causal_conv3d(x5, weight5, bias, *, stride=(1, 1, 1), padding=(1, 1, 1), pad_mode="reflect"):
-    """The reference conv at T=1: reflect on H/W, causal zeros on T."""
-    if padding[1] or padding[2]:
-        x5 = F.pad(x5, (padding[2], padding[2], padding[1], padding[1], 0, 0), mode=pad_mode)
-    if padding[0]:
-        # T == 1 takes the reference's single-frame branch: front-pad by k_t - 1.
-        x5 = F.pad(x5, (0, 0, 0, 0, weight5.shape[2] - 1, 0), mode="constant")
-    return F.conv3d(x5, weight5, bias, stride=stride, padding=0)
-
-
-def _ref_conv2d(x4, weight5, bias, *, stride=1, pad=1, pad_mode="reflect"):
-    """The 2D form: the kernel's last temporal tap."""
-    if pad:
-        x4 = F.pad(x4, (pad, pad, pad, pad), mode=pad_mode)
-    return F.conv2d(x4, weight5[:, :, -1], bias, stride=stride)
-
-
-@pytest.mark.parametrize(
-    ("kernel_t", "stride", "padding"),
-    [
-        (3, (1, 1, 1), (1, 1, 1)),
-        (3, (1, 2, 2), (1, 0, 0)),
-        (3, (2, 2, 2), (1, 0, 0)),
-        (1, (1, 1, 1), (0, 0, 0)),
-    ],
-)
-def test_causal_conv3d_collapses_to_conv2d_at_one_frame(kernel_t, stride, padding):
-    """Host-only: the collapse claim, per conv shape the encoder uses."""
-    torch.manual_seed(0)
-    weight = torch.randn(16, 8, kernel_t, 3, 3) if kernel_t == 3 else torch.randn(16, 8, 1, 1, 1)
-    bias = torch.randn(16)
-    x5 = torch.randn(1, 8, 1, 16, 20)
-
-    reference = _ref_causal_conv3d(x5, weight, bias, stride=stride, padding=padding)
-    collapsed = _ref_conv2d(x5[:, :, 0], weight, bias, stride=stride[1:], pad=padding[1])[:, :, None]
-
-    assert reference.shape == collapsed.shape
-    relative = ((reference - collapsed).norm() / reference.norm()).item()
-    assert relative < 1e-5, f"collapse broke: rel err {relative:.3e}"
-
-
-def test_collapse_does_not_compound():
-    """Twelve chained convs -- the encoder's resnet depth -- must not drift."""
-    torch.manual_seed(1)
-    weights = [(torch.randn(16, 16, 3, 3, 3), torch.randn(16)) for _ in range(12)]
-    x5 = torch.randn(1, 16, 1, 24, 24)
-
-    three_d = two_d = x5
-    for weight, bias in weights:
-        three_d = _ref_causal_conv3d(three_d, weight, bias)
-        two_d = _ref_conv2d(two_d[:, :, 0], weight, bias)[:, :, None]
-
-    relative = ((three_d - two_d).norm() / three_d.norm()).item()
-    assert relative < 1e-5, f"error compounded to {relative:.3e} over 12 convs"
-
-
-@pytest.mark.parametrize(
-    ("num_frames", "temporal_taps", "expected_latent_shape"),
-    [
-        pytest.param(1, 1, (1, 16, 16), id="keyframe_1x256x256"),
-        pytest.param(CLIP_FRAMES, 3, (5, 16, 16), id="clip_17x256x256"),
-    ],
-)
-@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encoder_moments(mesh_device, num_frames, temporal_taps, expected_latent_shape):
-    """The full 128..1024 encoder on the shipping tile, against the pinned reference.
-
-    This is the shape that actually ships, for every supported working point, so it is
-    worth the cost of running the reference on host rather than shrinking the stack.
-    """
-    reference_cls = _reference_encoder_cls()
-    torch.manual_seed(3)
-    out_channels = 2 * LATENT_CHANNELS
-
-    reference = reference_cls(
-        in_channels=3,
-        out_channels=out_channels,
-        block_out_channels=BLOCK_OUT_CHANNELS,
-        layers_per_block=LAYERS_PER_BLOCK,
-        spatial_downsample_factors=SPATIAL_DOWN,
-        temporal_downsample_factors=TEMPORAL_DOWN,
-        norm_num_groups=32,
-        norm_eps=1e-6,
-        spatial_padding_mode="reflect",
-    ).eval()
-
-    x = torch.randn(1, 3, num_frames, TILE, TILE)
-    with torch.no_grad():
-        expected = reference(x)
-
-    tt_encoder = MiniMaxH3Encoder3d(
-        num_frames=num_frames,
-        height=TILE,
-        width=TILE,
-        in_channels=3,
-        out_channels=out_channels,
-        block_out_channels=BLOCK_OUT_CHANNELS,
-        layers_per_block=LAYERS_PER_BLOCK,
-        spatial_downsample_factors=SPATIAL_DOWN,
-        temporal_downsample_factors=TEMPORAL_DOWN,
-        temporal_taps=temporal_taps,
-        mesh_device=mesh_device,
-    )
-    tt_encoder.load_torch_state_dict(dict(reference.state_dict()))
-
-    actual = _from_device(tt_encoder(_to_device(x, mesh_device, tt_encoder.conv_in.in_channels)), out_channels)
-
-    # The shape schedule is part of the contract: assert it before the numeric bar, since
-    # assert_quality only warns on a shape mismatch when element counts match.
-    assert (
-        tt_encoder.latent_shape == expected_latent_shape
-    ), f"latent shape {tt_encoder.latent_shape} != expected {expected_latent_shape}"
-    assert actual.shape == expected.shape, f"shape {tuple(actual.shape)} != reference {tuple(expected.shape)}"
-    assert_quality(expected, actual, pcc=0.99)
-
-
 # -------------------------------------------------------------------- the 36-layer ViT decoder
 #
 # Gate M8c: the MiniMax-H3 visual VAE's 36-layer ViT decoder.
@@ -658,18 +510,18 @@ def test_encoder_moments(mesh_device, num_frames, temporal_taps, expected_latent
 # ``(1, 24, 7, 16, 16)`` latent tile, i.e. ``7*16*16 = 1792`` patches plus a 5-token
 # suffix, so every test here runs at that shape.
 #
-# Ordered cheapest-first, and the first two need no device at all:
+# Ordered cheapest-first, and the first needs no device at all:
 #
 # * **RoPE**, host: the tables must be bit-exact against the reference module, and the
 #   permuted ``alt_complex_rotate90`` form must reproduce the reference rotation exactly.
 #   This is the decoder's riskiest detail -- only 48 of each head's 64 lanes rotate, and
 #   the pairing is ``(i, i+24)``, so the usual full-width RoPE op is simply wrong here.
-# * **swiglu half order**, host: the checkpoint's ``ff.net.0.proj`` packs ``[value; gate]``
-#   and tt_dit's swiglu wants the same, so no swap is needed -- unlike the H3 *DiT*, where
-#   the halves must be swapped. Applying that swap here
-#   would corrupt every FFN, so the order is asserted rather than assumed.
 # * **one block** (which is where a missing ``scale1``/``scale2`` shows
 #   up as PCC near zero), then the **full 36 layers**.
+#
+# The swiglu half order (the checkpoint packs ``[value; gate]``, matching tt_dit -- no
+# swap, unlike the H3 *DiT*) is documented where the halves are loaded, at ``ff1`` in
+# ``models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py``.
 
 
 # The production decode unit: one 256x256 pixel tile over one 7-latent-frame chunk.
@@ -704,7 +556,14 @@ def _reference_rope(num_suffix_tokens: int):
 
 
 def test_rope_tables_are_bit_exact():
-    """Host-only: our cos/sin must equal the reference module's exactly."""
+    """Host-only rope gate, both halves of the claim in one place.
+
+    First the tables: our cos/sin must equal the reference module's exactly. Then the
+    rotation (folded from the old ``test_permuted_rope_matches_reference_rotation``):
+    lane permute + rot90 must equal the reference's half-split rotation, and the two
+    properties that make the no-slice trick valid must hold -- the pass-through lanes are
+    untouched, and the suffix rows are the identity.
+    """
     reference_cos, reference_sin = _reference_rope(NUM_SUFFIX_TOKENS)
     cos, sin = rope_tables(
         LATENT_FRAMES,
@@ -720,14 +579,7 @@ def test_rope_tables_are_bit_exact():
     assert torch.equal(cos, reference_cos), f"cos differs by {(cos - reference_cos).abs().max()}"
     assert torch.equal(sin, reference_sin), f"sin differs by {(sin - reference_sin).abs().max()}"
 
-
-def test_permuted_rope_matches_reference_rotation():
-    """Host-only: lane permute + rot90 == the reference's half-split rotation.
-
-    Also pins the two properties that make the no-slice trick valid: the pass-through
-    lanes are untouched, and the suffix rows are the identity.
-    """
-    reference_cos, reference_sin = _reference_rope(NUM_SUFFIX_TOKENS)
+    # -- the permuted rotation, against the reference's half-split rotation.
     torch.manual_seed(0)
     total = NUM_PATCHES + NUM_SUFFIX_TOKENS
     x = torch.randn(1, total, NUM_HEADS, HEAD_DIM)
@@ -753,36 +605,6 @@ def test_permuted_rope_matches_reference_rotation():
     rotary_dim = reference_cos.shape[-1]
     assert torch.equal(actual[..., rotary_dim:], x[..., rotary_dim:]), "pass-through lanes were modified"
     assert torch.equal(actual[:, -NUM_SUFFIX_TOKENS:], x[:, -NUM_SUFFIX_TOKENS:]), "suffix rows are not identity"
-
-
-def test_swiglu_half_order_needs_no_swap():
-    """Host-only: the checkpoint packs ``[value; gate]``, matching tt_dit -- no swap.
-
-    The H3 *DiT*'s ``fc1`` halves must be swapped. That swap came from
-    the raw MiniMax layout, not the diffusers-converted one, so applying it to the VAE
-    decoder would silently corrupt every FFN. Exactly one of the two orders must match.
-    """
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers.models.attention import FeedForward
-
-    torch.manual_seed(1)
-    dim, mult = 256, 4
-    reference = FeedForward(dim, mult=mult, activation_fn="swiglu", bias=True).eval()
-    x = torch.randn(2, 8, dim)
-    with torch.no_grad():
-        expected = reference(x)
-
-    projected = reference.net[0].proj(x)
-    first, second = projected.chunk(2, dim=-1)
-    value_times_silu_gate = reference.net[2](first * torch.nn.functional.silu(second))
-    gate_times_silu_value = reference.net[2](second * torch.nn.functional.silu(first))
-
-    assert torch.allclose(
-        value_times_silu_gate, expected, atol=1e-5
-    ), "first half is not the value: tt_dit's [value; gate] convention would be wrong here"
-    assert not torch.allclose(
-        gate_times_silu_value, expected, atol=1e-5
-    ), "both orders matched, so this test cannot detect a swap"
 
 
 def _to_device_tiled(x: torch.Tensor, mesh_device) -> ttnn.Tensor:

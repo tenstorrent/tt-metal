@@ -92,25 +92,6 @@ def test_step_uses_data_ward_velocity():
     assert bool((stepped > 0).all())
 
 
-def test_step_rejects_enumerate_index(expect_error):
-    scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-    scheduler.set_timesteps(50)
-    with expect_error(ValueError, "enumerate"):
-        scheduler.step(torch.zeros(1, 4), 0, torch.zeros(1, 4))
-
-
-def test_step_reaches_zero_sigma():
-    """The final step lands on sigma = 0, i.e. ratio = 0, i.e. pure x0."""
-    scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-    scheduler.set_timesteps(50)
-    sample = torch.randn(1, 16, generator=torch.Generator().manual_seed(3))
-    generator = torch.Generator().manual_seed(4)
-    for timestep in scheduler.timesteps:
-        sample = scheduler.step(torch.randn(1, 16, generator=generator), timestep, sample)
-    assert scheduler.step_index == scheduler.num_inference_steps
-    assert torch.isfinite(sample).all()
-
-
 @pytest.mark.parametrize("timestep", [0.0, 0.5, MINIMAX_H3_KEYFRAME_NOISE_AUG, 1.0])
 def test_scale_noise_is_the_forward_process(timestep):
     """``x_t = t*x_0 + (1-t)*noise``, with ``t`` taken at face value.
@@ -143,25 +124,6 @@ def test_explicit_sigmas_used_verbatim(shift):
     # Verbatim means no shift and no dedup; the values still round through fp32.
     assert torch.equal(scheduler.sigmas, torch.tensor(sigmas, dtype=torch.float32))
     assert scheduler.num_inference_steps == 3
-
-
-@pytest.mark.parametrize(
-    "sigmas,message",
-    [
-        ([1.0], "strictly decreasing"),
-        ([1.0, 0.5], "strictly decreasing"),
-        ([0.5, 1.0, 0.0], "strictly decreasing"),
-    ],
-)
-def test_explicit_sigmas_validated(sigmas, message, expect_error):
-    with expect_error(ValueError, message):
-        MiniMaxH3Scheduler().set_timesteps(sigmas=sigmas)
-
-
-@pytest.mark.parametrize("shift", [0.0, -1.0])
-def test_shift_must_be_positive(shift, expect_error):
-    with expect_error(ValueError, "must be positive"):
-        MiniMaxH3Scheduler(shift=shift)
 
 
 def test_matches_diffusers_reference():

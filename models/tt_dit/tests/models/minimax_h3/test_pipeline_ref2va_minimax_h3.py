@@ -4,6 +4,26 @@
 
 """MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on the 4x8 mesh.
 
+ONE combined perf + quality e2e, on the ``mixed`` case -- the largest shape (padded_len 89856
+against 46080 for one image and 81664 for a sounded video) and the only one carrying all three
+modalities at once, in an order that exercises the per-modality row cursors of
+``split_condition_blocks``. The dropped ``one_image`` and ``video_with_sound`` e2e cases are
+covered where their failure modes actually live: per-modality encode parity is the device PCC
+gate in ``test_references_minimax_h3.py`` (``test_encode_references_matches_reference``), the
+packed layout is bit-exact host-gated there per case, and "the conditioning reaches the output"
+is ``test_ref2va_conditioning_is_not_a_no_op`` below. The former order-sensitivity e2e is gone
+for the same reason: reference order is bit-exact host-gated (``nine_mixed_reversed``), and the
+no-op discriminator already proves layout differences reach the output.
+
+The e2e folds the fully-warm latency measurement and the quality gates into one weight load:
+warmup at the real shape with the real references, prime the prompt cache, then time the measured
+generation and gate its output. The timing method is ``pipelines/ltx``'s -- prepares and export
+excluded, ``Total (compute)`` = the sum of ``pipeline.last_timings`` rows -- so the number is
+comparable to the t2va and fl2va rows. A cold total says almost nothing about the loop: at 81664
+padded rows the shape probe measured a cold forward of 114 s against a warm 3.26 s, the
+difference being kernel compilation. There is no tuned perf target for ref2va; the timing is
+logged, not gated.
+
 A separate file from the ``t2va`` / ``fl2va`` e2e gates so it defaults to its own
 process: a ref2va request is 1.2x-3.0x t2va's packed length, and one process
 holding DiT programs plus CCL buffers at several of those lengths is a memory risk.
@@ -257,40 +277,68 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     return MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), task="ref2va")
 
 
-# The e2e case list, all admitted by the full-depth shape probe. `padded` is the measured
-# packed length each case runs at, asserted below so a case cannot silently drift
-# onto a different shape than the one that was probed.
-# Padded packed length per case, MEASURED end to end and asserted below so a case cannot drift
-# onto a shape the probe did not cover. `one_image` and `video_with_sound` match the
-# host-only prediction exactly; `mixed` is 89856 rather than the 90112 predicted, because that
-# estimate used a guessed presentation length and the real one tokenizes shorter. The prediction was
-# never a measurement -- `mixed` was an interpolation between two probed shapes.
-CASES = {
-    "one_image": 46080,
-    "video_with_sound": 81664,
-    "mixed": 89856,
-}
+# The gated e2e case and the padded packed length it runs at, MEASURED end to end and asserted
+# below so the case cannot silently drift onto a shape the full-depth probe did not cover.
+# `mixed` is 89856 rather than the 90112 the host-only prediction gave, because that estimate used
+# a guessed presentation length and the real one tokenizes shorter. For the record, the two
+# formerly-gated smaller shapes measured 46080 (`one_image`) and 81664 (`video_with_sound`);
+# `padded_len` is what every program in the 50-block stack is keyed on, so it is the identity of
+# the measurement too.
+CASE = "mixed"
+EXPECTED_PADDED_LEN = 89856
 
 
-@pytest.mark.timeout(9000)
+@pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("case", list(CASES), ids=list(CASES))
-def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
-    """A full ref2va generation: video plus its synchronized soundtrack.
+def test_ref2va_end_to_end(mesh_device, reset_seeds):
+    """A full ref2va generation on the ``mixed`` request: video plus its synchronized soundtrack.
 
     Gates that every path a reference touches agrees on geometry: the conditioner's vision
     blocks, the VAE encode, the packed layout, the rotary clock and both decoders. A mismatch
-    surfaces as a wrong shape, a failed assert or a desynchronized soundtrack.
+    surfaces as a wrong shape, a failed assert or a desynchronized soundtrack. The same timed
+    generation carries the fully-warm latency measurement (see the module docstring).
     """
+    case = CASE
+    references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
+
+    # ---- fully-warm latency, `pipelines/ltx`'s method. The same three warmth conditions as the
+    # fl2va gate, sharpened for ref2va:
+    # 1. The warmup must be ref2va-shaped, with the SAME references: `padded_len` depends on the
+    #    number and resolution of the references, so warming with different ones warms nothing.
+    # 2. The warmup must run at the same prompt length, which for ref2va means the same
+    #    presentation -- a 2048 px image reference contributes ~4096 vision tokens and a video
+    #    reference ~1008 per merged frame pair. Asserted below via `last_padded_len`.
+    # 3. The embedding cache must be populated: `warmup` runs with `use_prompt_cache=False`. The
+    #    references have to be *prepared* first, because that is what the cache key digests.
+    pipeline.warmup(
+        prompt=PROMPT,
+        references=references,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=STEPS,
+    )
+    warm_padded_len = pipeline.last_padded_len
+
+    from ....pipelines.minimax_h3.references import prepare_references
+
+    prepared, _ = prepare_references(references, NUM_FRAMES, pipeline.audio_sampling_rate)
+    pipeline.encode_prompt(PROMPT, references=prepared, use_cache=True)
+
     output = pipeline(
         PROMPT,
-        references=ref2va_references(case),
+        references=references,
         num_frames=NUM_FRAMES,
         height=HEIGHT,
         width=WIDTH,
         num_inference_steps=STEPS,
         seed=SEED,
+    )
+
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
     )
 
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
@@ -299,14 +347,33 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     # A drift here means the case is no longer the request that was probed, so the memory
     # verdict of the shape probe no longer covers it.
     assert (
-        pipeline.last_padded_len == CASES[case]
-    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {CASES[case]}"
+        pipeline.last_padded_len == EXPECTED_PADDED_LEN
+    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"
 
     frames = _frames_of(output)
     # Artifacts before the checks: a check that fires first leaves no frames to inspect, and the
     # frames are what a seam reading has to be judged against.
     paths = _write(output, f"ref2va_{case}")
-    logger.info(f"ref2va[{case}] padded_len={pipeline.last_padded_len} timings={pipeline.last_timings}")
+
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    num_forwards = STEPS - 1
+    logger.info(
+        f"MEASUREMENT ref2va[{case}] fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, "
+        f"2 links, l1_small_size {_L1_SMALL} | {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames @ {FPS} fps "
+        f"({NUM_FRAMES / FPS:.2f} s), {num_forwards} forwards, padded_len {warm_padded_len} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for label, seconds in rows:
+        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / (NUM_FRAMES / FPS):8.1f} x  (compute / video seconds)")
 
     check_audio_sanity(
         output.audio, sampling_rate=output.sampling_rate, expected_seconds=NUM_FRAMES / FPS, tolerance_seconds=0.05
@@ -409,40 +476,4 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
         f"ref2va direction (recorded, not asserted): CLIP own-vs-other "
         f"A {to_normal[0]:.4f} vs {to_inverted[0]:.4f}, B {to_inverted[1]:.4f} vs {to_normal[1]:.4f}; "
         f"colour own-vs-other A {colour[0]:.4f} vs {crossed[0]:.4f}, B {colour[1]:.4f} vs {crossed[1]:.4f}"
-    )
-
-
-@pytest.mark.timeout(9000)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-def test_ref2va_reference_order_changes_the_request(mesh_device, reset_seeds):
-    """Reordering the same two references is a different request, and must generate differently.
-
-    The host gate covers the layout changing; this covers the change reaching the output. Both
-    references are the same size, so the two requests have identical row counts and an
-    identical noise stream, and only the rotary clock and the presentation labels differ.
-    """
-    pipeline = _pipeline(mesh_device)
-    normal = _real_frame_image()
-    inverted = _inverted(normal)
-
-    def generate(references):
-        return pipeline(
-            PROMPT,
-            references=references,
-            num_frames=NUM_FRAMES,
-            height=HEIGHT,
-            width=WIDTH,
-            num_inference_steps=STEPS,
-            seed=SEED,
-        )
-
-    forward = generate([MiniMaxH3Reference(image=normal), MiniMaxH3Reference(image=inverted)])
-    reversed_ = generate([MiniMaxH3Reference(image=inverted), MiniMaxH3Reference(image=normal)])
-
-    divergence = _divergence(forward.video, reversed_.video)
-    logger.info(f"ref2va reference order: divergence {divergence:.6f}, padded_len={pipeline.last_padded_len}")
-    assert forward.video.shape == reversed_.video.shape
-    assert divergence > 0.01, (
-        f"reordering the references changed the output by only {divergence:.6f}; the order is supposed to "
-        "advance the shared rotary clock and relabel the presentation"
     )
