@@ -64,7 +64,7 @@ alone would take v3 from **−4,068 to −9,987 against v2's −12,626 — 79 %.
 
 | loss | µs | category |
 |---|---:|---|
-| **g26onA sliding: 88 absent from the ladder + a decode-only guard** | **−5,907** | **model-code defect, one line** — [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) |
+| **g26onA sliding: 88 absent from the ladder + a decode-only guard** | **−5,907** | **model-code defect. Fix measured: −12.27 %/layer at PCC 0.9996293 — *above* the incumbent. −5,627 µs/model recoverable, one line** — [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) |
 | phiB: v3's own substituted geometry is slower **and** PCC 0.917 | **−1,285** | **implementation, two lines** |
 | phiFN: rope placement inexpressible (capture substitution) | **−989** | **capability** |
 | phiA residue: clause-2 oracle artefacts at 10⁻⁷ | −340 | decision |
