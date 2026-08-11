@@ -204,8 +204,6 @@ def test_e2e_isl_sweep_4p_climate_100min(mesh_device, device_params):
     tt_model = TTVibeVoiceModel.from_checkpoint(
         mesh_device,
         model_path,
-        cfg_scale=_CFG_SCALE,
-        num_diffusion_steps=_NUM_STEPS,
     )
     logger.info(f"model load: {time.perf_counter() - t_load0:.1f}s")
 

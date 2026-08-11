@@ -198,9 +198,7 @@ def test_e2e_wer_teacher_forced(mesh_device):
     prefill_speech_embeds = prefill_speech_embeds.to(torch.float32)
 
     # ── bf16 TT, teacher-forced ──
-    tt_model = TTVibeVoiceModel.from_checkpoint(
-        mesh_device, MODEL_PATH, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS
-    )
+    tt_model = TTVibeVoiceModel.from_checkpoint(mesh_device, MODEL_PATH)
     tt_model.set_speech_scale_bias(ref.model.speech_scaling_factor.item(), ref.model.speech_bias_factor.item())
     tt_gen = tt_model._make_generator(
         processor.tokenizer, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS, max_new_tokens=None
