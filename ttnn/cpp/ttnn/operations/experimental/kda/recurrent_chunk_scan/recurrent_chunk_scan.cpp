@@ -52,7 +52,7 @@ std::pair<ttnn::MemoryConfig, ttnn::DeviceComputeKernelConfig> resolve_configs(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
-    return {output_memory_config, std::move(kernel_config)};
+    return {output_memory_config, kernel_config};
 }
 
 }  // namespace
