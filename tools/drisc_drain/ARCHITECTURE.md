@@ -91,8 +91,48 @@ everywhere -- *including* the saturated delay-20 run (18,426 producer stalls). T
 the knee the FILLERs are never blocked by the DRAM frame ring, so what limits delay 20 is the SWEEP
 (read+proc over 60 cores), not absorption and not egress.
 
-Which makes 64 MiB per ring look generous: ~192 MiB is allocated for 128 MiB of actual ring (the
-interleaved allocation wastes a page) and under a fifth is ever used.
-`TT_METAL_PERF_DEBUG_ROLE_RING_MB` should come down a long way before absorption erodes -- worth
-measuring, since holding ~192 MiB of DRAM for the profiler's lifetime is the likeliest thing to bite on
-a real model.
+## DRAM cost, and how big the ring actually needs to be
+
+Measured, not estimated -- see FINDINGS §N+39 for the two sweeps.
+
+**The allocator is lock-step**, so the cost is `page_size x num_banks`, NOT `npages x page_size`. Here
+`page_size == ring_bytes` by construction (one ring per page), and bh-26's allocator has **7** DRAM banks
+(8 channels, 1 harvested; confirmed on silicon via the ring-bank validation message). So a 64 MiB ring
+costs **448 MiB of DRAM**, of which 128 MiB is addressed and 320 MiB is pure lock-step waste. The
+runtime log understates this ~4x: it prints `npages x ring_bytes` (191 MiB), which is not what the
+allocator reserves. For scale, the OLD profiler's DRAM region is 4.58 MiB/bank = **32.0 MiB** total, so
+64 MiB puts us at **14x** the profiler we are replacing.
+
+Which bank a ring lives in is IRRELEVANT to footprint -- lock-step reserves the same offset in every
+bank regardless, so moving rings onto pages 0-1 saves nothing. The only lever is `page_size`, i.e.
+`TT_METAL_PERF_DEBUG_ROLE_RING_MB` itself.
+
+**The earlier claim here -- that the ring "should come down a long way" because under a fifth is ever
+used -- was wrong, and wrong for an instructive reason.** The 8.4%-18.9% high-water it rested on was
+measured at 5,000 zones/RISC only. The ring does not have a steady-state occupancy: its high-water
+tracks TOTAL VOLUME and never plateaus (14% at 5k zones/RISC, 49% at 10k, 92% at 15k, 100% at 20k).
+The movers drain permanently slower than the fillers stage, so **the ring is runway, not headroom** --
+it buys a fixed number of zones before back-pressure reaches producers, and 64 MiB buys ~16-17k
+zones/RISC. A low high-water means the workload ended first, not that the ring is oversized.
+
+So the ring size is a function of the capture VOLUME you intend to support:
+
+| ring | frames | DRAM (x7 banks) | stall-free at 5k zones/RISC |
+|---|---|---|---|
+| 64 MiB (default) | 6355 | 448 MiB | yes (runway ~16-17k zones) |
+| **12 MiB** | 1191 | **84 MiB** | **yes, 3/3 -- smallest that is** |
+| 10 MiB | 992 | 70 MiB | 2 of 3 |
+| 9 MiB | 893 | 63 MiB | no (0.7-1.7k stalls) |
+| 6 MiB | 595 | 42 MiB | no (~1.8k stalls) |
+
+12 MiB is the right default for 5k-zone captures -- 84 MiB, 2.6x the old profiler instead of 14x -- with
+the env var as the escape hatch for high-volume runs. Undersizing costs producer perturbation but never
+correctness: every size down to 6 MiB dropped **zero** records with **zero** timestamp regressions,
+because the ring fills, the filler waits for room, and the producers stall. Nothing is lost.
+
+Two structural notes for anyone tuning this. The two lanes are **asymmetric** -- filler 1 fills first in
+every undersized run while filler 0 sometimes never fills at all (at 8 MiB: 794/794 with 36 ring-room
+waits vs 648/794 with 0), so the required size is set by the slower mover, and balancing the two buys
+more than any sizing change. And a bigger ring cannot rescue a long capture: the host record ring is the
+real volume ceiling (drops begin at 15k zones/RISC, one sweep point BEFORE producers stall), so doubling
+the ring just doubles the runway.
