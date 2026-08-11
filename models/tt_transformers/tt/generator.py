@@ -772,6 +772,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Release our handle on the compile-pass output before capturing, matching the pre-split behaviour.
         # A deferred warmup caller may still be holding it; that is its own reference to keep or drop.
         prepared.pop("compile_output", None)
+        # Warm the program cache over the *persistent* inputs before capturing. The compile pass in
+        # _prepare_trace_prefill ran against transient buffers, so a program whose cache key depends on
+        # anything that differs between those and the persistent inputs is still uncached here, and would
+        # be loaded inside the capture window -- which the runtime rejects outright:
+        # "Cannot load new binaries during trace capture" (mesh_workload.cpp). Gemma-4's LM head hit this.
+        # Runs before begin_trace_capture, so the allocation it makes is safe by this path's own rules, and
+        # the output is dropped immediately.
+        warmup_output = self._prefill_trace_forward(prepared, device_inputs)
+        ttnn.synchronize_device(mesh_device)
+        del warmup_output
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
