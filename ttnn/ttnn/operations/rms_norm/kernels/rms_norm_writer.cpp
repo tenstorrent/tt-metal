@@ -17,6 +17,17 @@
 //       (the writer) on EVERY member, root included.
 //   store_block — the output block to DRAM, batched one tile-row per barrier.
 //
+// PLACEMENT. On an INTERLEAVED output, store_block writes DRAM through a
+// TensorAccessor. On a physically SHARDED output the block's final home is already
+// this core's L1 and there is NO NoC write of it:
+//   * TILE shard      — cb_output_tiles is pinned zero-copy over the shard buffer,
+//                       so compute packed straight into it and store_block is the
+//                       CB handshake alone.
+//   * ROW_MAJOR shard — untilize emits the group-uniform tile-row stride, not the
+//                       shard's stick stride, so the sticks are re-strided
+//                       CORE-LOCALLY (write_shard_rows, L1 -> L1).
+// A core's own shard is NEVER addressed through a TensorAccessor.
+//
 // Helper substitutions (raw NoC instead of a kernel_lib helper), with reasons:
 //   * The GATHER leg is raw noc_async_write + semaphore. mcast_pipe's SenderPipe
 //     is a one-to-many broadcast of one buffer to a rectangle; the gather is
@@ -53,9 +64,20 @@ constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t TILE_HW_DIM = 32;
 
+// A resident-shard "accessor" with the same page/offset shape as TensorAccessor,
+// resolving to THIS core's own L1 (the mirror of the reader's). Lets
+// write_slice_rows serve the DRAM leg and the resident-shard leg with one body.
+struct LocalShardAccessor {
+    uint32_t base;
+    uint32_t row_bytes;
+    FORCE_INLINE uint64_t get_noc_addr(uint32_t page, uint32_t byte_offset) const {
+        return ::get_noc_addr(base + page * row_bytes + byte_offset);
+    }
+};
+
 // Drain one uniform-width CB block (`cb_w_tiles` tile-sized pages) as `rows`
 // row-major sticks of `slice_bytes`, reading each stick at the block's uniform
-// L1 row stride. The trailing pad columns are never written to DRAM.
+// L1 row stride. The trailing pad columns are never written out.
 template <uint32_t cb_id, uint32_t cb_w_tiles, typename Accessor>
 FORCE_INLINE void write_slice_rows(
     const Accessor& acc, uint32_t rows, uint32_t slice_bytes, uint32_t start_page, uint32_t byte_offset) {
@@ -71,6 +93,25 @@ FORCE_INLINE void write_slice_rows(
     noc_async_write_barrier();
     cb_pop_front(cb_id, cb_w_tiles);
 }
+
+// The resident-shard mirror of read_shard_rows: a core-local L1 re-stride of the
+// untilized block back into this core's OWN output shard. No DRAM crossing. When
+// the shard's stick stride already IS the block row stride the whole 32-row group
+// goes out as ONE transfer instead of 32.
+template <uint32_t cb_id, uint32_t cb_w_tiles>
+FORCE_INLINE void write_shard_rows(
+    uint32_t base, uint32_t shard_row_bytes, uint32_t rows, uint32_t slice_bytes, uint32_t start_page) {
+    constexpr uint32_t block_row_bytes = (get_tile_size(cb_id) / TILE_HW_DIM) * cb_w_tiles;
+    if (slice_bytes == block_row_bytes && shard_row_bytes == block_row_bytes) {
+        cb_wait_front(cb_id, cb_w_tiles);
+        noc_async_write(
+            get_read_ptr(cb_id), ::get_noc_addr(base + start_page * shard_row_bytes), rows * block_row_bytes);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id, cb_w_tiles);
+        return;
+    }
+    write_slice_rows<cb_id, cb_w_tiles>(LocalShardAccessor{base, shard_row_bytes}, rows, slice_bytes, start_page, 0);
+}
 }  // namespace
 
 using namespace dataflow_kernel_lib;
@@ -81,8 +122,9 @@ void kernel_main() {
     constexpr bool IS_RM_OUT = get_compile_time_arg_val(2) != 0;
     constexpr uint32_t W_GROUP_SIZE = get_compile_time_arg_val(3);
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(4);
-    constexpr uint32_t MCAST_CT_BASE = 5;
-    constexpr uint32_t MCAST_RT_BASE = 15;
+    constexpr bool IS_SHARDED_OUT = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t MCAST_CT_BASE = 6;
+    constexpr uint32_t MCAST_RT_BASE = 16;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -101,6 +143,14 @@ void kernel_main() {
     const uint32_t stick_start = get_arg_val<uint32_t>(12);
     const uint32_t out_slice_bytes = get_arg_val<uint32_t>(13);
     const uint32_t out_byte_offset = get_arg_val<uint32_t>(14);
+    [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(15);
+
+    // A mcast-box FILLER core (see the reader): inside a group's broadcast rectangle
+    // but owning no shard. It carries no work, never gathers and never acks — the
+    // mcast is emitted with an explicit num_active = member count for exactly this.
+    if (num_blocks == 0) {
+        return;
+    }
 
     Noc noc;
     Semaphore<> gather_sem(SEM_GATHER);
@@ -115,12 +165,37 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
     // Default page size == the accessor args' aligned page size, which is the
     // tile size on the tiled path and the stick size on the row-major path.
-    const auto out_acc = TensorAccessor(dst_args, dst_addr);
+    // Built unconditionally (one type for every leg, so `if constexpr` in the
+    // non-template store_block below still type-checks), but a SHARDED output never
+    // USES it: its shard is this core's own L1, addressed through
+    // LocalShardAccessor. The accessor keeps owning interleaved I/O only.
+    [[maybe_unused]] const auto out_acc = TensorAccessor(dst_args, dst_addr);
 
     // --- store_block: drain one output block to DRAM -------------------------
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
-        if constexpr (IS_RM_OUT) {
+        if constexpr (IS_RM_OUT && IS_SHARDED_OUT) {
+            // Resident ROW_MAJOR output shard: no DRAM leg. untilize emits the
+            // group-uniform tile-row stride, which is not the shard's stick stride,
+            // so the sticks are re-strided CORE-LOCALLY into this core's own shard.
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                uint32_t sticks_this = TILE_HW_DIM;
+                if (sticks_this > num_sticks - sticks_done) {
+                    sticks_this = num_sticks - sticks_done;
+                }
+                write_shard_rows<cb_output_rm, CB_W_TILES>(
+                    dst_addr, shard_row_bytes, sticks_this, out_slice_bytes, stick_start + sticks_done);
+                sticks_done += sticks_this;
+            }
+        } else if constexpr (IS_SHARDED_OUT) {
+            // Resident TILE output shard: cb_output_tiles is PINNED zero-copy over
+            // it, so compute packed the block straight into its final home and
+            // "store_block" is the CB handshake alone — zero NoC traffic. The pad
+            // columns / padded tile-rows compute also wrote land in the shard's own
+            // padding, which is outside the logical tensor and never read back.
+            cb_wait_front(cb_output_tiles, rows_t * CB_W_TILES);
+            cb_pop_front(cb_output_tiles, rows_t * CB_W_TILES);
+        } else if constexpr (IS_RM_OUT) {
             for (uint32_t r = 0; r < rows_t; ++r) {
                 uint32_t sticks_this = TILE_HW_DIM;
                 if (sticks_this > num_sticks - sticks_done) {

@@ -11,7 +11,8 @@ blocking model live in `op_design.md` / `l1_ledger.md` next to this file; the
 program is built by `rms_norm_program_descriptor.create_program_descriptor`.
 
 Support rectangle (see SUPPORTED below):
-  * bfloat16 / float32 / bfloat8_b activations, TILE and ROW_MAJOR, INTERLEAVED.
+  * bfloat16 / float32 / bfloat8_b activations, TILE and ROW_MAJOR, INTERLEAVED
+    or HEIGHT/WIDTH/BLOCK sharded (a resident shard is consumed in place).
   * gamma optional, at its own dtype/layout ("none" sentinel when absent).
   * fp32_dest_acc_en at both settings, except for float32 activations
     (see EXCLUSIONS).
@@ -93,10 +94,20 @@ SUPPORTED = {
     # "none" is the absent-gamma sentinel and is ALWAYS legal.
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    # Phase 0 consumes interleaved tensors. The cross-core hidden-split combine
-    # is already built, so the three sharded placements are placement unlocks
-    # (lamp S1), not a scheme change.
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # Refinement 2: all four placements. The three sharded schemes are placement
+    # unlocks of the scheme Phase 0 already built (op_design.md lamp S1) — the
+    # cross-core combine exists, so the shard spec SUPPLIES the block geometry
+    # instead of `_select_regime` choosing it, and the resident shard is consumed
+    # in place through a zero-copy CB pinned over its L1 buffer.
+    #   HEIGHT ⇒ cuts the independent `row` axis  ⇒ w_group_size == 1, local reduce
+    #   WIDTH  ⇒ cuts the dependent `hidden` axis ⇒ the shard grid is ONE group
+    #   BLOCK  ⇒ cuts both ⇒ one grid row of the shard rectangle is one group
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 

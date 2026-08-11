@@ -95,6 +95,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_stat_sq);
 
+    // A mcast-box FILLER core: inside a reduction group's broadcast rectangle (a
+    // physical shard grid is not always a rectangle) but owning no shard, so it
+    // carries no work. It stays a program core only so the group's L1 map stays
+    // uniform for the peer-addressed cb_rstd / cb_stat_gather.
+    if (num_blocks == 0) {
+        return;
+    }
+
     // Hidden tiles handled by the bulk accumulation, and the stat-column layout.
     const uint32_t c_full = core_w - has_tail;
     const uint32_t bulk_cols = (c_full > 0) ? 1u : 0u;
