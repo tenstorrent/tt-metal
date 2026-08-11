@@ -1,6 +1,7 @@
 name: "Build prefill-worker image"
 
 on:
+  push:
   workflow_dispatch:
     inputs:
       version:
@@ -43,9 +44,22 @@ jobs:
             VERSION="dev-${BRANCH_SLUG:0:124}"
           fi
 
+          # Release tags (latest*) belong to publish-release-image.yaml.
+          case "$VERSION" in
+            latest|latest-rc|v[0-9]*)
+              echo "::error::'$VERSION' is a release tag owned by publish-release-image.yaml; pick another tag."
+              exit 1
+              ;;
+          esac
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::'$VERSION' is not a valid Docker tag."
+            exit 1
+          fi
+
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-ubuntu-22.04-release-models-amd64
-          echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
-          echo "TAG_NAME=$REPO_IMAGE_NAME:$VERSION" >> $GITHUB_ENV
+          echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> "$GITHUB_ENV"
+          echo "TAG_NAME=$REPO_IMAGE_NAME:$VERSION" >> "$GITHUB_ENV"
 
       - name: Capture proxy env for the buildx builder
         run: |
@@ -65,7 +79,7 @@ jobs:
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.VM_BLAZE }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute tool tags
         id: tool-tags
@@ -88,6 +102,7 @@ jobs:
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
           ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
+          GIT_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           TARGET="release-models"
@@ -102,7 +117,7 @@ jobs:
           SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
           SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
           SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
-          SET+="${TARGET}.args.GIT_REF=${{ github.ref_name }}"$'\n'
+          SET+="${TARGET}.args.GIT_REF=${GIT_REF}"$'\n'
           SET+="${TARGET}.args.TT_LLM_ENGINE_IMAGE=${ENGINE_IMAGE}"$'\n'
           if [ -n "$PROXY_HTTP" ]; then
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
@@ -113,29 +128,30 @@ jobs:
             echo "$SET"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
-          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
 
       - name: Build and push release-models
         uses: ./.github/actions/manual-docker-bake
         with:
           targets: release-models
           set-lines: ${{ steps.bake.outputs.set }}
-          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
-          oras-image: ${{ steps.bake.outputs.oras-image }}
+          enable-attestations: "false"
+          enrich-sbom: "false"
           retries: "2"
           retry-delay-seconds: "15"
           harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
       - name: Report pushed image
+        env:
+          TAG_NAME: ${{ env.TAG_NAME }}
+          REPO_IMAGE_NAME: ${{ env.REPO_IMAGE_NAME }}
         run: |
           set -euo pipefail
-          DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${{ env.TAG_NAME }}")
+          DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$TAG_NAME")
           {
             echo "### Pushed release-models image"
             echo ""
             echo '```'
-            echo "${{ env.TAG_NAME }}"
-            echo "${{ env.REPO_IMAGE_NAME }}@${DIGEST}"
+            echo "$TAG_NAME"
+            echo "${REPO_IMAGE_NAME}@${DIGEST}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
