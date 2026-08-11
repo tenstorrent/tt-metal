@@ -26,7 +26,9 @@ and the result diverges from ``TilizeGolden(src_A, num_faces)``.
 that no existing tilize test reaches.
 """
 
+import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -58,6 +60,17 @@ def test_unpack_tilize_uninit_restore(
     dest_acc,
     num_faces,
 ):
+    # BH cannot express a single 16x16 face for datums wider than one byte: its unpacker reads 32
+    # datums before applying the row stride, so a num_faces=1 tilize reads face_r_dim/2 full 32-wide
+    # source rows instead of face 0. _llk_unpack_tilize_init_ asserts this out. This test carries no
+    # 8-bit format, so num_faces=1 is WH-only here.
+    if num_faces == 1 and get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "BH unpack_tilize does not support num_faces=1 for non-8-bit formats: "
+            "UnpackRowWidth is 32 datums for datums wider than one byte, so a single UNPACR "
+            "reads full 32-wide source rows instead of face 0"
+        )
+
     torch_format = format_dict[formats.output_format]
     input_dimensions = [32, 32]
 

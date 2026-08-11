@@ -100,12 +100,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the SrcA operand baseline this op mutated. NOTE: intentionally NO
     // `_llk_unpack_reconfig_data_format_srca_impl_` here, so this uninit is the
     // sole reset of the unpacker state before the next op.
-#ifdef ARCH_WORMHOLE
-    // Wormhole threads face_r_dim so the restore matches a tiny-tile operand baseline.
+    // face_r_dim is threaded through so the restore matches a tiny-tile operand baseline.
     _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
-#else
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces);
-#endif
 
     // ---- Run 1: plain datacopy of the tilized tile (same format, no reconfig) ----
     run = 1;

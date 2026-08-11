@@ -114,6 +114,19 @@ class DataFormat(Enum):
             DataFormat.UInt8,
         }
 
+    def is_llk_8bit_format(self) -> bool:
+        """Checks if the format is an 8-bit format in the LLK sense.
+
+        Mirrors `ckernel::IS_8BIT_FORMAT` (tt_llk_blackhole/common/inc/ckernel_defs.h). Block-float
+        formats such as Bfp8_b are one byte per datum but are deliberately excluded, because the
+        predicate selects the unpacker paths that treat a datum as a whole byte.
+        """
+        return self in {
+            DataFormat.Int8,
+            DataFormat.UInt8,
+            DataFormat.Fp8_e4m3,
+        }
+
     def needs_int8_math_config(self) -> bool:
         """Checks if the format requires int8 math mode in the ALU."""
         return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}

@@ -81,10 +81,11 @@ inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_([[maybe_unused]] c
     return 0;
 }
 
-inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_([[maybe_unused]] const std::uint32_t num_faces)
+inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
 {
-    // Blackhole tests keep unpack_tilize on the default 4-face path.
-    return 4;
+    // Blackhole uses num_faces to size the tilize read (Tile_x_dim on the whole-tile path, loop
+    // count on the 8-bit path), so drive the operand's real value into the LLK.
+    return num_faces;
 }
 
 inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, [[maybe_unused]] const std::uint32_t tile_num_faces)
@@ -106,9 +107,10 @@ inline void _llk_unpack_tilize_wrapper_(
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
-inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4)
+inline void _llk_unpack_tilize_uninit_wrapper_(
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces));
+    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 #else
