@@ -335,11 +335,9 @@ class TTVibeVoiceGenerator:
 
     # Eager frames run before each (re)capture so the program cache is warm — a capture that has to
     # load a new binary dies with "Cannot load new binaries during trace capture".  ONE frame is
-    # enough to populate it, and the second was pure cost: an eager frame is ~345 ms (Python
-    # dispatch over ~3400 ops) against ~32 ms for the traced replay, so at every segment boundary
-    # the extra warmup was ~1/4 of the whole ~1.35 s recapture.  The trace is released at each
-    # boundary (see _reset_segment_frame_trace), so this is paid once per SEGMENT, not once per run:
-    # 264 boundaries on the 100-min render.
+    # enough to populate it; the second was pure cost, since an eager frame (full Python dispatch over
+    # the whole graph) is far more expensive than the traced replay.  The trace is released at each
+    # boundary (see _reset_segment_frame_trace), so this warmup is paid once per SEGMENT, not per run.
     #
     # Insufficient warmup fails LOUDLY (TT_FATAL at begin_trace_capture) rather than silently
     # corrupting the capture, so this cannot degrade audio undetected — verified with 0 warmups,
