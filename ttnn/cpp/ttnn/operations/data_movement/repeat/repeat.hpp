@@ -10,7 +10,9 @@
 
 namespace ttnn {
 
-// `implementation`: "auto"/"native"/"codegen"; auto picks codegen when supported and not demoted.
+// `implementation`: "auto" (default) picks codegen when the codegen prim
+// supports the call and it isn't perf-demoted, else native; "native" and
+// "codegen" force the respective prim ("codegen" TT_FATALs if unsupported).
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,

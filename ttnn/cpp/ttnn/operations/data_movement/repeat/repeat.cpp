@@ -195,7 +195,10 @@ ttnn::Tensor repeat_dim_tile(
         std::move(optional_output_tensor));
 }
 
-// Pad/view to 4D for codegen kernels, then view output back to the logical shape.
+// Single-dim codegen repeat step. repeat_codegen's kernels assume a 4D input
+// (ops/repeat/spec.py's _page_map / build_repeat_rm_factory), so `tensor` is
+// padded up to 4D here (prepending 1s) regardless of its original rank; the
+// output is viewed back down to the true logical shape before returning.
 ttnn::Tensor repeat_dim_codegen(
     const ttnn::Tensor& tensor,
     const uint32_t dim,
@@ -273,7 +276,11 @@ ttnn::Tensor repeat_dim_codegen(
     return ttnn::view(out, ttnn::Shape(expected_shape));
 }
 
-// Multi-dim repeat as reverse-order single-dim codegen steps (axes are independent).
+// Decomposes a (possibly multi-dim) repeat into a sequence of single-dim
+// prim::repeat_codegen calls, mirroring the reverse-order per-dim loops
+// above (native TILE/RM) and ops/repeat/repeat.py's RepeatCodegen.repeat --
+// each single-dim step is independent (orthogonal axes), so iteration order
+// doesn't affect correctness.
 ttnn::Tensor repeat_via_codegen(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
@@ -321,6 +328,12 @@ ttnn::Tensor repeat(
             memory_config->buffer_type() == optional_output_tensor->memory_config().buffer_type() &&
                 memory_config->memory_layout() == optional_output_tensor->memory_config().memory_layout(),
             "repeat: memory_config must match optional_output_tensor memory config");
+        // Explicit shard_spec must match prealloc; omit shard_spec to derive-from-prealloc.
+        if (memory_config->shard_spec().has_value()) {
+            TT_FATAL(
+                memory_config->shard_spec() == optional_output_tensor->memory_config().shard_spec(),
+                "repeat: memory_config shard_spec must match optional_output_tensor");
+        }
     }
     auto working_output_mem_config = output_mem_config;
 
@@ -399,7 +412,13 @@ ttnn::Tensor repeat(
     };
 
     {
-        // Codegen needs interleaved same-placement output; sharded/cross-placement use native.
+        // Sharded *output* has no resharding path in this port (codegen only ever produces an
+        // interleaved output tensor); gate it here rather than in supported_by_codegen(), which
+        // is about the input side per the manifest's hand-authored sharded case.
+        // Placement must match too: the RM factories derive CB slot sizes and per-page
+        // transfer sizes from one side's aligned page size, and DRAM/L1 page alignments
+        // differ, so a cross-placement call can overrun destination pages or CB slots.
+        // Native derives both sides' pitches independently and handles the conversion.
         const bool placement_matches = output_mem_config.buffer_type() == working_tensor.memory_config().buffer_type();
         const bool codegen_output_ok = !output_mem_config.is_sharded() && placement_matches;
         if (sel != repeat_codegen::ImplementationSelector::Native) {
@@ -453,7 +472,8 @@ ttnn::Tensor repeat(
             input_orientation_hint = input_tensor.shard_spec()->orientation;
         }
         if (working_tensor.memory_config().is_sharded()) {
-            // DRAM-sharded → L1 interleaved staging (keeps match_input_rank padding).
+            // DRAM-sharded fallback via to_memory_config (sharded_to_interleaved is L1-only);
+            // use working_tensor to keep rank padding from match_input_rank.
             const MemoryConfig l1_interleaved{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
             working_tensor = ttnn::to_memory_config(working_tensor, l1_interleaved, std::nullopt);
         }
