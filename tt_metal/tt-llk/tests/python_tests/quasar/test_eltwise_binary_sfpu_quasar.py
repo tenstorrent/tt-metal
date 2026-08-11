@@ -895,6 +895,7 @@ def _run_quant(
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),
+            FILL_CONSTANT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt),
