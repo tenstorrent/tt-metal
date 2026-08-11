@@ -116,6 +116,14 @@ TILE_HW = 32
 FP32_TILE_BYTES = 4096
 BF16_TILE_BYTES = 2048
 
+# Block-float dtypes: 16 datums share one 8-bit exponent, so a tile is an
+# exponent section plus a mantissa section and there is NO per-element byte size
+# (`Tensor.element_size()` raises "datum for bfp2, bfp4, bfp8 is invalid"). The
+# only consumers of an element size are the ROW_MAJOR stick legs — and a
+# block-float tensor has no row-major form (ttnn refuses to build one), so 0 is
+# the honest value there rather than a branch at every use site.
+_BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
 # L1 per Tensix core, by arch. Queried by name because the Python device object
 # does not expose l1_size_per_core().
 _L1_SIZE_BY_ARCH = {
@@ -136,6 +144,16 @@ def _divisors(n):
 
 def _f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
+
+
+def _elem_bytes(tensor):
+    """Bytes per element of `tensor`, or 0 for a block-float dtype.
+
+    See `_BLOCK_FLOAT_DTYPES`: block-float has no element size, and the only
+    users of this value are the ROW_MAJOR stick legs, which a block-float tensor
+    can never take.
+    """
+    return 0 if tensor.dtype in _BLOCK_FLOAT_DTYPES else tensor.element_size()
 
 
 def _l1_cb_budget():
@@ -177,13 +195,13 @@ class _Geometry:
             self.tensor_row_tiles = images * _div_up(shape[-2], TILE_HW)
 
         self.in_dtype = input_tensor.dtype
-        self.in_elem_bytes = input_tensor.element_size()
+        self.in_elem_bytes = _elem_bytes(input_tensor)
         self.in_tile_bytes = ttnn.tile_size(input_tensor.dtype)
 
         self.has_gamma = gamma is not None
         if self.has_gamma:
             self.gamma_dtype = gamma.dtype
-            self.gamma_elem_bytes = gamma.element_size()
+            self.gamma_elem_bytes = _elem_bytes(gamma)
             self.gamma_tile_bytes = ttnn.tile_size(gamma.dtype)
             self.is_rm_gamma = gamma.layout == ttnn.ROW_MAJOR_LAYOUT
         else:
@@ -390,6 +408,7 @@ def create_program_descriptor(
     grid_x, grid_y = int(grid.x), int(grid.y)
 
     is_rm_out = output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    out_elem_bytes = _elem_bytes(output_tensor)
     budget = _l1_cb_budget()
 
     # ---- block factors ---------------------------------------------------
@@ -525,8 +544,8 @@ def create_program_descriptor(
             in_byte_offset = w_start * TILE_HW * geo.in_elem_bytes
             gamma_slice_bytes = w_elems * geo.gamma_elem_bytes
             gamma_byte_offset = w_start * TILE_HW * geo.gamma_elem_bytes
-            out_slice_bytes = w_elems * output_tensor.element_size()
-            out_byte_offset = w_start * TILE_HW * output_tensor.element_size()
+            out_slice_bytes = w_elems * out_elem_bytes
+            out_byte_offset = w_start * TILE_HW * out_elem_bytes
 
             if geo.is_rm_in:
                 stick_start = row_start * TILE_HW

@@ -10,10 +10,11 @@ EXCLUSIONS, validate) plus the public entry point.  The kernel schedule and its
 blocking model live in `op_design.md` / `l1_ledger.md` next to this file; the
 program is built by `rms_norm_program_descriptor.create_program_descriptor`.
 
-Phase 0 support rectangle (see SUPPORTED below):
-  * bfloat16 / float32 activations, TILE and ROW_MAJOR, INTERLEAVED.
+Support rectangle (see SUPPORTED below):
+  * bfloat16 / float32 / bfloat8_b activations, TILE and ROW_MAJOR, INTERLEAVED.
   * gamma optional, at its own dtype/layout ("none" sentinel when absent).
-  * fp32_dest_acc_en=True — the maxed-out precision corner.
+  * fp32_dest_acc_en at both settings, except for float32 activations
+    (see EXCLUSIONS).
 """
 
 from __future__ import annotations
@@ -80,16 +81,17 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    # Phase 0 is the maxed-out precision corner. fp32_dest_acc_en=False is a
-    # later refinement for BOTH dtypes (see references/precision_convention.md).
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    # Refinement 1 opened the bf16-DEST corner. The whole `cb_stat_*` path stays
+    # fp32 in L1 at BOTH settings, so only the in-DEST accumulation narrows.
+    # {float32, fp32_dest_acc_en=False} stays refused (see EXCLUSIONS).
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     # "none" is the absent-gamma sentinel and is ALWAYS legal.
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     # Phase 0 consumes interleaved tensors. The cross-core hidden-split combine
     # is already built, so the three sharded placements are placement unlocks
@@ -103,9 +105,19 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 #
 # Cells inside cartesian(SUPPORTED) refused for now. {float32,
-# fp32_dest_acc_en=False} is the canonical precision exclusion; it is currently
-# unreachable because fp32_dest_acc_en=False is outside SUPPORTED at all, but it
-# is declared here so it stays refused when bf16 + fp32_dest_acc_en=False lands.
+# fp32_dest_acc_en=False} is the canonical precision exclusion, and since
+# Refinement 1 put False in SUPPORTED it is REACHABLE and actively enforced:
+# asking for fp32 activations while narrowing DEST to 16 bits contradicts the
+# only reason to pay for an fp32 activation tensor. Callers who want the narrow
+# DEST datapath pass bfloat16 or bfloat8_b activations.
+#
+# NOTHING ELSE is excluded. Every other cell Refinement 1 opened was measured
+# green: bfloat16/bfloat8_b at fp32_dest_acc_en=False, dtype=bfloat8_b and
+# gamma_dtype=bfloat8_b, including the mask-before-square ragged-hidden path
+# under a 16-bit DEST accumulator. bfloat8_b x ROW_MAJOR and bfloat8_b x
+# non-tile-aligned are NOT listed: they are structurally impossible (ttnn itself
+# refuses to build a ROW_MAJOR block-float tensor) and live in the golden
+# suite's feature_spec.INVALID, so they are skipped, not refused.
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
