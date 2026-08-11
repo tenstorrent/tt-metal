@@ -689,9 +689,14 @@ static Tensor conv_group_weight_zero_pad_helper(
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
+    // BFP8/BFP4 cannot be ROW_MAJOR (TensorSpec asserts TILE-only for block floats).
+    // Use the native buffer dtype (FLOAT32 for T=float) for the intermediate spec;
+    // params.weights_bias_dtype drives the final BFP8 packing in the tilize step.
+    const DataType spec_dtype =
+        (output_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : output_dtype;
     const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
-        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(spec_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(weight, pad_weight, output_spec);
 }
 
@@ -753,9 +758,11 @@ static Tensor conv_depthwise_weight_bcast_helper(
 
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
+    const DataType spec_dtype =
+        (output_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : output_dtype;
     const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
-        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(spec_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
 }
 
@@ -859,9 +866,11 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
+    const DataType spec_dtype =
+        (output_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : output_dtype;
     const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
-        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(spec_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(weight, pad_weight, output_spec);
 }
 
@@ -1025,11 +1034,13 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                 return tt::tt_metal::HostBuffer(std::move(output_buffer));
             },
             tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        // BFP8 cannot be ROW_MAJOR; use FLOAT32 for the intermediate spec.
+        const DataType spec_dtype = (dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dtype;
         return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
             std::move(folded_buffer),
             tt::tt_metal::TensorSpec(
                 output_shape,
-                tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
+                tt::tt_metal::TensorLayout(spec_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
             conv_weight_tensor.tensor_topology()));
     };
 
@@ -1313,12 +1324,18 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
     if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
+        // BFP8/BFP4 dtypes require TILE layout; use TILE for dummy tensors used only for slice-attr sizing.
+        const Layout dummy_layout =
+            (conv_config.weights_dtype.value() == DataType::BFLOAT8_B ||
+             conv_config.weights_dtype.value() == DataType::BFLOAT4_B)
+                ? Layout::TILE
+                : Layout::ROW_MAJOR;
         Tensor dummy_weight_tensor = ttnn::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
                 tt::tt_metal::TensorLayout(
                     conv_config.weights_dtype.value(),
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                    tt::tt_metal::PageConfig(dummy_layout),
                     MemoryConfig{
                         TensorMemoryLayout::INTERLEAVED,
                         BufferType::DRAM,
@@ -1331,7 +1348,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                     ttnn::Shape({1, 1, 1, out_channels}),
                     tt::tt_metal::TensorLayout(
                         conv_config.weights_dtype.value(),
-                        tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                        tt::tt_metal::PageConfig(dummy_layout),
                         MemoryConfig{
                             TensorMemoryLayout::INTERLEAVED,
                             BufferType::DRAM,
@@ -1609,10 +1626,19 @@ static ttnn::Tensor prepare_conv_weights_internal(
 
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
+    // Only upgrade to the config's target dtype (e.g. BFP8) when the weight buffer is
+    // already FLOAT32.  create_host_buffer_for_conv_weight only supports BFP8/BFP4 packing
+    // from float (T=float).  For BFLOAT16 weights (op-model query path), keep the native
+    // dtype; the to_dtype() call below handles the final BFP8 conversion from BFLOAT16 TILE.
+    const DataType tilize_dtype =
+        (params.weights_bias_dtype.has_value() && weight_tensor_.dtype() == DataType::FLOAT32)
+            ? params.weights_bias_dtype.value()
+            : weight_tensor_.dtype();
+
     // for conv op, pad the weights to block shape
     if (params.interleaved_mm_conv) {
         // Use interleaved MM layout conversion: [Co, Ci, Kh, Kw] -> [1, 1, KhKwCi, Co] and tilize
-        weight_tensor_ = convert_conv_weight_tensor_to_interleaved_mm_layout(weight_tensor_, weight_tensor_.dtype());
+        weight_tensor_ = convert_conv_weight_tensor_to_interleaved_mm_layout(weight_tensor_, tilize_dtype);
     } else {
         auto input_parallel_config = params.input_parallel_config.value();
         auto output_parallel_config = params.output_parallel_config.value();
@@ -1632,14 +1658,14 @@ static ttnn::Tensor prepare_conv_weights_internal(
             // assumes a conventional conv inner dimension.
             if (is_conv_1d_depthwise_conv) {
                 weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-                    weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
+                    weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, tilize_dtype);
             } else {
                 weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
                     weight_tensor_,
                     params.weight_block_h_ntiles,
                     params.weight_block_w_ntiles,
                     params.enable_activation_reuse,
-                    weight_tensor_.dtype());
+                    tilize_dtype);
             }
         } else if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
             weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
@@ -1647,10 +1673,10 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 input_num_cores_channels,
                 output_num_cores_channels,
                 params.full_inner_dim,
-                weight_tensor_.dtype());
+                tilize_dtype);
         } else if (input_parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
             weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-                weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
+                weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, tilize_dtype);
         } else {
             TT_THROW("Unsupported conv weights params : {}", params);
         }
