@@ -319,6 +319,35 @@ def _print_slide_perf_result(demo, mode, median_us, samples_us):
     print(f"FUSION_SLIDE_PERF demo={demo} mode={mode} " f"median_us={median_us:.3f} samples_us={samples}")
 
 
+def _benchmark_barrier_per_transition(fused_fn, baseline_fn, device, num_transitions, *, num_trials=7, num_measure=100):
+    """Measure barrier cost by subtracting a one-phase dispatch in paired trials."""
+    for fn in (fused_fn, baseline_fn):
+        for _ in range(5):
+            fn()
+        ttnn.synchronize_device(device)
+
+    samples_us = []
+    for trial in range(num_trials):
+        if trial % 2 == 0:
+            fused_ms = _time_e2e(fused_fn, device, num_warmup=0, num_measure=num_measure)
+            baseline_ms = _time_e2e(baseline_fn, device, num_warmup=0, num_measure=num_measure)
+        else:
+            baseline_ms = _time_e2e(baseline_fn, device, num_warmup=0, num_measure=num_measure)
+            fused_ms = _time_e2e(fused_fn, device, num_warmup=0, num_measure=num_measure)
+        samples_us.append((fused_ms - baseline_ms) * 1000 / num_transitions)
+    return statistics.median(samples_us), samples_us
+
+
+def _run_device_profile(run, device, *, num_warmup=1, num_measure=5):
+    """Emit repeated synchronized dispatches for robust Tracy medians."""
+    for _ in range(num_warmup):
+        run()
+        ttnn.synchronize_device(device)
+    for _ in range(num_measure):
+        run()
+        ttnn.synchronize_device(device)
+
+
 # =============================================================================
 # Performance Demos (fused vs unfused comparison)
 # =============================================================================
@@ -2041,8 +2070,157 @@ class TestPerfDemos:
             pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
-    # Manual slide benchmarks — Parallel Chains and Balanced Tree only
+    # Manual slide benchmarks — comparative demos
     # -----------------------------------------------------------------
+
+    def _linear_chain_perf_setup(self, device, H):
+        core_range, mm_cfg, torch_input, torch_w, torch_b = self._linear_chain_setup(device, H)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+
+        def to_device(tensor):
+            return ttnn.from_torch(
+                tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=dram,
+            )
+
+        compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        return (
+            core_range,
+            mm_cfg,
+            to_device(torch_input),
+            to_device(torch_w),
+            to_device(torch_w),
+            to_device(torch_b),
+            compute_cfg,
+        )
+
+    def _linear_chain_fused_callable(self, setup, *, persistent):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        core_range, mm_cfg, tt_input, tt_w1, tt_w2, tt_b, compute_cfg = setup
+
+        def make_container():
+            root_kwargs = dict(
+                core_range_set=core_range,
+                weight=tt_w1,
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            r1 = rms_norm.rms_norm(**root_kwargs) if persistent else rms_norm.rms_norm(tt_input, **root_kwargs)
+            matmul = matmul_desc(
+                r1.output_tensors[0],
+                tt_b,
+                core_range_set=core_range,
+                program_config=mm_cfg,
+                compute_kernel_config=compute_cfg,
+            )
+            r2 = rms_norm.rms_norm(
+                matmul.output_tensors[0],
+                core_range_set=core_range,
+                weight=tt_w2,
+                epsilon=1e-5,
+                compute_kernel_config=compute_cfg,
+            )
+            return Sequential(r1, matmul, r2), r1
+
+        if persistent:
+            container, root = make_container()
+
+            def run_persistent():
+                root.update(tt_input)
+                return container.run()
+
+            return run_persistent
+
+        def run_inline():
+            container, _ = make_container()
+            return container.run()
+
+        return run_inline
+
+    @staticmethod
+    def _linear_chain_unfused_callable(setup):
+        _, mm_cfg, tt_input, tt_w, _, tt_b, _ = setup
+
+        def run_unfused():
+            result = ttnn.rms_norm(tt_input, weight=tt_w, epsilon=1e-5)
+            result = ttnn.matmul(result, tt_b, program_config=mm_cfg)
+            return ttnn.rms_norm(result, weight=tt_w, epsilon=1e-5)
+
+        return run_unfused
+
+    def _sharded_chain_fused_callable(self, setup, *, persistent):
+        from models.experimental.ops.descriptors.fusion import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        cores, sharded_mem, _, tt_input, tt_w, _, _ = setup
+
+        def make_container():
+            root_kwargs = dict(
+                core_range_set=cores,
+                weight=tt_w,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            root = rms_norm.rms_norm(**root_kwargs) if persistent else rms_norm.rms_norm(tt_input, **root_kwargs)
+            leaf = layer_norm.layer_norm(
+                root.output_tensors[0],
+                core_range_set=cores,
+                weight=tt_w,
+                epsilon=1e-5,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            return Sequential(root, leaf), root
+
+        if persistent:
+            container, root = make_container()
+
+            def run_persistent():
+                root.update(tt_input)
+                return container.run()
+
+            return run_persistent
+
+        def run_inline():
+            container, _ = make_container()
+            return container.run()
+
+        return run_inline
+
+    @staticmethod
+    def _sharded_chain_unfused_callable(setup):
+        _, sharded_mem, program_cfg, tt_input, tt_w, _, _ = setup
+
+        def run_unfused():
+            result = ttnn.rms_norm(
+                tt_input,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+            return ttnn.layer_norm(
+                result,
+                weight=tt_w,
+                epsilon=1e-5,
+                program_config=program_cfg,
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=sharded_mem,
+            )
+
+        return run_unfused
 
     def _parallel_chains_fused_callable(self, setup, *, persistent):
         from models.experimental.ops.descriptors.fusion import Parallel, Sequential
@@ -2301,6 +2479,32 @@ class TestPerfDemos:
 
     @SLIDE_PERF_SKIP
     @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_slide_linear_chain_e2e(self, device, H, mode):
+        setup = self._linear_chain_perf_setup(device, H)
+        mode_callables = {
+            "inline": lambda: self._linear_chain_fused_callable(setup, persistent=False),
+            "persistent": lambda: self._linear_chain_fused_callable(setup, persistent=True),
+            "unfused": lambda: self._linear_chain_unfused_callable(setup),
+        }
+        median_us, samples_us = _benchmark_e2e_mode(mode_callables[mode](), device)
+        _print_slide_perf_result(f"linear_chain_H{H}", mode, median_us, samples_us)
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_slide_sharded_chain_e2e(self, device, H, mode):
+        setup = self._sharded_chain_setup(device, H)
+        mode_callables = {
+            "inline": lambda: self._sharded_chain_fused_callable(setup, persistent=False),
+            "persistent": lambda: self._sharded_chain_fused_callable(setup, persistent=True),
+            "unfused": lambda: self._sharded_chain_unfused_callable(setup),
+        }
+        median_us, samples_us = _benchmark_e2e_mode(mode_callables[mode](), device)
+        _print_slide_perf_result(f"sharded_chain_H{H}", mode, median_us, samples_us)
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
     def test_slide_parallel_chains_e2e(self, device, mode):
         setup = self._parallel_chains_setup(device)
         mode_callables = {
@@ -2340,32 +2544,60 @@ class TestPerfDemos:
         _print_slide_perf_result("balanced_tree", mode, median_us, samples_us)
 
     @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_slide_linear_chain_device_fw(self, device, H, mode):
+        """Repeated-dispatch entry point for manual device profiling."""
+        setup = self._linear_chain_perf_setup(device, H)
+        mode_callables = {
+            "inline": lambda: self._linear_chain_fused_callable(setup, persistent=False),
+            "persistent": lambda: self._linear_chain_fused_callable(setup, persistent=True),
+            "unfused": lambda: self._linear_chain_unfused_callable(setup),
+        }
+        run = mode_callables[mode]()
+        _run_device_profile(run, device)
+
+    @SLIDE_PERF_SKIP
+    @pytest.mark.parametrize("mode", ["inline", "persistent", "unfused"])
+    @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
+    def test_slide_sharded_chain_device_fw(self, device, H, mode):
+        """Repeated-dispatch entry point for manual device profiling."""
+        setup = self._sharded_chain_setup(device, H)
+        mode_callables = {
+            "inline": lambda: self._sharded_chain_fused_callable(setup, persistent=False),
+            "persistent": lambda: self._sharded_chain_fused_callable(setup, persistent=True),
+            "unfused": lambda: self._sharded_chain_unfused_callable(setup),
+        }
+        run = mode_callables[mode]()
+        _run_device_profile(run, device)
+
+    @SLIDE_PERF_SKIP
     @pytest.mark.parametrize("mode", ["inline", "persistent"])
     def test_slide_parallel_chains_fused_device_fw(self, device, mode):
-        """Single-dispatch entry point for manual device profiling."""
+        """Repeated-dispatch entry point for manual device profiling."""
         setup = self._parallel_chains_setup(device)
         run = self._parallel_chains_fused_callable(setup, persistent=mode == "persistent")
-        run()
-        ttnn.synchronize_device(device)
+        _run_device_profile(run, device)
 
     @SLIDE_PERF_SKIP
     def test_slide_parallel_chains_unfused_device_fw(self, device):
-        """Single-dispatch entry point for manual device profiling."""
-        self.test_parallel_chains_ln_mm_rms_mm_unfused(device, "device_fw")
+        """Repeated-dispatch entry point for manual device profiling."""
+        setup = self._parallel_chains_setup(device)
+        _run_device_profile(self._parallel_chains_unfused_callable(device, setup), device)
 
     @SLIDE_PERF_SKIP
     @pytest.mark.parametrize("mode", ["inline", "persistent"])
     def test_slide_balanced_tree_fused_device_fw(self, device, mode):
-        """Single-dispatch entry point for manual device profiling."""
+        """Repeated-dispatch entry point for manual device profiling."""
         setup = self._sharded_tree_setup(device)
         run = self._sharded_tree_fused_callable(device, setup, persistent=mode == "persistent")
-        run()
-        ttnn.synchronize_device(device)
+        _run_device_profile(run, device)
 
     @SLIDE_PERF_SKIP
     def test_slide_balanced_tree_unfused_device_fw(self, device):
-        """Single-dispatch entry point for manual device profiling."""
-        self.test_sharded_tree_ln_slice_matmul_slice_ln_unfused(device, "device_fw")
+        """Repeated-dispatch entry point for manual device profiling."""
+        setup = self._sharded_tree_setup(device)
+        _run_device_profile(self._sharded_tree_unfused_callable(setup), device)
 
 
 # =============================================================================
@@ -2787,3 +3019,28 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
         per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
     else:
         pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
+
+
+@SLIDE_PERF_SKIP
+@pytest.mark.skipif(
+    is_watcher_enabled(), reason="pytest-timeout plugin interacts with watcher on device reopen (noop kernels)"
+)
+@pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
+@pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])
+def test_slide_barrier_overhead_e2e(device, num_phases, num_cores):
+    """Measure median per-transition barrier cost for the documentation table."""
+    from models.experimental.ops.descriptors.fusion import Sequential
+
+    fused = Sequential(*_barrier_bench_setup(device, num_phases, num_cores))
+    baseline = Sequential(*_barrier_bench_setup(device, 1, num_cores))
+    median_us, samples_us = _benchmark_barrier_per_transition(
+        fused.run,
+        baseline.run,
+        device,
+        num_transitions=num_phases - 1,
+    )
+    samples = ",".join(f"{sample:.3f}" for sample in samples_us)
+    print(
+        f"\nFUSION_BARRIER_PERF cores={num_cores} phases={num_phases} "
+        f"median_us={median_us:.3f} samples_us={samples}"
+    )
