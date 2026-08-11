@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler, LTXUpsamplerResBlock
+from models.tt_dit.models.upsampler.latent_upsampler_ltx2_3 import LTXLatentUpsampler, LTXUpsamplerResBlock
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality

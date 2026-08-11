@@ -24,9 +24,9 @@ from ...parallel.config import AudioTCParallelConfig, DiTParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.conv3d import conv3d_blocking_hash
-from .bwe_ltx import MelSTFT, VocoderWithBWE
-from .mel_decoder_ltx import MelDecoder
-from .vocoder_ltx import Vocoder
+from .bwe_ltx2_3 import MelSTFT, VocoderWithBWE
+from .mel_decoder_ltx2_3 import MelDecoder
+from .vocoder_ltx2_3 import Vocoder
 
 # Config keys forwarded verbatim from the checkpoint's vocoder/bwe config into ``Vocoder``.
 _VOCODER_CONFIG_KEYS = (

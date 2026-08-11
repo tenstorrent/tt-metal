@@ -16,9 +16,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx import euler_step
-from models.tt_dit.pipelines.ltx.pipeline_ltx_one_stage import LTXOneStagePipeline
-from models.tt_dit.utils.ltx import (
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx import euler_step
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx_one_stage import LTXOneStagePipeline
+from models.tt_dit.utils.ltx2_3 import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,

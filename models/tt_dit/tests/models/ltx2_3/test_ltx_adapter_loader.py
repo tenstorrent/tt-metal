@@ -11,7 +11,7 @@ depth; resolution must return "absent" so the caller skips, not raise IndexError
 
 from types import SimpleNamespace
 
-from models.tt_dit.experimental.lora.ltx_adapter_loader import _get_attn, _resolve_singleton
+from models.tt_dit.experimental.lora.ltx_adapter_loader_ltx2_3 import _get_attn, _resolve_singleton
 
 
 def _fake_transformer(num_blocks: int):

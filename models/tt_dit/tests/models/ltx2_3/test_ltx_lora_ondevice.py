@@ -24,8 +24,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_dit.experimental.lora.ltx_adapter_loader import iter_lora_modules
-from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.experimental.lora.ltx_adapter_loader_ltx2_3 import iter_lora_modules
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.test import line_params
 

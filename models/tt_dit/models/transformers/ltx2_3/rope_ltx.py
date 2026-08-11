@@ -24,7 +24,7 @@ import torch
 import ttnn
 
 from ....parallel.config import DiTParallelConfig
-from ....utils.patchifiers import (
+from ....utils.patchifiers_ltx2_3 import (
     AudioLatentShape,
     VideoLatentShape,
     audio_get_patch_grid_bounds,

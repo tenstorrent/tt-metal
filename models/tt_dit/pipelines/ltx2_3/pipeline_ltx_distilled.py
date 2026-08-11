@@ -15,11 +15,11 @@ from loguru import logger
 
 import ttnn
 
-from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
-from ...models.vae.vae_ltx import upsample_latent
-from ...utils.ltx import load_conditioning_image
-from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...models.transformers.ltx2_3.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx2_3.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.vae.vae_ltx2_3 import upsample_latent
+from ...utils.ltx2_3 import load_conditioning_image
+from ...utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid

@@ -18,7 +18,7 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
-from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
+from ...models.transformers.ltx2_3.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
 

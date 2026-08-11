@@ -14,7 +14,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
 - See **[experimental/](experimental/)** for in-progress model variants (AniSora, Wan2.2-Distill, LoRA adapters)
-- **[LTX-2.3](models/LTX2.md)** - Joint audio-video generation model (Pro and Fast variants)
+- **[LTX-2.3](models/LTX2.3.md)** - Joint audio-video generation model (Pro and Fast variants)
 
 ## Directory Structure
 
@@ -30,10 +30,10 @@ tt_dit/
 │   ├── QwenImage.md     # Qwen-Image model documentation
 │   ├── Mochi_1.md       # Mochi-1 model documentation
 │   ├── Wan2_2.md        # Wan2.2 model documentation
-│   └── LTX2.md          # LTX-2.3 model documentation
+│   └── LTX2.3.md        # LTX-2.3 model documentation
 ├── encoders/            # Text encoder implementations
 │   ├── clip/           # CLIP encoder
-│   ├── gemma/          # Gemma encoder
+│   ├── gemma3/         # Gemma-3 encoder (LTX-2.3)
 │   └── t5/             # T5 encoder
 ├── parallel/            # Parallelization utilities
 │   ├── config.py        # Parallel configuration
@@ -42,12 +42,12 @@ tt_dit/
 │   ├── stable_diffusion_35_large/
 │   ├── mochi/
 │   ├── wan/
-│   ├── ltx/
+│   ├── ltx2_3/
 │   ├── flux1/
 │   ├── motif/
 │   └── qwenimage/
 ├── tests/              # Test suite
-│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, ltx, flux1, motif, qwenimage)
+│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, ltx2_3, flux1, motif, qwenimage)
 │   ├── encoders/       # Encoder tests
 │   ├── blocks/         # Block-level tests
 │   └── unit/          # Unit tests for layers
@@ -122,8 +122,8 @@ python -m pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -v
 python -m pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -v
 python -m pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -v
 python -m pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -v
-python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -v
-python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py -v
+python -m pytest models/tt_dit/tests/models/ltx2_3/test_pipeline_ltx_distilled.py -v
+python -m pytest models/tt_dit/tests/models/ltx2_3/test_pipeline_ltx_two_stages.py -v
 ```
 
 ## Key Features

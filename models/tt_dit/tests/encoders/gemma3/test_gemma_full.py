@@ -12,7 +12,7 @@ encode; it skips unless GEMMA_PROF=1, so it never silently no-ops the default (a
 Do NOT run the 2x4 case under TT_METAL_WATCHER — the watcher overflows the active-eth
 fabric-router kernel-config buffer at device open.
 
-    pytest models/tt_dit/tests/encoders/gemma/test_gemma_full.py -s
+    pytest models/tt_dit/tests/encoders/gemma3/test_gemma_full.py -s
 """
 
 import glob
@@ -29,8 +29,8 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.encoders.gemma.model_gemma import GemmaEncoderLayer
-from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.encoders.gemma3.model_gemma import GemmaEncoderLayer
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
 
 

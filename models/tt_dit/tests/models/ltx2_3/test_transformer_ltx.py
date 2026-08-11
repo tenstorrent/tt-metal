@@ -20,9 +20,9 @@ from safetensors.torch import load_file
 from tracy import signpost
 
 import ttnn
-from models.tt_dit.models.transformers.ltx.quant_config import LtxQuantProfile
-from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
-from models.tt_dit.models.transformers.ltx.transformer_ltx import (
+from models.tt_dit.models.transformers.ltx2_3.quant_config import LtxQuantProfile
+from models.tt_dit.models.transformers.ltx2_3.rope_ltx import LTXRopeType, precompute_freqs_cis
+from models.tt_dit.models.transformers.ltx2_3.transformer_ltx import (
     LTXTransformerBlock,
     LTXTransformerModel,
     build_audio_masks,
@@ -32,7 +32,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
-from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
+from models.tt_dit.utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import (
     line_params_req_exact_devices,

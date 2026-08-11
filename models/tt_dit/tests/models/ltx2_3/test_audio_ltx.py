@@ -30,13 +30,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
-from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
-from models.tt_dit.models.audio_vae.mel_decoder_ltx import AudioUpsample, MelDecoder, ResnetBlock
-from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1, Vocoder
+from models.tt_dit.models.audio_vae.audio_decoder_ltx2_3 import LTXAudioDecoderAdapter
+from models.tt_dit.models.audio_vae.bwe_ltx2_3 import MelSTFT, VocoderWithBWE
+from models.tt_dit.models.audio_vae.mel_decoder_ltx2_3 import AudioUpsample, MelDecoder, ResnetBlock
+from models.tt_dit.models.audio_vae.vocoder_ltx2_3 import AMPBlock1, Vocoder
 from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 from models.tt_dit.utils.video import Audio
@@ -1007,7 +1007,7 @@ def test_stage_c_audio_decode(mesh_device, device_params):
 #   LTX_AUDIO_PROF=1 \
 #   LTX_CHECKPOINT=~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors \
 #   python -m tracy -p -r -v -o generated/profiler/ltx_audio_decode -m \
-#     pytest 'models/tt_dit/tests/models/ltx/test_audio_ltx.py::test_audio_decode_profile' -s
+#     pytest 'models/tt_dit/tests/models/ltx2_3/test_audio_ltx.py::test_audio_decode_profile' -s
 # then sum "DEVICE FW DURATION [ns]" from
 #   generated/profiler/ltx_audio_decode/reports/<date>/ops_perf_results_<date>.csv
 # ===========================================================================
@@ -1150,7 +1150,7 @@ def test_audio_decode_perf_table():
     from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
     subdir = "ltx_audio_decode"
-    test_id = "models/tt_dit/tests/models/ltx/test_audio_ltx.py::test_audio_decode_profile"
+    test_id = "models/tt_dit/tests/models/ltx2_3/test_audio_ltx.py::test_audio_decode_profile"
     run_device_profiler(
         f"-m 'pytest {test_id} -s'",
         subdir,

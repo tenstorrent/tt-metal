@@ -23,7 +23,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.conv3d import ConvDims, conv3d_blocking_hash, conv_pad_height, conv_pad_width
 from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
-from ..vae.vae_ltx import LTXCausalConv3d
+from ..vae.vae_ltx2_3 import LTXCausalConv3d
 
 
 def _all_gather_hw(x: ttnn.Tensor, pc: VaeHWParallelConfig, ccl: CCLManager) -> ttnn.Tensor:

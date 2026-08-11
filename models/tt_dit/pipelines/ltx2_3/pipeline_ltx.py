@@ -22,24 +22,24 @@ from loguru import logger
 
 import ttnn
 
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
-from ...experimental.lora.ltx_adapter_loader import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
-from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
-from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
-from ...models.transformers.ltx.transformer_ltx import (
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
+from ...experimental.lora.ltx_adapter_loader_ltx2_3 import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
+from ...models.audio_vae.audio_decoder_ltx2_3 import LTXAudioDecoderAdapter
+from ...models.transformers.ltx2_3.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx2_3.transformer_ltx import (
     LTXTransformerCheckpoint,
     LTXTransformerModel,
     build_audio_masks,
     build_video_pad_mask,
 )
-from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoVAEAdapter, upsample_latent
+from ...models.upsampler.latent_upsampler_ltx2_3 import LTXLatentUpsampler
+from ...models.vae.vae_ltx2_3 import LTXVideoVAEAdapter, upsample_latent
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
-from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
+from ...utils.ltx2_3 import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
-from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
@@ -636,7 +636,7 @@ class LTXPipeline:
         preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
-        from ...models.transformers.ltx.quant_config import LtxQuantProfile
+        from ...models.transformers.ltx2_3.quant_config import LtxQuantProfile
 
         # Explicit registry, not getattr(LtxQuantProfile, preset): the profile's instance methods
         # (linear_kwargs, ...) are class attributes too, so getattr would resolve LTX_QUANT=linear_kwargs

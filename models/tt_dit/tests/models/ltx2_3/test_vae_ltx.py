@@ -20,7 +20,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.tt_dit.models.vae.vae_ltx import (
+from models.tt_dit.models.vae.vae_ltx2_3 import (
     LTXCausalConv3d,
     LTXDepthToSpaceUpsample,
     LTXResnetBlock3D,

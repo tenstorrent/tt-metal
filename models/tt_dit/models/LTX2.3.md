@@ -66,15 +66,15 @@ export LTX_CHECKPOINT="$HOME/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.sa
 export GEMMA_PATH="google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Loud Box 2x4 (sp1/tp0)
-RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
+RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx2_3/test_pipeline_ltx_distilled.py \
   -k "bh_2x4sp1tp0" -s --timeout 3600
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Galaxy 4x8 (ring)
-RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
+RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx2_3/test_pipeline_ltx_distilled.py \
   -k "bh_4x8sp1tp0_ring" -s --timeout 3600
 
 # Interactive prompt (omit NO_PROMPT)
-pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "bh_2x4sp1tp0" -s --timeout 3600
+pytest models/tt_dit/tests/models/ltx2_3/test_pipeline_ltx_distilled.py -k "bh_2x4sp1tp0" -s --timeout 3600
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
@@ -97,13 +97,13 @@ encode/decode) only; the concrete variants below implement `generate` / `warmup_
 ### LTXOneStagePipeline (Pro, one-stage)
 - Single full-guidance (CFG + STG + modality) denoise on the base 22B checkpoint
 - Mirrors the reference `ti2vid_one_stage.TI2VidOneStagePipeline`
-- Entry: `models/tt_dit/pipelines/ltx/pipeline_ltx_one_stage.py`
+- Entry: `models/tt_dit/pipelines/ltx2_3/pipeline_ltx_one_stage.py`
 
 ### LTXDistilledPipeline (Distilled)
 - Two-stage: half-resolution denoise → spatial upsample → full-resolution refine
 - No CFG/STG (distilled sigmas)
-- Entry: `models/tt_dit/pipelines/ltx/pipeline_ltx_distilled.py`
+- Entry: `models/tt_dit/pipelines/ltx2_3/pipeline_ltx_distilled.py`
 
 ### LTXTwoStagesPipeline (Pro + distilled-LoRA refine)
 - Two-stage: full-guidance s1 (base 22B) → distilled-LoRA s2 refine
-- Entry: `models/tt_dit/pipelines/ltx/pipeline_ltx_two_stages.py`
+- Entry: `models/tt_dit/pipelines/ltx2_3/pipeline_ltx_two_stages.py`

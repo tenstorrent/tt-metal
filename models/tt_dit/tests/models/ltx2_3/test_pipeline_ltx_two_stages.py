@@ -9,8 +9,8 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_two_stages import LTXTwoStagesPipeline
-from models.tt_dit.utils.ltx import (
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx_two_stages import LTXTwoStagesPipeline
+from models.tt_dit.utils.ltx2_3 import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,

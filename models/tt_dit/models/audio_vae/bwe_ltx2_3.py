@@ -15,7 +15,7 @@ import ttnn
 
 from ...layers.audio_resample import UpSample1d
 from ...layers.module import Module, Parameter
-from .vocoder_ltx import Vocoder
+from .vocoder_ltx2_3 import Vocoder
 
 
 class _STFTFn(Module):

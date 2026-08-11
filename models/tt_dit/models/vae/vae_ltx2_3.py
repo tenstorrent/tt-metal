@@ -35,13 +35,13 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
-from ...utils.ltx import pad_hw_replicate
+from ...utils.ltx2_3 import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
 
 if TYPE_CHECKING:
-    from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
+    from ..upsampler.latent_upsampler_ltx2_3 import LTXLatentUpsampler
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):

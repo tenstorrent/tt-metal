@@ -16,10 +16,10 @@ import time
 import torch
 from loguru import logger
 
-from ...models.vae.vae_ltx import upsample_latent
+from ...models.vae.vae_ltx2_3 import upsample_latent
 from ...utils.fuse_loras import LoraSpec
-from ...utils.ltx import load_conditioning_image
-from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.ltx2_3 import load_conditioning_image
+from ...utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
 

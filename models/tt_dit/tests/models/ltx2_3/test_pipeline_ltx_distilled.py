@@ -18,15 +18,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
-from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
-from models.tt_dit.utils.ltx import (
+from models.tt_dit.models.audio_vae.audio_decoder_ltx2_3 import LTXAudioDecoderAdapter
+from models.tt_dit.pipelines.ltx2_3.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.utils.ltx2_3 import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
 )
-from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
+from models.tt_dit.utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
@@ -677,7 +677,7 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
     # output, which is otherwise unverified — exactly the gap that let a broken trace ship).
     # Per-1s-interval error-to-signal (rmse/σ, dB) + overall PCC; the absolute level (~−18 dB
     # conv1d) is the fp32/bf16 floor, gated only against a gross spike.
-    from models.tt_dit.tests.models.ltx.test_audio_ltx import _build_torch_stage_c_real
+    from models.tt_dit.tests.models.ltx2_3.test_audio_ltx import _build_torch_stage_c_real
 
     z = pipeline.tt_mel_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()

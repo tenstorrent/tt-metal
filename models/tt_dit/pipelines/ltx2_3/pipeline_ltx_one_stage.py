@@ -14,7 +14,7 @@ import time
 import torch
 from loguru import logger
 
-from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.patchifiers_ltx2_3 import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, LTXPipeline, latent_grid
 

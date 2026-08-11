@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
+from models.tt_dit.models.transformers.ltx2_3.attention_ltx import LTXAttention
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
