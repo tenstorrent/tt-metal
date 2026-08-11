@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
+inline constexpr std::int32_t kMaxUint16SafeWidth = 256;
 
 struct SortParams {
     const int8_t dim;

@@ -111,6 +111,85 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
         assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
 
 
+@pytest.mark.parametrize("shape", ([1, 1, 32, 288], [1, 1, 32, 544]))
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_auto_promoted_boundary_regression(shape, descending, device):
+    input = torch.zeros(shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_equal(torch_sort_indices.to(torch.int64), ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64))
+
+@pytest.mark.parametrize("width", [288, 544])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_uint16_input_with_preallocated_outputs(width, descending, device):
+    torch.manual_seed(0)
+    input = torch.randint(0, 4, (1, 1, 32, width), dtype=torch.uint16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+
+    ttnn.sort(
+        ttnn_input,
+        dim=-1,
+        descending=descending,
+        stable=True,
+        out=(ttnn_sort_values, ttnn_sort_indices),
+    )
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch.uint16))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
+    )
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_uint16_short_width(descending, device):
+    input = torch.tensor([[[[2, 1, 2, 0]]]], dtype=torch.uint16)
+    ttnn_input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(
+        ttnn_input, dim=-1, descending=descending, stable=True
+    )
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch.uint16))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
+    )
+
+@pytest.mark.parametrize("width", [288, 544])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_bfloat16_input_with_preallocated_uint16_indices(width, descending, device):
+    input = torch.zeros((1, 1, 32, width), dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values = ttnn.zeros_like(ttnn_input)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
+
+    ttnn.sort(
+        ttnn_input,
+        dim=-1,
+        descending=descending,
+        stable=True,
+        out=(ttnn_sort_values, ttnn_sort_indices),
+    )
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64),
+    )
+
+
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
@@ -778,21 +857,27 @@ def test_fp32_non_last_dim_index_validation(shape, dim, device):
     assert_allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2)
 
 
-def test_fp32_input_uint16_preallocated_index_rejected(device, expect_error):
+def test_fp32_input_uint16_preallocated_index(device):
     shape = [TILE_HEIGHT, 2 * TILE_WIDTH]
-    t = torch.randn(shape, dtype=torch.float32)
-    x = ttnn.from_torch(
-        t, dtype=ttnn.float32, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+    torch.manual_seed(0)
+    input = torch.randint(0, 4, shape, dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(
+        input, dtype=ttnn.float32, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
     )
-    out_v = ttnn.zeros(
+    out_values = ttnn.zeros(
         shape, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    out_i = ttnn.zeros(
+    out_indices = ttnn.zeros(
         shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    with expect_error(RuntimeError, "must be UINT32 when input dtype is FLOAT32"):
-        ttnn.sort(x, dim=-1, out=(out_v, out_i))
+    expected_values, expected_indices = torch.sort(input, dim=-1, stable=True)
+    actual_values, actual_indices = ttnn.sort(
+        ttnn_input, dim=-1, stable=True, out=(out_values, out_indices)
+    )
+
+    assert_equal(expected_values, ttnn.to_torch(actual_values, dtype=torch.float32))
+    assert_equal(expected_indices.to(torch.int64), ttnn.to_torch(actual_indices).to(torch.int64))
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -910,3 +995,50 @@ def test_block_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+@pytest.mark.parametrize("width", [32, 64, 128, 256, 320, 544, 4096, 6400])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_tie_order(width, descending, device):
+    """
+    Duplicate-heavy regression: with stable=True, equal values must keep their
+    original relative order, so the returned indices must match torch's stable
+    sort exactly. Exercises the directional tie-break in the LLK for both
+    sort directions (tt-llk#1340 / tt-metal stable-sort wiring).
+    """
+    input = torch.randint(0, 4, (1, 1, 32, width), dtype=torch.float32)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch.float32))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint32).to(torch.int64),
+    )
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+        (torch.uint16, ttnn.uint16),
+    ],
+)
+@pytest.mark.parametrize("width", [256, 320, 544, 6400])
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_wide_supported_dtypes(width, descending, device, torch_dtype, ttnn_dtype):
+    torch.manual_seed(0)
+    source = torch.randint(0, 4, (1, 1, 32, width), dtype=torch.int64)
+    input = source.to(torch_dtype)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
+    assert_equal(
+        torch_sort_indices.to(torch.int64),
+        ttnn.to_torch(ttnn_sort_indices).to(torch.int64),
+    )

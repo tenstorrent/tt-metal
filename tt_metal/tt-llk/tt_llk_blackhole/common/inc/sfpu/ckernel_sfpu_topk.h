@@ -20,6 +20,8 @@ namespace sfpu
 {
 
 static std::int32_t topk_replay_init = 0;
+// This state is private to one math-core kernel invocation. The compute
+// kernel sets it before any stable compare-exchange sequence.
 static bool topk_stable_descending_mode = false;
 
 ALWI void set_topk_stable_descending_mode(bool descending)
@@ -187,16 +189,11 @@ ALWI void topk_cmp_swap_stable_min_to_vd()
     }
 }
 
-template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE>
-ALWI void topk_cmp_swap_stable_min_to_vc()
-{
-    topk_cmp_swap_stable_directional<VC, VD, MODE, false>();
-}
 
 template <bool STABLE_SORT>
 inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_start)
 {
-    if (dir == (bool)SortDir::ArgMin)
+    if (dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
         TTI_SFPNOP;
@@ -250,7 +247,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
         lltt::replay(replay_start, replay_count);
     }
 
-    if (dir == (bool)SortDir::ArgMin)
+    if (dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x004, 0xF, 1); // Restore the max/min behaviour of SWAP
         TTI_SFPNOP;
@@ -371,7 +368,7 @@ template <>
 inline void bitonic_topk_step_N<true>(bool dir)
 {
     // Step N
-    if (dir == (bool)SortDir::ArgMax)
+    if (dir == static_cast<bool>(SortDir::ArgMax))
     {
         topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX>();
         topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX>();

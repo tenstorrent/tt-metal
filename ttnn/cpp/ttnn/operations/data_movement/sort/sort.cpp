@@ -65,26 +65,17 @@ Tensor pre_sort_transform_tensor(
     Tensor padded_tensor = transformed_tensor;
     const bool is_row_major = (transformed_tensor.layout() == Layout::ROW_MAJOR);
 
-    // UINT16 cannot represent ±inf.  Use UINT16_MAX (65535) as the sentinel for ascending
-    // (sorts past all real values) and 0 for descending (sorts after all real values).
-    // For all other dtypes use ±inf as before.
-    //
-    // Known limitation: 0 and 65535 are valid UINT16 values, so these sentinels
-    // can collide with real input data.  If the input contains 65535 (ascending)
-    // or 0 (descending) and the last dimension needs W-padding to the next power
-    // of two, a padded element with the same sentinel value could sort into the
-    // sliced result, producing an index that points outside the original
-    // sort dimension.  In practice the primary use case (position indices
-    // bounded well below 65535) is not affected, but full-range UINT16 inputs
-    // may see incorrect indices for tied values at the boundary.
-    const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
-    const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
-    const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
+    const bool is_uint16_input = (transformed_tensor.dtype() == DataType::UINT16);
+    const float pad_ascending =
+        is_uint16_input ? static_cast<float>(std::numeric_limits<uint16_t>::max())
+                        : std::numeric_limits<float>::infinity();
+    const float pad_descending =
+        is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
     const float pad_fill = descending ? pad_descending : pad_ascending;
 
     if (!is_row_major) {
         // TILE layout: fill the implicit tile-row padding so the bitonic sort
-        // ignores it (pads with ±inf or UINT16 sentinel).
+        // ignores it.
         padded_tensor = ttnn::fill_implicit_tile_padding(transformed_tensor, pad_fill);
     } else {
         // ROW_MAJOR: the kernel processes rows in groups of TILE_HEIGHT (32).
@@ -305,17 +296,19 @@ std::vector<Tensor> sort(
     }
 
     // Convert sharded inputs to DRAM before the pre-sort transforms.
-    // ttnn::pad (called inside pre_sort_transform_tensor) does not support
-    // sharded tensors and will hang or produce incorrect results if the input
-    // is still sharded when it is called.  We capture the user-requested output
-    // memory config in sort_mem_cfg above before doing this conversion so that
-    // the output can be converted back to the sharded config after sorting.
+    // ttnn::pad does not support sharded tensors.
     const Tensor transform_input = input_tensor.memory_config().is_sharded()
                                        ? ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG)
                                        : input_tensor;
+    // UINT16 inputs are widened before any implicit or explicit padding. Their
+    // finite UINT16 sentinels can otherwise be interpreted as fp16 NaNs by the
+    // sort kernel, and valid keys near the sentinel can enter the output slice.
+    const bool widen_u16 = (input_tensor.dtype() == DataType::UINT16);
+    const Tensor sort_input =
+        widen_u16 ? ttnn::typecast(transform_input, DataType::FLOAT32) : transform_input;
 
     Tensor padded_input_tensor =
-        dm::pre_sort_transform_tensor(transform_input, dim, is_dim_last_idx, is_rank_le_4d, descending);
+        dm::pre_sort_transform_tensor(sort_input, dim, is_dim_last_idx, is_rank_le_4d, descending);
     const MemoryConfig device_op_mem_cfg = sort_mem_cfg.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : sort_mem_cfg;
 
     // Canonicalize any preallocated output tensors.
@@ -344,23 +337,25 @@ std::vector<Tensor> sort(
     // pre_sort_transform_tensor always moves the sort dimension to position -1,
     // so the device op always sorts along the last dimension.
     //
-    // UINT16 values corrupt for sort widths above 256 (SFPU LO16 tracking limit)
-    // in both 16- and 32-bit dest modes; route those through FLOAT32 (exact for
-    // every uint16 value) and cast the values back after sorting. The indices
-    // output is also forced to UINT32 above 256, including preallocated UINT16
-    // outputs, then cast back when the logical width fits.
-    const bool widen_u16 = (padded_input_tensor.dtype() == DataType::UINT16 &&
-                            padded_input_tensor.logical_shape()[-1] > 256);
+    // UINT16 input was widened before pre-sort padding. Cast sorted values back
+    // after the device operation; indices remain UINT32 internally.
     const bool force_u32_indices =
-        padded_input_tensor.logical_shape()[-1] > 256 && optional_output_tensors.has_value() &&
-        std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16;
+        optional_output_tensors.has_value() &&
+        std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16 &&
+        (padded_input_tensor.logical_shape()[-1] > prim::kMaxUint16SafeWidth ||
+         padded_input_tensor.dtype() == DataType::FLOAT32);
     if (widen_u16) {
-        padded_input_tensor = ttnn::typecast(padded_input_tensor, DataType::FLOAT32);
-    }
-    if (widen_u16 || force_u32_indices) {
-        // Let the prim allocate a UINT32 index tensor and rebind the user's
-        // preallocated handles below.
+        // The FLOAT32 widening changes the value dtype, so let the prim
+        // allocate both outputs and rebind the user's handles below.
         output_tensors = {std::nullopt, std::nullopt};
+    } else if (force_u32_indices) {
+        if (output_tensors[0].has_value() && output_tensors[1].has_value()) {
+            // Preserve the compatible preallocated values buffer. The index
+            // buffer must be UINT32 internally and cast back below.
+            output_tensors[1] = ttnn::zeros_like(*output_tensors[1], DataType::UINT32);
+        } else {
+            output_tensors = {std::nullopt, std::nullopt};
+        }
     }
     auto sorted_tensors = ttnn::prim::sort(
         padded_input_tensor, static_cast<int8_t>(-1), descending, stable, device_op_mem_cfg, output_tensors);
