@@ -178,45 +178,49 @@ class SamplingGenerator:
         self,
         sampling_params_chunks: list,
         *,
-        reset_batch: bool = False,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
-        """Format, merge (if row-sharded), and apply sampling params for one model instance.
+        """Apply the explicitly requested parts of decode sampling state.
 
         Args:
             sampling_params_chunks: List of SamplingParams assigned to this instance.
                 Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
-            reset_batch: Also reset prompt tokens and output state (first decode step).
+            reload_sampling_params: Upload temperature/top-k/top-p/etc.
+            reset_sampling_state: Rebuild prompt/output penalty state.
             prompt_tokens: Prompt tokens for penalty tracking.
             output_tokens: Output tokens for penalty tracking.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
         """
-        chunks_per_model = len(sampling_params_chunks)
+        if reload_sampling_params:
+            chunks_per_model = len(sampling_params_chunks)
+            max_batch_size = self.tt_sampling.max_batch_size
 
-        max_batch_size = self.tt_sampling.max_batch_size
+            if chunks_per_model == 1:
+                formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
+                self.reset_sampling_params(formatted_params)
+            else:
+                # Row-sharded case: format each chunk to max_batch_size,
+                # concatenate, then upload one merged parameter set.
+                formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
+                concat_fields = {}
+                for field in SAMPLING_PARAM_FIELDS:
+                    lists = [getattr(fc, field) for fc in formatted_chunks]
+                    if all(v is None for v in lists):
+                        concat_fields[field] = None
+                    else:
+                        concat_fields[field] = sum(
+                            (v if isinstance(v, list) else [v] for v in lists),
+                            [],
+                        )
+                formatted_params = SamplingParams(**concat_fields)
+                self.reset_sampling_params(formatted_params)
 
-        if chunks_per_model == 1:
-            formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
-            self.reset_sampling_params(formatted_params)
-        else:
-            # Row-sharded case: format each chunk to max_batch_size, concatenate.
-            # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
-            # Both TTSampling and TTPenalties use the same concatenated params.
-            formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
-            concat_fields = {}
-            for field in SAMPLING_PARAM_FIELDS:
-                lists = [getattr(fc, field) for fc in formatted_chunks]
-                if all(v is None for v in lists):
-                    concat_fields[field] = None
-                else:
-                    concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
-            formatted_params = SamplingParams(**concat_fields)
-            self.reset_sampling_params(formatted_params)
-
-        if reset_batch:
+        if reset_sampling_state:
             self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
 

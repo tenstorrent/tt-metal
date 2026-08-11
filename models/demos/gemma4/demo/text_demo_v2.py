@@ -540,6 +540,10 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=None,  # host sampling
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         out_tok = _host_sample(logits, temperature, top_p)
         profiler.end(f"inference_decode_time_{iteration}")

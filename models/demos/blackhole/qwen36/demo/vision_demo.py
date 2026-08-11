@@ -412,6 +412,10 @@ def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_in
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         decode_times.append(time.time() - t_step)
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
@@ -461,6 +465,10 @@ def _run_paged_vision_generation(model, tokenizer, device, token_ids, vision_inp
             kv_cache=None,
             enable_trace=False,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         decode_times.append(time.time() - t_step)
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()

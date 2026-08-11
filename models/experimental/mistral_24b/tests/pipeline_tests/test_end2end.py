@@ -309,6 +309,10 @@ def run_generation_exactly_like_test_end2end(
             enable_trace=False,
             page_table=page_table,
             kv_cache=tt_kv_cache,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
 
         # decode_forward returns (logits, log_probs) tuple when read_from_device=True

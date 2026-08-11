@@ -653,15 +653,20 @@ def test_mlp1d_llama_demo(
             out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
         # Decode forward
+        decode_enable_trace = not measure_accuracy
         logits, _ = generator.decode_forward(
             out_tok,
             current_pos,
-            enable_trace=not measure_accuracy,  # Disable trace for accuracy (teacher forcing)
+            enable_trace=decode_enable_trace,  # Disable trace for accuracy (teacher forcing)
             page_table=page_table,
             kv_cache=tt_kv_cache_list,
             sampling_params=device_sampling_params,
             prompt_tokens=input_tokens_prefill_pt,
             output_tokens=out_tok,
+            reload_inputs=iteration == 0 or not decode_enable_trace or device_sampling_params is None,
+            reload_page_table=False,
+            reload_sampling_params=device_sampling_params is not None,
+            reset_sampling_state=device_sampling_params is not None and iteration == 0,
         )
 
         # Get next token
