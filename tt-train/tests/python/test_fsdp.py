@@ -135,12 +135,13 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 
 @pytest.fixture(scope="module")
-def fsdp_mesh():
+def fsdp_mesh(skip_if_host_too_small):
     """Open a 2D mesh ``[1, FSDP_AXIS_SIZE]`` with axes ``("dp", "fsdp")``.
 
     A 2D layout with ``dp=1`` keeps the same fixture re-usable for HSDP
     tests later (those need a real ``dp`` axis without re-shaping the
-    mesh). Skips the module if the system can't host the requested mesh.
+    mesh). Skips the module if the host has too few devices for the shape.
+    A host that has enough but still can't open the mesh fails instead.
 
     If ``TT_MESH_GRAPH_DESC_PATH`` isn't set in the environment, we point
     it at a bundled MGD that matches the host arch + requested shape (see
@@ -148,15 +149,17 @@ def fsdp_mesh():
     The original value is restored at teardown.
     """
     shape = (1, FSDP_AXIS_SIZE)
+    skip_if_host_too_small(shape, "FSDP tests")
     previous_mgd = _ensure_mgd_path(shape)
 
     _close_device_quietly()
     try:
         m = ttml.Mesh(shape, ("dp", "fsdp"))
         ttml.open_device_mesh(m)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        _close_device_mesh_quietly()
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"FSDP tests need {FSDP_AXIS_SIZE} devices on the 'fsdp' axis: {e}")
+        raise
 
     yield ttml.mesh()
 
