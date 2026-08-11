@@ -34,6 +34,7 @@ add_subdirectory(reduction)
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
 add_subdirectory(kda/affine_exclusive_scan)
+add_subdirectory(kda/prepare_chunk_recurrence)
 add_subdirectory(kda/qkv_causal_conv1d_silu)
 add_subdirectory(kda/reduce_affine_transforms)
 add_subdirectory(kda/sigmoid_gated_rms_norm)
@@ -95,6 +96,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
+        TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
         TTNN::Ops::Experimental::KDA::ReduceAffineTransforms
         TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm
@@ -149,6 +151,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm>
