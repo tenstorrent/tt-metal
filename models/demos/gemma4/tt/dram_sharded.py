@@ -87,18 +87,31 @@ def _padded_n_tiles(n):
     return _roundup(n, TILE_SIZE * DRAM_CORES) // TILE_SIZE
 
 
+# Measured on Gemma4-12B/1x4 batch-32 decode: at these small M=32 shapes,
+# _find_grid_k_n's greedy largest-feasible core-count pick is slower than a
+# smaller grid found by sweeping within the real DramShardedLinear scheme
+# (same program-config type, same DRAM-sharded weight layout, only num_cores
+# varied) -- per-core dispatch overhead dominates at this small an M. Keyed by
+# (k_tiles, n_tiles) so only these exact verified shapes are overridden;
+# any other DramShardedLinear shape keeps the default search unchanged.
+#   down_proj    (k=3840, n=3840): 40 cores/5x8 (default) -> 5 cores/1x5,
+#     1.27x faster (0.0733ms -> 0.0578ms), identical PCC 0.9998.
+#   gate_up_proj (k=3840, n=7680): 40 cores/5x8 (default) -> 8 cores/1x8,
+#     1.08x faster (0.0985ms -> 0.0912ms), identical PCC 0.9998.
+_DECODE_CORE_GRID_OVERRIDES = {
+    (120, 120): (1, 5),
+    (120, 240): (1, 8),
+}
+
+
 def _decode_core_grid(k, n):
     """Compute-core grid for decode DRAM-sharded matmul + matching act shard."""
     k_tiles = k // TILE_SIZE
     n_tiles = _padded_n_tiles(n)
-    # Measured on Gemma4-12B/1x4 batch-32 decode at this exact shape (down_proj:
-    # k=3840, n=3840, both 120 tiles): _find_grid_k_n's greedy largest-feasible
-    # pick (40 cores, 5x8) is 1.27x SLOWER than 5 cores/1x5 (0.0733ms vs
-    # 0.0578ms, identical PCC 0.9998) -- per-core dispatch overhead dominates
-    # this small an M=32 matmul. Narrowly scoped to the exact verified k,n so
-    # other shapes (e.g. gate_up_proj, k=3840 n=7680) keep the default search.
-    if k_tiles == 120 and n_tiles == 120:
-        return 1, 5, 5
+    override = _DECODE_CORE_GRID_OVERRIDES.get((k_tiles, n_tiles))
+    if override is not None:
+        rows, cols = override
+        return rows, cols, rows * cols
     rows, cols = _find_grid_k_n(k_tiles, n_tiles)
     return rows, cols, rows * cols
 
