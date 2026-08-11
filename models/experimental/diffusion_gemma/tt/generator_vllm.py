@@ -288,6 +288,39 @@ def _reveal_bucket_downshift_enabled() -> bool:
     )
 
 
+def _reveal_output_budget() -> int | None:
+    """Output tokens provisioned into the admission bucket (DG_REVEAL_OUTPUT_BUDGET).
+
+    Unset (default): admission provisions the full ceiling — no mid-request
+    recapture can ever fire, at the cost of capturing the worst-case span (the
+    pre-buckets behaviour). An explicit value provisions
+    ``prompt + canvas + budget`` — the deployment states how much output its
+    workload emits (an eval pins max_gen_toks; a serving profile knows its cap)
+    and every recapture happens at ADMISSION, between requests, where memory is
+    quiet and the release-recapture path is production-proven
+    (DG_UPFRONT_LAZY_PREFILL_RECAPTURE). Mid-request upshift remains only as
+    the fallback for requests that exceed the budget: at the 256K geometry
+    steady-state DRAM runs ~99% allocated and a mid-request recapture OOMed
+    placing the controller's [canvas, vocab] noise buffer (tt-shield run
+    31448367055).
+    """
+    raw = os.environ.get("DG_REVEAL_OUTPUT_BUDGET", "").strip()
+    if not raw:
+        return None
+    budget = int(raw)
+    if budget < 0:
+        raise RuntimeError(f"DG_REVEAL_OUTPUT_BUDGET must be >= 0, got {budget}")
+    return budget
+
+
+def _reveal_provisioned_span(prefix_len: int, *, canvas_length: int, ceiling: int) -> int:
+    """Span the admission bucket must cover for a request starting at ``prefix_len``."""
+    budget = _reveal_output_budget()
+    if budget is None:
+        return int(ceiling)
+    return min(int(prefix_len) + int(canvas_length) + budget, int(ceiling))
+
+
 def _resolve_reveal_bucket(needed_span: int, *, ceiling: int) -> int:
     """Smallest power-of-two bucket >= max(needed, floor), clipped to the ceiling.
 
@@ -524,7 +557,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         self._upfront_reveal_bucket = None
         if self._upfront and _reveal_buckets_enabled():
             self._upfront_reveal_bucket = _resolve_reveal_bucket(
-                ttnn.TILE_SIZE + self.canvas_length, ceiling=self._upfront_pmax
+                _reveal_provisioned_span(ttnn.TILE_SIZE, canvas_length=self.canvas_length, ceiling=self._upfront_pmax),
+                ceiling=self._upfront_pmax,
             )
         # Register unconditionally: the active span is module-global in traced_denoise,
         # so a wrapper built after a bucketed one (tests, restarts in-process) must not
@@ -920,7 +954,47 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             except BaseException as cleanup_error:
                 logger.error(f"failed to release {label} adapter: {cleanup_error}")
 
-    def _reserve_cold_recapture_holes(self) -> list:
+    def _reserve_upshift_controller_holes(self) -> list:
+        """Pin two [canvas, vocab] holes for the recaptured controller's noise buffers.
+
+        A mid-request recapture releases the old controller's Gumbel/noise
+        buffers and immediately reallocates same-sized ones — but the capture's
+        many small allocations (masks, RoPE, halt scalars, compile temporaries)
+        run first and can nibble the freed contiguous blocks. At the 256K
+        geometry that turned 134 MB of just-freed space into an 8 MB largest
+        free block and OOMed the new noise buffer (tt-shield 31448367055).
+        Reserving the two vocabulary-wide holes right after the release and
+        dropping them immediately before capture keeps contiguous space the
+        new buffers can land in.
+        """
+        tt_model = self.model[0]
+        text_config = getattr(tt_model.hf_config, "text_config", tt_model.hf_config)
+        vocab_size = int(getattr(text_config, "vocab_size"))
+        shape = [1, 1, int(self.canvas_length), vocab_size]
+        reservations = []
+        try:
+            for _ in range(2):
+                reservations.append(
+                    ttnn.empty(
+                        shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=tt_model.mesh_device,
+                    )
+                )
+        except BaseException:
+            for reservation in reservations:
+                reservation.deallocate(True)
+            raise
+        _metric(
+            "reveal_upshift_controller_holes_reserved",
+            buffers=len(reservations),
+            shape=shape,
+            bytes_per_buffer=2 * int(self.canvas_length) * vocab_size,
+        )
+        return reservations
+
+    def _reserve_cold_recapture_holes(self, *, span: int | None = None) -> list:
         """Protect the four large holes needed to restart long-context capture.
 
         Releasing the resident trace exposes the large DRAM blocks used by the
@@ -930,9 +1004,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         full-vocabulary Gumbel buffers, then simultaneous prefix+canvas K and V
         concats. Hold four concat-sized buffers across the prefill, then release
         them immediately before recapture so those allocations can reuse the
-        preserved holes.
+        preserved holes. ``span`` sizes the holes to the span the capture will
+        actually bind (a reveal bucket); default is the deployment ceiling.
         """
-        p_max = int(getattr(self, "_upfront_pmax", 0) or 0)
+        p_max = int(span) if span is not None else int(getattr(self, "_upfront_pmax", 0) or 0)
         if p_max < 65536:
             return []
         tt_model = self.model[0]
@@ -1124,9 +1199,16 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             if callable(release_masks):
                 release_masks()
             self._persistent_adapter = None  # republished after a successful capture
-            ttnn.synchronize_device(self.model[0].mesh_device)
-            set_active_reveal_pmax(new_bucket)
-            recapture_holes = self._reserve_cold_recapture_holes()
+            # Pin the just-freed vocabulary-wide blocks BEFORE anything else can
+            # fragment them; released immediately before capture so the new
+            # controller's Gumbel/noise buffers land in the preserved holes.
+            controller_holes = self._reserve_upshift_controller_holes()
+            try:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+                set_active_reveal_pmax(new_bucket)
+                recapture_holes = self._reserve_cold_recapture_holes(span=new_bucket)
+            finally:
+                self._release_cold_recapture_holes(controller_holes)
             try:
                 emission, adapter, trace_stats = self._capture_prefilled_session(session)
             finally:
@@ -1165,6 +1247,45 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             raise
         finally:
             self._upfront_rebuild_in_progress = False
+
+    def _restore_resident_capture(self) -> None:
+        """Re-establish the model-lifetime capture after a failed mid-request rebuild.
+
+        Same BOS mock-prompt capture as startup warmup, at whatever span is
+        currently registered (the failure path restored the resident bucket).
+        The failed request has been released, so memory is as quiet as any
+        between-requests recapture. A failure HERE leaves the wrapper unable to
+        serve anything and is engine-fatal, matching the startup contract.
+        """
+        if self._persistent_adapter is not None:
+            return
+        mock_token_id = getattr(self._tokenizer, "bos_token_id", None)
+        if mock_token_id is None:
+            mock_token_id = getattr(self._tokenizer, "eos_token_id", None)
+        if mock_token_id is None:
+            mock_token_id = 0
+        mock_tokens = torch.tensor([[int(mock_token_id)]], dtype=torch.long)
+        session = self._make_session()
+        adapter = None
+        try:
+            session.prefill(mock_tokens)
+            _emission, adapter, trace_stats = self._capture_prefilled_session(session)
+            session._logits_fn = None
+            session.reset()
+            self._persistent_adapter = adapter
+            _metric("resident_capture_restored", trace_stats=trace_stats)
+        except BaseException:
+            self._release_unpublished_adapter(
+                adapter if adapter is not None else session._logits_fn,
+                label="failed resident-capture restore",
+            )
+            session._logits_fn = None
+            session.reset()
+            logger.error(
+                "[DiffusionGemma vLLM] failed to restore the resident capture after a "
+                "reveal-upshift failure; the engine cannot continue"
+            )
+            raise
 
     def warmup_model_decode(self, *args, **kwargs):
         """No-op: model-level denoise needs no separate decode warmup."""
@@ -1295,7 +1416,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         f"{cache_len} + {self.canvas_length} > {p_max}"
                     )
                 if _reveal_buckets_enabled() and getattr(self, "_upfront_reveal_bucket", None) is not None:
-                    candidate = _resolve_reveal_bucket(cache_len + self.canvas_length, ceiling=int(p_max))
+                    candidate = _resolve_reveal_bucket(
+                        max(
+                            cache_len + self.canvas_length,
+                            _reveal_provisioned_span(cache_len, canvas_length=self.canvas_length, ceiling=int(p_max)),
+                        ),
+                        ceiling=int(p_max),
+                    )
                     if _resolve_reveal_bucket_change(candidate, int(self._upfront_reveal_bucket)):
                         # Committed (active span registered, tracker updated) only around
                         # the rebuild call below, so the rejection path and a failed
@@ -1502,7 +1629,24 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             try:
                 upshift_span = self._reveal_upshift_needed_span(session)
                 if upshift_span is not None:
-                    emission = self._rebuild_for_reveal_upshift(session, needed_span=upshift_span, row=row)
+                    try:
+                        emission = self._rebuild_for_reveal_upshift(session, needed_span=upshift_span, row=row)
+                    except BaseException as upshift_error:
+                        # ONE REQUEST costs ONE REQUEST (same contract as the unwarmed
+                        # prefill rejection above): a failed growth recapture ends the
+                        # growing request with its stop block, then restores a resident
+                        # capture so the server keeps serving. Only a failed restore is
+                        # engine-fatal.
+                        logger.error(
+                            f"[DiffusionGemma vLLM] reveal upshift failed on row {row}; ending this "
+                            f"request and restoring the resident capture: {upshift_error!r}"
+                        )
+                        _metric("reveal_upshift_request_failed", row=row, error=repr(upshift_error))
+                        stop_block = self._stop_block(session)
+                        self.release_request(row)
+                        self._restore_resident_capture()
+                        blocks.append(stop_block)
+                        continue
                 else:
                     emission = session.decode_block()
             except BaseException:

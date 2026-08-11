@@ -1546,8 +1546,11 @@ def test_vllm_reveal_upshift_recaptures_on_live_session(monkeypatch):
         return emission, adapter, [{"traces_captured": 48}]
 
     wrapper._capture_prefilled_session = capture_prefilled
-    wrapper._reserve_cold_recapture_holes = lambda: events.append("holes") or []
-    wrapper._release_cold_recapture_holes = lambda reservations: events.append("holes_released")
+    wrapper._reserve_upshift_controller_holes = lambda: events.append("vocab_holes") or ["vocab"]
+    wrapper._reserve_cold_recapture_holes = lambda **kwargs: events.append(f"holes@{kwargs.get('span')}") or ["concat"]
+    wrapper._release_cold_recapture_holes = lambda reservations: events.append(
+        f"released:{reservations[0] if reservations else 'none'}"
+    )
     monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append("sync"))
     monkeypatch.setattr(generator_vllm, "set_active_reveal_pmax", lambda span: spans.append(span))
     monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
@@ -1556,7 +1559,15 @@ def test_vllm_reveal_upshift_recaptures_on_live_session(monkeypatch):
     actual = wrapper._rebuild_for_reveal_upshift(session, needed_span=4224, row=0)
 
     assert actual is emission
-    assert events == ["controller_release", "sync", "holes", "capture", "holes_released"]
+    assert events == [
+        "controller_release",
+        "vocab_holes",
+        "sync",
+        "holes@8192",
+        "released:vocab",
+        "capture",
+        "released:concat",
+    ]
     assert spans == [8192]
     assert wrapper._upfront_reveal_bucket == 8192
     assert wrapper._persistent_adapter is adapter
@@ -1589,7 +1600,8 @@ def test_vllm_reveal_upshift_failure_restores_span_and_unpublishes(monkeypatch, 
         raise RuntimeError("capture blew up")
 
     wrapper._capture_prefilled_session = failing_capture
-    wrapper._reserve_cold_recapture_holes = lambda: []
+    wrapper._reserve_upshift_controller_holes = lambda: []
+    wrapper._reserve_cold_recapture_holes = lambda **kwargs: []
     wrapper._release_cold_recapture_holes = lambda reservations: None
     monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: None)
     monkeypatch.setattr(generator_vllm, "set_active_reveal_pmax", lambda span: spans.append(span))
@@ -1673,6 +1685,9 @@ def test_device_reveal_bucket_mid_request_upshift_matches_fixed_span(upfront_dev
     # canvases the degeneracy guard would end at block 0, and the request must keep
     # growing for the bucket to overflow. Correctness is the bit-exact token match.
     monkeypatch.setenv("DG_DEGENERACY_POLICY", "off")
+    # Budget 0 = pure growth-on-demand, which is what forces the mid-request upshift
+    # this test exists to exercise (a real deployment provisions at admission).
+    monkeypatch.setenv("DG_REVEAL_OUTPUT_BUDGET", "0")
     monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "0")
     reference_wrapper = _make_upfront_wrapper(upfront_device_bundle, [prompt])
     try:
@@ -1703,6 +1718,7 @@ def test_device_reveal_bucket_admission_change_matches_fixed_span(upfront_device
     assert int(large.shape[1]) + 256 > 512, "large prompt must not fit the floor bucket"
 
     monkeypatch.setenv("DG_DEGENERACY_POLICY", "off")  # mechanism test; see the upshift test
+    monkeypatch.setenv("DG_REVEAL_OUTPUT_BUDGET", "0")  # growth-on-demand geometry
     monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "0")
     reference_wrapper = _make_upfront_wrapper(upfront_device_bundle, [small, large])
     try:
@@ -1733,3 +1749,84 @@ def test_device_reveal_bucket_admission_change_matches_fixed_span(upfront_device
         assert torch.equal(small_again, small_reference)
     finally:
         wrapper.release_persistent_capture()
+
+
+def test_reveal_output_budget_provisioning(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm as GV
+
+    # Unset -> provision the ceiling: no mid-request growth can ever fire.
+    monkeypatch.delenv("DG_REVEAL_OUTPUT_BUDGET", raising=False)
+    assert GV._reveal_provisioned_span(160, canvas_length=256, ceiling=262144) == 262144
+    # Explicit budget -> prompt + canvas + budget, clipped to the ceiling.
+    monkeypatch.setenv("DG_REVEAL_OUTPUT_BUDGET", "13824")
+    assert GV._reveal_provisioned_span(160, canvas_length=256, ceiling=262144) == 14240
+    assert GV._resolve_reveal_bucket(14240, ceiling=262144) == 16384
+    assert GV._reveal_provisioned_span(260000, canvas_length=256, ceiling=262144) == 262144
+    # Budget 0 restores pure growth-on-demand (prompt + one canvas).
+    monkeypatch.setenv("DG_REVEAL_OUTPUT_BUDGET", "0")
+    assert GV._reveal_provisioned_span(160, canvas_length=256, ceiling=262144) == 416
+    monkeypatch.setenv("DG_REVEAL_OUTPUT_BUDGET", "-5")
+    with expect_error(RuntimeError, match="DG_REVEAL_OUTPUT_BUDGET"):
+        GV._reveal_output_budget()
+
+
+def test_vllm_failed_upshift_costs_one_request_not_the_engine(monkeypatch):
+    """A failed growth recapture ends the request, restores a capture, and serving continues."""
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    events = []
+    stop_block = torch.full((1, 256), 7, dtype=torch.long)
+    session = SimpleNamespace(finished=False, _logits_fn=None, _persistent_adapter=None)
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.model = [SimpleNamespace(mesh_device="mesh")]
+    wrapper.canvas_length = 256
+    wrapper._upfront = True
+    wrapper._sessions = {0: session}
+    wrapper._reveal_upshift_needed_span = lambda s: 4224
+    wrapper._stop_block = lambda s: events.append("stop_block") or stop_block
+
+    def failing_upshift(s, *, needed_span, row):
+        events.append("upshift")
+        raise RuntimeError("DRAM says no")
+
+    wrapper._rebuild_for_reveal_upshift = failing_upshift
+    wrapper.release_request = lambda row: events.append(f"release:{row}")
+    wrapper._restore_resident_capture = lambda: events.append("restore")
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+
+    out = wrapper.decode_forward()
+
+    assert events == ["upshift", "stop_block", "release:0", "restore"]
+    assert torch.equal(out, stop_block)
+
+
+def test_vllm_failed_upshift_and_failed_restore_is_fatal(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    session = SimpleNamespace(finished=False, _logits_fn=None, _persistent_adapter=None)
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.model = [SimpleNamespace(mesh_device="mesh")]
+    wrapper.canvas_length = 256
+    wrapper._upfront = True
+    wrapper._sessions = {0: session}
+    wrapper._reveal_upshift_needed_span = lambda s: 4224
+    wrapper._stop_block = lambda s: torch.zeros((1, 256), dtype=torch.long)
+
+    def failing_upshift(s, *, needed_span, row):
+        raise RuntimeError("DRAM says no")
+
+    def failing_restore():
+        raise RuntimeError("restore also failed")
+
+    wrapper._rebuild_for_reveal_upshift = failing_upshift
+    wrapper.release_request = lambda row: None
+    wrapper._restore_resident_capture = failing_restore
+    monkeypatch.setattr(generator_vllm, "_metric", lambda *args, **kwargs: None)
+
+    with expect_error(RuntimeError, match="restore also failed"):
+        wrapper.decode_forward()
