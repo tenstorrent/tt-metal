@@ -525,6 +525,8 @@ verdict, so you can jump rather than read 3,900 lines.
 - **§6.66** — review pass after §6.65: four defects, three of them on paths no test reaches
 - **§6.67** — the sharded decode norm REVERSES BACK: +5.399 ms/frame, RTF 0.4415 → 0.3647, WER 1 → 0
 - **§6.68** — the stale-rejection sweep comes back EMPTY, and that is the useful result
+- **§6.69** — there is no prefill length limit; utterance length is `max_seq_len` and costs DRAM,
+  not RTF ⟵ **corrects a "~1024 tokens" claim that appeared in three places and was never measured**
 
 **Shipped, in order of size:** §6.65 traced frame loop (−4.2 ms), §6.67 sharded decode
 norm (−5.4), §6.52 matmul program configs (−4.2), §6.62 residual-as-bias (−1.9, block only),
@@ -558,7 +560,8 @@ which independently reproduces our Block 2 finding on a different implementation
 runs ALL-BFP8 — the exact config that hangs for us — without hanging, which is more evidence the
 hang is a tt-metal-version property rather than something about our weights.
 
-**Still open:** prefill beyond ~1024 tokens would need chunked prefill. batch=1 only.
+**Still open:** batch=1 only. (Prefill length was listed here as a limit for a long time. It is
+not one — §6.69 measured prefill clean to 4096 tokens.)
 
 ### Block 2 — DONE, and the accuracy is not the problem
 390M, 3 layers, **3-token sequence**, bidirectional (no RoPE, no mask), 7 Euler steps per frame with
@@ -3811,7 +3814,9 @@ next to the device version for a side-by-side.
 - **The WER number comes from a scipy port** of `score_quality_set.py`, not the repo scorer, which
   cannot run here (torchaudio ABI). Faithful, but a systematic bug in it would pass silently.
 - **894 words over 4 long-form cases** is a thin sample.
-- **Functional limits**: prefill beyond ~1024 tokens needs chunked prefill; batch=1 only.
+- **Functional limits**: batch=1 only. Utterance length is bounded by `max_seq_len`, which holds
+  prompt + generated frames together — 2048 is ~136 s of audio, and raising it costs DRAM only
+  (§6.69). Not a prefill limit.
 - **CC BY-NC 4.0 weights** — a hard non-technical blocker regardless of quality.
 
 **Verdict: every objective check is at or better than the reference implementation, and the one
@@ -4353,6 +4358,43 @@ instead of 38-71. **A rejection is stale when its premise is a cost, and someone
 that cost. Once the cost is gone, the sweep is finished** — which is why this section closes the
 line of enquiry rather than opening another.
 
+### 6.69 — the "prefill can't do long utterances" limit does not exist, and never did
+
+Asked why the docs said prefill needs chunking past ~1024 tokens. It doesn't. **Nothing in the
+code has ever enforced 1024.** The only guard is `Sp > self.max_seq_len` (`gpt.py:344`), and
+`max_seq_len` is a constructor argument defaulting to 2048. The model's own `params.json` has
+context **65536** with no sliding window — `voxtral_backbone_ref.py:35` has said "context length
+costs KV-cache, nothing else" since the reference was written. The claim appeared in three places
+and was never measured.
+
+**Measured (`tests/probes/seq_len_limits.py`).** Prefill at S = 256/512/1024/2048/3072/4096: all
+clean, finite, no failure at any length.
+
+**The limit the docs never named, which is the one that matters.** For TTS a "long utterance" is
+thousands of generated frames, not a long prompt. Every frame writes one cache position, so
+`max_seq_len` bounds **prompt + frames together**. That, not prefill, is what caps an utterance.
+
+| `max_seq_len` | KV cache | audio after a 350-tok prompt | ms/frame |
+|---|---|---|---|
+| 1024 | 109 MB | 54 s | 27.45 |
+| 2048 | 218 MB | 136 s | 27.98 |
+| 4096 | 436 MB | 300 s | 27.88 |
+
+**Length is free in time and costs only memory.** Allocation is free (the column above is flat),
+and so is depth: a 3635-frame grind out to position 3900 held **28.7 ms/frame**, against 27.5 for a
+shallow warm band. Neither `sdpa_decode` nor the trace cares how full the cache is — the trace
+takes `pos` as a device tensor, so nothing bakes in a depth. On 32 GB the cache can be sized for
+far more than five minutes of speech at no per-frame cost.
+
+**Method note, because it nearly produced a wrong answer.** The first deep run measured 43 ms/frame
+in every band and I began writing up a thermal-droop story. It was contamination: a `find /` I had
+backgrounded was still scanning the filesystem. `_traced_frame` does real host work every frame
+(embed lookup, host↔device copies, argmax, FSQ quantize), so host CPU contention inflates every
+frame *uniformly and independently of position* — which is exactly what a hardware explanation
+would also look like. Idle the box before timing anything on this fork. This is the third time a
+headline number on this branch has been contaminated by something outside the model (§6.21's
+warmup case in the mean, §6.63's compare-against-a-recorded-number).
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
@@ -4394,9 +4436,11 @@ closed the last three candidates.
    per-stream latency. Nothing measured since has changed that, and it has never been attempted.
 2. **Prefill's `repeat_interleave`** (`gpt.py:254`) is 11.8% of prefill and the one shipped path
    with a large structural cost a known-better op would remove — `sdpa` handles GQA natively and
-   Block 2 already uses it. Prefill is only ~0.5% of an utterance, so this matters only if
-   chunked prefill or long prompts do.
-3. **Chunked prefill** for prompts over ~1024 tokens. Still unimplemented.
+   Block 2 already uses it. Prefill is only ~0.5% of an utterance, so this matters only if very
+   long prompts do.
+3. **Nothing here about prefill length.** This slot used to say "chunked prefill for prompts over
+   ~1024 tokens". §6.69 measured that limit out of existence — prefill runs clean to 4096 and the
+   model's own context is 65536. Do not re-open it without a measurement that contradicts §6.69.
 4. **A human MOS eval.** §6.59's DistillMOS is a predictor, not raters, and §3 has said from the
    start that naturalness has never been properly evaluated.
 
