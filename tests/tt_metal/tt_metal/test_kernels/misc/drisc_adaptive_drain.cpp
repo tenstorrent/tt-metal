@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DRISC adaptive drain -- the steady-state sweep, modelled on X280 profstream FW's reader hart.
+// DRISC adaptive drain -- the steady-state sweep.
 //
-// One sweep is three phases, matching what the X280 reader does per core but restructured for a
-// core whose reads are issue-bound rather than bandwidth-bound:
+// One sweep is three phases, structured for a core whose reads are issue-bound rather than
+// bandwidth-bound:
 //
 //   1. POLL   issue a 64-word (256 B) control-vector read to every core, all outstanding, one barrier.
 //   2. DECIDE sum (tail - head) over the 5 RISC tails per core; a core whose total reaches
-//             ADAPT_THRESH (X280 profstream FW: 4 * RING_CAP words) goes on the bulk list.
+//             ADAPT_THRESH (4 * RING_CAP words) goes on the bulk list.
 //   3. BULK   one whole-core read (5 contiguous rings, 10240 B) per listed core, kBulkDepth
 //             outstanding at a time.
 //
-// The deliberate departure from X280 profstream FW: it falls back to per-RISC drains below the threshold.
-// That is wrong here -- a read costs ~40 cycles regardless of payload, so 5 per-lane reads cost 5x
+// No per-RISC fallback below the threshold, which an adaptive drain might otherwise do.
+// That would be wrong here -- a read costs ~40 cycles regardless of payload, so 5 per-lane reads cost 5x
 // one whole-core read that fetches the same data plus slack. On DRISC, over-reading is free and
 // per-lane draining is the expensive path.
 //

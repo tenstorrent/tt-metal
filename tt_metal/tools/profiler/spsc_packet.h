@@ -1,7 +1,7 @@
 /*
- * prof_packet.h - drainer compact profiler packet wire format (per-lane, never-linearized design).
+ * spsc_packet.h - drainer compact profiler packet wire format.
  *
- * Each (core,risc) lane is kept SEPARATE end to end (L1 ring -> per-lane LIM SPSC -> per-lane host
+ * Each (core,risc) lane is kept SEPARATE end to end (L1 ring -> per-lane SPSC -> per-lane host
  * slot), so identity is structural (the host slot position IS the lane) and the packet carries NO
  * core/risc and NO header/framing bits. That frees every bit for payload and drops the identity
  * stamping + header OR from the producer hot path.
@@ -24,8 +24,8 @@
  * Plain C header: included by the worker producer kernel (C++) and the host
  * consumer (C++). No dependencies.
  */
-#ifndef drainer_PROF_PACKET_H
-#define drainer_PROF_PACKET_H
+#ifndef SPSC_PACKET_H
+#define SPSC_PACKET_H
 
 #include <stdint.h>
 
@@ -33,8 +33,8 @@
  * hostdevcommon's PacketTypes, which belongs to the DRAM readback path. The two data sources never
  * co-exist and their host decoders share no code, so no value here needs to agree with a PacketTypes
  * value: ZONE_START/END coincide at 0/1 only by history. Do NOT reintroduce a 3-bit pass-through of a
- * PacketTypes value onto this wire -- that is what made ZONE_TOTAL(2) alias PP_drainer_ZONE and
- * TS_DATA_16B(5) alias PP_BULK_CORE, silently desynchronizing the whole packet walk. The producer maps
+ * PacketTypes value onto this wire -- that is what made ZONE_TOTAL(2) and TS_DATA_16B(5) collide with
+ * unrelated types here (5 is PP_BULK_CORE), silently desynchronizing the whole packet walk. The producer maps
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
 #define PP_ZONE_END 1u
@@ -89,7 +89,7 @@
 
 /* ZONE_TOTAL: an accumulated-duration zone (DO_SUM / profileScopeAccumulate). 2 words, but word1 is the
  * accumulated SUM, not a timer -- the host must not treat it as a timestamp. Moved off the DRAM path's
- * value 2, which aliases PP_drainer_ZONE on this wire. */
+ * value 2, which does not name a marker type on this wire. */
 #define PP_ZONE_TOTAL 11u
 
 /* --- PP_DATA low27 sub-fields --- */
@@ -217,4 +217,4 @@ static inline uint64_t pp_full_ts(uint32_t timer_hi, uint32_t timer_low) {
 static inline uint32_t pp_ts_hi(uint64_t ts) { return (uint32_t)((ts >> 32) & PP_TIMER_HI_MASK); }
 static inline uint32_t pp_ts_lo(uint64_t ts) { return (uint32_t)(ts & 0xFFFFFFFFu); }
 
-#endif /* drainer_PROF_PACKET_H */
+#endif /* SPSC_PACKET_H */

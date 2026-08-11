@@ -73,8 +73,8 @@ void kernel_main() {
     constexpr uint32_t kClkMhz = get_compile_time_arg_val(15);
     constexpr uint32_t kDelayStepCycles = get_compile_time_arg_val(16);
     // Head write-back. The ring is flow-controlled: SPSC_RING_HEAD_0..4 in the worker's control vector
-    // are CONSUMER-written (profiler_common.h:157-161), and X280 profstream FW does the same
-    // (`w32(cbase + r*4, tails[r]); /* advance heads -> producers unblock */`). Without it a real
+    // are CONSUMER-written (profiler_common.h:157-161), so advancing them is what unblocks the
+    // producers. Without it a real
     // producer stalls. Five head words are staged locally and published in ONE 20 B NoC write rather
     // than five inline writes, since issue cost dominates. Posted -- a stale head only makes the
     // producer conservative, never unsafe.
@@ -84,11 +84,10 @@ void kernel_main() {
     constexpr uint32_t kMirrorCores = 128;
     constexpr uint32_t kRingCapWordsK = kRingCapBytes / 4;
 
-    // Offsets come from the shared enum, never from literals. Hardcoding word 5 is exactly how the
-    // X280 firmware silently stopped draining when PROFILER_SPSC_MAX_RISC moved 5 -> 24: the tails
-    // relocated to 24..28, the reader kept reading 5..9, those read 0, tail always equalled head, and
-    // every producing RISC blocked forever. X280 profstream FW / X280 profcons FW / X280 profll FW still carry that
-    // literal; X280 profzone FW takes the offset via the boot nonce.
+    // Offsets come from the shared enum, never from literals. Hardcoding word 5 is exactly how a
+    // reader silently stops draining when PROFILER_SPSC_MAX_RISC moves 5 -> 24: the tails
+    // relocate to 24..28, the reader keeps reading 5..9, those read 0, tail always equals head, and
+    // every producing RISC blocks forever.
     constexpr uint32_t kHeadWordOffset = kernel_profiler::SPSC_RING_HEAD_0;
     constexpr uint32_t kTailWordOffset = kernel_profiler::SPSC_RING_TAIL_0;
     constexpr uint32_t kCoreXyOffset = kernel_profiler::SPSC_CORE_XY;
@@ -131,7 +130,7 @@ void kernel_main() {
     uint32_t head_ctr = 0;
     // Local head mirror. The head is consumer-written, so the drainer already knows it -- reading it
     // back from the worker would be pointless work. Only the tail is producer-written and must be
-    // fetched, and it rides along in the control vector. Same shape as X280 profstream FW's LIM mirror.
+    // fetched, and it rides along in the control vector.
     static uint32_t head_mirror[kMirrorCores * kNumRisc];
     uint64_t delay_cycles = 0;
     uint64_t last_sweep = get_timestamp();

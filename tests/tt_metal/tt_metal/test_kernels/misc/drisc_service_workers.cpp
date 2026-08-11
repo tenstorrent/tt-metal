@@ -12,8 +12,7 @@
 //   DRAIN for each core with work, one 10,240 B whole-core read of the five rings
 //   HEAD  publish the five advanced heads in ONE 20 B write -- this is what unblocks the producer
 //
-// Ordering follows X280: poll the control vector, then read the rings. X280 profzone FW does the same --
-// five tails in one 20 B vector load, then a bulk read of the rings only.
+// Ordering: poll the control vector, then read the rings only -- never the control vector twice.
 //
 // This is NOT because a fused read of the whole 10,496 B span would tear. It would not: the control
 // vector sits at LOWER addresses than the rings, so one burst samples the tail BEFORE the data, which
@@ -60,8 +59,8 @@ void kernel_main() {
     constexpr uint32_t kMaxCores = 128;
     constexpr uint32_t kHeadSlots = 16;
 
-    // Offsets come from the shared enum, never from literals. Hardcoding word 5 is exactly how the X280
-    // firmware silently stopped draining when PROFILER_SPSC_MAX_RISC moved 5 -> 24.
+    // Offsets come from the shared enum, never from literals. Hardcoding word 5 is exactly how a reader
+    // silently stops draining when PROFILER_SPSC_MAX_RISC moves 5 -> 24.
     constexpr uint32_t kHeadWordOffset = kernel_profiler::SPSC_RING_HEAD_0;
     constexpr uint32_t kTailWordOffset = kernel_profiler::SPSC_RING_TAIL_0;
     static_assert(

@@ -118,8 +118,8 @@ Marker = 2 words = 8 B. `K` = markers per read, `B` = reads issued before the ba
 Per-visit cost depends on **B only, essentially not on K**: 43.23 ns at B=16 for K=1, K=4, and K=16
 alike, rising only to 43.62 at K=64. A 64x payload increase costs 0.9% more time.
 
-**The drain is issue-bound, not bandwidth-bound. Over-reading is free.** This is the inverse of the
-X280, where the only lever was fewer bytes per marker. Here the lever is more bytes per transaction.
+**The drain is issue-bound, not bandwidth-bound. Over-reading is free.** The lever is more bytes per
+transaction, not fewer bytes per marker.
 
 | K (bytes) | B=1 | B=8 | B=16 | B=32 | B=64 | B=120 (issue-all) |
 |---|---|---|---|---|---|---|
@@ -303,8 +303,8 @@ The DRISC can write its own bank's GDDR at 64 GB/s, which beats the PCIe path, n
 loop during the run, and turns a 3.98 GB DRAM view into the buffer. The catch is that **a DRISC
 cannot land NoC traffic directly in GDDR**: in stream mode (required to initiate reads at all) NoC
 traffic terminates at L1, and DRAM is reachable only through the L1 + DMA path. So every byte crosses
-L1 twice — written by the NIU, read by the DMA engine. That is structurally what killed the X280,
-whose LIM ran at 2.5 GB/s and was crossed twice for ~1.2 GB/s.
+L1 twice — written by the NIU, read by the DMA engine. That double crossing is the structural risk for
+this path: a buffer crossed twice can only sustain half its own bandwidth.
 
 **It does not reproduce here. Combining the two legs costs ~10%, not half.**
 
@@ -465,7 +465,7 @@ slow PCIe write rather than a 640 ns DMA, so the larger page outweighs the overl
 ## Scaling the direct drainer: ingest fans out, egress does not
 
 N DRISCs, each on its own bank, each owning a slice of the grid and pushing to **its own D2H socket** --
-the same fan-out shape as the X280 reader pool, except every reader is also its own egress path, so
+a fan-out of readers in which every reader is also its own egress path, so
 there is no relay and no shared ring. The grid splits by whole 8-core pages (15 of them), as evenly as
 15/N allows. Host drains all sockets round-robin on one thread.
 
@@ -483,7 +483,7 @@ The work redistributes; the total does not move.
 
 This is the opposite of ingest, which scaled 1.93x / 3.85x at 2 and 4 DRISCs, and the difference is
 structural: **ingest is N independent NoC paths, egress is one PCIe link and one host consumer.** The
-X280 reader fan-out helped because reads were the constraint; here the constraint is downstream of
+Reader fan-out only helps when reads are the constraint; here the constraint is downstream of
 every reader, so nothing upstream can move it.
 
 Practical consequence: add DRISCs to poll the grid faster or cover more cores, never to get more data
@@ -626,10 +626,8 @@ pacing results above already measured.
    control vector the poll already fetches. (This is also the honest answer to "why head loads?": once,
    to seed, never per sweep.)
 
-2. **Poll-then-drain is what X280 does -- but NOT for the reason first claimed here.** This drainer
-   polls the control vector, then reads the rings, matching X280: its `profzone` FW reads the five tails in
-   one 20 B vector-load NoC transaction (`read_tails`) and then bulk-reads the **rings only**
-   (`rbufs = cbase + ring_off`, 5 x 2048 B, no control vector).
+2. **Poll-then-drain -- but NOT for the reason first claimed here.** This drainer polls the control
+   vector, then bulk-reads the **rings only**, not the control vector a second time.
 
    An earlier version of this section claimed a fused read of the whole 10,496 B span was unsafe
    because a fresh tail could pair with stale data. **That is backwards.** `profiler_msg_t` places the
@@ -645,7 +643,7 @@ pacing results above already measured.
 
 3. **A third run mode had to exist.** Producers emit whenever `get_profiler_enabled()` is set, but both
    pre-existing modes ship a competing consumer: default starts `RealtimeProfilerManager`, and
-   `TT_METAL_PERF_DEBUG_PROFILER=1` boots the X280. Two consumers on one SPSC ring corrupt each other.
+   `TT_METAL_PERF_DEBUG_PROFILER=1` boots the perf-debug drainer. Two consumers on one SPSC ring corrupt each other.
    `TT_METAL_DRISC_PROFILER=1` now disables both the RT manager (`mesh_device.cpp`) and the DRAM
    profiler's per-program control-buffer reset (`profiler.cpp`), which would otherwise rewind the ring
    tail mid-drain. Note `TT_METAL_NO_RT_PROFILER` is read **nowhere** in the tree and never disabled
@@ -695,8 +693,8 @@ A page is a flat run of frames; a frame is a 2-word header (`kind | lane | nword
 Three decisions worth keeping:
 
 1. **Identity is free.** `SPSC_CORE_XY` is already in the 256 B control vector the poll fetches, so the
-   drainer never constructs or injects identity -- it copies a word the core wrote about itself. This
-   is why the X280's `PP_STICKY_SRC` machinery has no counterpart here.
+   drainer never constructs or injects identity -- it copies a word the core wrote about itself, so no
+   sticky-source machinery is needed at all.
 
 2. **Read per-lane straight into the page.** The alternative -- one whole-core 10 KB read into staging,
    then a local copy of the live words into the page -- costs a device-side memcpy and ships dead ring
@@ -708,7 +706,7 @@ Three decisions worth keeping:
    The host never needs the ring geometry, so the decoder stays a flat walk.
 
 4. **One shared header for the wire format**, included by kernel and host both. Duplicating those
-   constants is exactly how the X280 readers rotted -- each self-consistent, all wrong.
+   constants is exactly how readers rot -- each copy self-consistent, all of them wrong.
 
 ### Cost of the framing
 
@@ -724,7 +722,7 @@ sweeps used to detect completion, and the host wall (0.076 s) includes them.
 ## Zone decode: the stream is real
 
 The framed egress carried words; this parses them back into zones host-side, against `spsc_packet.h`
-(named `prof_packet.h` at the time; the same definitions the device's `ppfmt` uses -- not a host copy).
+(the same definitions the device's `ppfmt` uses -- not a host copy).
 
 Decoder walk per lane: `STICKY_TIMER` (1 word, sets the wall-clock HIGH half for everything after it),
 `ZONE_START/END/TOTAL` (2 words: `type | 16-bit srcloc`, then the LOW half), `STICKY_PROG` (1 word),
@@ -759,8 +757,9 @@ congruent with each other. **The NoC mis-delivers rather than rejects.** The sym
 substituted word* at a frame boundary -- total word count still reconciled perfectly, so only the
 marker walk could see it. 440 of 600 lanes desynced.
 
-The X280 copies word-granular safely because its L2CPU uses CPU loads and stores; a DRISC moves data
-with NoC DMA and is bound by the alignment rules. **Do not port X280 copy idioms to a DRISC unchanged.**
+A DRISC moves data with NoC DMA and is bound by the alignment rules, so word-granular copy idioms that
+are safe on a CPU issuing plain loads and stores are not safe here. **Check the alignment rules before
+porting any copy idiom to a DRISC.**
 
 Fixed with one aligned whole-core read into staging plus a local copy of the live words into the page
 -- the shape rejected earlier on efficiency grounds. Cost: 77 -> 88 ms on the full grid. The
@@ -888,7 +887,7 @@ critical path, because nothing needs installing.)
   subchannel — the only one safe to flip into stream mode. The other usable one is the bank's NOC1
   worker endpoint, which Tensix uses to reach that bank's DRAM. Its logical coord is in the
   preferred-first space `CreateKernel(DramConfig)` indexes, which is *not* UMD's raw subchannel order.
-- **D2HSocket with a DRISC sender** goes through `ExternalConfigBuffer{address, sender_is_l2cpu=true}`
+- **D2HSocket with a DRISC sender** goes through `ExternalConfigBuffer{address, sender_uses_physical_noc_addr=true}`
   — the flag really means "sender is not a Tensix worker" — with a **NOC0** sender coord (`CoordSystem`
   has no `PHYSICAL`; it is `NOC0`).
 - **Stream mode must be set before the socket is constructed.** `ExternalConfigBuffer::address` is
@@ -913,14 +912,6 @@ critical path, because nothing needs installing.)
   `DeviceZoneScopedN` compiles to nothing. Use the watcher ring buffer + `get_timestamp_32b()` idiom.
 
 ## Open questions
-
-**The X280 `profstream` FW is stale in two places, not one.** Alongside the known `CTRL_TAIL(r) = 5u + r` it
-hardcodes `rbufs = cbase + 128`. 128 B is 32 words -- the OLD control-vector size; it is now 64 words
-(256 B). Both literals are self-consistent for the old layout and both wrong for the current one, so
-that reader would land 128 B inside the control vector rather than on ring data. The X280 `profcons` and
-`profll` FWs carry the same tail literal. The `profzone` FW is fine: the host passes `SPSC_RING_TAIL_0` and
-`PROFILER_L1_CONTROL_BUFFER_SIZE` through the boot nonce, with 128 only as a documented fallback for
-an out-of-date host.
 
 **Does a NoC burst sample its source in address order?** The fused single-read shape (control vector +
 rings in one 10,496 B transaction) depends on it, and it would delete the poll phase outright. See the
@@ -957,7 +948,7 @@ Two different regimes, and they need opposite treatment:
 ## §N — The conduit drainer, and the knee at 125 (bh-05, 2026-08-04)
 
 Single-DRISC drain of the full 110-core grid, measured end to end with per-phase counters on both sides.
-**Knee moved 875 → 125** (7×) against the X280 baseline. Everything below is measured on
+**Knee moved 875 → 125** (7×) against the earlier baseline. Everything below is measured on
 `test_perf_debug_zones --gx 0 --gy 0 --iters 500 --delay N`, conduit drainer, no Tracy capture.
 
 ### The design: the DRISC is a conduit, not a processor
@@ -1043,7 +1034,7 @@ than back-pressuring the device) fixed delay 900 outright (0 stalls, complete re
 
 | configuration | knee | zone | aggregate |
 |---|---|---|---|
-| X280 (§27) | 875 | 5.88 µs | 187 M mk/s, 1.50 GB/s |
+| prior baseline (§27) | 875 | 5.88 µs | 187 M mk/s, 1.50 GB/s |
 | DRISC, per-lane sliced reads | ~750 | 5.03 µs | 219 M mk/s, 1.75 GB/s |
 | conduit + stall-only decode | 250–300 | 1.68–2.01 µs | 655 M mk/s, 5.2 GB/s |
 | **conduit + L1 counters, host read+ack only** | **125** | **0.84 µs** | **1.31 G mk/s, 10.5 GB/s** |
@@ -1163,8 +1154,8 @@ rise says. Deeper buffering gives each ship more time to land:
 
 `D2HSocket::read()` ends in `notify_sender()`, one 4 B device write of `bytes_acked`. The DRISC drainer paid
 a **UMD dynamic-TLB reconfigure** on every one of them; the Tensix drainer did not. The socket gated its
-static window on `!sender_is_l2cpu_`, and `perf_debug_profiler` sets `sender_is_l2cpu = !tensix_drain` — so
-the DRISC inherited "no static TLB window exists", which is true of the X280 L2CPU and false of a DRAM core.
+static window on `!sender_uses_physical_noc_addr_`, and `perf_debug_profiler` sets `sender_uses_physical_noc_addr = !tensix_drain` — so
+the DRISC inherited "no static TLB window exists", which is false for a DRAM core.
 
 Measured, healthy card, warm runs:
 
@@ -1221,9 +1212,8 @@ record**, unlike every deliberate reboot. So the sequence was: box hard-froze un
 rebooted it → **the card came up degraded**. The dropped ssh and the "killed" job were symptoms of the box
 going down, not the cause of anything. Causality was backwards.
 
-That is the same signature as the X280-era freezes: two processes stop together, the kernel logs nothing, and
-the physical host never reboots — a host CPU stalling on MMIO to a wedged card. Worth knowing it recurs on the
-DRISC perf-debug path, not just the X280 one.
+That signature — two processes stop together, the kernel logs nothing, and the physical host never
+reboots — is a host CPU stalling on MMIO to a wedged card. It occurs on the DRISC perf-debug path.
 
 **How to tell the two apart, because the observable is identical** (your ssh dies, work stops):
 
@@ -1563,7 +1553,7 @@ both are created on NoC 0. So the divergence is NOT in the write code. It is in 
 
 | | DRISC | Tensix BRISC |
 |---|---|---|
-| socket `sender_is_l2cpu` | **true** -- physical NoC coord + full L1 address | false -- logical coord, worker-L1 semantics |
+| socket `sender_uses_physical_noc_addr` | **true** -- physical NoC coord + full L1 address | false -- logical coord, worker-L1 semantics |
 | socket core coord passed | **NOC0 PHYSICAL** (`drisc_phys`) | **LOGICAL** (`drisc_logical`) |
 | static TLB | configured explicitly here (2 MB @ 0, Strict) because the drainer sits on the DRAM channel's *unused* port, which `ll_api::configure_static_tlbs` does not map | free -- metal maps all workers at device init |
 | NIU mode call | `set_drisc_niu_mode(..., 1)` before the socket is built | none |
@@ -1585,7 +1575,7 @@ both are created on NoC 0. So the divergence is NOT in the write code. It is in 
 3. **Shared DRAM-bank infrastructure.** The drainer's NIU is an unused *port* of a bank whose other ports carry
    real GDDR traffic. `pick_unused_dram_logical_core` guarantees no one else uses that port, not that the port
    is isolated from the bank.
-4. Addressing/coordinate differences (`sender_is_l2cpu`, physical vs logical) are ADDRESSING ONLY and are
+4. Addressing/coordinate differences (`sender_uses_physical_noc_addr`, physical vs logical) are ADDRESSING ONLY and are
    exercised identically on every clean run -- they cannot be rate-dependent, so they do not explain a hang that
    only appears at low producer delay.
 
@@ -2911,8 +2901,9 @@ the surface, each event parking a CPU for a fifth of a second.
 `nmi_watchdog=1`, `watchdog=1`, `hung_task_timeout_secs=120` -- **the detectors were armed and none
 fired**, `/sys/fs/pstore` is empty, and the previous boot's kernel log simply stops 11 minutes before
 the freeze with no lockup, RCU stall, AER, MCE, panic or `tenstorrent` message. `systemd-detect-virt`
-returns **none**, so this is bare metal and the physical host really did reset -- NOT the
-reservation-VM freeze pattern of [[x280_vm_freeze_churn]]. There is no watchdog device and no
+returns **none**, so this is bare metal and the physical host really did reset -- NOT the other
+freeze pattern, in which the reservation VM hard-freezes (two processes stopping together, kernel
+silent) and the IRD watchdog reboots the VM while the physical host stays up. There is no watchdog device and no
 `/dev/ipmi0`, so the reset came from outside the box (IRD infrastructure) and nothing local recorded it.
 
 ### Correction to the recovery matrix

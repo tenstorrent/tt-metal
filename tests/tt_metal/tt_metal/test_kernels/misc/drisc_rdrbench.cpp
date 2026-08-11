@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DRISC scatter-read microbenchmark -- the DRISC port of the X280 test_x280_rdrbench.
+// DRISC scatter-read microbenchmark.
 //
 // Models the ingest half of a profiler drainer hosted on a DRAM core: walk a table of
 // worker-core NoC coords, pull a profiler-sized marker burst out of each core's L1 into a
@@ -12,9 +12,8 @@
 // Two knobs, both compile-time so the issue sequence codegens cleanly:
 //   kMarkersPerRead  bytes pulled per core visit (K * 8B). Sweeping this finds the knee
 //                    where per-transaction overhead stops dominating.
-//   kReadsInFlight   how many reads are issued before the barrier -- the equivalent of the
-//                    X280's hand-rolled ILP, except here it is the NoC's own outstanding
-//                    read tracking rather than multiple uncached loads in flight.
+//   kReadsInFlight   how many reads are issued before the barrier -- read-level parallelism via
+//                    the NoC's own outstanding-read tracking, not multiple loads in flight.
 //
 // The landing ring is kReadsInFlight slots of kMarkersPerRead markers. Slots are only
 // reused after a barrier, so there is no write-after-read hazard on the destination.
@@ -35,9 +34,9 @@ void kernel_main() {
     constexpr uint32_t kReadsInFlight = get_compile_time_arg_val(1);
     constexpr uint32_t kRingBase = get_compile_time_arg_val(2);
     constexpr uint32_t kResultsAddr = get_compile_time_arg_val(3);
-    // Poll mode: after each barrier, examine the landed control vectors the way X280 profstream FW's adaptive
-    // switch does -- sum (tail - head) across the 5 RISC tails per core. Mirrors
-    //   read_tails(cbase + 5u*4, tails); for (r) full += tails[r] - heads[c*NRISC + r];
+    // Poll mode: after each barrier, examine the landed control vectors the way an adaptive drain
+    // switch does -- sum (tail - head) across the 5 RISC tails per core,
+    //   for (r) full += tails[r] - heads[c*NRISC + r];
     // so the measured per-core cost includes the CPU work a real poll pays, not just the NoC read.
     // Heads are not advanced (they stay 0), which is cost-equivalent but not functionally a drain.
     constexpr uint32_t kPollExamine = get_compile_time_arg_val(4);

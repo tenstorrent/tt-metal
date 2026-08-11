@@ -279,7 +279,7 @@ constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
 // Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
-// Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in prof_packet.h).
+// Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in spsc_packet.h).
 constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
 // Socket page granularity, in words -- a frame is padded up to a whole number of these.
 //

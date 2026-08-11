@@ -8,8 +8,8 @@
 //
 // A DRISC cannot land NoC traffic straight in GDDR -- in stream mode (required to initiate reads at
 // all) NoC traffic terminates at L1, and DRAM is only reachable through the L1 + DMA path. So every
-// byte crosses L1 twice: written by the NIU, read by the DMA engine. That double-crossing is exactly
-// what killed throughput on the X280's LIM, hence this test.
+// byte crosses L1 twice: written by the NIU, read by the DMA engine. A buffer crossed twice can only
+// sustain half its own bandwidth, hence this test.
 //
 // Structure: two L1 batch buffers ping-ponged against the two DMA TX streams, so the DMA of batch N
 // overlaps the NoC reads of batch N+1.
