@@ -4644,7 +4644,7 @@ class HadamardH128Golden:
     @staticmethod
     def sylvester(order: int) -> torch.Tensor:
         """The Sylvester Hadamard matrix of the given pow2 order."""
-        if order & (order - 1):
+        if order <= 0 or order & (order - 1):
             raise ValueError(f"Hadamard order must be a power of two, got {order}")
         matrix = torch.ones(1, 1, dtype=torch.float32)
         while matrix.shape[0] < order:
