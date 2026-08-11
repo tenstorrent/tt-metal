@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -30,8 +31,7 @@ void kernel_main() {
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t granularity = get_compile_time_arg_val(4);
-    constexpr uint32_t u_count = get_compile_time_arg_val(5);
-    constexpr auto cache_args = TensorAccessorArgs<6>();
+    constexpr auto cache_args = TensorAccessorArgs<5>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
 
@@ -50,10 +50,13 @@ void kernel_main() {
         cb_untilized_input.wait_front(Wt);
         uint32_t input_l1_read_addr = cb_untilized_input.get_read_ptr() + batch_read_offset;
 
-        for (uint32_t u = 0; u < u_count; ++u) {
+        // Last batch-group in a head may be short when Bcache is not a multiple of TILE_HEIGHT.
+        uint32_t users_remaining = std::min(32u, B - b);
+        while (users_remaining > 0) {
+            const uint32_t g = std::min(granularity, users_remaining);
             // Operating on a granularity > 1 led to performance improvements.
             // It introduces a double-buffered pipeline between compute and writer.
-            for (uint32_t g = 0; g < granularity; ++g) {
+            for (uint32_t i = 0; i < g; ++i) {
                 // Wait on compute to untilize a block. Update that block in L1.
                 cb_untilized_cache.wait_front(Wt);
                 cb_untilized_cache2.reserve_back(Wt);
@@ -72,7 +75,7 @@ void kernel_main() {
                 cb_untilized_cache.pop_front(Wt);  // NEW
             }
 
-            for (uint32_t g = 0; g < granularity; ++g) {
+            for (uint32_t i = 0; i < g; ++i) {
                 // Wait on compute to tilize an updated block. Write that block to DRAM
                 cb_cache.wait_front(Wt);
                 uint32_t out_l1_read_offset = 0;
@@ -94,6 +97,7 @@ void kernel_main() {
                 noc.async_writes_flushed();
                 cb_cache.pop_front(Wt);
             }
+            users_remaining -= g;
         }
         cb_untilized_input.pop_front(Wt);
     }

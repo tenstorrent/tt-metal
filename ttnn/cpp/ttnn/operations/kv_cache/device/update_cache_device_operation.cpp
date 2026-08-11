@@ -132,6 +132,21 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Cache tensor batch size ({}) must be <= input tensor height ({})",
             cache_tensor.padded_shape()[0],
             input_tensor.padded_shape()[-2]);
+        // Input batch lives on dim -2 and is tilized, so it is padded to a multiple of TILE_HEIGHT.
+        // Require exactly round_up(Bcache, TILE_HEIGHT) so work-split does not process extra
+        // all-pad tiles that would wrap and re-update earlier cache users.
+        {
+            const uint32_t Bcache = cache_tensor.padded_shape()[0];
+            const uint32_t B_input = input_tensor.padded_shape()[-2];
+            const uint32_t B_expected = ((Bcache + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT;
+            TT_FATAL(
+                B_input == B_expected,
+                "Input tensor batch dim ({}) must equal round_up(cache batch {}, TILE_HEIGHT={}) = {}",
+                B_input,
+                Bcache,
+                TILE_HEIGHT,
+                B_expected);
+        }
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {
             TT_FATAL(

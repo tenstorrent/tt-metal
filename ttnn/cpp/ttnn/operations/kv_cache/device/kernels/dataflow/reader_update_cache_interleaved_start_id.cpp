@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -24,8 +25,7 @@ void kernel_main() {
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t granularity = get_compile_time_arg_val(2);
-    constexpr uint32_t u_count = get_compile_time_arg_val(3);
-    constexpr auto cache_args = TensorAccessorArgs<4>();
+    constexpr auto cache_args = TensorAccessorArgs<3>();
     constexpr auto input_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
@@ -60,10 +60,13 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_input.push_back(Wt);
 #endif
-        for (uint32_t u = 0; u < u_count; ++u) {
-            cb_cache.reserve_back(Wt * granularity);
+        // Last batch-group in a head may be short when Bcache is not a multiple of TILE_HEIGHT.
+        uint32_t users_remaining = std::min(32u, B - b);
+        while (users_remaining > 0) {
+            const uint32_t g = std::min(granularity, users_remaining);
+            cb_cache.reserve_back(Wt * g);
             uint32_t cache_l1_write_offset = 0;
-            for (uint32_t g = 0; g < granularity; ++g) {
+            for (uint32_t i = 0; i < g; ++i) {
                 for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
                     noc.async_read(
                         s0,
@@ -82,7 +85,8 @@ void kernel_main() {
             }
 
             noc.async_read_barrier();
-            cb_cache.push_back(Wt * granularity);
+            cb_cache.push_back(Wt * g);
+            users_remaining -= g;
         }
     }
 }
