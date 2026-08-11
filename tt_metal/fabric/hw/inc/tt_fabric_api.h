@@ -155,6 +155,18 @@ inline bool fabric_set_indexed_unicast_route(
 #define FABRIC_EXPRESS_MESH_X_SIZE 0
 #endif
 
+#if defined(FABRIC_EXPRESS_ENABLED) && (FABRIC_EXPRESS_MESH_Y_SIZE > 0)
+// widen_indexed_route_to_chip fills route_buffer[0..Y) with the Y map and route_buffer[Y..Y+X) with
+// the X map, so the header needs Y + X bytes -- two more than the (Y-1) + (X-1) hop count the buffer
+// tiers were originally sized from. FabricContext::compute_packet_specifications accounts for that,
+// and this catches any future mismatch at build time: the runtime ASSERT guarding the same condition
+// inside widen_indexed_route_to_chip compiles out of release kernels, so without this a shape that
+// outgrows its buffer writes past the end of the packet header instead of failing.
+static_assert(
+    FABRIC_EXPRESS_MESH_Y_SIZE + FABRIC_EXPRESS_MESH_X_SIZE <= sizeof(HybridMeshPacketHeader::route_buffer),
+    "Express mesh shape requires a larger 2D route buffer than the packet header provides.");
+#endif
+
 template <bool called_from_router = false>
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,

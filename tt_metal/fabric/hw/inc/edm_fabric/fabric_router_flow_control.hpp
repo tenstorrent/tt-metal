@@ -223,9 +223,11 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
-template <bool CHECK_BUSY>
+// The sender type is a parameter because each receiver channel picks its own credit transport
+// (ReceiverChannelResponseCreditSenderFor), so callers hand in whichever one their channel holds.
+template <bool CHECK_BUSY, typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE void receiver_send_completion_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
+    ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
     uint8_t src_id,
     uint32_t num_completions = 1) {
     if constexpr (CHECK_BUSY) {
@@ -235,9 +237,9 @@ FORCE_INLINE void receiver_send_completion_ack(
     receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
 }
 
-template <bool CHECK_BUSY>
+template <bool CHECK_BUSY, typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE void receiver_send_received_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };

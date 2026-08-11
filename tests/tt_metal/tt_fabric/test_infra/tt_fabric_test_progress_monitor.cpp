@@ -5,11 +5,13 @@
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_progress_monitor.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -23,6 +25,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <hostdev/fabric_telemetry_msgs.h>
+#include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -1133,6 +1137,11 @@ void TestProgressMonitor::write_summary_report(
                 (void)pair_key;
                 ofs << "  [" << pair_idx++ << "] " << format_device_label(agg.src_node) << "  ->  "
                     << format_device_label(agg.dst_node) << "\n";
+                // The hop-by-hop path the routing tables actually produce for this flow, first so
+                // it reads before the physical detail: whether the route itself is what was
+                // expected decides whether anything below it is worth reading.
+                ofs << "      Route: " << format_hanging_link_path(control_plane, psd, agg.src_node, agg.dst_node)
+                    << "\n";
                 ofs << "      Dst Host: " << agg.dst_host << " (Rank " << agg.dst_host_rank << ")\n";
 
                 auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(agg.src_node, agg.dst_node);
@@ -1149,9 +1158,6 @@ void TestProgressMonitor::write_summary_report(
                         ofs << "        " << port_resolver.affected_link_label(src_asic_id, chan) << "\n";
                     }
                 }
-
-                ofs << "      Route: " << format_hanging_link_path(control_plane, psd, agg.src_node, agg.dst_node)
-                    << "\n";
 
                 uint64_t shown_packets =
                     (agg.min_packets_processed == std::numeric_limits<uint64_t>::max()) ? 0 : agg.min_packets_processed;
@@ -1228,6 +1234,10 @@ void TestProgressMonitor::write_detailed_report(
             FabricNodeId dst_node_id(MeshId{rec->dst_mesh_id}, rec->dst_chip_id);
 
             ofs << "  [" << entry_idx++ << "] " << role_str << " endpoint\n";
+            // The hop-by-hop path the routing tables actually produce for this flow, first so it
+            // reads before the physical detail: whether the route itself is what was expected
+            // decides whether anything below it is worth reading.
+            ofs << "      Route: " << format_hanging_link_path(control_plane, psd, src_node_id, dst_node_id) << "\n";
             ofs << "      flow_uid: " << rec->flow_uid << "\n";
             ofs << "      Configured: " << format_device_label(src_node_id) << " -> "
                 << format_device_label(dst_node_id) << "\n";
@@ -1240,8 +1250,6 @@ void TestProgressMonitor::write_detailed_report(
                     ofs << "        " << port_resolver.link_label(src_asic_id, chan) << "\n";
                 }
             }
-
-            ofs << "      Route: " << format_hanging_link_path(control_plane, psd, src_node_id, dst_node_id) << "\n";
 
             ofs << "      Core: (" << rec->core_x << "," << rec->core_y << ") | config_idx: " << rec->config_idx
                 << "\n";

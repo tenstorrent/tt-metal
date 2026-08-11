@@ -2010,7 +2010,11 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
-    const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+    // Same accessor the indexed packer, the router named args, and the worker shape defines use.
+    // The coordinates only mean anything against the shape the tables were built with, and a
+    // Galaxy presents as either 8x4 or 4x8, so taking the shape from a second source risks
+    // transposed coordinates that index valid-looking but wrong table slots.
+    const auto mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     routing_info.my_mesh_coord_y = chip_id / mesh_shape[1];
     routing_info.my_mesh_coord_x = chip_id % mesh_shape[1];
 
