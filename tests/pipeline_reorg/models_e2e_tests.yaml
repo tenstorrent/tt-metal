@@ -195,7 +195,7 @@
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-token-matching"
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-eval-1"
   model: llama3.3-70b-galaxy
   model_family: Llama
   skus:
@@ -432,6 +432,38 @@
 
 # ── Gemma ──────────────────────────────────────────────────────────
 
+# Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
+# (2B + 9B); 2B also runs on N150 (single-chip, covered by CI). Requires
+# gemma-2-{2b,9b}-it.refpt under models/tt_transformers/tests/reference_outputs/.
+- name: Gemma-2-2B e2e tests
+  cmd: |
+    export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
+    pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+  model: gemma-2-2b
+  model_family: Gemma
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 3
+    wh_n300:
+      timeout: 20
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-2-9B e2e tests
+  cmd: |
+    export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
+    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+  model: gemma-2-9b
+  model_family: Gemma
+  skus:
+    wh_n300:
+      timeout: 25
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Gemma-3-4B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
@@ -615,6 +647,22 @@
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Mistral-Small-3.1-24B e2e tests
+  cmd: |
+    set -e
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  model: mistral-small-3.1-24b
+  model_family: Mistral
+  skus:
+    bh_quietbox_2:
+      timeout: 12
+      tier: 3
+  owner_id: U08GEGWHQJF # Adam Roberge
   team: models
 
 - name: Mixtral-8x7B e2e tests
@@ -929,26 +977,65 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
 
-# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4-mgd) ───────────────────
+# ── ViT ────────────────────────────────────────────────────────────
+
+# Ported from the (Single-card) Demo tests inline matrix, where this ran as
+# `run_vit_demo` on both N150 and N300. HF_HUB_OFFLINE is forced back to 0
+# because the tiered impl defaults WH SKUs to offline and the demo resolves
+# its checkpoint from the hub (same pattern as the SDXL entries above).
+- name: ViT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 900 models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+  model: vit
+  model_family: ViT
+  skus:
+    # Measured on the tier runners in run 31106916424, + ~15%:
+    # wh_n150 9.2 min -> 11, wh_n300 5.0 min -> 6. Both legs passed.
+    wh_n150:
+      timeout: 11
+      tier: 2
+    wh_n300:
+      timeout: 6
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+
+# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+    test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 40
       tier: 1
       release_ready: false
@@ -960,20 +1047,35 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
-    TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
-    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" --tcp-interface ens5f0np0 \
-      --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+    test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 80
       tier: 1
       release_ready: false
@@ -989,14 +1091,15 @@
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-t2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 60
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1010,14 +1113,15 @@
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 60
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1031,15 +1135,16 @@
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-i2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 55
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1053,18 +1158,19 @@
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # Condition on a fixed image so distilled_i2v takes the single-i2v path and SKIPS the in-process
     # t2v pre-gen -- on 4x8 that chain reloads the encoder over captured traces and wedges (the test
     # documents this at test_pipeline_ltx_distilled.py: "t2v->i2v chain in one process ... wedges").
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-i2v
   model_family: LTX
   skus:
     bh_sc1:
-      timeout: 55
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

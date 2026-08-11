@@ -47,6 +47,10 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
             * :attr:`program_config` (Optional[ttnn.MatmulProgramConfig])
             * :attr:`fused_activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
+            * :attr:`fused_ternary_input_a` (Optional[ttnn.Tensor]): addcmul residual/base tensor (added to the result).
+            * :attr:`fused_ternary_input_b` (Optional[ttnn.Tensor]): addcmul multiplier/gate tensor; a single tile-row broadcasts across M.
+            * :attr:`fused_ternary_scalar` (Optional[float]): addcmul scale; output = a + scalar * matmul_out * b. Requires both a and b.
+            * :attr:`chunks` (int): split the matmul output into this many tensors along N (default 1). Returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}]. N must be divisible by chunks.
 
         Example:
 
@@ -74,7 +78,11 @@ void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
-        nb::arg("read_local_slice_from_input") = nb::none());
+        nb::arg("read_local_slice_from_input") = nb::none(),
+        nb::arg("fused_ternary_input_a") = nb::none(),
+        nb::arg("fused_ternary_input_b") = nb::none(),
+        nb::arg("fused_ternary_scalar") = nb::none(),
+        nb::arg("chunks") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

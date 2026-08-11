@@ -1,0 +1,53 @@
+# MiniMax-M3 — Gate 2 (loopback migration) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
+#
+# The runner publishes the KV chunk table to the migration worker, blocks on WORKER_READY, serves the
+# producer's H2D pushes, then waits for migration_driver's DONE sentinel and PCCs each migrated pair.
+# PREFILL_ENABLE_MIGRATION is single-rank only (the runner rejects it for num_ranks > 1).
+#
+# Launch (endpoint must already be up — see PREFILL_MIGRATION_TESTING.md Gate 2):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/minimax_m3/tt/runners/manifests/m3_binding_loopback_migration_1rank.yaml $HOST:1
+#
+# Queue names match launch_migration_endpoints.sh --prefill_endpoint_id 1 (default /mig_ep1_*); the
+# runner's own defaults are the older /prefill_mig_*_1 names, so they must be set explicitly.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "10240"
+  PREFILL_H2D_SERVICE_ID: "m3_prefill"
+  # Every dst slot must exist in the table: src 0,1 -> dst 2,3.
+  PREFILL_NUM_USERS: "4"
+  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+
+  PREFILL_ENABLE_MIGRATION: "1"
+  # The driver drains num_layers x pushes acks before it migrates; without them it copies a half-written
+  # cache. Selects the host-callback ack transport, the only one this runtime implements — it enables no
+  # tracing, since the runtime has no capture_trace.
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_USE_TRACE: "1"
+  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
+  PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  PREFILL_MIGRATION_CLIENT_DIR: "${PREFILL_MIGRATION_CLIENT_DIR}"
+
+  PREFILL_VALIDATE_MIGRATION: "1"
+  # dst == src fidelity (golden-free). Comment out for the burst variant (src and dst both vs golden).
+  PREFILL_MIGRATE_PAIRWISE: "1"
+  # The driver sends no shutdown push, so this is how the runner knows prefill is done before it polls
+  # the sentinel: 2 src slots x 2 chunks = 4.
+  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "4"
+  MIGRATION_DONE_FILE: "/tmp/m3_migration_done.sentinel"
+  PREFILL_MIGRATE_WAIT_S: "1200"
+
+  LOGURU_LEVEL: "INFO"

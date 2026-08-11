@@ -37,6 +37,22 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 
 
+def test_compute_constants_reserves_local_expert_tile_padding():
+    """A raw 256-token budget needs 736 rows when it spans 16 experts."""
+    experts_per_chip, _, dispatch_buffer_rows, max_tokens_per_expert = compute_constants(
+        seq_len_per_chip=64,
+        num_routed_experts=64,
+        num_experts_per_tok=1,
+        num_devices=4,
+        dispatch_group_size=4,
+        dispatch_buffer_capacity_factor=1,
+    )
+
+    assert experts_per_chip == 16
+    assert max_tokens_per_expert == 256
+    assert dispatch_buffer_rows == 736
+
+
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
