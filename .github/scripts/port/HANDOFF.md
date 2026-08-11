@@ -17,8 +17,11 @@ with it -- a sample that could not contain the failures it was supposed to catch
 could not fail, an asserted rather than measured demotion set, and a verdict policy that threw the
 work away when the wall clock was noisy.
 
-`untilize` is the second op and the first that is not `pad`. It is running now as the first exercise
-of the hardened harness.
+`untilize` is the second op and the first that is not `pad`. It is the first exercise of the hardened
+harness, and it also moved the job to CIv2, which the `pad` PR never ran on. Both moves at once is
+why the recent history is a run of failures: four of them, three ours and one not, each hiding the
+next. The harness fixes are described below; the one that is not ours is the last section before
+*What is not verified*, and it is currently what blocks a `untilize` PR.
 
 ## `pad` was load-bearing in ways nobody intended
 
@@ -60,6 +63,37 @@ Worth knowing, because it means these paths are no longer speculative:
 - A cold build on CIv2 takes about 12 minutes, so a failed run costs roughly 25 minutes to reach the
   same point again. It is worth reading ahead for the next failure rather than fixing one at a time.
 
+## The one thing CIv2 cannot do yet, and it is not ours to fix
+
+The job now runs on CIv2 end to end up to the agent itself: the runner hosts gh-aw's servers, the
+build succeeds, the baseline passes, and the agent process starts. Then every model request fails,
+and squid's access log says why in one line, repeated 52 times:
+
+    172.30.0.30 api.githubcopilot.com:443 10.43.242.248:3128 CONNECT 403 TCP_TUNNEL:FIRSTUP_PARENT
+
+CIv2 has no direct egress; everything leaves through `proxy.restricted-proxy.svc.cluster.local`.
+AWF handles that correctly and without being told -- its squid carries
+`cache_peer proxy.restricted-proxy... parent 3128` and `never_direct allow all`, so the agent's
+traffic is offered to the cluster proxy exactly as intended. The cluster proxy answers 403:
+`api.githubcopilot.com` is not on its allowlist. That host is the only upstream AWF ever asks for,
+so there is nothing to work around in the workflow, and no amount of configuration on this side
+changes a decision made in the proxy's allowlist.
+
+This is why the CIv1 cloud-VM pool worked: direct egress, no allowlist in the path. It is also why
+the earlier failures were so confusing -- three separate layers (missing `netstat`, proxied
+loopback, unpriced model) each had to be cleared before the real one became visible, and each
+presented as a silent connection that did not happen.
+
+**The ask for infra is one line:** allow `api.githubcopilot.com:443` through `restricted-proxy` for
+the `tt-ubuntu-2204-N150-viommu-stable` pool. Worth requesting alongside it, since gh-aw's own
+allowlist names them and a later feature may reach for one:
+`api.business.githubcopilot.com`, `api.enterprise.githubcopilot.com`,
+`api.individual.githubcopilot.com`, and `telemetry.enterprise.githubcopilot.com`.
+
+Note that AWF is *not* being bypassed by this request. Its own allowlist still governs what the
+agent may reach; the cluster proxy is a second gate in series, and this only stops the two gates
+from disagreeing about the one host the agent cannot work without.
+
 ## What is *not* verified about this run
 
 None of the following could be checked without a device, so treat them as the likely failure points:
@@ -72,9 +106,9 @@ None of the following could be checked without a device, so treat them as the li
   native output*, not *matches torch*. A port that faithfully reproduces a native bug will pass.
   `pad` had a real torch golden, so this weaker oracle is new, and the PR body should not be read as
   claiming more than it measures.
-- **Everything from the agent onward.** No run has yet reached the agent, so the deliverable contract,
-  the demotion logic, and the per-stratum grading have still only been exercised against synthetic
-  fixtures.
+- **Everything from the agent onward.** The agent process now starts, but it cannot reach a model
+  (see above), so it has never taken a single action. The deliverable contract, the demotion logic
+  and the per-stratum grading have still only been exercised against synthetic fixtures.
 
 ## The hard part of the `untilize` port itself
 
