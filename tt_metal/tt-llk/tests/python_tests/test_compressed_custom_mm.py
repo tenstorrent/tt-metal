@@ -31,6 +31,7 @@
 #
 # Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
 
+import pytest
 import torch
 from conftest import blackhole_only
 from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
@@ -163,12 +164,42 @@ class _CompressedMMStimuli(StimuliConfig):
         write_to_device(location, self.buf_c_addr, self.meta_bytes)
 
 
+# The full sweep is 3 BFP formats x the 40-point (ct_dim, kt_dim, in0_rows) grid == 120 hardware cases, over the
+# repo's 100-combination cap for non-nightly parametrizations (.github/instructions/python.instructions.md), and this
+# is the only one of the three matmul advance tests that multiplies the grid by a format axis. So the merge-gate test
+# below keeps all three compression formats but only the grid corners (ct_dim and in0_rows at their extremes, both
+# kt_dim values) == 24 cases, and the full sweep runs nightly. The two are the same body.
+CORNER_GRID = matmul_grid(ct_dims=[1, 16], kt_dims=[2, 4], in0_rows=[1, 8])
+
+
 @blackhole_only
+@parametrize(
+    formats=COMPRESSED_MM_FORMATS,
+    ct_kt_rows=CORNER_GRID,
+)
+def test_compressed_custom_mm(
+    formats,
+    ct_kt_rows,
+    boot_mode=BootMode.DEFAULT,
+):
+    _run_compressed_custom_mm(formats, ct_kt_rows, boot_mode)
+
+
+@blackhole_only
+@pytest.mark.nightly
 @parametrize(
     formats=COMPRESSED_MM_FORMATS,
     ct_kt_rows=matmul_grid(),
 )
-def test_compressed_custom_mm(
+def test_compressed_custom_mm_full_grid(
+    formats,
+    ct_kt_rows,
+    boot_mode=BootMode.DEFAULT,
+):
+    _run_compressed_custom_mm(formats, ct_kt_rows, boot_mode)
+
+
+def _run_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
