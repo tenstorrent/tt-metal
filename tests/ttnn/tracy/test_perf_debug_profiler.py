@@ -32,7 +32,7 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_META
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_perf_debug_zones"
-CTX_INSPECT = Path(TT_METAL_HOME) / "tools" / "x280_bm" / "tracy_ctx_inspect" / "tracy_ctx_inspect"
+CTX_INSPECT = Path(TT_METAL_HOME) / "tools" / "drisc_drain" / "tracy_ctx_inspect" / "tracy_ctx_inspect"
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "perf_debug_profiler_tests"
 
 
