@@ -1,38 +1,194 @@
 {
-  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test from the 'RTL Sim CI test' check is matched by (config, group, filter); a field omitted in an entry is a wildcard. Optional per-entry fields: assignee (Jira accountId the ticket is assigned to), assignee_name (human label, ignored by code), requirement (AIIPSW ticket key, added as a label), team. Tests not listed here are ignored (no ticket).",
+  "_comment": "RTL sim tests that warrant a RELEASE Jira ticket when they fail. Each failed test reported by the 'RTL Sim CI test' check is matched by (config, group, filter, runner); a field omitted in an entry is a wildcard, and `filter` is compared literally (the '*' characters are part of the gtest filter string, not matcher wildcards). Entries are tried in order, so keep specific entries above wildcard ones. Optional per-entry fields: requirement (AIIPSW ticket key, added as a label), team, assignee (Jira accountId), assignee_name (human label, ignored by code). Fields prefixed with '_' are documentation only. Tests not listed here are ignored (no ticket).",
+  "_coverage": "Generated inventory of every Quasar test, where it runs, and which of these entries watches it: tests/scripts/quasar/QUASAR_TEST_COVERAGE.md (regenerate with tests/scripts/quasar/gen_test_coverage_doc.py).",
+  "_reaches_jira_today": "Verified 2026-08-11 against GitLab tensix/tt-umd-simulators main. Only ONE job feeds this matcher: metal_unit_test_vcs_qsr, which runs the config-1x3 rows of tests/scripts/quasar/quasar_sim_regresion_tests.yaml and labels every manifest row '1x3'. So the only tuples that can arrive today are unit_tests_legacy/*DmLoopback*, unit_tests_legacy/*QuasarComputeKernelMultipleThread*, unit_tests_legacy/*Bmm and unit_tests_api/*TensixSingleCoreDirectDramReaderDatacopyWriter. Everything else below is staged: it matches a row in quasar_regression_tests.yaml or quasar_local_tests.yaml, which today run in the emulator job (metal_unit_test_emu_quasar) that reports to Slack #tt-qsr-emu-ci and does not write the failed_tests.tsv manifest. Those entries activate with no change here once that job feeds the manifest.",
   "relevant_tests": [
     {
-      "config": "1x3",
       "group": "unit_tests_legacy",
       "filter": "*DmLoopback*",
       "requirement": "AIIPSW-2",
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
-      "assignee_name": "Kevin Stevens"
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); quasar_regression_tests.yaml @2x3_DISPATCH"
     },
     {
-      "config": "1x3",
       "group": "unit_tests_legacy",
       "filter": "*QuasarComputeKernelMultipleThread*",
       "requirement": "AIIPSW-2",
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
-      "assignee_name": "Kevin Stevens"
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); quasar_regression_tests.yaml @2x3_DISPATCH"
     },
     {
-      "config": "2x3",
       "group": "unit_tests_legacy",
       "filter": "*MultiDmAddTwoInts*",
       "requirement": "AIIPSW-2",
       "team": "Trinity",
       "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
-      "assignee_name": "Kevin Stevens"
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_sim_regresion_tests.yaml @2x3 (sim CI runs 1x3 only, so not live); quasar_regression_tests.yaml @2x3 and @2x3_DISPATCH"
+    },
+    {
+      "group": "unit_tests_api",
+      "filter": "*TensixSingleCoreDirectDramReaderDatacopyWriter",
+      "requirement": "AIIPSW-6",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_sim_regresion_tests.yaml @1x3 (live); moved to @2x3_DISPATCH in quasar_regression_tests.yaml by PR #51403"
+    },
+    {
+      "group": "unit_tests_api",
+      "filter": "*QuasarCRTASharedL1Address*",
+      "requirement": "AIIPSW-6",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_regression_tests.yaml @2x3_DISPATCH (was @1x3 before PR #51403); absent from the sim yaml, so not live"
+    },
+    {
+      "group": "unit_tests_api",
+      "filter": "*QuasarCRTAUniqueL1Addresses*",
+      "requirement": "AIIPSW-6",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_source": "quasar_regression_tests.yaml @2x3_DISPATCH (was @1x3 before PR #51403); absent from the sim yaml, so not live"
+    },
+    {
+      "group": "unit_tests_dispatch",
+      "requirement": "AIIPSW-6",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_note": "group-only wildcard: every test in the dispatch binary is dispatch-engine relevant",
+      "_source": "quasar_regression_tests.yaml: *QuasarDispatchSInstantiatedAndRunning* @2x3 and @2x3_DISPATCH (group added by PR #51403)"
+    },
+    {
+      "runner": "pytest",
+      "group": "tests/tt_metal/tools/profiler/test_device_profiler.py",
+      "requirement": "AIIPSW-13",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_note": "filter omitted: covers every profiler node id in the file",
+      "_source": "quasar_local_tests.yaml: test_custom_cycle_count_slow_dispatch @1x3, test_custom_cycle_count @2x3_DISPATCH, test_full_buffer @2x3_DISPATCH"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
+    },
+    {
+      "runner": "pytest",
+      "group": "models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py",
+      "requirement": "AIIPSW-4",
+      "team": "Trinity",
+      "assignee": "712020:8b948ca3-de9c-49d2-9e7b-bd009a6106d9",
+      "assignee_name": "Borys Bradel",
+      "_source": "quasar_local_tests.yaml @2x3 (whole file)"
     },
     {
       "config": "1x3",
       "group": "unit_tests_api",
       "filter": "RtlSimCheckOutput.DoesNotExist_ForcedFailure",
       "_note": "forced-failure fixture for end-to-end testing; inert now (test reverted)"
+    },
+    {
+      "config": "2x3_DISPATCH",
+      "requirement": "AIIPSW-6",
+      "team": "Trinity",
+      "assignee": "712020:f8aa3402-dbce-4799-9094-0f4ec382989e",
+      "assignee_name": "Kevin Stevens",
+      "_note": "config-only wildcard: any test failing under the dispatch-engine config is AIIPSW-6 relevant. MUST stay last -- it would otherwise shadow the more specific entries above that also run at 2x3_DISPATCH.",
+      "_source": "quasar_regression_tests.yaml has 14 rows at @2x3_DISPATCH; quasar_local_tests.yaml has 2"
     }
   ]
 }
