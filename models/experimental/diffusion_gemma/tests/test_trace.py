@@ -425,6 +425,8 @@ class _CaptureAdapter:
 def _capture_with_pooled_gumbel_reserve(controller, adapter, monkeypatch, *, reveal_pmax):
     """Run only the capture lifecycle pieces needed to test pool ownership."""
     controller.consts = object()
+    controller.canvas_buf = _FakeTensor("canvas-buf")
+    controller.committed_buf = _FakeTensor("committed-buf")
     controller._prepare_adapter_for_capture = lambda _adapter, *, start_pos: setattr(
         controller, "reveal_pmax", reveal_pmax
     )
