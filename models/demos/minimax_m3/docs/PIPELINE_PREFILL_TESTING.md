@@ -26,9 +26,19 @@ Run the commands below from inside the allocation.
 ## Accuracy — KV PCC
 
 Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
-reads the KV back and PCCs it against the golden trace. Start the runner with the request binding for the
-rank count you want:
+reads the KV back and PCCs it against the golden trace. `PREFILL_MOCK_MIGRATION=1` makes the runner
+publish its KV chunk table for the read-back gate (without it the producer has nothing to PCC). On the
+producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1` so every
+slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED` (threshold
+`PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
 
+Both `PREFILL_MANIFEST` and `PREFILL_MOCK_MIGRATION` are shell-forwarded with `mpirun -x`, which lands on
+the launch-host rank only — fine at 1 galaxy (one rank), but at 2+ galaxies the remote ranks never see
+them and silently run the default model without publishing their table. For multi-host, put both in the
+request binding's `global_env` (the same `_minimax.yaml` copy made under Process 1, plus
+`PREFILL_MOCK_MIGRATION: "1"`) and drop them from the shell.
+
+### 1 galaxy
 ```bash
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
 PREFILL_MOCK_MIGRATION=1 \
@@ -36,16 +46,21 @@ PREFILL_MOCK_MIGRATION=1 \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
   bh-glx-b08u02:1
 ```
-`PREFILL_MOCK_MIGRATION=1` is what makes the runner publish its KV chunk table for the read-back gate;
-without it the producer has nothing to PCC. Then add `PREFILL_PRODUCER_CHECK_PCC=1` to the producer
-command (Process 2 below) and drop
-`PREFILL_PRODUCER_MAX_REQUESTS` down to one request per slot so every slot's KV is still resident when it
-is read back. PASS = `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`,
-default `0.93`).
 
-Swap `..._request_1rank.yaml` for `..._request_2rank.yaml` / `..._request_4rank.yaml` and extend the
-`--host` list (see the table below) for 2 and 4 galaxies. At 2+ galaxies the manifest must live in the
-binding's `global_env`, not the shell — see the multi-host note under Process 1 below.
+### 2 galaxies
+```bash
+# binding copy carries PREFILL_MANIFEST (absolute) + PREFILL_MOCK_MIGRATION: "1" in global_env
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank_minimax.yaml \
+  bh-glx-b08u02:1,bh-glx-b08u08:1
+```
+
+### 4 galaxies
+```bash
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank_minimax.yaml \
+  bh-glx-b09u02:1,bh-glx-b09u08:1,bh-glx-b08u08:1,bh-glx-b08u02:1
+```
 
 ## Perf — throughput + overlap plot
 
