@@ -590,16 +590,6 @@ near-linear in context. Prefill throughput peaks around 8k (1236 tok/s) and ease
 prompt. Best end-to-end RTF is at ISL=4096 (4.27× RT): below that the fixed ~4.1 s prefill dominates
 short renders, above it the growing per-token cost outweighs better prefill amortization.
 
-> **How these rows were collected.** ISLs 32–8192 came from one sweep process; 16384 and 23038 were
-> re-run individually (`VV_ISL_SWEEP=16384` / `23038`) after that process was killed by an
-> intermittent host-side `SIGBUS` at ISL=16384. The test warms up per ISL, so the rows are
-> comparable, but this was not a single continuous pass and the sweep's JSON artifact holds only the
-> last isolated row. The `SIGBUS` is environmental, not a model or code fault: it reproduced ~2 runs
-> in 3 at the largest KV allocation (~2.9 GB) with no kernel error, no OOM and no Python traceback,
-> and ISL=16384 passed on both sides of the commit under test with identical generation (31728 AR
-> tokens, 4230.40 s audio). Root cause is not yet established — capture a core/gdb backtrace to
-> settle it. Re-running the affected ISL succeeds.
-
 ### Performance tests (Tracy)
 
 `tests/perf/` follows the Voxtral / Seamless pattern: outer drivers spawn Tracy; inner workloads warm
