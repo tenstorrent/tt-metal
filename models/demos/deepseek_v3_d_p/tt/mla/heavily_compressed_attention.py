@@ -394,7 +394,16 @@ class TtHCA(_TtHCABase):
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
         # The write rewrites whole tiles from the tile boundary below entry_count, so the last write can
         # reach past the entries themselves. ``chunk_tokens`` sizes that headroom; single-shot is one chunk.
-        capacity += _tail_tile_buf(chunk_tokens or max_seq_len, self.compressor.compress_rate)
+        chunk = chunk_tokens or max_seq_len
+        capacity += _tail_tile_buf(chunk, self.compressor.compress_rate)
+        # forward must build no host tensors, so every one-hot the write can ever need is built here. The
+        # slab width is fixed -- it is part of the program shape, so the no-recompile contract already
+        # forbids it moving -- but r_e reaches every value once chunks carry differing real lengths, so a
+        # chunked state needs the whole TILE_SIZE set. Single-shot writes once, at r_e = 0.
+        self._build_tail_tile_matrices(
+            -(-int(chunk) // self.compressor.compress_rate),
+            range(ttnn.TILE_SIZE) if chunk_tokens is not None else (0,),
+        )
         return TtHCAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -672,19 +681,15 @@ class TtHCA(_TtHCABase):
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
         state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
-    def _tail_tile_matrices(self, r_e, width):
-        """The two one-hot matrices depend on nothing but ``(r_e, width)``, so they are built once and kept:
-        uploading a pair costs ~0.9 ms of host time, which device perf does not measure.
+    def _build_tail_tile_matrices(self, width, r_es):
+        """Every one-hot pair the write can need, for one slab width. Called from alloc_state, never from
+        forward: building a pair costs ~0.9 ms of host time that device perf does not measure, and forward
+        is required to touch no host tensors.
 
-        Bounded by TILE_SIZE keys per width, not fewer. Chunks that all carry the same entry count walk only
-        the multiples of gcd(count, TILE_SIZE) -- one r_e for 4096-token chunks, four for 5120 -- but the
-        contract only asks non-final chunks for ``real_len % compress_rate == 0``, so a run with mixed
-        lengths reaches every r_e. At 24 KB a pair for chunk 5120 that is 768 KB per layer per chip worst
-        case, which is why this fills in on demand rather than up front."""
-        key = (r_e, width)
-        if key not in self._tail_tile_cache:
-            tile, buf = ttnn.TILE_SIZE, _buf_for_width(width)
-
+        A pair is 24 KB for chunk 5120 (18 KB shift + 6 KB take, both independent of head_dim), so the
+        whole TILE_SIZE set is 768 KB per chip -- negligible beside the compressed cache itself."""
+        tile, buf = ttnn.TILE_SIZE, _buf_for_width(width)
+        for r_e in r_es:
             # merged row i takes src row i + (tile - r_e), for the r_e + width rows that carry entries;
             # the rest stay zero, so nothing reads past src.
             rows = torch.arange(r_e + width)
@@ -698,8 +703,17 @@ class TtHCA(_TtHCABase):
             take = torch.zeros(1, 1, tile, buf)
             take[0, 0, rows, rows + (r_e + width) - tile] = 1.0
 
-            self._tail_tile_cache[key] = (self._from_torch(shift), self._from_torch(take))
-        return self._tail_tile_cache[key]
+            self._tail_tile_cache[(r_e, width)] = (self._from_torch(shift), self._from_torch(take))
+
+    def _tail_tile_matrices(self, r_e, width):
+        """Lookup only. A miss means alloc_state was given a chunk width this call does not match, and
+        building here would put host work back in forward -- so fail instead."""
+        pair = self._tail_tile_cache.get((r_e, width))
+        assert pair is not None, (
+            f"no tail-tile one-hot for (r_e={r_e}, width={width}); alloc_state built "
+            f"{sorted({w for _, w in self._tail_tile_cache})} -- pass chunk_tokens matching the slab width"
+        )
+        return pair
 
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
@@ -761,7 +775,9 @@ class TtHCA(_TtHCABase):
         )
 
         if state is None:
-            state = self.alloc_state(real_len, batch=batch)
+            # Sized on the padded slab, not real_len: the write covers the whole padded width, so that is
+            # what the tail-tile one-hot has to be built for.
+            state = self.alloc_state(seq_pad_global, batch=batch)
 
         n_new = real_len // compress_rate
         total_entries = state.entry_count + n_new
