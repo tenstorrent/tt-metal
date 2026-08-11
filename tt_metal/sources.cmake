@@ -27,7 +27,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
-    api/tt-metalium/experimental/cluster_noc_helpers.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
@@ -128,6 +127,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/internal/cluster.hpp
+    api/tt-metalium/internal/cluster_noc_helpers.hpp
     api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
@@ -170,7 +170,6 @@ set(TT_METAL_PUBLIC_API
 
 set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
-    impl/experimental/cluster_noc_helpers.cpp
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp

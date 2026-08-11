@@ -8,7 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/experimental/cluster_noc_helpers.hpp>
+#include <tt-metalium/internal/cluster_noc_helpers.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
@@ -502,7 +502,7 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
     const ChipId device_id = device->id();
 
-    const auto table = experimental::get_dram_bank_table(device_id);
+    const auto table = internal::get_dram_bank_table(device_id);
 
     const auto& allocator = *device->allocator();
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);

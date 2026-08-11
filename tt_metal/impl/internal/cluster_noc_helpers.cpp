@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/experimental/cluster_noc_helpers.hpp"
+#include "tt-metalium/internal/cluster_noc_helpers.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -21,7 +21,7 @@
 // MetalContext (impl/) and tt_cluster (llrt/) out of the ttnn-nanobind
 // include path. See cluster_noc_helpers.hpp for the rationale.
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal::internal {
 
 void noc_write(
     std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, ttsl::Span<const std::byte> data) {
@@ -110,4 +110,4 @@ std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
     return out;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::internal

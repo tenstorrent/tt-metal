@@ -10,12 +10,13 @@
 #include <cstdint>
 #include <vector>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal::internal {
 
 /**
- * @warning EXPERIMENTAL. Everything declared in this header lives under
- * @c tt-metalium/experimental and is subject to change or removal without a
- * deprecation period. Do not depend on it from stable code.
+ * @warning INTERNAL. Everything declared in this header lives under
+ * @c tt-metalium/internal: it exists to serve tt-metal's own tooling and
+ * bindings, is not part of the supported user-facing API, and may change or be
+ * removed without a deprecation period.
  *
  * These are raw NOC accessors with no bounds checking beyond what the Watcher
  * host sanitizer applies; callers are responsible for targeting a valid core
@@ -118,4 +119,4 @@ struct DramBankInfo {
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::internal

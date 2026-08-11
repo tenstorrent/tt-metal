@@ -12,7 +12,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/cluster_noc_helpers.hpp>
+#include <tt-metalium/internal/cluster_noc_helpers.hpp>
 
 #include "ttnn/cluster.hpp"
 
@@ -107,7 +107,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "write_to_core",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
-            tt::tt_metal::experimental::noc_write(device_id, x, y, addr, as_bytes(data));
+            tt::tt_metal::internal::noc_write(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -140,7 +140,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "read_from_core",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, uint32_t size) -> nb::bytes {
-            auto buf = tt::tt_metal::experimental::noc_read(device_id, x, y, addr, size);
+            auto buf = tt::tt_metal::internal::noc_read(device_id, x, y, addr, size);
             return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
         },
         nb::arg("device_id"),
@@ -181,7 +181,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "write_to_core_immediate",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
-            tt::tt_metal::experimental::noc_write_immediate(device_id, x, y, addr, as_bytes(data));
+            tt::tt_metal::internal::noc_write_immediate(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -199,7 +199,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "read_reg",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr) -> uint32_t {
-            return tt::tt_metal::experimental::noc_read_reg_u32(device_id, x, y, addr);
+            return tt::tt_metal::internal::noc_read_reg_u32(device_id, x, y, addr);
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -226,7 +226,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "get_dram_bank_table",
         [](uint32_t device_id) -> nb::list {
-            auto table = tt::tt_metal::experimental::get_dram_bank_table(device_id);
+            auto table = tt::tt_metal::internal::get_dram_bank_table(device_id);
             nb::list out;
             for (const auto& e : table) {
                 nb::dict d;
