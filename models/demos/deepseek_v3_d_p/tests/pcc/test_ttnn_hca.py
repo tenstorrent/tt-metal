@@ -277,9 +277,6 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug("PCC test passed!")
 
 
-# must be full (the cache write needs a tile-aligned offset); a partial FINAL chunk is fine.
-_CHUNK_SIZE = 4096
-
 # The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
 # program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
 _WRITE_COMPILES_PER_CHUNK = 0
@@ -292,6 +289,9 @@ _CHUNKED_SCENARIOS = [
     ("3chunk-ragged", 4096, [4096, 4096, 3000]),
     ("chunk5120-full", 5120, [5120, 5120]),
     ("chunk5120-ragged", 5120, [5120, 5120, 3000]),
+    # Non-final chunks below chunk_size. Pins the two places real_len and the padded slab width must not
+    # be confused: the carry, and the tail the compressed-cache write carries across chunks.
+    ("chunk5120-varying", 5120, [1024, 256, 5120]),
 ]
 
 
@@ -418,28 +418,43 @@ def _sliding_mask(q_pos, k_pos, sliding_window):
     return torch.zeros(i.shape[0], j.shape[1]).masked_fill(~allowed, float("-inf"))
 
 
+# Demo-sized prompts. The two 56,320-token scenarios are the same length by construction
+# (11 * 5120 = 55 * 1024), so the mixed one differs from the uniform one only in how the tokens are
+# split -- every non-final chunk a multiple of compress_rate, none wider than chunk_size.
+_LONG_SCENARIOS = [
+    pytest.param("14x4096", 4096, [4096] * 14, id="14x4096"),
+    pytest.param("11x5120", 5120, [5120] * 11, id="11x5120"),
+    pytest.param(
+        "mixed5120",
+        5120,
+        [1024, 256, 5120, 2048, 5120, 5120, 3072, 5120, 640, 5120, 5120, 4096, 5120, 5120, 4224],
+        id="mixed5120",
+    ),
+]
+
+
 @pytest.mark.timeout(0)
+@pytest.mark.parametrize("name, chunk_size, iters_valid", _LONG_SCENARIOS)
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
-    """14 chunks of 4096 = 57,344 tokens, the demo-sized prompt.
+def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, name, chunk_size, iters_valid):
+    """Demo-sized prompts, ~57K tokens, 440-448 entries deep.
 
     The reference is chunked here, unlike the short scenarios. An unchunked one is not an option at
     this length: eager attention (forced, since sinks make V4 eager-only) materializes
     [1, num_heads, S, S] scores = 726 GB at 57K. The short scenarios are what pin chunked == plain
-    attention; this test only shows it stays true 14 chunks and 448 entries deep."""
+    attention; this test only shows it stays true that many chunks deep."""
     torch.manual_seed(42)
 
     batch = 1
-    chunks = 14  # 14 * 4096 = 57,344 tokens
     config = _flash_config()
     config._attn_implementation = "eager"  # sinks: the sdpa interface silently drops s_aux
     sw = config.sliding_window
     compress_rate = config.compress_rates["heavily_compressed_attention"]
-    total = _CHUNK_SIZE * chunks
+    total = sum(iters_valid)
 
     ref = DeepseekV4Attention(config, layer_idx=0).eval()
     with torch.no_grad():
@@ -453,27 +468,30 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
     position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
 
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
-    state = tt_model.alloc_state(total, chunk_tokens=_CHUNK_SIZE)
+    state = tt_model.alloc_state(total, chunk_tokens=chunk_size)
     ref_cache = _RefHCACache(DeepseekV4HCACache(config))
     ms = tuple(mesh_device.shape)
-    logger.debug(f"mesh={ms} chunks={chunks}x{_CHUNK_SIZE} total={total}")
+    logger.debug(f"mesh={ms} scenario={name} chunk_size={chunk_size} chunks={len(iters_valid)} total={total}")
 
     signpost("HCA_START")
     kv_actual = 0
     programs = mesh_device.num_program_cache_entries()
-    for it in range(chunks):
-        chunk = hidden[:, kv_actual : kv_actual + _CHUNK_SIZE]
-        chunk_pos = position_ids[:, kv_actual : kv_actual + _CHUNK_SIZE]
+    for it, valid in enumerate(iters_valid):
+        real = hidden[:, kv_actual : kv_actual + valid]
+        chunk_pos = position_ids[:, kv_actual : kv_actual + valid]
 
         # The reference cache returns [carry | chunk] from update(), so the mask must cover exactly
         # those keys; the reference cats its own block_bias on for the compressed slots.
         carry = min(sw - 1, kv_actual)
         k_pos = torch.cat([torch.arange(kv_actual - carry, kv_actual), chunk_pos[0]])
-        ref_mask = _sliding_mask(chunk_pos[0], k_pos, sw).view(1, 1, _CHUNK_SIZE, -1).expand(batch, 1, -1, -1)
+        ref_mask = _sliding_mask(chunk_pos[0], k_pos, sw).view(1, 1, valid, -1).expand(batch, 1, -1, -1)
         with torch.no_grad():
-            cos, sin = ref.compressor.rotary_emb(chunk, position_ids=chunk_pos, layer_type="compress")
-            expected, _ = ref(chunk, {"compress": (cos, sin)}, chunk_pos, ref_mask, past_key_values=ref_cache)
+            cos, sin = ref.compressor.rotary_emb(real, position_ids=chunk_pos, layer_type="compress")
+            expected, _ = ref(real, {"compress": (cos, sin)}, chunk_pos, ref_mask, past_key_values=ref_cache)
 
+        # Fixed device width every chunk; a short chunk is padded up to it.
+        chunk = torch.zeros(batch, chunk_size, config.hidden_size)
+        chunk[:, :valid] = real
         tt_in = ttnn.from_torch(
             chunk.unsqueeze(1),
             device=mesh_device,
@@ -481,13 +499,13 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
         )
-        out_tt = tt_model(tt_in, chunk_pos, seq_len_actual=_CHUNK_SIZE, state=state)
+        out_tt = tt_model(tt_in, chunk_pos, seq_len_actual=valid, state=state)
         out = ttnn.to_torch(
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
-        ).squeeze(1)
+        ).squeeze(1)[:, :valid]
 
         pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
-        logger.debug(f"  iter {it} (kv_actual={kv_actual} entries={state.entry_count}): PCC {pcc_message}")
+        logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid} entries={state.entry_count}): {pcc_message}")
         assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
 
         now = mesh_device.num_program_cache_entries()
@@ -499,11 +517,11 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology):
             )
         programs = now
 
-        kv_actual += _CHUNK_SIZE
+        kv_actual += valid
     signpost("HCA_END")
 
     assert state.kv_actual == total
-    assert state.entry_count == total // compress_rate
+    assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
     with torch.no_grad():
         ref_entries, _ = ref.compressor(
