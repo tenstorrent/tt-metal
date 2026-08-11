@@ -14,6 +14,7 @@ from models.common.sampling import (
     SeedManager,
     broadcast_sampling_params,
     format_sampling_params,
+    scatter_sampling_params_to_slots,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
@@ -145,6 +146,34 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.temperature[0] == 1.0
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
+
+
+def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
+    """A batched prefill samples slot row s with the params of the request there."""
+    params = SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7], seed=[7, 8, 9])
+
+    scattered = scatter_sampling_params_to_slots(params, [2, 0, 5], slot_len=8)
+
+    assert scattered.temperature[2] == 0.1 and scattered.temperature[0] == 0.2
+    assert scattered.temperature[5] == 0.3
+    assert scattered.top_k[2] == 1 and scattered.top_k[0] == 2 and scattered.top_k[5] == 3
+    assert scattered.top_p[2] == 0.5 and scattered.top_p[0] == 0.6 and scattered.top_p[5] == 0.7
+    # Unoccupied rows carry the last request's values, so they stay valid instead of
+    # sampling from a formatter default.
+    assert scattered.temperature[1] == 0.3
+    # SeedManager.reset_seed is given the slot list separately and maps seeds itself.
+    assert scattered.seed == [7, 8, 9]
+    # The input is never mutated.
+    assert params.temperature == [0.1, 0.2, 0.3]
+
+
+def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
+    params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
+
+    scattered = scatter_sampling_params_to_slots(params, list(range(2)), slot_len=32)
+
+    assert scattered.temperature[:2] == params.temperature[:2]
+    assert scattered.top_k[:2] == params.top_k[:2]
 
 
 def _skip_if_not_galaxy(mesh_device):

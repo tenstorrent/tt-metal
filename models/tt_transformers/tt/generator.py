@@ -24,6 +24,7 @@ from models.common.sampling import (
     broadcast_sampling_params,
     chunk_sampling_params,
     format_sampling_params,
+    scatter_sampling_params_to_slots,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
@@ -42,6 +43,23 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
+
+def batched_prefill_padded_batch(batch_size, empty_slots, max_batch_size):
+    """Rows the batched-prefill device batch needs for ``empty_slots``.
+
+    A batched prefill places request ``i`` at device row ``empty_slots[i]``, its
+    physical slot, and every slot-indexed buffer (``prefill_ids``,
+    ``padded_last_token_idx``, the padded page table) is bounded by the returned
+    value. The batch must therefore span the highest slot in use, not just the
+    request count: vLLM hands out the slot that already owns a request's per-slot
+    state, so a batch of N requests can legitimately land on slots above N.
+    """
+    span = batch_size
+    if empty_slots is not None and len(empty_slots) > 0:
+        span = max(span, max(int(s) for s in empty_slots) + 1)
+    return next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= span), max_batch_size)
+
 
 # Position of the page table within the decode input tuple produced by
 # Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
@@ -677,10 +695,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 use_batched_prefill = False
 
         if use_batched_prefill:
-            padded_batch = next(
-                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-                self.model_args[0].max_batch_size,
-            )
+            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
@@ -877,7 +892,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    # ``combined_prompt_tokens`` above and the extracted hidden states
+                    # are both laid out by slot, so the params have to be as well.
+                    combined_params = scatter_sampling_params_to_slots(
+                        format_sampling_params(sampling_params, sampling_batch),
+                        empty_slots,
+                        sampling_batch,
+                    )
                     sampling_module.apply_prefill_state(
                         sampling_params=combined_params,
                         prompt_tokens=combined_prompt_tokens,
@@ -933,12 +954,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         if tt_log_probs is not None and not isinstance(tt_log_probs, LogProbsResult)
                         else None
                     )
+                    # Device rows are physical slots; the returned arrays are in the
+                    # caller's prefill order, so read by slot and write by local_idx.
                     for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[slot] = tokens_host[slot]
+                        output_tokens[local_idx] = tokens_host[slot]
                         if isinstance(tt_log_probs, LogProbsResult):
-                            output_log_probs[slot] = tt_log_probs.extract_user(slot)
+                            output_log_probs[local_idx] = tt_log_probs.extract_user(slot)
                         elif plain_log_probs_host is not None:
-                            output_log_probs[slot] = plain_log_probs_host[slot]
+                            output_log_probs[local_idx] = plain_log_probs_host[slot]
                 else:
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
@@ -948,16 +971,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
                                 user_hidden, last_token_idx[slot]
                             )
-                            slot_hidden_list.append((slot, slot_hidden, last_token_idx[slot]))
+                            slot_hidden_list.append((local_idx, slot_hidden, last_token_idx[slot]))
                         ttnn.synchronize_device(self.model[model_id].mesh_device)
                         dim = self.model[model_id].args.dim
-                        for slot, slot_hidden, lt_idx in slot_hidden_list:
+                        for local_idx, slot_hidden, lt_idx in slot_hidden_list:
                             slot_hidden_torch = ttnn.to_torch(ttnn.get_device_tensors(slot_hidden)[0]).float()
                             pos = int(lt_idx % 32)
                             out = slot_hidden_torch[0, 0, pos, :dim].clone()
                             if out.device.type != "cpu":
                                 out = out.cpu()
-                            output_tensor[slot] = out
+                            output_tensor[local_idx] = out
                     else:
                         for local_idx, slot in enumerate(empty_slots):
                             user_logits = logits[slot : slot + 1, :, :, :]
@@ -967,7 +990,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             _logits = ttnn.to_layout(
                                 _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
                             )
-                            output_tensor[slot] = self.model[model_id].process_output_prefill(
+                            output_tensor[local_idx] = self.model[model_id].process_output_prefill(
                                 _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                             )
                 break

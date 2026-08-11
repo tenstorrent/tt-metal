@@ -11,6 +11,7 @@ from .generator import (
     SAMPLING_PARAM_FIELDS,
     format_sampling_params,
     broadcast_sampling_params,
+    scatter_sampling_params_to_slots,
     chunk_sampling_params,
     SeedManager,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "SAMPLING_PARAM_FIELDS",
     "format_sampling_params",
     "broadcast_sampling_params",
+    "scatter_sampling_params_to_slots",
     "chunk_sampling_params",
     "SeedManager",
     "split_list",
