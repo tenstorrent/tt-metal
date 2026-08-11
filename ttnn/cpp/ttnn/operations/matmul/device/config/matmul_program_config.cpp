@@ -1143,6 +1143,9 @@ MatmulProgramConfig create_simple_matmul_program_config(
     }
 
     // out_subblock h/w doesn't matter
+    // get_per_core_factor only considers L1 fit; cap by the actual output tile dims so a
+    // small matmul (e.g. 13x13 tiles) does not produce a 16x16 per-core block / 512x512
+    // shard. See GitHub issue #32435.
     per_core_M = get_per_core_factor(
         input_tensor_a,
         input_tensor_b,
@@ -1153,6 +1156,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
         compute_kernel_config,
         output_dtype);
     per_core_N = per_core_M;
+    per_core_M = std::min(per_core_M, Mt);
+    per_core_N = std::min(per_core_N, Nt);
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -1294,8 +1299,14 @@ MatmulProgramConfig create_simple_matmul_program_config(
             uint32_t out_block_w = per_core_N;
             out_subblock_h = 4;
             out_subblock_w = 2;
+            // Mcast-2D requires out_subblock_w == per_core_N || out_subblock_h == 1.
             if (out_subblock_w != per_core_N) {
                 out_subblock_h = 1;
+            }
+            // Cap above can leave dims that don't divide 2 (e.g. 13); fall back to 1x1.
+            if (per_core_M % out_subblock_h != 0 || per_core_N % out_subblock_w != 0) {
+                out_subblock_h = 1;
+                out_subblock_w = 1;
             }
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
