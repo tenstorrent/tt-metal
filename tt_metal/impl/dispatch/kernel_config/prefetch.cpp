@@ -278,7 +278,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch_s = true;
 
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
-                dependent_config_.downstream_dispatch_s_cb_sem_id = dispatch_s_kernel->GetMyDispatchCbSemId(cq_id_);
+                dependent_config_.downstream_dispatch_s_cb_sem_id =
+                    dispatch_s_kernel->GetChannelConfig(cq_id_).my_dispatch_cb_sem_id;
             } else {
                 TT_FATAL(false, "Unrecognized downstream kernel.");
             }
@@ -371,7 +372,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch_s = true;
 
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
-                dependent_config_.downstream_dispatch_s_cb_sem_id = dispatch_s_kernel->GetMyDispatchCbSemId(cq_id_);
+                dependent_config_.downstream_dispatch_s_cb_sem_id =
+                    dispatch_s_kernel->GetChannelConfig(cq_id_).my_dispatch_cb_sem_id;
             } else if (auto* relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(k)) {
                 TT_ASSERT(!found_relay_mux, "PREFETCH_D kernel has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;

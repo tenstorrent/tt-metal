@@ -141,10 +141,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     TT_FATAL(
         upstream_cq_ids == downstream_cq_ids,
         "DISPATCH_S upstream PREFETCH and downstream DISPATCH kernels must cover the same set of CQs");
-    served_cq_ids_.assign(upstream_cq_ids.begin(), upstream_cq_ids.end());
-
-    const bool serves_one_cq = served_cq_ids_.size() == 1;
-    const bool serves_cq0_and_cq1 = served_cq_ids_.size() == 2 && served_cq_ids_[0] == 0 && served_cq_ids_[1] == 1;
+    const bool serves_one_cq = upstream_cq_ids.size() == 1;
+    const bool serves_cq0_and_cq1 = upstream_cq_ids == std::set<uint8_t>{0, 1};
     TT_FATAL(serves_one_cq || serves_cq0_and_cq1, "DISPATCH_S must serve exactly one CQ, or CQ0 and CQ1 when shared");
     if (serves_cq0_and_cq1) {
         for (const auto* kernel : upstream_kernels_) {
@@ -158,25 +156,18 @@ void DispatchSKernel::GenerateStaticConfigs() {
                 "Shared DISPATCH_S requires its downstream DISPATCH kernels to be on the same core");
         }
         const uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_id_);
-        for (const uint8_t served_cq_id : served_cq_ids_) {
+        for (const uint8_t served_cq_id : upstream_cq_ids) {
             TT_FATAL(
                 dispatch_core_manager_.dispatcher_s_core(device_id_, channel, served_cq_id) == logical_core_,
                 "All CQs served by one DISPATCH_S must resolve to the same core");
         }
     }
 
-    for (const uint8_t served_cq_id : served_cq_ids_) {
+    for (const uint8_t served_cq_id : upstream_cq_ids) {
         auto& channel_config = static_config_.channels[served_cq_id];
-        if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
-            // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE): start its CB past dispatch_d's.
-            const uint32_t cb_base_offset = (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH)
-                                                ? (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                                      my_dispatch_constants.dispatch_buffer_pages()
-                                                : 0;
-            channel_config.cb_base = my_dispatch_constants.dispatch_buffer_base(served_cq_id) + cb_base_offset;
-        } else {
-            channel_config.cb_base = 0xff;
-        }
+        channel_config.cb_base = get_dispatch_query_manager_ref().dispatch_s_enabled()
+                                     ? my_dispatch_constants.dispatch_s_buffer_base(served_cq_id)
+                                     : 0xff;
         channel_config.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         channel_config.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         // cq_dispatch.cpp derives dispatch_s_enabled from a non-zero shutdown sem id.
@@ -273,23 +264,25 @@ void DispatchSKernel::GenerateStaticConfigs() {
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
-    for (const uint8_t served_cq_id : served_cq_ids_) {
+    // GenerateStaticConfigs already established that each served CQ has exactly one upstream
+    // PREFETCH and one downstream DISPATCH, so a single pass per direction covers every channel.
+    std::map<uint8_t, PrefetchKernel*> prefetch_by_cq_id;
+    for (auto* upstream : upstream_kernels_) {
+        auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream);
+        TT_ASSERT(prefetch_kernel != nullptr);
+        prefetch_by_cq_id[upstream->GetCQId()] = prefetch_kernel;
+    }
+    std::map<uint8_t, DispatchKernel*> dispatch_by_cq_id;
+    for (auto* downstream : downstream_kernels_) {
+        auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream);
+        TT_ASSERT(dispatch_kernel != nullptr);
+        dispatch_by_cq_id[downstream->GetCQId()] = dispatch_kernel;
+    }
+
+    for (const auto& [served_cq_id, channel_config] : static_config_.channels) {
         auto& channel = dependent_config_.channels[served_cq_id];
-        PrefetchKernel* prefetch_kernel = nullptr;
-        DispatchKernel* dispatch_kernel = nullptr;
-        for (auto* upstream : upstream_kernels_) {
-            if (upstream->GetCQId() == served_cq_id) {
-                TT_ASSERT(prefetch_kernel == nullptr);
-                prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream);
-            }
-        }
-        for (auto* downstream : downstream_kernels_) {
-            if (downstream->GetCQId() == served_cq_id) {
-                TT_ASSERT(dispatch_kernel == nullptr);
-                dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream);
-            }
-        }
-        TT_ASSERT(prefetch_kernel != nullptr && dispatch_kernel != nullptr);
+        PrefetchKernel* prefetch_kernel = prefetch_by_cq_id.at(served_cq_id);
+        DispatchKernel* dispatch_kernel = dispatch_by_cq_id.at(served_cq_id);
         channel.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         channel.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
         channel.downstream_logical_core = dispatch_kernel->GetLogicalCore();
@@ -322,8 +315,9 @@ void DispatchSKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
+    const size_t num_channels = static_config_.channels.size();
     std::map<std::string, std::string> defines = {
-        {"NUM_DISPATCH_S_CHANNELS", std::to_string(served_cq_ids_.size())},
+        {"NUM_DISPATCH_S_CHANNELS", std::to_string(num_channels)},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},                  // Unused, remove later
@@ -366,9 +360,8 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    for (size_t channel_index = 0; channel_index < served_cq_ids_.size(); ++channel_index) {
-        const uint8_t served_cq_id = served_cq_ids_[channel_index];
-        const auto& channel = static_config_.channels.at(served_cq_id);
+    size_t channel_index = 0;
+    for (const auto& [served_cq_id, channel] : static_config_.channels) {
         const auto& dependent_channel = dependent_config_.channels.at(served_cq_id);
         const auto upstream_virtual_core =
             device_->virtual_core_from_logical_core(dependent_channel.upstream_logical_core.value(), GetCoreType());
@@ -378,7 +371,7 @@ void DispatchSKernel::CreateKernel() {
             device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
         const auto downstream_virtual_noc_coords =
             device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
-        const std::string suffix = served_cq_ids_.size() == 1 ? "" : "_" + std::to_string(channel_index);
+        const std::string suffix = num_channels == 1 ? "" : "_" + std::to_string(channel_index);
         defines["CB_BASE" + suffix] = std::to_string(channel.cb_base.value());
         defines["MY_DISPATCH_CB_SEM_ID" + suffix] = std::to_string(channel.my_dispatch_cb_sem_id.value());
         defines["UPSTREAM_DISPATCH_CB_SEM_ID" + suffix] =
@@ -395,13 +388,16 @@ void DispatchSKernel::CreateKernel() {
         defines["UPSTREAM_NOC_Y" + suffix] = std::to_string(upstream_virtual_noc_coords.y);
         defines["DOWNSTREAM_NOC_X" + suffix] = std::to_string(downstream_virtual_noc_coords.x);
         defines["DOWNSTREAM_NOC_Y" + suffix] = std::to_string(downstream_virtual_noc_coords.y);
+        ++channel_index;
     }
-    num_threads_ = served_cq_ids_.size();
+    num_threads_ = num_channels;
     configure_kernel_variant(
         dispatch_kernel_file_names[DISPATCH_S], {}, defines, tt::tt_metal::KernelBuildOptLevel::Os);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
-        const auto& channel = static_config_.channels.at(served_cq_ids_.front());
+        // Only Quasar shares one dispatch_s across CQs, so the non-Quasar path has a single channel.
+        TT_ASSERT(num_channels == 1);
+        const auto& channel = static_config_.channels.begin()->second;
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
@@ -418,17 +414,8 @@ void DispatchSKernel::CreateKernel() {
     }
 }
 
-uint32_t DispatchSKernel::GetMyDispatchCbSemId(uint8_t cq_id) const {
-    return static_config_.channels.at(cq_id).my_dispatch_cb_sem_id.value();
-}
-
-uint32_t DispatchSKernel::GetDispatchDShutdownSemId(uint8_t cq_id) const {
-    return static_config_.channels.at(cq_id).dispatch_d_shutdown_sem_id.value();
-}
-
 void DispatchSKernel::ConfigureCore() {
-    for (const uint8_t served_cq_id : served_cq_ids_) {
-        const auto& channel = static_config_.channels.at(served_cq_id);
+    for (const auto& [served_cq_id, channel] : static_config_.channels) {
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             zero_dispatch_s_realtime_profiler_msg_fields(
                 device_, logical_core_, GetCoreType(), descriptor_.hal(), channel.realtime_profiler_msg_addr.value());

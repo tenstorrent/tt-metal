@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <map>
 #include <optional>
-#include <vector>
 
 #include "fd_kernel.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -83,12 +82,11 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
-    const dispatch_s_static_config_t& GetStaticConfig() { return static_config_; }
-    uint32_t GetMyDispatchCbSemId(uint8_t cq_id) const;
-    uint32_t GetDispatchDShutdownSemId(uint8_t cq_id) const;
+    const dispatch_s_channel_config_t& GetChannelConfig(uint8_t cq_id) const {
+        return static_config_.channels.at(cq_id);
+    }
 
 private:
-    std::vector<uint8_t> served_cq_ids_;
     dispatch_s_static_config_t static_config_;
     dispatch_s_dependent_config_t dependent_config_;
 };

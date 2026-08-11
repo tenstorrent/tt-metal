@@ -307,7 +307,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
             TT_ASSERT(dispatch_s_kernel);
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
-            dependent_config_.dispatch_d_shutdown_sem_id = dispatch_s_kernel->GetDispatchDShutdownSemId(cq_id_);
+            dependent_config_.dispatch_d_shutdown_sem_id =
+                dispatch_s_kernel->GetChannelConfig(cq_id_).dispatch_d_shutdown_sem_id;
         } else {
             // If no dispatch_s, no downstream
             TT_ASSERT(downstream_kernels_.empty());
@@ -409,7 +410,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             if (auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_s, "DISPATCH_D has multiple downstream DISPATCH_S kernels.");
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
-                dependent_config_.dispatch_d_shutdown_sem_id = dispatch_s_kernel->GetDispatchDShutdownSemId(cq_id_);
+                dependent_config_.dispatch_d_shutdown_sem_id =
+                    dispatch_s_kernel->GetChannelConfig(cq_id_).dispatch_d_shutdown_sem_id;
                 found_dispatch_s = true;
             } else if (auto* dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
