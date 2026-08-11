@@ -142,6 +142,58 @@ def test_linear_decode_prefetcher_shared_global_cb_mixed_slab_sizes(device):
             assert_with_pcc(ref, ttnn.to_torch(layer(x)).float(), 0.99)
 
 
+def test_shared_expert_prefetched_pcc(device):
+    """The MoE shared expert's three projections on the model's one shared GCB.
+
+    This is the whole of ``decode_prefetch``'s contract exercised end to end on the MoE side:
+    the three weights are streamed through the same buffer the attention projections use, at
+    the page size that buffer was built for, and queued up front the way the model hoists a
+    layer's weights. gate and up leave their outputs sharded exactly as down_proj wants its
+    activation, so a layout slip there shows up here as a reshard error or bad numbers.
+    """
+    from types import SimpleNamespace
+
+    from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
+    from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4MLP
+
+    tokens, hidden, inter = 32, 4096, 2048
+    dtype = ttnn.bfloat16
+    # Four pages rather than the model's 16: a bf16 page is 64 KB, and the point here is the
+    # sharing and the layouts, not the run-ahead depth.
+    buffers = make_decode_prefetch_buffers(device, dtype, num_prefetch_pages=4)
+    assert len({id(cb) for cb in buffers.values()}) == 1, "every decode weight must share one GCB"
+
+    torch.manual_seed(0)
+    pt_x = torch.randn((tokens, hidden), dtype=torch.bfloat16)
+    pt_w = {
+        "gate_proj": torch.randn((inter, hidden), dtype=torch.bfloat16),
+        "up_proj": torch.randn((inter, hidden), dtype=torch.bfloat16),
+        "down_proj": torch.randn((hidden, inter), dtype=torch.bfloat16),
+    }
+    x32 = pt_x.to(torch.float32)
+    swiglu = torch.nn.functional.silu(x32 @ pt_w["gate_proj"].float().t()) * (x32 @ pt_w["up_proj"].float().t())
+    ref = swiglu @ pt_w["down_proj"].float().t()
+
+    mlp = DeepSeekV4MLP(
+        {f"shared_experts.{name}.weight": w for name, w in pt_w.items()},
+        "shared_experts",
+        device,
+        weight_dtype=dtype,
+        config=SimpleNamespace(hidden_size=hidden, moe_intermediate_size=inter),
+        use_prefetcher=True,
+        prefetch_buffers=buffers,
+    )
+    assert [p.gcb_k_blocks for p in (mlp.gate_proj, mlp.up_proj, mlp.down_proj)] == [4, 4, 4]
+
+    x = ttnn.from_torch(pt_x.reshape(1, 1, tokens, hidden), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        mlp.prefetch_weights()
+        result = ttnn.to_torch(mlp(x)).float().reshape(tokens, hidden)
+
+    assert_with_pcc(ref, result, 0.99)
+
+
 @pytest.mark.parametrize(
     "m, k, n, k_blocks, n_blocks",
     [

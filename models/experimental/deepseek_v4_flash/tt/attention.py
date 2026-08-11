@@ -4,14 +4,13 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config, _signpost
-from .layers import (
-    BatchedLinearDecode,
-    DeepSeekV4RMSNorm,
-    LinearDecode,
-    _rms_norm_unweighted,
-    decode_gcb_page_bytes,
-    make_shared_decode_gcb,
+from .decode_prefetch import (
+    DECODE_LAYOUTS,
+    check_decode_layout,
+    decode_prefetch_page_bytes,
+    make_decode_prefetch_buffers,
 )
+from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
 from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -792,68 +791,6 @@ _COMPRESSORS = {
 }
 
 
-# The four decode projections, keyed in the order :meth:`DeepSeekV4Attention.decode` calls
-# them. That order is load-bearing under the prefetcher: projections sharing a GCB share a
-# single FIFO, so their weights must be queued in the order the matmuls pop them (see
-# :meth:`DeepSeekV4Attention.prefetch_weights`). All four want 64 B cores, which is what makes
-# them candidates to share a receiver set at all. Identical for every layer, which is what lets
-# one set of buffers serve a whole model.
-_DECODE_PROJ_LAYOUTS = {
-    "q_a_proj": {"K": 4096, "N": 1024, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
-    "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
-    "kv_proj": {"K": 4096, "N": 512, "partial_width_sharded": True, "k_blocks": 4, "n_blocks": 16},
-    "o_b_proj": {"K": 8192, "N": 4096},
-}
-
-# The compressor's two projections (``kv_proj`` then ``gate_proj``, both consuming the block's
-# ``hidden``) are the same shape as each other, so one GCB serves the pair. That shape depends
-# on the layer's compressor kind -- HCA projects each token to ``Dh``, CSA to ``2*Dh`` for its
-# Ca/Cb pair -- so the two kinds cannot share with each other. Keyed by layer type.
-_COMPRESSOR_PROJ_LAYOUTS = {
-    "heavily_compressed_attention": {
-        "K": 4096,
-        "N": 512,
-        "partial_width_sharded": True,
-        "k_blocks": 4,
-        "n_blocks": 16,
-    },
-    "compressed_sparse_attention": {
-        "K": 4096,
-        "N": 1024,
-        "partial_width_sharded": True,
-        "k_blocks": 2,
-        "n_blocks": 32,
-    },
-}
-
-_ALL_DECODE_LAYOUTS = {**_DECODE_PROJ_LAYOUTS, **_COMPRESSOR_PROJ_LAYOUTS}
-
-# Every weight shares one GCB, in the order the matmuls consume them. What makes that possible
-# is streaming: the slabs range from 32 to 512 tiles, but they all divide into pages of 32, so
-# the prefetcher delivers each weight as some number of uniformly sized pages and the ring's
-# page size never changes (a ring whose page size changes between transfers hangs -- see
-# ``make_shared_decode_gcb``).
-#
-# One buffer rather than one per slab size is what lets the prefetcher run ahead *across*
-# weights: a 16-page ring holds far more than the two pages the matmul on it is waiting for, so
-# the senders keep working through later weights while the workers are still on the first,
-# instead of stalling at each slab boundary. It also costs less DRISC state -- each GCB takes a
-# fixed ~176 B of the senders' 1 KB zone, which caps a device at about six.
-#
-# The price is that the FIFO ordering contract now spans all six. The compressor entries make
-# that widest: it runs unconditionally (only its *pooling* is conditional) and always after the
-# projections, so ``_qkv``'s q_a and kv precede it, which is also the order
-# :meth:`DeepSeekV4Attention.prefetch_weights` queues them in.
-_DECODE_PROJ_GCB_GROUP = (
-    "q_a_proj",
-    "q_b_proj",
-    "kv_proj",
-    "o_b_proj",
-    "compressed_sparse_attention",
-    "heavily_compressed_attention",
-)
-
-
 def _compressor_projections(
     layer_type: str,
     config,
@@ -867,29 +804,20 @@ def _compressor_projections(
 ):
     """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
 
-    Shared by the two compressor kinds, which differ only in the projected width. Under the
-    prefetcher the pair streams through the GCB keyed to ``layer_type`` -- which the block
-    projection of the same slab size also uses -- so they must be queued in the order
-    :meth:`DeepSeekV4HCACompressor._project` runs them, kv before gate, and after that
-    projection's own weight.
-
-    The layout is a hardcoded constant (as for the block projections), so check it against the
-    config here -- a stale ``K``/``N`` would otherwise reach the device as a silently
-    mis-sharded weight rather than an error.
+    Shared by the two compressor kinds, which differ only in the projected width -- HCA
+    projects a token to ``Dh``, CSA to ``2*Dh`` for its Ca/Cb pair -- which is why the layout
+    is keyed by ``layer_type``. Under the prefetcher the pair streams through the device's one
+    GCB, so they must be queued in the order :meth:`DeepSeekV4HCACompressor._project` runs
+    them, kv before gate, in the block's turn (see ``decode_prefetch``).
     """
-    layout = _COMPRESSOR_PROJ_LAYOUTS[layer_type]
     feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
-    if (layout["K"], layout["N"]) != (config.hidden_size, feat):
-        raise ValueError(
-            f"the {layer_type} compressor layout is fixed at K={layout['K']}, N={layout['N']} but this config "
-            f"wants K={config.hidden_size}, N={feat}"
-        )
+    layout = check_decode_layout(layer_type, config.hidden_size, feat)
     if use_prefetcher and prefetch_buffers is None:
-        prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
+        prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
     prefetch = {"use_prefetcher": use_prefetcher}
     if use_prefetcher:
         prefetch["global_cb"] = prefetch_buffers[layer_type]
-        prefetch["global_cb_page_bytes"] = attention_prefetch_page_bytes(weight_dtype)
+        prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
 
     def projection(name):
         return LinearDecode(
@@ -902,51 +830,6 @@ def _compressor_projections(
         )
 
     return projection("kv_proj"), projection("gate_proj")
-
-
-def attention_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:
-    """The GCB page size every attention projection is streamed at.
-
-    A pure function of the (fixed) projection shapes and the weight dtype, so
-    :func:`make_attention_prefetch_buffers` and the layers that stream through the buffer it
-    builds can each derive it independently and cannot disagree -- which matters because a
-    layer streaming at a page size the ring was not built for is a hang.
-    """
-    return decode_gcb_page_bytes([_ALL_DECODE_LAYOUTS[name] for name in _DECODE_PROJ_GCB_GROUP], weight_dtype)
-
-
-def make_attention_prefetch_buffers(
-    device: ttnn.MeshDevice, weight_dtype: ttnn.DataType, num_prefetch_pages: int = 16
-) -> dict:
-    """The GCB attention blocks prefetch their projection weights through.
-
-    Returns a mapping to hand to :class:`DeepSeekV4Attention` as ``prefetch_buffers``, keyed by
-    projection name for the block's own four and by layer type for the compressors. One buffer
-    backs all of them (see ``_DECODE_PROJ_GCB_GROUP``), which matters beyond L1: each GCB also
-    consumes a fixed slice of a small DRISC state zone that only fits about six per device.
-
-    ``num_prefetch_pages`` is the ring depth. It is the knob for how far ahead the prefetcher
-    may run: at the default it is 16 pages, several weights' worth, so the senders keep working
-    through later projections while the workers are still on an earlier one.
-
-    Build this **once per device and pass it to every layer on that device**. A GCB is a
-    permanent L1 allocation, so per-layer buffers do not scale: at bf4 the default ring is
-    288 KB per receiver core, which a 43-layer model would multiply well past L1. Every
-    layer has the same projection shapes, so one buffer serves them all.
-
-    Sharing across layers extends the FIFO ordering contract across them too: the weights must
-    be queued in the order the matmuls consume them, which for a model stepping layer by layer
-    means layer order. Queueing layer ``i+1``'s weights while layer ``i`` computes is fine and
-    is the point; queueing them out of order is not, and yields wrong results rather than an
-    error.
-    """
-    global_cb = make_shared_decode_gcb(
-        device,
-        [_ALL_DECODE_LAYOUTS[name] for name in _DECODE_PROJ_GCB_GROUP],
-        weight_dtype,
-        num_pages=num_prefetch_pages,
-    )
-    return {name: global_cb for name in _DECODE_PROJ_GCB_GROUP}
 
 
 class DeepSeekV4Attention(DeepSeekV4Module):
@@ -971,10 +854,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
       session should span a whole model step rather than a single block. Check
       ``ttnn.experimental.is_tensor_prefetcher_supported(device)`` first.
     * A GCB is a permanent L1 allocation, not a transient staging copy. Pass
-      ``prefetch_buffers`` from :func:`make_attention_prefetch_buffers` so one set is shared
-      by every layer on the device: left to build its own, each block costs ~342 KB per
-      receiver core plus a slice of a DRISC state zone that only fits about six GCBs, neither
-      of which scales past a handful of layers.
+      ``prefetch_buffers`` from :func:`~.decode_prefetch.make_decode_prefetch_buffers` so one
+      buffer is shared by every layer on the device: left to build its own, each block costs
+      288 KB per receiver core plus a slice of a DRISC state zone that only fits about six
+      GCBs, neither of which scales past a handful of layers.
     """
 
     def __init__(
@@ -1005,19 +888,19 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         print(f"weight_dtype: {weight_dtype}")
 
         if use_prefetcher and prefetch_buffers is None:
-            prefetch_buffers = make_attention_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
+            prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
 
         def projection(name):
             prefetch = {"use_prefetcher": use_prefetcher}
             if use_prefetcher:
                 prefetch["global_cb"] = prefetch_buffers[name]
-                prefetch["global_cb_page_bytes"] = attention_prefetch_page_bytes(weight_dtype)
+                prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
             return LinearDecode(
                 weights[f"{name}.weight"],
                 device,
                 cache.file(name),
                 dtype=weight_dtype,
-                **_DECODE_PROJ_LAYOUTS[name],
+                **DECODE_LAYOUTS[name],
                 **prefetch,
             )
 
@@ -1025,7 +908,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.q_b_proj = projection("q_b_proj")
         self.kv_proj = projection("kv_proj")
         self.o_b_proj = projection("o_b_proj")
-        self._prefetch_order = list(_DECODE_PROJ_LAYOUTS)
         self.q_a_norm = DeepSeekV4RMSNorm(
             weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
         )
