@@ -33,16 +33,8 @@ inline void calculate_rdiv(const uint value) {
         sfpi::vFloat result = recip * val;
 
         if constexpr (rounding_mode != RoundingMode::None) {
-            // recip(+-inf) == 0 so `result * in` is 0*inf = NaN, and
-            // recip(subnormal) == +-inf; val = +-inf makes `val - result*in`
-            // an inf - inf. Correct only where all three are well defined.
             sfpi::vInt e_in = sfpi::exexp(in, sfpi::ExponentMode::Biased);
             sfpi::vInt e_res = sfpi::exexp(result, sfpi::ExponentMode::Biased);
-
-            v_if (e_in != 0 && e_in != 255 && e_res != 255) {
-                result = result + (val - result * in) * recip;
-            }
-            v_endif;
 
             sfpi::vFloat q;
             if constexpr (rounding_mode == RoundingMode::Trunc) {
@@ -51,9 +43,10 @@ inline void calculate_rdiv(const uint value) {
                 q = _floor_body_(result);
             }
 
-            v_if (e_in != 0 && e_in != 255 && e_res != 255) {
-                // Correct at integer granularity: |r| vs |in| is exact, whereas
-                // r * recip inherits the reciprocal's error (0.99999994 vs 1.0).
+            v_if (e_in != 0 && e_in < 253 && e_res != 255) {
+                // Fix one-integer errors from the reciprocal product landing just below an integer.
+                // Avoid the Newton residual step here; the discrete remainder invariant is enough
+                // for the exact-divisible floor/trunc bug and keeps the rounded path smaller.
                 sfpi::vFloat r = val - q * in;
                 sfpi::vFloat rq = r * recip;  // sign only
 
