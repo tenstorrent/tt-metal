@@ -60,6 +60,7 @@ def run(
     input_a_memory_config,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
+    arg1=None,  # split_size — positional in the traced JSON
     *,
     device,
     **kwargs,
@@ -70,8 +71,14 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"dim"}, output_memory_config=output_memory_config)
 
-    # Extract split_size from op_kwargs (from traced config) or use default
-    split_size = op_kwargs.get("split_size", 32)
+    # split_size is POSITIONAL in ttnn.split, so the tracer records it as arg1 -- there is no
+    # "split_size" key in a traced config (its arguments are exactly arg0/arg1/dim), and
+    # build_op_kwargs strips argN by design. Reading it from op_kwargs therefore always missed
+    # and fell back to 32, so every traced config ran at 32 instead of its recorded size
+    # (128..16384) -- both the golden and the op, so they agreed and the run looked healthy
+    # while testing a configuration no model ever traced. Prefer the positional value, matching
+    # how concat_model_traced reads its own positional dim.
+    split_size = arg1 if arg1 is not None else op_kwargs.get("split_size", 32)
     dim = kwargs.get("dim", 3)
 
     # Handle tuple input_a_shape for sample suite
@@ -126,7 +133,23 @@ def run(
     output_tensors = [mesh_tensor_to_torch(t, device if is_mesh_device else None) for t in output_tensors]
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - compare first output
-    pcc = check_with_pcc(torch_output_tensors[0], output_tensors[0], 0.999)
+    # Compare EVERY chunk, and the chunk count. Checking only output_tensors[0] is what let the
+    # split_size bug above go unnoticed: with the wrong size, chunk 0 of the op still lined up
+    # with chunk 0 of the golden often enough to report PCC 1.0, so half the configs "passed"
+    # while splitting at 32 instead of their traced size. A split is only correct if the whole
+    # partition matches -- the number of pieces and each piece.
+    if len(output_tensors) != len(torch_output_tensors):
+        pcc = (
+            False,
+            f"split produced {len(output_tensors)} chunks, expected {len(torch_output_tensors)} "
+            f"(split_size={split_size}, dim={dim})",
+        )
+    else:
+        pcc = (True, "")
+        for i, (golden, actual) in enumerate(zip(torch_output_tensors, output_tensors)):
+            ok, msg = check_with_pcc(golden, actual, 0.999)
+            if not ok:
+                pcc = (False, f"chunk {i}/{len(output_tensors)}: {msg}")
+                break
 
     return [pcc, e2e_perf]
