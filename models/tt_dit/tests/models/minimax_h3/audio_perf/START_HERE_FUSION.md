@@ -261,11 +261,25 @@ one full-tensor pass for another does not.** Folding the snake into the conv won
 deleted a pass outright. Merging convs only saves the ~180 us per-op floor plus the row effect, and
 then spends it again on a duplicate and a reduce.
 
-The one route that could tip it is a grouped conv with a **channel multiplier** -- `in_channels=C,
-out_channels=2C, groups=C` gives both polyphase outputs from one pass with no duplicate, which by the
-tally above would be about +2 ms per band at C=8. It needs the depthwise path to accept out != in, and
-`grouped-conv branch batching` is already in the dead-ends list (0.94-1.11x, lossy at C>=64), so treat
-it as unproven rather than promising.
+### The grouped channel multiplier: fast, and unusable (`band_grouped_multiplier.py`)
+
+`in_channels=C, out_channels=2C, groups=C` gives both polyphase phases from one pass with no
+duplicate. It was tried. It works, and it is the fastest thing measured here:
+
+    shape              pair      grouped   speedup   rel_rmse ph0 / ph1
+    C=8  M=165606   6.11 ms      2.08 ms     2.94x   1.445e-03 / 1.103e-03
+    C=32 M=41403    1.92 ms      1.46 ms     1.32x   1.444e-03 / 1.102e-03
+
+**And it is five orders less accurate**, because `is_1d_depthwise_conv` is
+`groups == input_channels && groups == output_channels` (`conv2d_utils.cpp:542`). With out=2C that is
+false, so the op leaves the depthwise factory and loses both things this branch built there: the SFPU
+fp32 tap accumulation, and the fused snake -- which is gated on the same predicate. 1.4e-03 is exactly
+the TF32 signature the SFPU path exists to remove (`1.6e-03 against a float64 golden`).
+
+So the channel multiplier is not a route to take as-is, but it does price the prize: **2.94x on the
+conv pair at the tail** if the depthwise path were extended to allow out == k * in. That is a real
+feature -- the compute kernel's tile indexing assumes the output width equals the input width -- not a
+config change. It is the most valuable open item measured so far.
 
 ### What actually unblocks this
 
