@@ -563,9 +563,19 @@ enum RingSlotArg : uint32_t {
     // after the successor's own chunk had F[s] == C[s+1] -- head-of-line blocking: a ready chunk stuck behind a
     // later one. Exactly one step forwards nothing (the one consuming the successor's own chunk, which it
     // already has), so the total is still G-1 == 7 forwards.
-    kRsFwdBase = 20,                     // G pairs {src_slot, dst_slot_on_successor}
-    kRsNoForward = 0xFFFFFFFFu,          // src_slot sentinel: this step forwards nothing
-    kRsArgCount = kRsFwdBase + 2u * 8u,  // G == 8 steps; == 36
+    kRsFwdBase = 20,             // G pairs {src_slot, dst_slot_on_successor}
+    kRsNoForward = 0xFFFFFFFFu,  // src_slot sentinel: this step forwards nothing
+    // Multicast publish (MCAST_RING). A bank ring's 8 cores sit on one row, but TRANSLATED coordinates are not
+    // dense -- slice 0's ring spans x=1..10 for 8 cores -- so one bounding box would also cover cores outside
+    // the ring and overwrite their cb0 with this k-slice. Instead the host decomposes the ring into maximal
+    // CONTIGUOUS runs (2 for that row) and the writer multicasts once per run. Layout: a run count followed by
+    // kRsMcastMaxRuns fixed-size {x0, y0, x1, y1, ndests} records. Always pushed, zeroed when multicast is
+    // off, so the arg layout never depends on the mode.
+    kRsMcastNRuns = kRsFwdBase + 2u * 8u,  // 36
+    kRsMcastRunBase = 37,
+    kRsMcastMaxRuns = 8u,  // worst case (a column placement) degenerates to one run per core
+    kRsMcastRunStride = 5u,
+    kRsArgCount = kRsMcastRunBase + kRsMcastMaxRuns * kRsMcastRunStride,  // 77
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -616,7 +626,12 @@ struct RingSchedule {
 constexpr uint32_t kWaveCost = 100u;
 constexpr uint32_t kHopCost = 1u;
 
-inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops) {
+// `shared`: drop the on-chip-hops tiebreak so the sort key depends only on the chunk, making all G rows
+// IDENTICAL -- one order for the whole ring. That is required under multicast, where a chunk lands on all 8
+// cores at once and there is no per-core "how far away is it" term to sort by. It is also the honest model of
+// multicast: per-core order exists only because a unicast ring delivers a chunk to different cores at
+// different times.
+inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops, bool shared = false) {
     RingSchedule sch;
     for (uint32_t p = 0; p < RingSchedule::kG; ++p) {
         for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
@@ -633,7 +648,8 @@ inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops) {
                 order[o] = o;
             }
             auto avail = [&](uint32_t o) {
-                return fabric_hops[o] * kWaveCost + ((c + RingSchedule::kG - o) % RingSchedule::kG) * kHopCost;
+                const uint32_t hops = shared ? 0u : ((c + RingSchedule::kG - o) % RingSchedule::kG);
+                return fabric_hops[o] * kWaveCost + hops * kHopCost;
             };
             for (uint32_t i = 1; i < RingSchedule::kG; ++i) {
                 uint32_t v = order[i], j = i;
@@ -645,6 +661,21 @@ inline RingSchedule build_ring_schedule(const uint32_t* fabric_hops) {
             }
             for (uint32_t s = 0; s < RingSchedule::kG; ++s) {
                 sch.consume_pos[c][s] = order[s];
+            }
+        }
+    }
+    // Under `shared` every row must have come out identical -- that is the whole point, and the multicast
+    // publish protocol is unsound without it (core b writes its chunk to ONE address on all 8 receivers).
+    if (shared && fabric_hops != nullptr) {
+        for (uint32_t p = 1; p < RingSchedule::kG; ++p) {
+            for (uint32_t s2 = 0; s2 < RingSchedule::kG; ++s2) {
+                TT_FATAL(
+                    sch.consume_pos[p][s2] == sch.consume_pos[0][s2],
+                    "shared ring schedule diverges at position {} step {}: {} vs {}",
+                    p,
+                    s2,
+                    sch.consume_pos[p][s2],
+                    sch.consume_pos[0][s2]);
             }
         }
     }
@@ -1182,6 +1213,18 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // no-gather FLOOR from 73.8 to 88.2, because every sub-block's Pk=10 chain reduction then lands after the
     // last matmul instead of pipelining behind the next sub-block's. Leaving (N_bpc - g) sub-blocks n-outer
     // keeps matmul work in hand to cover the group's reduction tail.
+    // TT_AGMM_MCAST=1: publish each gathered chunk to the whole 8-core bank ring with ONE NoC multicast
+    // instead of relaying it around the ring in 7 sequential unicast hops. All 8 cores of a ring need the SAME
+    // k-slice (they split in1's N, and in1 is ~10x in0, so replicating in0 is the cheap direction) -- the
+    // replication is necessary, the 7-hop mechanism is not. Measured, that mechanism costs 10.3 us of NoC
+    // bandwidth (`nogather` 84.06 vs `nogather,noring` 73.75) and delays the far side of the ring by up to 7
+    // hops behind every fabric arrival (`agmm_wait_ring` median 40.5 us).
+    // TT_AGMM_MCAST=1 multicasts; =2 fans the same chunk out as G-1 UNICAST writes over the identical shared
+    // schedule. The fan-out costs the ring's bandwidth (7 copies) but still collapses its 7-hop LATENCY chain,
+    // so it isolates "is the shared-schedule protocol right" from "is the multicast call right".
+    const char* mcast_env = std::getenv("TT_AGMM_MCAST");
+    const bool mcast_ring = mcast_env != nullptr;
+    const bool mcast_fanout = mcast_ring && std::atoi(mcast_env) == 2;
     const char* ko_env = std::getenv("TT_AGMM_K_OUTER");
     const uint32_t k_outer_g = ko_env ? std::min<uint32_t>(std::max(0, std::atoi(ko_env)), geo.N_bpc) : 0u;
     const bool k_outer = k_outer_g > 0u;
@@ -1327,6 +1370,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
     std::map<std::string, std::string> cdefs_extra;
+    if (mcast_ring) {
+        wdefs["MCAST_RING"] = "1";
+    }
+    if (mcast_fanout) {
+        wdefs["MCAST_FANOUT"] = "1";
+    }
     if (k_outer) {
         cdefs_extra["AGMM_K_OUTER"] = std::to_string(k_outer_g);
     }
@@ -2022,7 +2071,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             }
         }
         for (uint32_t sl = 0; sl < preaders_pf; ++sl) {
-            ring_sch[sl] = build_ring_schedule((direct_l1 && !ring_rotation) ? hops[sl].data() : nullptr);
+            ring_sch[sl] = build_ring_schedule((direct_l1 && !ring_rotation) ? hops[sl].data() : nullptr, mcast_ring);
         }
         // Same construction for the two neighbours, so we can ask where THEY put our chunk.
         if (direct_l1 && !ring_rotation) {
@@ -2034,8 +2083,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             ring_sch_fwd.resize(preaders_pf);
             ring_sch_bwd.resize(preaders_pf);
             for (uint32_t sl = 0; sl < preaders_pf; ++sl) {
-                ring_sch_fwd[sl] = build_ring_schedule(hf[sl].data());
-                ring_sch_bwd[sl] = build_ring_schedule(hb[sl].data());
+                ring_sch_fwd[sl] = build_ring_schedule(hf[sl].data(), mcast_ring);
+                ring_sch_bwd[sl] = build_ring_schedule(hb[sl].data(), mcast_ring);
             }
         }
         if (direct_l1 && !ring_rotation && std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
@@ -2238,6 +2287,74 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
                     wa[kRsFwdBase + 2u * (geo.G - 1u)] == kRsNoForward,
                     "rotation must skip the final step at position {}",
                     p);
+            }
+            // ---- Multicast rectangle for this core's bank ring ----
+            // The ring's 8 cores are the ones sharing this slice: index b*preaders + slice, b in 0..7.
+            // place_mesh puts them at logical (x=b, y=slice), i.e. a contiguous row, and translated coords keep
+            // the worker grid contiguous -- so the bounding box is exactly those 8 cores. That is ASSERTED, not
+            // assumed: a box containing any core outside the ring would have the multicast overwrite that
+            // core's cb0 with another ring's k-slice.
+            if (mcast_ring) {
+                // Maximal runs of horizontally-adjacent ring cores, in translated coords. Each run is a
+                // rectangle containing ONLY ring cores, which is the property that makes the multicast safe.
+                std::vector<CoreCoord> rc;
+                rc.reserve(geo.G);
+                for (uint32_t b = 0; b < geo.G; ++b) {
+                    rc.push_back(phys(b * geo.preaders + cp.slice));
+                }
+                std::sort(rc.begin(), rc.end(), [](const CoreCoord& a2, const CoreCoord& b2) {
+                    return (a2.y != b2.y) ? (a2.y < b2.y) : (a2.x < b2.x);
+                });
+                const CoreCoord me = phys(i);
+                std::vector<std::array<uint32_t, 5>> runs;
+                for (uint32_t j = 0; j < rc.size();) {
+                    uint32_t k = j;
+                    while (k + 1u < rc.size() && rc[k + 1u].y == rc[j].y && rc[k + 1u].x == rc[k].x + 1u) {
+                        ++k;
+                    }
+                    // Drop myself from this run's receiver count: I already hold my own chunk, and a
+                    // non-loopback multicast does not deliver to a sender inside the rectangle.
+                    const bool holds_me = (me.y == rc[j].y && me.x >= rc[j].x && me.x <= rc[k].x);
+                    const uint32_t n = (k - j + 1u) - (holds_me ? 1u : 0u);
+                    if (n > 0u) {  // a run that is just me has no receivers; multicasting to 0 cores can hang
+                        // NOC1 MIRRORS EACH COORDINATE (get_noc_multicast_addr -> DYNAMIC_NOC_X). Mirroring a
+                        // start/end pair individually reverses their order, so a rectangle given low-to-high
+                        // comes out high-to-low and the multicast never completes -- a hang, not an error.
+                        // Emit the corners pre-swapped for the NOC this core's writer runs on. `cp.noc == 0`
+                        // selects writerA, which is RISCV_1_default == NOC1.
+                        const bool wnoc1 = (cp.noc == 0u);
+                        const uint32_t sx = static_cast<uint32_t>(wnoc1 ? rc[k].x : rc[j].x);
+                        const uint32_t sy = static_cast<uint32_t>(wnoc1 ? rc[k].y : rc[j].y);
+                        const uint32_t ex = static_cast<uint32_t>(wnoc1 ? rc[j].x : rc[k].x);
+                        const uint32_t ey = static_cast<uint32_t>(wnoc1 ? rc[j].y : rc[k].y);
+                        runs.push_back({sx, sy, ex, ey, n});
+                    }
+                    j = k + 1u;
+                }
+                TT_FATAL(
+                    runs.size() <= kRsMcastMaxRuns,
+                    "TT_AGMM_MCAST: slice {} needs {} multicast runs, over the {} the arg block carries",
+                    cp.slice,
+                    runs.size(),
+                    static_cast<uint32_t>(kRsMcastMaxRuns));
+                uint32_t total = 0;
+                for (const auto& r : runs) {
+                    total += r[4];
+                }
+                TT_FATAL(
+                    total == geo.G - 1u,
+                    "TT_AGMM_MCAST: slice {} runs reach {} receivers, expected {} (every ring core but me)",
+                    cp.slice,
+                    total,
+                    geo.G - 1u);
+                wa.push_back(static_cast<uint32_t>(runs.size()));
+                for (uint32_t r = 0; r < kRsMcastMaxRuns; ++r) {
+                    const std::array<uint32_t, 5> z{0u, 0u, 0u, 0u, 0u};
+                    const auto& v = (r < runs.size()) ? runs[r] : z;
+                    wa.insert(wa.end(), v.begin(), v.end());
+                }
+            } else {
+                wa.insert(wa.end(), 1u + kRsMcastMaxRuns * kRsMcastRunStride, 0u);
             }
             TT_FATAL(
                 wa.size() == kRsArgCount,

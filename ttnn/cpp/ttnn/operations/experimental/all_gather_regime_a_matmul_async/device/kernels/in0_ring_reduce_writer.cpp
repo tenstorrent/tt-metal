@@ -137,6 +137,11 @@ void kernel_main() {
     const uint32_t ring_peer_slot_bwd = get_arg_val<uint32_t>(19);
     constexpr uint32_t kRingFwdBase = 20;             // G pairs {src_slot, dst_slot}, one per consume step
     constexpr uint32_t kRingNoForward = 0xFFFFFFFFu;  // src_slot sentinel: this step forwards nothing
+    // Multicast publish (MCAST_RING): my bank ring as maximal contiguous runs of cores, in translated coords.
+    // Translated coords are not dense, so one rectangle would also cover non-ring cores; see the host.
+    [[maybe_unused]] constexpr uint32_t kMcNRuns = 36;
+    [[maybe_unused]] constexpr uint32_t kMcRunBase = 37;
+    [[maybe_unused]] constexpr uint32_t kMcRunStride = 5;
     [[maybe_unused]] uint32_t fidx = 20u + 2u * G;    // optional args start after the schedule
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
@@ -984,7 +989,7 @@ void kernel_main() {
 #endif
         };
         // Number of received chunks needed before slot `sl` is filled: every slot below it except our own.
-        auto recv_needed = [&](uint32_t sl) { return (ring_own_slot <= sl) ? sl : (sl + 1u); };
+        [[maybe_unused]] auto recv_needed = [&](uint32_t sl) { return (ring_own_slot <= sl) ? sl : (sl + 1u); };
         // THE one wait of this step: the chunk we are about to consume. Nothing else gates here.
         if (step == ring_own_slot) {
             ensure_own();
@@ -993,12 +998,81 @@ void kernel_main() {
 #if defined(AGMM_PROFILE)
             const uint32_t tr0 = agmm_clk();
 #endif
+#if defined(MCAST_FANOUT)
             noc_semaphore_wait_min(fwd_ptr, recv_needed(step));
+#elif defined(MCAST_RING)
+            // counter == slots published so far, so slot `step` is filled once it reaches step+1
+            noc_semaphore_wait_min(fwd_ptr, step + 1u);
+#else
+            noc_semaphore_wait_min(fwd_ptr, recv_needed(step));
+#endif
 #if defined(AGMM_PROFILE)
             agmm_wait_ring += agmm_clk() - tr0;
 #endif
 #endif
         }
+#if defined(MCAST_RING)
+        // MULTICAST PUBLISH. Under one shared schedule slot `step` has exactly ONE owner in the ring, and that
+        // owner is the only core that does not wait at this step -- so publication is strictly in slot order:
+        // a core reaches its own step only once every earlier slot has been published. That is what lets the
+        // readiness signal stay a single monotone counter instead of needing a flag per slot: the semaphore
+        // value IS "how many slots are filled", so a core at step s just needs it to reach s+1.
+        //
+        // Ordering is enforced with a full write barrier rather than the ring's payload-then-inc trick: a
+        // multicast to a rectangle and a semaphore set are different transactions, so nothing orders them for
+        // us. The barrier costs one hop of latency, against the seven the ring charged.
+        if (step == ring_own_slot) {
+            const uint32_t off = base0 + step * shard_bytes;
+            const uint32_t nruns = get_arg_val<uint32_t>(kMcNRuns);
+#if defined(MCAST_FANOUT)
+            // Same schedule, G-1 unicast writes instead of a multicast. Each publisher increments every other
+            // core once, so the counter means "chunks received from others" and the ORIGINAL recv_needed gate
+            // applies unchanged. Run corners are stored pre-swapped for NOC1, so walk min..max.
+            for (uint32_t r = 0; r < nruns; ++r) {
+                const uint32_t a0 = kMcRunBase + r * kMcRunStride;
+                const uint32_t ax = get_arg_val<uint32_t>(a0), ay = get_arg_val<uint32_t>(a0 + 1u);
+                const uint32_t bx = get_arg_val<uint32_t>(a0 + 2u), by = get_arg_val<uint32_t>(a0 + 3u);
+                const uint32_t lo = (ax < bx) ? ax : bx, hi = (ax < bx) ? bx : ax;
+                const uint32_t yy = (ay < by) ? ay : by;
+                for (uint32_t x = lo; x <= hi; ++x) {
+                    if (x == my_x[0] && yy == my_y[0]) {
+                        continue;  // I already hold my own chunk
+                    }
+                    noc_async_write(off, get_noc_addr(x, yy, off), shard_bytes);
+                    noc_semaphore_inc(get_noc_addr(x, yy, fwd_addr), 1);
+                }
+            }
+#else
+            for (uint32_t r = 0; r < nruns; ++r) {
+                const uint32_t a0 = kMcRunBase + r * kMcRunStride;
+                noc_async_write_multicast(
+                    off,
+                    get_noc_multicast_addr(
+                        get_arg_val<uint32_t>(a0),
+                        get_arg_val<uint32_t>(a0 + 1u),
+                        get_arg_val<uint32_t>(a0 + 2u),
+                        get_arg_val<uint32_t>(a0 + 3u),
+                        off),
+                    shard_bytes,
+                    get_arg_val<uint32_t>(a0 + 4u));
+            }
+            noc_async_write_barrier();
+            noc_semaphore_set(fwd_ptr, step + 1u);
+            for (uint32_t r = 0; r < nruns; ++r) {
+                const uint32_t a0 = kMcRunBase + r * kMcRunStride;
+                noc_semaphore_set_multicast(
+                    fwd_addr,
+                    get_noc_multicast_addr(
+                        get_arg_val<uint32_t>(a0),
+                        get_arg_val<uint32_t>(a0 + 1u),
+                        get_arg_val<uint32_t>(a0 + 2u),
+                        get_arg_val<uint32_t>(a0 + 3u),
+                        fwd_addr),
+                    get_arg_val<uint32_t>(a0 + 4u));
+            }
+#endif
+        }
+#else
         // Relay that same chunk onward. src_slot == step by construction; the sentinel marks the single step
         // whose chunk is the successor's own, which it already has.
         // ABLATE_NORING: no relay write and no readiness inc. Consumers read whatever is already in the slot
@@ -1011,6 +1085,7 @@ void kernel_main() {
             // payload THEN readiness, same peer + same NoC, so the successor cannot observe the credit early
             noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
+#endif
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this chunk (W blocks)
     }
 #else

@@ -387,7 +387,62 @@ Each of these was measured, not reasoned about, and each is a real result about 
 The common thread: every one of these targets scheduling or byte count, and the measurement says the cost is
 interference from how the on-chip ring moves the bytes.
 
-### The remaining structural lever: multicast instead of the bank ring
+### Complete decomposition (every term measured, not inferred)
+
+Adding `nopayload,nowait` splits "the mux exists" from "bytes actually move":
+
+| run | us | delta | what it adds |
+|---|---|---|---|
+| `nogather,noring` | 73.97 | — | compute + in1; DRAM roofline 72.8 |
+| `nogather` | 84.02 | **+10.1** | on-chip 8x replication |
+| `nopayload,nowait` | 87.88 | **+3.9** | mux connections + credits, ZERO payload bytes |
+| `nowait` | 104.20 | **+16.3** | the 1.92 MB of fabric payload, with no dependency stalls |
+| full | 118.28 | **+14.1** | actually waiting for arrivals |
+
+The two gather terms to attack are the 16.3 (fabric occupancy) and the 14.1 (waiting). Note what the 16.3
+means: moving 1.92 MB costs 16.3 us of makespan *even when nothing waits for it*, so it is occupancy, not
+latency, and rescheduling cannot remove it. For context the standalone all-gather moves the same bytes in
+36.6 us, so the fused op already hides more than half the fabric time -- it just does not hide enough, and
+118.3 is still no better than the 115.1 unfused Phase-0 composition.
+
+### MEASURED AND REJECTED: multicast instead of the bank ring
+
+Implemented (`TT_AGMM_MCAST=1`, bit-exact -- same per-device hash as the ring) and it does **nothing**:
+
+| | full | `nogather` | `agmm_wait_ring` median |
+|---|---|---|---|
+| unicast bank ring | 116.56 | 84.02 | 40.5 us |
+| multicast | 118.01 | 84.62 | 42.7 us |
+| unicast fan-out (`=2`) | 125.20 | — | — |
+
+Both premises behind it were wrong, and both are worth keeping:
+
+1. **The ring's 10.1 us is not link bandwidth, it is receiver L1 write bandwidth.** Multicast replaces 7
+   sequential link traversals with one -- and `nogather` does not move (84.02 -> 84.62). Every core still has
+   to take 7 x 32 KB into its own L1 no matter how the bytes get there, because all 8 cores of a bank ring
+   genuinely need the same k-slice. Multicast cannot reduce that, so the 10.1 us is structural for as long as
+   in0 is the replicated operand -- which it should be, since in1 is ~10x larger.
+2. **`agmm_wait_ring` is not time spent in the ring.** It is cores waiting for chunks that are still crossing
+   the FABRIC; the on-chip hop count was never what set it. Collapsing 7 hops to 1 left it unchanged (40.5 ->
+   42.7). The counter's name oversells what it measures.
+
+A design note in case anyone revisits this: with one shared schedule, slot `s` has exactly one owner and that
+owner is the only core that does not wait at step `s`, so publication is automatically ordered and the
+readiness signal can stay ONE monotone counter. That is elegant and it is also the limitation -- publication
+is serialized in slot order, so the multicast reproduces the ring's lockstep rather than escaping it.
+Out-of-order publication (per-slot flags) would be needed to do better, and since arrival order already
+matches slot order closely, that is unlikely to pay.
+
+The NOC1 trap this cost a rebuild to find: `get_noc_multicast_addr` mirrors EACH coordinate
+(`DYNAMIC_NOC_X`), so passing a rectangle low-to-high comes out high-to-low on NOC1 and the multicast never
+completes -- a hang, not an error. The corners must be emitted pre-swapped for the NOC the sending kernel
+runs on. Also: translated coords are NOT dense (slice 0's 8 ring cores span x=1..10), so a single bounding
+box would cover non-ring cores and overwrite their cb0; the host emits maximal contiguous runs instead.
+
+#### What that section predicted, before it was measured
+
+Kept because the reasoning was sound and the conclusion was still wrong -- the byte-count argument below is
+exactly the kind that the `noring` withdrawal above should have warned against.
 
 All 8 cores of a bank ring end up with the SAME k-slice -- the replication is necessary (they split in1's N,
 and in1 is 10x in0, so replicating in0 is the cheap direction). The *mechanism* is not: 7 sequential unicast
