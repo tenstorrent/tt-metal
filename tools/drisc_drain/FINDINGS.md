@@ -627,7 +627,7 @@ pacing results above already measured.
    to seed, never per sweep.)
 
 2. **Poll-then-drain is what X280 does -- but NOT for the reason first claimed here.** This drainer
-   polls the control vector, then reads the rings, matching X280: `profzone.c` reads the five tails in
+   polls the control vector, then reads the rings, matching X280: its `profzone` FW reads the five tails in
    one 20 B vector-load NoC transaction (`read_tails`) and then bulk-reads the **rings only**
    (`rbufs = cbase + ring_off`, 5 x 2048 B, no control vector).
 
@@ -723,8 +723,8 @@ sweeps used to detect completion, and the host wall (0.076 s) includes them.
 
 ## Zone decode: the stream is real
 
-The framed egress carried words; this parses them back into zones host-side, against `prof_packet.h`
-(the same definitions the device's `ppfmt` uses -- not a host copy).
+The framed egress carried words; this parses them back into zones host-side, against `spsc_packet.h`
+(named `prof_packet.h` at the time; the same definitions the device's `ppfmt` uses -- not a host copy).
 
 Decoder walk per lane: `STICKY_TIMER` (1 word, sets the wall-clock HIGH half for everything after it),
 `ZONE_START/END/TOTAL` (2 words: `type | 16-bit srcloc`, then the LOW half), `STICKY_PROG` (1 word),
@@ -914,11 +914,11 @@ critical path, because nothing needs installing.)
 
 ## Open questions
 
-**`profstream.c` is stale in two places, not one.** Alongside the known `CTRL_TAIL(r) = 5u + r` it
+**The X280 `profstream` FW is stale in two places, not one.** Alongside the known `CTRL_TAIL(r) = 5u + r` it
 hardcodes `rbufs = cbase + 128`. 128 B is 32 words -- the OLD control-vector size; it is now 64 words
 (256 B). Both literals are self-consistent for the old layout and both wrong for the current one, so
-that reader would land 128 B inside the control vector rather than on ring data. `profcons.c` and
-`profll.c` carry the same tail literal. `profzone.c` is fine: the host passes `SPSC_RING_TAIL_0` and
+that reader would land 128 B inside the control vector rather than on ring data. The X280 `profcons` and
+`profll` FWs carry the same tail literal. The `profzone` FW is fine: the host passes `SPSC_RING_TAIL_0` and
 `PROFILER_L1_CONTROL_BUFFER_SIZE` through the boot nonce, with 128 only as a documented fallback for
 an out-of-date host.
 
