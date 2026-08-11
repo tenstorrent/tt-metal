@@ -439,3 +439,19 @@ came from **the harness I was measuring with** rather than from anything about t
 And the corollary that would have caught both: **when a configuration passes by a margin that looks lucky, vary
 the harness before believing it.** v2's 88-core config passes at exactly the prefill length where its guard fires.
 That coincidence was visible in the guard's source the whole time.
+
+## The pattern behind ERRORS 15 and 18, and why it is the same one as the run's own defect
+
+ERROR 15: concluded from 79 configurations that all fixed the input **shape** at the decode case. ERROR 18:
+concluded from four that all fixed the prefill **length** at 32. Both times the fixed value came from the harness I
+was measuring with.
+
+**The stage made the identical mistake, in code rather than in prose.** Its agents wrote decode-only knobs because
+its harness measures decode; its gates passed them because each oracle fixes a prefill length — and north-mini's
+fixes it at zero. [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md).
+
+> So the analyst's pitfall and the stage's defect are one pitfall: **a measurement apparatus silently supplies
+> premises, and both the thing measured and the person reading it inherit them.** The fix is the same in both
+> places — *name what the apparatus holds fixed, and check whether the deployed system varies it* — and it is
+> cheap: sweeping the one constant that mattered cost eight minutes; not sweeping it cost this corpus 5,919 µs and
+> me six retractions.

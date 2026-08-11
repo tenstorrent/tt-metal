@@ -7,6 +7,13 @@
 73 %. **That was wrong — v2's 88-core configuration reproduces `0.9996293363224806` and passes.** The 45 % stands.
 → [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md), [`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 16.
 
+**For *why*, read [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md) first.** Short version: v3's harness measures traced
+decode replay, so every agent wrote a knob that only acts in decode; those knobs change the arithmetic producing
+K/V, the one state crossing prefill→decode; and whether each model's oracle can *see* the resulting inconsistency
+is decided by a fixture constant nobody chose for that purpose — gemma prefills 32 tokens, phi 127, **north-mini
+prefills nothing at all.** 48 % of what v3 shipped rides on that pattern, and the largest lost win was a
+model-code defect recorded as a placement rejection.
+
 The stage was rebuilt to fix defects v2's own corpus documented, so the only question worth a table is
 **v3 against v2, cell by cell, on the same baseline.** That is this file. Op-level and layout-level detail for
 the three cells that lost the most is in [`OP-BY-OP-VS-V2`](ADVCHAL-V3-OP-BY-OP-VS-V2.md); why the predictions
