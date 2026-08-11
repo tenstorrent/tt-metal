@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run the agent's build and verify on hardware it cannot reach, and hand back only the answer.
+
+The agent runs on a GitHub-hosted runner, because that is the only place the Copilot API is
+reachable -- CIv2 egresses through a proxy that answers 403 to `api.githubcopilot.com`. A hosted
+runner has four cores and cannot build tt-metal at any useful speed, and it has no card at all. So
+the two things the agent's loop is made of, compiling and measuring, both happen somewhere else:
+this pushes the working tree to a scratch ref, which starts `port-measure.yaml` on CIv2, waits, and
+prints the verdict.
+
+It runs host-side, in the agent job but outside the agent's sandbox. That distinction is the whole
+security design and it is narrower than it looks. The sandbox is handed
+`${RUNNER_TEMP}/gh-aw` read-only and the workspace read-write, and awf is invoked with `--env-all`,
+so a credential in either place -- including one interpolated into an mcp-scripts handler, which is
+what `${{ secrets.X }}` in a tool body compiles to -- is a credential the agent can read. The token
+therefore arrives by neither route: a pre-step writes it to a file under `$HOME`, which is in none
+of those mounts, and this reads that file. See HANDOFF.md for how that was established.
+
+The credential must be a PAT rather than the job's own `GITHUB_TOKEN`, and not for the reason one
+would guess. It is not about scope: it is that GitHub deliberately does not start workflow runs from
+pushes made with `GITHUB_TOKEN`, to stop runs from triggering runs. Since the push *is* the trigger
+here, that suppression would leave this waiting five minutes for a run that was never going to
+happen. `PORT_PUSH_TOKEN` needs `contents: write` to push the scratch ref and `actions: read` to
+read back the run and its artifacts.
+
+Four things here are less obvious than they look:
+
+  Nothing is dispatched, despite the name. `port-measure.yaml` triggers on pushes to
+  `port-op-scratch/**`, and a `push` event runs the workflow as it exists in the pushed commit --
+  unlike `workflow_dispatch`, which only ever sees workflow files on the default branch. Since the
+  code under test has to be pushed anyway, using the push as the trigger is both one fewer API call
+  and the thing that lets the entire pipeline be developed and exercised on a branch.
+
+  The parameters travel in the commit message, as JSON. A push event has no inputs, and the message
+  is the only free-form channel that arrives in the event payload -- so the workflow can read it
+  without a checkout -- and leaves nothing behind in the tree. A parameters *file* would be visible
+  to gate.py's write-path guard, which diffs the checkout against the base commit, and would read
+  as the agent having written somewhere it was not allowed to.
+
+  The commit never touches the agent's tree. A temporary index is populated from the worktree and
+  turned into a commit with `commit-tree`, parented on the base. HEAD does not move, the agent's
+  index is untouched, and every dispatch is exactly one commit on top of the base -- which is what
+  lets the measure job find the base with a depth-1 fetch instead of a full clone.
+
+  Waiting is loud. A verify is 35-45 minutes of nothing, and a silent process that long is
+  indistinguishable from a hung one to anything watching -- including whoever is reading the job
+  log at the time. The heartbeat goes to stderr so it does not pad the tool result the agent reads.
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+import zipfile
+from contextlib import contextmanager
+from pathlib import Path
+
+WORKFLOW_FILE = "port-measure.yaml"
+SCRATCH_PREFIX = "port-op-scratch"
+
+# The workflow's own name for what it produced, minus the run id it appends.
+RESULTS_ARTIFACT_PREFIX = "port-results-"
+
+POLL_SECONDS = 20
+HEARTBEAT_SECONDS = 120
+# How long to wait for a dispatched run to become visible in the run list. Dispatch is not
+# instantaneous and neither is indexing; a minute has been enough, five is not tight.
+RUN_APPEARS_TIMEOUT = 300
+# Everything after that. `port-measure.yaml` caps its own device job at 120 minutes and a build is
+# 15-25, so a wait past this means something is queued behind hardware that is not coming free.
+RUN_COMPLETE_TIMEOUT = 3 * 60 * 60
+
+VERDICT_WIN = "win"
+
+
+def log(message: str) -> None:
+    """Progress, not results. stderr keeps it out of the tool result the agent pays for."""
+    print(message, file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# GitHub REST, without a dependency
+
+
+class DispatchError(RuntimeError):
+    """The launcher could not do its job. Distinct from a failing verdict, which is a result."""
+
+
+class ApiError(DispatchError):
+    """A GitHub call that failed. Recoverable at some call sites -- a heartbeat that cannot list
+    jobs should say so and keep waiting, not abort a measurement that is still running."""
+
+
+class Api:
+    def __init__(self, token: str, repo: str, base_url: str) -> None:
+        self._token = token
+        self.repo = repo
+        self.base = base_url.rstrip("/")
+
+    def _request(self, method: str, url: str, redirect: bool = True):
+        if url.startswith("/"):
+            url = f"{self.base}{url}"
+        request = urllib.request.Request(url, method=method)
+        request.add_header("Authorization", f"Bearer {self._token}")
+        request.add_header("Accept", "application/vnd.github+json")
+        request.add_header("X-GitHub-Api-Version", "2022-11-28")
+
+        opener = urllib.request.build_opener() if redirect else urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(request, timeout=120) as response:
+                return response.status, response.headers, response.read()
+        except urllib.error.HTTPError as exc:
+            if not redirect and exc.code in (301, 302, 303, 307, 308):
+                return exc.code, exc.headers, b""
+            # The body carries GitHub's actual complaint, which is the only useful part.
+            detail = exc.read().decode("utf-8", "replace")[:600]
+            raise ApiError(f"{method} {url} failed: HTTP {exc.code} {detail}") from None
+
+    def get_json(self, url: str) -> dict:
+        _, _, body = self._request("GET", url)
+        return json.loads(body)
+
+    def download(self, url: str) -> bytes:
+        """Follow the signed-URL redirect GitHub uses for logs and artifacts.
+
+        The redirect target is pre-authenticated and rejects an `Authorization` header, so it has to
+        be fetched as a separate unauthenticated request rather than by letting urllib follow it.
+        """
+        status, headers, body = self._request("GET", url, redirect=False)
+        if status in (301, 302, 303, 307, 308):
+            with urllib.request.urlopen(headers["Location"], timeout=300) as response:
+                return response.read()
+        return body
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Getting the working tree to CIv2
+
+
+def git(*args: str, cwd: Path, env: dict | None = None, check: bool = True) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        env={**os.environ, **(env or {})},
+        capture_output=True,
+        text=True,
+    )
+    if check and result.returncode != 0:
+        raise DispatchError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def commit_worktree(repo: Path, work: Path, message: str) -> tuple[str, str]:
+    """Turn the current worktree into one commit on top of HEAD, without disturbing either.
+
+    A scratch index means `git add -A` here cannot collide with whatever the agent has staged, and
+    `commit-tree` writes an object without moving a ref. The scaffolded `codegen/` sources are
+    untracked, so `-A` rather than a diff; `.git/info/exclude` is what keeps the generator checkout
+    from being swept in with them.
+
+    The agent job checks out with `submodules: false`, so every submodule here is an empty directory.
+    `git add -A` leaves those gitlinks alone rather than staging a deletion, which is what lets the
+    measure job check the same commit out with submodules and build it.
+    """
+    base = git("rev-parse", "HEAD", cwd=repo)
+    index = work / "scratch-index"
+    index.unlink(missing_ok=True)
+    env = {"GIT_INDEX_FILE": str(index)}
+
+    git("read-tree", "HEAD", cwd=repo, env=env)
+    git("add", "-A", cwd=repo, env=env)
+    tree = git("write-tree", cwd=repo, env=env)
+    if tree == git("rev-parse", "HEAD^{tree}", cwd=repo):
+        log("note: the working tree is identical to the base commit")
+
+    commit = git(
+        "-c",
+        "user.name=port-dispatch",
+        "-c",
+        "user.email=port-dispatch@tenstorrent.com",
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-m",
+        message,
+        cwd=repo,
+    )
+    return commit, base
+
+
+@contextmanager
+def credentialed(work: Path, token_file: Path):
+    """A git environment that can authenticate, without the token reaching a command line.
+
+    Via `GIT_ASKPASS` rather than a URL with credentials in it, because git echoes remote URLs back
+    in its error messages, and those messages end up in a log this agent can read.
+    """
+    askpass = work / "askpass.sh"
+    askpass.write_text(f'#!/bin/sh\nexec cat "{token_file}"\n')
+    askpass.chmod(0o700)
+    try:
+        yield {"GIT_ASKPASS": str(askpass), "GIT_TERMINAL_PROMPT": "0"}
+    finally:
+        askpass.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# Dispatch, wait, collect
+
+
+def find_run(api: Api, head_sha: str, since: float) -> dict | None:
+    """The run the push started, identified by the commit that started it.
+
+    Exact rather than heuristic: the commit is unique to this call, so nothing else can match it,
+    and there is no race with another port in flight. The query is by sha across all workflows and
+    the filter is on `path`, rather than asking the by-filename endpoint, because that endpoint
+    needs the workflow to be registered already and this one may never have run before.
+    """
+    listing = api.get_json(
+        f"/repos/{api.repo}/actions/runs?head_sha={head_sha}&per_page=40&exclude_pull_requests=true"
+    )
+    for run in listing.get("workflow_runs", []):
+        if (run.get("path") or "").endswith(f"/{WORKFLOW_FILE}"):
+            return run
+    if time.monotonic() - since > RUN_APPEARS_TIMEOUT:
+        raise ApiError(
+            f"pushed {head_sha[:12]} but no {WORKFLOW_FILE} run appeared for it within "
+            f"{RUN_APPEARS_TIMEOUT // 60} minutes. Either the branch does not match the workflow's "
+            f"`port-op-scratch/**` filter, or the push was made with a token whose pushes GitHub "
+            f"does not let start workflows -- PORT_PUSH_TOKEN must be a PAT, not GITHUB_TOKEN."
+        )
+    return None
+
+
+def wait_for_completion(api: Api, run: dict, label: str) -> dict:
+    started = time.monotonic()
+    last_beat = 0.0
+    while True:
+        run = api.get_json(f"/repos/{api.repo}/actions/runs/{run['id']}")
+        if run.get("status") == "completed":
+            return run
+
+        elapsed = time.monotonic() - started
+        if elapsed > RUN_COMPLETE_TIMEOUT:
+            raise ApiError(f"{label} run {run['html_url']} has not finished after {elapsed / 60:.0f} minutes")
+        if elapsed - last_beat >= HEARTBEAT_SECONDS:
+            last_beat = elapsed
+            log(f"  [{elapsed / 60:5.1f}m] {label}: {run.get('status')} -- {_job_summary(api, run['id'])}")
+        time.sleep(POLL_SECONDS)
+
+
+def _job_summary(api: Api, run_id: int) -> str:
+    try:
+        jobs = api.get_json(f"/repos/{api.repo}/actions/runs/{run_id}/jobs?per_page=50").get("jobs", [])
+    except ApiError:
+        return "job list unavailable"
+    active = [j for j in jobs if j.get("status") != "completed"]
+    if active:
+        return ", ".join(f"{j['name']} {j['status']}" for j in active[:3])
+    return ", ".join(f"{j['name']} {j.get('conclusion')}" for j in jobs[-3:]) or "no jobs yet"
+
+
+def fetch_results(api: Api, run_id: int, into: Path) -> Path | None:
+    """Unpack the results artifact, if the device job got far enough to upload one."""
+    listing = api.get_json(f"/repos/{api.repo}/actions/runs/{run_id}/artifacts?per_page=50")
+    artifact = next(
+        (a for a in listing.get("artifacts", []) if a["name"].startswith(RESULTS_ARTIFACT_PREFIX)),
+        None,
+    )
+    if artifact is None:
+        return None
+    blob = api.download(f"/repos/{api.repo}/actions/artifacts/{artifact['id']}/zip")
+    into.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        archive.extractall(into)
+    return into
+
+
+def failure_output(api: Api, run_id: int, tail: int = 120) -> str:
+    """What the failing job actually said, which for a `build` is the compiler.
+
+    Error lines first and the tail after: ninja prints the diagnostic and then keeps going through
+    the remaining targets, so the last hundred lines of a failed build are often the least
+    informative part of it.
+    """
+    jobs = api.get_json(f"/repos/{api.repo}/actions/runs/{run_id}/jobs?per_page=50").get("jobs", [])
+    failed = [j for j in jobs if j.get("conclusion") not in (None, "success", "skipped")]
+    if not failed:
+        return "the run failed but no job reported a failure; see the run page"
+
+    chunks = []
+    for job in failed[:2]:
+        try:
+            text = api.download(f"/repos/{api.repo}/actions/jobs/{job['id']}/logs").decode("utf-8", "replace")
+        except ApiError as exc:
+            chunks.append(f"### {job['name']}: could not read the log ({exc})")
+            continue
+        lines = text.splitlines()
+        errors = [ln for ln in lines if "error:" in ln.lower() or ln.startswith("FAILED:")]
+        body = "\n".join(errors[:60]) if errors else ""
+        chunks.append(
+            f"### {job['name']} ({job.get('conclusion')})\n"
+            + (f"{body}\n\n--- last {tail} lines ---\n" if body else "")
+            + "\n".join(lines[-tail:])
+        )
+    return "\n\n".join(chunks)
+
+
+def adopt_workspace(results: Path, repo: Path) -> list[str]:
+    """Lay the `workspace/` half of the artifact over the checkout.
+
+    The baseline dispatch generates the routing test, because rendering it needs ttnn and a card.
+    It is part of the deliverable and has to exist in the tree the agent commits, so it comes home
+    at its repo-relative path and is copied into place rather than described.
+    """
+    source = results / "workspace"
+    if not source.is_dir():
+        return []
+    adopted = []
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            relative = path.relative_to(source)
+            target = repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            adopted.append(str(relative))
+    return adopted
+
+
+# ---------------------------------------------------------------------------------------------
+
+
+def report_build(run: dict, api: Api) -> int:
+    if run.get("conclusion") == "success":
+        print("build OK -- the tree compiles and the wheel was produced.")
+        return 0
+    print(f"build FAILED ({run.get('conclusion')}). {run['html_url']}\n")
+    print(failure_output(api, run["id"]))
+    return 1
+
+
+def report_verify(run: dict, api: Api, results: Path | None) -> int:
+    gate = (results / "gate.json") if results else None
+    if gate is None or not gate.is_file() or not gate.read_text().strip():
+        print(f"verify could not produce a verdict ({run.get('conclusion')}). {run['html_url']}\n")
+        print(failure_output(api, run["id"]))
+        return 2
+
+    body = gate.read_text()
+    print(body)
+    try:
+        verdict = json.loads(body).get("verdict")
+    except json.JSONDecodeError:
+        print(f"\nthe verdict is not parseable JSON. {run['html_url']}")
+        return 2
+    # Mirrors gate.py's own exit codes, which the in-cluster pipeline propagated directly: 0 only
+    # for a win, 2 for a tree the gate refused to measure at all.
+    if verdict == VERDICT_WIN:
+        return 0
+    return 2 if verdict == "blocked" else 1
+
+
+def report_baseline(run: dict, api: Api, results: Path | None, repo: Path) -> int:
+    if run.get("conclusion") != "success" or results is None:
+        print(f"the baseline dispatch failed ({run.get('conclusion')}). {run['html_url']}\n")
+        print(failure_output(api, run["id"]))
+        return 1
+    adopted = adopt_workspace(results, repo)
+    print(f"baseline OK. {run['html_url']}")
+    for name in adopted:
+        print(f"  brought back: {name}")
+    summary = results / "baseline.json"
+    if summary.is_file():
+        print(f"\n{summary.read_text()}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Dispatch a build or a measurement onto CIv2 and wait for it.")
+    ap.add_argument("--mode", required=True, choices=["baseline", "build", "verify"])
+    ap.add_argument("--band", default="both", choices=["correctness", "performance", "both"])
+    ap.add_argument("--op", default=os.environ.get("PORT_OP", "untilize"))
+    ap.add_argument("--category", default=os.environ.get("PORT_CATEGORY", "data_movement"))
+    ap.add_argument("--codegen-ref", default=os.environ.get("PORT_CODEGEN_REF", "codegen_agentic_port"))
+    ap.add_argument("--perf-limit", default=os.environ.get("PORT_LIMIT", "24"))
+    ap.add_argument(
+        "--runner-label",
+        default=os.environ.get("PORT_RUNNER_LABEL", '["tt-ubuntu-2204-N150-viommu-stable"]'),
+    )
+    ap.add_argument("--repo-path", default=os.environ.get("GITHUB_WORKSPACE", "."))
+    ap.add_argument(
+        "--token-file",
+        default=os.environ.get("PORT_DISPATCH_TOKEN_FILE", str(Path.home() / ".port-dispatch" / "token")),
+        help="written by a pre-step, outside every path the agent sandbox mounts",
+    )
+    args = ap.parse_args()
+
+    token_file = Path(args.token_file)
+    if not token_file.is_file():
+        raise DispatchError(f"no dispatch credential at {token_file}; the pre-step that writes it did not run")
+    token = token_file.read_text().strip()
+    if not token:
+        raise DispatchError(f"the dispatch credential at {token_file} is empty")
+
+    repo_slug = os.environ.get("GITHUB_REPOSITORY")
+    if not repo_slug:
+        raise DispatchError("GITHUB_REPOSITORY is unset; this only runs inside a workflow job")
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    api = Api(token, repo_slug, os.environ.get("GITHUB_API_URL", "https://api.github.com"))
+
+    repo = Path(args.repo_path).resolve()
+    work = token_file.parent
+    work.mkdir(parents=True, exist_ok=True)
+
+    nonce = f"{os.environ.get('GITHUB_RUN_ID', 'local')}-{uuid.uuid4().hex[:8]}"
+    branch = f"{SCRATCH_PREFIX}/{args.op}-{args.mode}-{nonce}"
+    remote = f"{server}/{repo_slug}.git"
+
+    # The workflow reads these back out of the commit message, so the message is the payload and
+    # nothing else. The nonce is in it to guarantee two identical dispatches cannot hash to the
+    # same commit, which is what makes the sha a usable handle on the run.
+    base = git("rev-parse", "HEAD", cwd=repo)
+    params = {
+        "mode": args.mode,
+        "band": args.band,
+        "op": args.op,
+        "category": args.category,
+        "codegen-ref": args.codegen_ref,
+        "perf-limit": str(args.perf_limit),
+        "base-sha": base,
+        "runner-label": args.runner_label,
+        "nonce": nonce,
+    }
+
+    commit, parent = commit_worktree(repo, work, json.dumps(params, separators=(",", ":")))
+    if parent != base:
+        # The write-path guard diffs the checkout against the base-sha in the message. If that is
+        # not the commit's own parent, it grades against the wrong tree and quietly reports the
+        # difference as the agent writing where it should not have.
+        raise DispatchError(f"HEAD moved from {base[:12]} to {parent[:12]} while snapshotting")
+    log(f"{args.mode} for {args.op}: pushing {commit[:12]} (base {base[:12]}) to {branch}")
+
+    with credentialed(work, token_file) as git_env:
+        git("push", remote, f"{commit}:refs/heads/{branch}", cwd=repo, env=git_env)
+
+    try:
+        started = time.monotonic()
+        run = None
+        while run is None:
+            time.sleep(POLL_SECONDS)
+            run = find_run(api, commit, started)
+        log(f"  run {run['id']}: {run['html_url']}")
+
+        run = wait_for_completion(api, run, args.mode)
+        log(f"  {args.mode} finished as {run.get('conclusion')} after {(time.monotonic() - started) / 60:.1f} minutes")
+
+        results = fetch_results(api, run["id"], work / f"results-{nonce}")
+    finally:
+        with credentialed(work, token_file) as git_env:
+            git("push", remote, f":refs/heads/{branch}", cwd=repo, env=git_env, check=False)
+
+    if args.mode == "build":
+        return report_build(run, api)
+    if args.mode == "verify":
+        return report_verify(run, api, results)
+    return report_baseline(run, api, results, repo)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except DispatchError as error:
+        # stdout, not stderr: this is the only thing the agent will see, and it needs to be able to
+        # tell "the harness could not run" apart from "your port is wrong". Exit 3 says the same.
+        print(f"the dispatch could not complete: {error}")
+        sys.exit(3)

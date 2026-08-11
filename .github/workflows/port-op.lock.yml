@@ -1,5 +1,5 @@
-# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"5f325e77b03aec379bf2b8a002c173b65a2ca72732337e1232dc2e3974f56451","body_hash":"cd4de2913149263c68a6872ce9511c931933f0f4198aaf09fefe0ef208b03c71","compiler_version":"v0.85.4","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.78"},"agent_image_runner":"tt-ubuntu-2204-N150-viommu-stable"}
-# gh-aw-manifest: {"version":1,"secrets":["CODEGEN_REPO_TOKEN","COPILOT_GITHUB_TOKEN","GARAGE_S3_ACCESS_KEY","GARAGE_S3_SECRET_KEY","GH_AW_CI_TRIGGER_TOKEN","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/checkout","sha":"de0fac2e4500dabe0009e67214ff5f5447ce83dd","version":"de0fac2e4500dabe0009e67214ff5f5447ce83dd"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/setup-python","sha":"5fda3b95a4ea91299a34e894583c3862153e4b97","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"astral-sh/setup-uv","sha":"c771a70e6277c0a99b617c7a806ffedaca235ff9","version":"v9.0.0"},{"repo":"github/gh-aw-actions/setup","sha":"2709137ea6c5b0e19aa621454dc643ea8dc526b1","version":"v0.85.4"},{"repo":"github/gh-aw-actions/setup-cli","sha":"2709137ea6c5b0e19aa621454dc643ea8dc526b1","version":"v0.85.4"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.8","digest":"sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.8@sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.8.0","digest":"sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520","pinned_image":"ghcr.io/github/github-mcp-server:v1.8.0@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520"}]}
+# gh-aw-metadata: {"schema_version":"v4","frontmatter_hash":"4e1010599c5fa658f212ff725ec53940eabf209a7eb41f25a77b03ea54a5b67e","body_hash":"9934038ab47acc2c4c99a08c5c6bf80c26504db06b2f7c431a3970cc5d7c0c10","compiler_version":"v0.85.4","strict":true,"agent_id":"copilot","engine_versions":{"copilot":"1.0.78"},"agent_image_runner":"ubuntu-latest"}
+# gh-aw-manifest: {"version":1,"secrets":["CODEGEN_REPO_TOKEN","COPILOT_GITHUB_TOKEN","GH_AW_CI_TRIGGER_TOKEN","GH_AW_GITHUB_MCP_SERVER_TOKEN","GH_AW_GITHUB_TOKEN","GITHUB_TOKEN","PORT_PUSH_TOKEN"],"actions":[{"repo":"actions/cache/restore","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/cache/save","sha":"55cc8345863c7cc4c66a329aec7e433d2d1c52a9","version":"v6.1.0"},{"repo":"actions/checkout","sha":"3d3c42e5aac5ba805825da76410c181273ba90b1","version":"v7.0.1"},{"repo":"actions/checkout","sha":"de0fac2e4500dabe0009e67214ff5f5447ce83dd","version":"de0fac2e4500dabe0009e67214ff5f5447ce83dd"},{"repo":"actions/download-artifact","sha":"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c","version":"v8.0.1"},{"repo":"actions/github-script","sha":"3a2844b7e9c422d3c10d287c895573f7108da1b3","version":"v9.0.0"},{"repo":"actions/setup-node","sha":"820762786026740c76f36085b0efc47a31fe5020","version":"v7.0.0"},{"repo":"actions/setup-python","sha":"5fda3b95a4ea91299a34e894583c3862153e4b97","version":"v7.0.0"},{"repo":"actions/upload-artifact","sha":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","version":"v7.0.1"},{"repo":"github/gh-aw-actions/setup","sha":"2709137ea6c5b0e19aa621454dc643ea8dc526b1","version":"v0.85.4"}],"containers":[{"image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44","digest":"sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4","pinned_image":"ghcr.io/github/gh-aw-firewall/agent:0.27.44@sha256:0d727725c737b58c7bdf51f640cffb928385ec46517e0917c7f1a02f1bada8b4"},{"image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44","digest":"sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7","pinned_image":"ghcr.io/github/gh-aw-firewall/api-proxy:0.27.44@sha256:b50fbadba138f6e9aba94aca09711335c489bb3b15861220cb66f6092e042dc7"},{"image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44","digest":"sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627","pinned_image":"ghcr.io/github/gh-aw-firewall/squid:0.27.44@sha256:83e48bbe12c634be8c228a576832fe45f66c529ac3659db92bddbcf2eeb6d627"},{"image":"ghcr.io/github/gh-aw-mcpg:v0.4.8","digest":"sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8","pinned_image":"ghcr.io/github/gh-aw-mcpg:v0.4.8@sha256:38bbea36cdb46a3c9d04d1db05e672966f5239b431a2022eb35881688e5721d8"},{"image":"ghcr.io/github/gh-aw-node","digest":"sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196","pinned_image":"ghcr.io/github/gh-aw-node@sha256:0d9f1fb5fd6610c0ac1f5194a38e45a8a1e81f8a390d5142d8e4e6f26a4b3196"},{"image":"ghcr.io/github/github-mcp-server:v1.8.0","digest":"sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520","pinned_image":"ghcr.io/github/github-mcp-server:v1.8.0@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520"}]}
 # This file was automatically generated by gh-aw (v0.85.4). DO NOT EDIT. To debug this workflow, load the skill at https://github.com/github/gh-aw/blob/main/debug.md
 #
 #    ___                   _   _
@@ -23,31 +23,32 @@
 #
 # For more information: https://github.github.com/gh-aw/introduction/overview/
 #
-# Port a tt-dm-codegen generic_op into tt-metal as a C++ program factory, on a card, in one job.
+# Port a tt-dm-codegen generic_op into tt-metal as a C++ program factory, proven on a card.
 #
 # An op that exists only as a tt-dm-codegen generic_op already has a working kernel and a measured
 # device-time win, but it pays a per-call program-descriptor rebuild that eats the win at wall
 # clock. Porting it means transliterating the generator's builder into a cached DeviceOperation and
 # wiring the native/codegen routing, then proving on silicon that the win survives.
 #
-# The deterministic parts run before the agent: kernels are copied, the build is registered, the
-# routing test is generated, the tree is compiled, and a native baseline is measured. The agent
-# writes C++ and calls two tools -- `build` and `verify` -- until the gates pass, then opens a draft
-# PR carrying the verdict it reached. It never picks the cases, the thresholds, or the measurement
-# method, and `verify` refuses to run at all if the working tree has changed outside the port's own
-# files or the generated test has drifted.
+# Two runners, because no single one can do both halves. This job holds the agent and runs on a
+# GitHub-hosted runner, the only place `api.githubcopilot.com` is reachable. It has no compiler
+# worth using and no card, so every build and every measurement is dispatched into CIv2 as a
+# `port-measure.yaml` run and waited on. The agent writes C++ and calls two tools -- `build` and
+# `verify` -- which are launchers over that dispatch, then opens a draft PR carrying the verdict it
+# reached. It never picks the cases, the thresholds, or the measurement method, and `verify`
+# refuses to run at all if the working tree has changed outside the port's own files or the
+# generated test has drifted.
 #
 # V1 scope: one op, one arch (N150), `workflow_dispatch` only.
 #
 # Secrets used:
 #   - CODEGEN_REPO_TOKEN
 #   - COPILOT_GITHUB_TOKEN
-#   - GARAGE_S3_ACCESS_KEY
-#   - GARAGE_S3_SECRET_KEY
 #   - GH_AW_CI_TRIGGER_TOKEN
 #   - GH_AW_GITHUB_MCP_SERVER_TOKEN
 #   - GH_AW_GITHUB_TOKEN
 #   - GITHUB_TOKEN
+#   - PORT_PUSH_TOKEN
 #
 # Custom actions used:
 #   - actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -60,8 +61,6 @@
 #   - actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
 #   - actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
 #   - actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-#   - astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-#   - github/gh-aw-actions/setup-cli@2709137ea6c5b0e19aa621454dc643ea8dc526b1 # v0.85.4
 #   - github/gh-aw-actions/setup@2709137ea6c5b0e19aa621454dc643ea8dc526b1 # v0.85.4
 #
 # Container images used:
@@ -94,11 +93,6 @@ on:
         description: tt-dm-codegen ref to port from
         required: false
         type: string
-      docker-image:
-        default: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
-        description: Dev image carrying both the build toolchain and the runtime
-        required: false
-        type: string
       op:
         default: untilize
         description: Op to port; must have a manifest at agentic_port/manifests/<op>.yaml
@@ -107,6 +101,11 @@ on:
       perf-limit:
         default: "24"
         description: Number of in-scope cases to measure per performance band
+        required: false
+        type: string
+      runner-label:
+        default: "[\"tt-ubuntu-2204-N150-viommu-stable\"]"
+        description: CIv2 pool the dispatched build and measurement land on
         required: false
         type: string
 
@@ -444,7 +443,7 @@ jobs:
   agent:
     needs: activation
     if: needs.activation.outputs.daily_ai_credits_exceeded != 'true'
-    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       copilot-requests: write
@@ -502,8 +501,18 @@ jobs:
             echo "GH_AW_SAFE_OUTPUTS_CONFIG_PATH=${RUNNER_TEMP}/gh-aw/safeoutputs/config.json"
             echo "GH_AW_SAFE_OUTPUTS_TOOLS_PATH=${RUNNER_TEMP}/gh-aw/safeoutputs/tools.json"
           } >> "$GITHUB_OUTPUT"
-      - name: Clear leftover state from earlier runs on this runner
-        run: "docker rm -f awmg-mcpg portdev 2>/dev/null || true\n\nif ! command -v ss >/dev/null; then\n  echo \"ss is unavailable; leaving the port check to gh-aw\"\n  exit 0\nfi\nfor _ in $(seq 1 15); do\n  if ! ss -ltnH 'sport = :8080' | grep -q .; then\n    echo \"gateway port 8080 is free\"\n    exit 0\n  fi\n  sleep 2\ndone\n\n# Naming the holder is the whole value of failing here: a container means leftover state and\n# a rerun will land somewhere clean, whereas a host service means this runner pool cannot\n# host a gh-aw agent at all. `-p` needs root to attribute sockets owned by other users.\necho \"::error::Port 8080 is still bound after 30s. The gh-aw MCP gateway binds it and cannot be moved, so this runner cannot host the agent.\"\nsudo -n ss -ltnp 2>/dev/null || ss -ltn || true\ndocker ps || true\nexit 1"
+      - env:
+          PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN }}
+        name: Place the dispatch credential outside the sandbox
+        run: |-
+          if [ -z "$PORT_DISPATCH_TOKEN" ]; then
+            echo "::error::PORT_PUSH_TOKEN is not set. The launcher cannot push a scratch ref or dispatch port-measure.yaml without it, so build and verify would both fail on the agent's first tool call."
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.port-dispatch"
+          umask 077
+          printf '%s' "$PORT_DISPATCH_TOKEN" > "$HOME/.port-dispatch/token"
+          echo "credential placed, $(wc -c < "$HOME/.port-dispatch/token") bytes"
 
       - name: Create gh-aw temp directory
         run: bash "${RUNNER_TEMP}/gh-aw/actions/create_gh_aw_tmp_dir.sh"
@@ -516,34 +525,16 @@ jobs:
         with:
           name: activation
           path: /tmp/gh-aw
-      - name: Configure environment
-        run: |
-          {
-            echo "PORT_CONTAINER=portdev"
-            echo "TT_METAL_HOME=/work"
-          } >> $GITHUB_ENV
       - name: Checkout tt-metal
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 1
           persist-credentials: false
-          submodules: recursive
-      - name: Install gh-aw extension
-        uses: github/gh-aw-actions/setup-cli@2709137ea6c5b0e19aa621454dc643ea8dc526b1 # v0.85.4
-        with:
-          version: 'v0.85.4'
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
+          submodules: false
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Setup uv
-        # zizmor: ignore[github_action_from_unverified_creator_used]
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Checkout tt-dm-codegen
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -552,336 +543,43 @@ jobs:
           ref: ${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}
           repository: tenstorrent/tt-dm-codegen
           token: ${{ secrets.CODEGEN_REPO_TOKEN }}
-      - name: Supply the tools gh-aw expects the image to have
-        run: |
-          mkdir -p "${RUNNER_TEMP}/shims"
-          for tool in netstat curl; do
-            if command -v "$tool" >/dev/null; then
-              echo "$tool: present in the image, left alone"
-              continue
-            fi
-            echo "$tool: missing, linking the shim"
-            ln -sf "${GITHUB_WORKSPACE}/.github/scripts/port/shims/$tool" "${RUNNER_TEMP}/shims/$tool"
-            chmod +x "${GITHUB_WORKSPACE}/.github/scripts/port/shims/$tool"
-          done
-          echo "${RUNNER_TEMP}/shims" >> "$GITHUB_PATH"
-
-          export PATH="${RUNNER_TEMP}/shims:$PATH"
-
-          # gh-aw reaches its own servers as `http://localhost:$PORT`, so `localhost` has to resolve and
-          # has to be exempt from the proxy. Neither is a given here: this pool reaches the network
-          # through the restricted proxy, and a proxy that is honoured for `localhost` sends a loopback
-          # request out to a host that cannot answer it. Both are cheap to assert and cheap to repair,
-          # and both failures present identically -- as a connection that does not happen.
-          if ! command -v getent >/dev/null; then
-            echo "no getent here, so leaving name resolution alone; the curl check below still decides"
-          elif getent hosts localhost >/dev/null; then
-            echo "localhost resolves to: $(getent hosts localhost | tr '\n' ' ')"
-          else
-            echo "localhost does not resolve; adding it to /etc/hosts"
-            printf '127.0.0.1 localhost\n::1 localhost\n' | sudo -n tee -a /etc/hosts >/dev/null \
-              || echo "::warning::could not write /etc/hosts"
-            echo "localhost now resolves to: $(getent hosts localhost | tr '\n' ' ' || echo NOTHING)"
-          fi
-
-          # Appended rather than assigned, so an existing no_proxy from the pool survives. Written to
-          # GITHUB_ENV because the step that needs it is gh-aw's, several steps later.
-          loopback="localhost,127.0.0.1,::1"
-          no_proxy_value="${no_proxy:+$no_proxy,}${loopback}"
-          {
-            echo "no_proxy=${no_proxy_value}"
-            echo "NO_PROXY=${no_proxy_value}"
-          } >> "$GITHUB_ENV"
-          export no_proxy="${no_proxy_value}" NO_PROXY="${no_proxy_value}"
-          echo "proxy settings seen here: http_proxy=${http_proxy:-unset} https_proxy=${https_proxy:-unset} no_proxy=${no_proxy}"
-
-          # Prove the pair answers gh-aw's actual question -- "is a server listening on this port, and
-          # does it respond over http" -- against a server this step starts and stops itself. A probe
-          # that silently sees nothing is what made the original failure so hard to read, so this one
-          # keeps curl's error text and says which address worked.
-          python3 -m http.server 3999 --bind 127.0.0.1 >/dev/null 2>&1 &
-          probe=$!
-          trap 'kill $probe 2>/dev/null || true' EXIT
-          for _ in $(seq 1 10); do
-            curl -sS -f -m 5 "http://127.0.0.1:3999/" >/dev/null 2>&1 && break
-            sleep 1
-          done
-
-          if ! netstat -tuln | grep -q ':3999'; then
-            echo "::error::netstat cannot see a port that is listening"
-            netstat -tuln || true
-            exit 1
-          fi
-
-          for target in "http://127.0.0.1:3999/" "http://localhost:3999/"; do
-            if curl -sS -f -m 5 "$target" >/dev/null; then
-              echo "curl reached $target"
-            else
-              echo "::error::curl cannot reach $target, which is the call gh-aw makes to check its servers"
-              curl -sS -f -m 5 -v "$target" 2>&1 | sed 's/^/    /' | head -30 || true
-              echo "    --- /etc/hosts ---"
-              sed 's/^/    /' /etc/hosts || true
-              netstat -tuln || true
-              exit 1
-            fi
-          done
-          echo "loopback http works by address and by name, and netstat can see the port"
       - env:
           GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
           GH_AW_EXPR_9CBF786B: ${{ inputs.op || 'untilize' }}
+          GH_AW_EXPR_D486EA81: ${{ inputs['runner-label'] || '["tt-ubuntu-2204-N150-viommu-stable"]' }}
+          GH_AW_EXPR_D48FA570: ${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}
           GH_AW_EXPR_F14CFA75: ${{ inputs['perf-limit'] || '24' }}
         name: Record the base commit
         run: |
+          # The generator tree is a checkout inside the workspace, so without this every one of its
+          # files reads as an untracked file: the launcher's `git add -A` would sweep the whole thing
+          # into the scratch commit, and gate.py's write-path guard, which counts untracked files,
+          # would refuse to measure anything.
           echo ".codegen/" >> .git/info/exclude
-          echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "PORT_OP=$GH_AW_EXPR_9CBF786B" >> $GITHUB_ENV
-          echo "PORT_CATEGORY=$GH_AW_EXPR_1CE92DB3" >> $GITHUB_ENV
-          echo "PORT_MANIFEST=/codegen/agentic_port/manifests/$GH_AW_EXPR_9CBF786B.yaml" >> $GITHUB_ENV
-          echo "PORT_LIMIT=$GH_AW_EXPR_F14CFA75" >> $GITHUB_ENV
-      - env:
-          GH_AW_EXPR_CDB6415C: ${{ inputs['docker-image'] || 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest' }}
-          GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
-        name: Start the toolchain container
+          {
+            echo "PORT_BASE_SHA=$(git rev-parse HEAD)"
+            echo "PORT_OP=$GH_AW_EXPR_9CBF786B"
+            echo "PORT_CATEGORY=$GH_AW_EXPR_1CE92DB3"
+            echo "PORT_CODEGEN_REF=$GH_AW_EXPR_D48FA570"
+            echo "PORT_LIMIT=$GH_AW_EXPR_F14CFA75"
+            echo "PORT_RUNNER_LABEL=$GH_AW_EXPR_D486EA81"
+          } >> $GITHUB_ENV
+      - name: Install what the scaffold pass needs
+        run: python3 -m pip install --quiet pyyaml
+      - name: Scaffold the port
         run: |
-          docker pull "$GH_AW_EXPR_CDB6415C"
+          python3 .github/scripts/port/scaffold.py \
+            --op "$PORT_OP" --category "$PORT_CATEGORY" \
+            --ttmetal-home . --codegen-root .codegen
 
-          # Deliberately no host cache mount. Nothing this run produces may outlive it on the runner:
-          # a per-run ccache directory under $HOME would grow without bound across every workflow that
-          # lands on the machine, and these runners are shared. Cross-run reuse belongs in the network
-          # cache (Garage S3, wired up below) and nowhere else. The local ccache directory therefore
-          # stays inside portdev, where it still pays for itself -- the build step and the agent's
-          # `build` tool both exec as root, so they share /root/.cache/ccache for the life of the job --
-          # and post-steps deletes it with the container.
-          # The 1G hugepage mount exists on the bare-metal and CIv1 cloud-VM pools but not on this one,
-          # where the card arrives by VFIO passthrough: `blackhole-e2e-tests-impl.yaml` skips the very
-          # same mount on any runner whose labels say `viommu`. Probing beats hardcoding either answer,
-          # because `-v` on a missing source silently creates a root-owned empty directory on the host
-          # and mounts that, which is both a bind mount to nothing and the kind of host debris this
-          # workflow is not allowed to leave behind.
-          HUGEPAGES=()
-          if [ -d /dev/hugepages-1G ]; then
-            HUGEPAGES=(-v /dev/hugepages-1G:/dev/hugepages-1G)
-          else
-            echo "no /dev/hugepages-1G on this runner, so portdev starts without it"
-          fi
-
-          # PYTHONPATH carries /work/tests/sweep_framework because that is what makes `sweeps.<op>`
-          # importable. A codegen sweep module is a drop-in for its upstream counterpart and may reuse
-          # that suite verbatim instead of restating the grid -- `untilize`'s does, and the manifest
-          # schema has an `upstream_sweep_module` field for saying so. tt-metal's own runner imports
-          # `sweeps.<module>` and gets the directory onto `sys.path` for free by living in it; nothing
-          # puts it there for us. `pad`'s sweep is self-contained, which is why this stayed invisible
-          # until the second op. Keep comments out of the continuation below: the backslashes join the
-          # lines before `#` is interpreted, so a comment inside would swallow the rest of the command.
-
-          docker run -d --name portdev \
-            --device /dev/tenstorrent \
-            --group-add 1457 \
-            --network host \
-            -v "$GH_AW_GITHUB_WORKSPACE:/work" \
-            -v "$GH_AW_GITHUB_WORKSPACE/.codegen:/codegen" \
-            "${HUGEPAGES[@]}" \
-            -e TT_METAL_HOME=/work \
-            -e PYTHONPATH=/work:/work/ttnn:/work/tools:/work/tests/sweep_framework:/codegen \
-            -e LD_LIBRARY_PATH=/work/build/lib \
-            -e ARCH_NAME=wormhole_b0 \
-            -e TRACY_NO_INVARIANT_CHECK=1 \
-            -e TRACY_NO_ISA_EXTENSIONS=1 \
-            -e TRACY_WASM_HTTP_PORT=18080 \
-            -e CCACHE_TEMPDIR=/tmp/ccache \
-            -e CCACHE_BASEDIR=/work \
-            -w /work \
-            "$GH_AW_EXPR_CDB6415C" sleep infinity
-          docker exec portdev git config --global --add safe.directory /work
-          docker exec portdev git config --global --add safe.directory /codegen
-          # CCACHE_TEMPDIR above names a path inside portdev, not on the runner, so create it there.
-          # `build-artifact.yaml` has the same step for the same reason.
-          docker exec portdev mkdir -p /tmp/ccache
-          docker exec portdev bash -c 'ls /dev/tenstorrent && echo "card visible in container"'
-      - env:
-          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
-          GH_AW_EXPR_9CBF786B: ${{ inputs.op || 'untilize' }}
-        name: Scaffold the port
-        run: |
-          docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
-            python3 .github/scripts/port/scaffold.py \
-            --op "$GH_AW_EXPR_9CBF786B" --category "$GH_AW_EXPR_1CE92DB3" \
-            --ttmetal-home /work --codegen-root /codegen
-
-          # And assert it, because the agent cannot do its job without write access and this is the only
-          # place the answer is cheap. This runs as the same user the agent runs as, so it is exactly the
-          # test the agent had to perform for itself. `[ -w ]` asks the kernel whether *this* user can
-          # write, which is the question; a permission-bit test would pass a root-owned 644 file, since
-          # u+w is set for a user we are not.
-          dir="ttnn/cpp/ttnn/operations/$GH_AW_EXPR_1CE92DB3/$GH_AW_EXPR_9CBF786B/codegen"
+          dir="ttnn/cpp/ttnn/operations/${PORT_CATEGORY}/${PORT_OP}/codegen"
           if [ ! -d "$dir" ]; then
             echo "::error::scaffold.py reported success but $dir does not exist"
             exit 1
           fi
-          unwritable=$(find "$dir" -exec sh -c 'for p; do [ -w "$p" ] || printf "%s\n" "$p"; done' sh {} +)
-          if [ -n "$unwritable" ]; then
-            echo "::error::The agent runs as $(id -un) and cannot write the scaffolded stubs it is asked to fill in."
-            printf '%s\n' "$unwritable" | head -20
-            stat -c '%U:%G %a %n' "$dir" "$dir"/* | head -20
-            exit 1
-          fi
-          echo "scaffolded $(find "$dir" -type f | wc -l) stub files, all writable by $(id -un)"
-      - continue-on-error: true
-        name: Resolve the remote ccache endpoint
-        run: |
-          if docker exec portdev getent hosts garage.garage.svc.cluster.local; then
-            echo "PORT_CCACHE_REMOTE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
-            docker exec portdev curl -sS -m 10 -o /dev/null \
-              -w 'ccache endpoint: HTTP %{http_code} in %{time_total}s\n' \
-              http://garage.garage.svc.cluster.local:3900/ \
-              || echo "::warning::The ccache endpoint resolves but did not answer; this build will be cold."
-          else
-            echo "::warning::garage.garage.svc.cluster.local does not resolve on this runner, so the build runs without the remote ccache and takes about 25 minutes. If this is a CIv2 runner, try the restricted-proxy that clang-tidy uses."
-            if docker exec portdev getent hosts github.com >/dev/null 2>&1; then
-              echo "github.com resolves, so DNS works generally and it is cluster-internal DNS specifically -- i.e. this is the runner pool, not the container."
-            fi
-            docker exec portdev cat /etc/resolv.conf || true
-            # Fail honestly. The step is non-fatal, but a green tick here would be a lie, and the
-            # previous green tick cost more than this build ever will.
-            exit 1
-          fi
-      - env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
-        name: Build tt-metal
-        run: |
-          if [ -z "$AWS_ACCESS_KEY_ID" ]; then
-            echo "::warning::Garage S3 credentials missing; this build will be cold."
-          fi
-          # The remote is configured only when the step above could actually resolve it. Pointing ccache
-          # at an unresolvable endpoint cost 1395 failed lookups per build and taught us nothing the
-          # probe does not say in one line.
-          if [ -n "$PORT_CCACHE_REMOTE" ]; then
-            remote=(-e "CCACHE_REMOTE_STORAGE=$PORT_CCACHE_REMOTE")
-          else
-            remote=()
-          fi
-          docker exec portdev ccache -z || true
-          # Tracy is on by default and there is no --enable-profiler flag; passing one makes
-          # build_metal.sh exit immediately on an unknown argument. The build is deliberately the last
-          # command so its status is the step's -- a trailing `ccache -sv || true` masked a failed
-          # build behind a green step on the first shakedown run.
-          # CCACHE_REMOTE_ONLY is off so that local storage still pays for itself across the rebuilds
-          # the agent triggers within this job, and CCACHE_LOGFILE turns any future remote failure into
-          # a readable cause rather than an error count.
-          docker exec \
-            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-            -e AWS_DEFAULT_REGION=garage \
-            -e CCACHE_COMPRESS=true -e CCACHE_LOGFILE=/tmp/ccache.log \
-            "${remote[@]}" \
-            portdev ./build_metal.sh --build-dir build --build-type Release --enable-ccache
-      - continue-on-error: true
-        if: always()
-        name: ccache summary
-        run: |
-          docker exec portdev ccache -sv || true
-          # The statistics report a remote error count but never the reason; the log has it.
-          docker exec portdev bash -c 'grep -m 20 -i "remote\|s3\|http" /tmp/ccache.log || echo "no remote entries in the ccache log"' || true
-      - name: Prepare the Python environment
-        run: |
-          # The image's /opt/venv has no pip -- tt-metal provisions with uv, so install with uv and
-          # only fall back to pip if this image ever changes.
-          docker exec portdev bash -c '
-            set -e
-            if command -v uv >/dev/null; then
-              uv pip install --python "$(command -v python3)" graphviz pyyaml
-            else
-              python3 -m pip install --quiet graphviz pyyaml
-            fi
-          '
-          docker exec portdev python3 -c 'import ttnn, torch, yaml, graphviz; print("harness imports OK")'
-      - env:
-          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
-          GH_AW_EXPR_9CBF786B: ${{ inputs.op || 'untilize' }}
-        name: Emit the routing test
-        run: |
-          docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp portdev \
-            python3 .github/scripts/port/scaffold.py \
-            --op "$GH_AW_EXPR_9CBF786B" --category "$GH_AW_EXPR_1CE92DB3" \
-            --ttmetal-home /work --codegen-root /codegen --emit-test-only
-      - env:
-          GH_AW_EXPR_9CBF786B: ${{ inputs.op || 'untilize' }}
-          GH_AW_EXPR_F14CFA75: ${{ inputs['perf-limit'] || '24' }}
-        name: Check the golden against native
-        run: |
-          docker exec portdev python3 .github/scripts/port/measure.py \
-            --op "$GH_AW_EXPR_9CBF786B" --band golden \
-            --manifest "/codegen/agentic_port/manifests/$GH_AW_EXPR_9CBF786B.yaml" \
-            --limit "$GH_AW_EXPR_F14CFA75" --out /tmp/golden.json
-
-          # Asserted here rather than in measure.py, which reports numbers and never decides pass or
-          # fail. Single-quoted so the shell leaves it alone; no single quotes inside for the same reason.
-          docker exec portdev python3 -c '
-          import json
-          report = json.load(open("/tmp/golden.json"))
-          source, results = report.get("golden"), report.get("results") or []
-          if source == "native":
-              print("::warning::no host golden for this op, so correctness compares against native output")
-              raise SystemExit(0)
-          if not results:
-              raise SystemExit("the golden check ran no cases, so the golden is unverified")
-          bad = [r for r in results if not r.get("equal") or r.get("error")]
-          for entry in bad[:10]:
-              print("  {} dtype={} max_abs_diff={} error={}".format(
-                  entry["case_id"], entry.get("dtype"), entry.get("max_abs_diff"), entry.get("error")))
-          if bad:
-              raise SystemExit("{} of {} cases disagree between native and {}".format(len(bad), len(results), source))
-          print("golden OK -- {} agrees with native on all {} sampled in-scope cases".format(source, len(results)))
-          '
-      - env:
-          GH_AW_EXPR_1CE92DB3: ${{ inputs.category || 'data_movement' }}
-          GH_AW_EXPR_9CBF786B: ${{ inputs.op || 'untilize' }}
-          GH_AW_EXPR_F14CFA75: ${{ inputs['perf-limit'] || '24' }}
-        name: Native baseline
-        run: |
-          docker exec portdev python3 .github/scripts/port/gate.py \
-            --op "$GH_AW_EXPR_9CBF786B" --manifest "/codegen/agentic_port/manifests/$GH_AW_EXPR_9CBF786B.yaml" \
-            --category "$GH_AW_EXPR_1CE92DB3" --band performance --repo /work \
-            --work /tmp/port-baseline --limit "$GH_AW_EXPR_F14CFA75" --skip-write-check \
-            > /tmp/baseline.json || true
-          cat /tmp/baseline.json
-
-          python3 - /tmp/baseline.json <<'PY'
-          import json, sys
-
-          try:
-              report = json.loads(open(sys.argv[1]).read() or "{}")
-          except json.JSONDecodeError as exc:
-              sys.exit(f"the baseline produced no parseable verdict ({exc}); the harness did not run")
-
-          verdict = report.get("verdict") or report.get("performance", {}).get("verdict")
-          if verdict in (None, "blocked"):
-              sys.exit(f"baseline verdict is {verdict!r}: {report.get('error', 'see the report above')}")
-          if not report.get("ledger_counts", {}).get("in"):
-              sys.exit("the ledger produced no in-scope cases, so there is nothing to measure")
-
-          # The op-code note is the only positive evidence that the native and generic legs really
-          # dispatched on the card and that profiler rows lined up with them. Without it the device
-          # band is inconclusive, and it will still be inconclusive once the agent is done.
-          codes = next((n for n in report.get("notes", []) if n.startswith("op codes:")), None)
-          if codes is None or "native=" not in codes:
-              sys.exit("no device attribution for the native leg; " + "; ".join(report.get("notes", [])))
-          print(f"baseline harness OK -- {codes}, verdict {verdict!r} (a failing verdict is expected here)")
-          PY
-      - name: Assert the profiler left the gateway port alone
-        run: |-
-          if ss -ltnH 'sport = :8080' | grep -q .; then
-            echo "::warning::Something began listening on 8080 while the profiler ran; clearing it."
-            docker exec portdev bash -c 'pkill -f serve_wasm.py' || true
-            sleep 3
-          fi
-          if ss -ltnH 'sport = :8080' | grep -q .; then
-            echo "::error::Port 8080 is occupied after the profiler ran, and the MCP gateway needs it."
-            sudo -n ss -ltnp 2>/dev/null || ss -ltn || true
-            docker exec portdev bash -c 'pgrep -af serve_wasm.py' || true
-            exit 1
-          fi
-          echo "gateway port 8080 is still free after the profiler ran"
+          echo "scaffolded $(find "$dir" -type f | wc -l) stub files"
+      - name: Measure the native baseline on CIv2
+        run: python3 .github/scripts/port/dispatch.py --mode baseline
 
       - name: Configure Git credentials
         env:
@@ -1085,7 +783,7 @@ jobs:
       - name: Write MCP Scripts Config
         run: |
           mkdir -p "${RUNNER_TEMP}/gh-aw/mcp-scripts/logs"
-          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/tools.json" << 'GH_AW_MCP_SCRIPTS_TOOLS_6d850be20dfec4a8_EOF'
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/tools.json" << 'GH_AW_MCP_SCRIPTS_TOOLS_8c2d1efbbf1670aa_EOF'
           {
             "serverName": "mcpscripts",
             "version": "1.0.0",
@@ -1093,17 +791,17 @@ jobs:
             "tools": [
               {
                 "name": "build",
-                "description": "Rebuild ttnn after editing the codegen sources. Returns compiler diagnostics on failure and a short success line otherwise. Call this after every batch of edits, before calling verify.",
+                "description": "Compile the tree on CIv2. Returns compiler diagnostics on failure and a short success line otherwise. This is a full remote build, so it takes roughly twenty minutes; batch every edit you intend to make before calling it.",
                 "inputSchema": {
                   "properties": {},
                   "type": "object"
                 },
                 "handler": "build.sh",
-                "timeout": 2400
+                "timeout": 5400
               },
               {
                 "name": "verify",
-                "description": "Grade the port on real hardware and return the verdict as JSON. `correctness` checks bit-exactness against a torch golden for in-scope cases and native fallback for out-of-scope ones; `performance` measures wall clock and device kernel duration against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has changed outside the port's own files. You cannot change what it measures or where the thresholds sit.",
+                "description": "Grade the port on real hardware and return the verdict as JSON. `correctness` checks bit-exactness against a golden for in-scope cases and native fallback for out-of-scope ones; `performance` measures wall clock and device kernel duration against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has changed outside the port's own files. You cannot change what it measures or where the thresholds sit. It builds before it measures, so it costs about forty minutes; you can afford a handful of these in a whole run.",
                 "inputSchema": {
                   "properties": {
                     "band": {
@@ -1114,11 +812,11 @@ jobs:
                   "type": "object"
                 },
                 "handler": "verify.sh",
-                "timeout": 3600
+                "timeout": 9000
               }
             ]
           }
-          GH_AW_MCP_SCRIPTS_TOOLS_6d850be20dfec4a8_EOF
+          GH_AW_MCP_SCRIPTS_TOOLS_8c2d1efbbf1670aa_EOF
           cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/mcp-server.cjs" << 'GH_AW_MCP_SCRIPTS_SERVER_e0a10bf70e571677_EOF'
             const path = require("path");
             const { startHttpServer } = require("./mcp_scripts_mcp_server_http.cjs");
@@ -1138,23 +836,23 @@ jobs:
 
       - name: Write MCP Scripts Tool Files
         run: |
-          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh" << 'GH_AW_MCP_SCRIPTS_SH_BUILD_582ded0556f314a6_EOF'
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh" << 'GH_AW_MCP_SCRIPTS_SH_BUILD_0fafe69521b7f5bb_EOF'
           #!/bin/bash
           # Auto-generated mcp-script tool: build
-          # Rebuild ttnn after editing the codegen sources. Returns compiler diagnostics on failure and a short success line otherwise. Call this after every batch of edits, before calling verify.
+          # Compile the tree on CIv2. Returns compiler diagnostics on failure and a short success line otherwise. This is a full remote build, so it takes roughly twenty minutes; batch every edit you intend to make before calling it.
 
           set +o histexpand
           set -euo pipefail
 
-          docker exec portdev bash -c 'cmake --build build --target install -j"$(nproc)" 2>&1 | tail -150; exit "${PIPESTATUS[0]}"'
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode build
 
 
-          GH_AW_MCP_SCRIPTS_SH_BUILD_582ded0556f314a6_EOF
+          GH_AW_MCP_SCRIPTS_SH_BUILD_0fafe69521b7f5bb_EOF
           chmod +x "${RUNNER_TEMP}/gh-aw/mcp-scripts/build.sh"
-          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh" << 'GH_AW_MCP_SCRIPTS_SH_VERIFY_a7990cf8e8f282af_EOF'
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh" << 'GH_AW_MCP_SCRIPTS_SH_VERIFY_8f959860e69d8bbc_EOF'
           #!/bin/bash
           # Auto-generated mcp-script tool: verify
-          # Grade the port on real hardware and return the verdict as JSON. `correctness` checks bit-exactness against a torch golden for in-scope cases and native fallback for out-of-scope ones; `performance` measures wall clock and device kernel duration against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has changed outside the port's own files. You cannot change what it measures or where the thresholds sit.
+          # Grade the port on real hardware and return the verdict as JSON. `correctness` checks bit-exactness against a golden for in-scope cases and native fallback for out-of-scope ones; `performance` measures wall clock and device kernel duration against native and against the tt-dm-codegen prototype. Refuses to run if the working tree has changed outside the port's own files. You cannot change what it measures or where the thresholds sit. It builds before it measures, so it costs about forty minutes; you can afford a handful of these in a whole run.
 
           set +o histexpand
           set -euo pipefail
@@ -1166,12 +864,10 @@ jobs:
             correctness|performance|both) BAND="$INPUT_BAND" ;;
             *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
           esac
-          docker exec portdev python3 .github/scripts/port/gate.py \
-            --op "$PORT_OP" --manifest "$PORT_MANIFEST" --category "$PORT_CATEGORY" \
-            --band "$BAND" --repo /work --base-sha "$PORT_BASE_SHA" --limit "$PORT_LIMIT"
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode verify --band "$BAND"
 
 
-          GH_AW_MCP_SCRIPTS_SH_VERIFY_a7990cf8e8f282af_EOF
+          GH_AW_MCP_SCRIPTS_SH_VERIFY_8f959860e69d8bbc_EOF
           chmod +x "${RUNNER_TEMP}/gh-aw/mcp-scripts/verify.sh"
 
       - name: Generate MCP Scripts Server Config
@@ -1346,7 +1042,7 @@ jobs:
       - name: Execute GitHub Copilot CLI
         id: agentic_execution
         # Copilot CLI tool arguments (sorted):
-        timeout-minutes: 330
+        timeout-minutes: 350
         run: |
           set -o pipefail
           printf '%s' "$(date +%s%3N)" > /tmp/gh-aw/agent_cli_start_ms.txt
@@ -1393,7 +1089,7 @@ jobs:
           GH_AW_PHASE: agent
           GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
           GH_AW_SAFE_OUTPUTS: ${{ steps.set-runtime-paths.outputs.GH_AW_SAFE_OUTPUTS }}
-          GH_AW_TIMEOUT_MINUTES: 330
+          GH_AW_TIMEOUT_MINUTES: 350
           GH_AW_VERSION: v0.85.4
           GITHUB_API_URL: ${{ github.api_url }}
           GITHUB_AW: true
@@ -1445,13 +1141,12 @@ jobs:
             const { main } = require('${{ runner.temp }}/gh-aw/actions/redact_secrets.cjs');
             await main();
         env:
-          GH_AW_SECRET_NAMES: 'CODEGEN_REPO_TOKEN,GARAGE_S3_ACCESS_KEY,GARAGE_S3_SECRET_KEY,GH_AW_GITHUB_MCP_SERVER_TOKEN,GH_AW_GITHUB_TOKEN,GITHUB_TOKEN'
+          GH_AW_SECRET_NAMES: 'CODEGEN_REPO_TOKEN,GH_AW_GITHUB_MCP_SERVER_TOKEN,GH_AW_GITHUB_TOKEN,GITHUB_TOKEN,PORT_PUSH_TOKEN'
           SECRET_CODEGEN_REPO_TOKEN: ${{ secrets.CODEGEN_REPO_TOKEN }}
-          SECRET_GARAGE_S3_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          SECRET_GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
           SECRET_GH_AW_GITHUB_MCP_SERVER_TOKEN: ${{ secrets.GH_AW_GITHUB_MCP_SERVER_TOKEN }}
           SECRET_GH_AW_GITHUB_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN }}
           SECRET_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SECRET_PORT_PUSH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN }}
       - name: Append agent step summary
         if: always()
         run: bash "${RUNNER_TEMP}/gh-aw/actions/append_agent_step_summary.sh"
@@ -1542,7 +1237,7 @@ jobs:
           fi
       - if: always()
         name: Preserve the port whatever the verdict
-        run: "mkdir -p /tmp/port-artifact\ndir=\"ttnn/cpp/ttnn/operations/${PORT_CATEGORY}/${PORT_OP}\"\n# The scaffolded codegen tree is untracked, so a diff would omit the very files the agent was\n# asked to fill in. Archive the op directory outright, and keep a diff for the few tracked\n# files the port may touch (sources.cmake, CMakeLists.txt, the op's own .cpp/.hpp).\ntar -czf /tmp/port-artifact/port-tree.tar.gz \"$dir\" || echo \"::warning::no $dir to archive\"\ngit diff \"${PORT_BASE_SHA}\" -- . > /tmp/port-artifact/tracked.diff || true\ngit status --porcelain > /tmp/port-artifact/status.txt || true\n# The generated routing test is untracked and lives outside the op directory, so neither the\n# archive above nor the diff would carry it. It is part of the deliverable.\nrouting=\"tests/ttnn/nightly/unit_tests/operations/${PORT_CATEGORY}/test_${PORT_OP}_codegen_routing.py\"\ncp \"$routing\" /tmp/port-artifact/ 2>/dev/null || echo \"::warning::no generated routing test at $routing\"\n# gate.py writes its per-case measurements inside portdev, which the next step deletes. These\n# reports are the only durable record of which cases were marginal and by how much, and that is\n# exactly what judging the noise floor needs after the fact -- the transcript truncates them.\ndocker cp portdev:/tmp/port-gate /tmp/port-artifact/gate || echo \"::warning::no gate reports to copy\"\nls -l /tmp/port-artifact/\n"
+        run: "mkdir -p /tmp/port-artifact\ndir=\"ttnn/cpp/ttnn/operations/${PORT_CATEGORY}/${PORT_OP}\"\n# The scaffolded codegen tree is untracked, so a diff would omit the very files the agent was\n# asked to fill in. Archive the op directory outright, and keep a diff for the few tracked\n# files the port may touch (sources.cmake, CMakeLists.txt, the op's own .cpp/.hpp).\ntar -czf /tmp/port-artifact/port-tree.tar.gz \"$dir\" || echo \"::warning::no $dir to archive\"\ngit diff \"${PORT_BASE_SHA}\" -- . > /tmp/port-artifact/tracked.diff || true\ngit status --porcelain > /tmp/port-artifact/status.txt || true\n# The generated routing test is untracked and lives outside the op directory, so neither the\n# archive above nor the diff would carry it. It is part of the deliverable.\nrouting=\"tests/ttnn/nightly/unit_tests/operations/${PORT_CATEGORY}/test_${PORT_OP}_codegen_routing.py\"\ncp \"$routing\" /tmp/port-artifact/ 2>/dev/null || echo \"::warning::no generated routing test at $routing\"\n# What each dispatch brought back. The per-case measurements behind every verdict live in the\n# results artifacts of the measure runs, which are separate runs nobody will think to look up;\n# copying them here puts the whole history of the port in one place. They are also the only\n# record of which cases were marginal and by how much, which is what judging the noise floor\n# needs after the fact -- the transcript truncates them.\ncp -r \"$HOME\"/.port-dispatch/results-* /tmp/port-artifact/ 2>/dev/null \\\n  || echo \"::warning::no dispatch results to copy\"\nls -l /tmp/port-artifact/\n"
       - continue-on-error: true
         if: always()
         name: Upload the port
@@ -1551,11 +1246,11 @@ jobs:
           if-no-files-found: warn
           name: port-${{ env.PORT_OP }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/port-artifact
-      - if: always()
-        name: Release the card and remove the toolchain container
-        run: |-
-          docker exec portdev tt-smi -r || tt-smi -r || echo "no tt-smi on the host or in the image; card not reset"
-          docker rm -f portdev || true
+      - env:
+          PORT_DISPATCH_TOKEN: ${{ secrets.PORT_PUSH_TOKEN }}
+        if: always()
+        name: Delete any scratch refs a dispatch left behind
+        run: "[ -n \"$PORT_DISPATCH_TOKEN\" ] || exit 0\nshred -u \"$HOME/.port-dispatch/token\" 2>/dev/null || rm -f \"$HOME/.port-dispatch/token\"\nremote=\"https://x-access-token:${PORT_DISPATCH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git\"\n# Scoped to this run's refs, not to the prefix: another port may legitimately be in flight.\n# The launcher names them \"<op>-<mode>-<run id>-<uuid>\", hence the leading wildcard.\nleftovers=$(git ls-remote --heads \"$remote\" \"refs/heads/port-op-scratch/*-${GITHUB_RUN_ID}-*\" \\\n  | awk '{print $2}')\nfor ref in $leftovers; do\n  echo \"removing leftover $ref\"\n  git push \"$remote\" \":$ref\" >/dev/null 2>&1 || echo \"::warning::could not delete $ref\"\ndone"
 
       - name: Upload agent artifacts
         if: always()
@@ -1819,7 +1514,7 @@ jobs:
           GH_AW_FAILURE_REPORT_AS_ISSUE: "true"
           GH_AW_MISSING_TOOL_REPORT_AS_FAILURE: "true"
           GH_AW_MISSING_DATA_REPORT_AS_FAILURE: "true"
-          GH_AW_TIMEOUT_MINUTES: "330"
+          GH_AW_TIMEOUT_MINUTES: "350"
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
@@ -1949,7 +1644,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           WORKFLOW_NAME: "Port a codegen op to a C++ program factory"
-          WORKFLOW_DESCRIPTION: "Port a tt-dm-codegen generic_op into tt-metal as a C++ program factory, on a card, in one job.\n\nAn op that exists only as a tt-dm-codegen generic_op already has a working kernel and a measured\ndevice-time win, but it pays a per-call program-descriptor rebuild that eats the win at wall\nclock. Porting it means transliterating the generator's builder into a cached DeviceOperation and\nwiring the native/codegen routing, then proving on silicon that the win survives.\n\nThe deterministic parts run before the agent: kernels are copied, the build is registered, the\nrouting test is generated, the tree is compiled, and a native baseline is measured. The agent\nwrites C++ and calls two tools -- `build` and `verify` -- until the gates pass, then opens a draft\nPR carrying the verdict it reached. It never picks the cases, the thresholds, or the measurement\nmethod, and `verify` refuses to run at all if the working tree has changed outside the port's own\nfiles or the generated test has drifted.\n\nV1 scope: one op, one arch (N150), `workflow_dispatch` only."
+          WORKFLOW_DESCRIPTION: "Port a tt-dm-codegen generic_op into tt-metal as a C++ program factory, proven on a card.\n\nAn op that exists only as a tt-dm-codegen generic_op already has a working kernel and a measured\ndevice-time win, but it pays a per-call program-descriptor rebuild that eats the win at wall\nclock. Porting it means transliterating the generator's builder into a cached DeviceOperation and\nwiring the native/codegen routing, then proving on silicon that the win survives.\n\nTwo runners, because no single one can do both halves. This job holds the agent and runs on a\nGitHub-hosted runner, the only place `api.githubcopilot.com` is reachable. It has no compiler\nworth using and no card, so every build and every measurement is dispatched into CIv2 as a\n`port-measure.yaml` run and waited on. The agent writes C++ and calls two tools -- `build` and\n`verify` -- which are launchers over that dispatch, then opens a draft PR carrying the verdict it\nreached. It never picks the cases, the thresholds, or the measurement method, and `verify`\nrefuses to run at all if the working tree has changed outside the port's own files or the\ngenerated test has drifted.\n\nV1 scope: one op, one arch (N150), `workflow_dispatch` only."
           HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
           GH_AW_DETECTION_CONTINUE_ON_ERROR: "true"
         with:
