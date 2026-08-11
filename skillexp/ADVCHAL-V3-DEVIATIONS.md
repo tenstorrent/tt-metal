@@ -184,8 +184,16 @@ The actual defect: all 17 carry `verdict = rejected_kind_by_absolute_oracle`, an
 `ladder_11_sliding`, at **PCC 0.99457** against a 0.995 bar, missing it by **0.0003**.
 
 > **The performance search was complete and correct. The correctness verdict was extrapolated from one
-> configuration to sixteen that were never measured.** Two of them (8 and 22 cores) are within 0.25 % of the
-> tested one.
+> configuration to sixteen that were never measured.**
+
+⚠⚠ **And the extrapolation turned out to be right.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) ran the model's own
+oracle on every rung: **2/4/8/11/22/44/88 all fail the 0.995 bar**, 0.99437–0.99457 against an incumbent 0.99963,
+with **88 — the advised grid and v2's shipped grid — the worst.** My earlier caveat that 8 and 22 "may well pass"
+is **falsified**; the −6,055 µs was never available. The process defect stands in full (one rung measured, verdict
+hardcoded as `kind == "full_attention"`, no oracle log) — but **a correct answer reached by an unauditable route
+is indistinguishable from a lucky one, which is exactly why the re-measure was needed.** And the same re-measure
+shows **v2's oracle for that cell is one un-sharded measurement filed under two names**, so the −5,919 µs it
+booked should be struck.
 
 **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198. **73 % of the whole v3-vs-v2
 gap.**

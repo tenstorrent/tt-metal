@@ -25,7 +25,7 @@ cells improved different kinds, so they are not comparable across versions (§5)
 
 | cell | v2 µs/model | v3 µs/model | v3 / v2 | verdict | why |
 |---|---:|---:|---:|:--|---|
-| **gemma-4-26B `-onA`** | **−7,105.4** | −1,198.3 | **17 %** | 🔴 **much worse** | swept a better ladder than v2 and found better grids on **both** kinds — then vetoed all 17 sliding measurements from **one** untested PCC inference. **−6,055 µs on one decision.** [OP-BY-OP §1.4](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
+| **gemma-4-26B `-onA`** | −7,105.4 ⚠⚠ *(−5,919 of it should be struck — [`REMEASURE`](ADVCHAL-V3-REMEASURE.md))* | −1,198.3 | **17 % → 101 % on the verified part** | 🟢 **v3 correct** | **Re-measured on device: every sliding rung 2…88 FAILS the model's 0.995 bar, and v2's shipped 88 is the worst at 0.99437.** v2's oracle for it is one *un-sharded* measurement filed under two names. v3's veto was procedurally indefensible and **substantively right** |
 | **north-mini `fuse-noadvise`** | −2,551.3 ⚠ | −351.3 | 14 % | 🔴 worse | v2's cell is the one its own driver marked `CONTAMINATED`, untagged, and step 0 could not reproduce its window. **The 14 % is against a number that was never checkable** |
 | **phi-3.5 `-onA`** | −1,594.1 | −1,254.4 | 79 % | 🟠 slightly worse | closest reproduction of a v2 win in the run; the residue is two clause-2 oracle artefacts at PCC gaps of 10⁻⁷ (§3) |
 | **phi-3.5 `nofuse-noadvise`** | −1,284.9 | **0** | **0 %** | 🔴 **total loss** | **same idea, different code.** v3 substituted an interleaved geometry where v2 kept the arithmetic sharded, and returned the key in the query's layout → **PCC 0.917 vs v2's 0.9990.** Two lines. [OP-BY-OP §2](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
@@ -36,7 +36,8 @@ cells improved different kinds, so they are not comparable across versions (§5)
 | **north-mini `-onA`** | **0.0** | **−1,400.0** | new | 🟢 **new** | v2 saw nothing here: the sparse-MoE kind never captured. v3's tracer handlers made it visible |
 | **qwen3.6 `nofuse-noadvise`** | **0.0** | **−1,129.8** | new | 🟢 **new** | same mechanism; its dominant kind now captures |
 | **north-mini `nofuse-noadvise`** | **0.0** | **−171.2** | new | 🟢 **new** | same mechanism |
-| **TOTAL** | **−15,176.8** | **−6,769.3** | **45 %** | | |
+| **TOTAL as published** | **−15,176.8** | **−6,769.3** | **45 %** | | |
+| **TOTAL with v2's unverified sliding win struck** | **−9,257.8** | **−6,769.3** | **73 %** | | [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) |
 
 ⚠ `nmFN` and `g26B` carry **no v2 `done` tag** — both were "complete, untagged". Their v2 figures are
 transcript-derived, and `nmFN`'s is the one the v2 corpus itself treats as void.
@@ -57,15 +58,22 @@ what was predicted.
 
 | loss | µs | category |
 |---|---:|---|
-| g26onA sliding: 17 measurements vetoed from 1 PCC sample | **−5,907** | **decision, taken against data in hand** |
+| ~~g26onA sliding: 17 measurements vetoed from 1 PCC sample~~ | ~~−5,907~~ → **0** | ⚠⚠ **not a loss.** Re-measured: every rung fails the 0.995 bar; v2's 88 fails worst. **v2's win is the defect** |
 | phiB: v3's own substituted geometry is slower **and** PCC 0.917 | **−1,285** | **implementation, two lines** |
 | phiFN: rope placement inexpressible (capture substitution) | **−989** | **capability** |
 | phiA residue: clause-2 oracle artefacts at 10⁻⁷ | −340 | decision |
 | qwenFN, g26B, nmFN (void) | −582 | mixed / not comparable |
 | g26FN: v3 ahead | **+195** | — |
 
-**Two of the three biggest losses are decisions or implementation errors made against measurements v3 already
-held.** Not one is a case of v2 finding something v3 could not find.
+⚠⚠ **The largest row is now retracted.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) re-ran the model's own oracle on
+all seven sliding rungs: **every one fails the 0.995 bar (0.99437–0.99457 against an incumbent 0.99963)**, so the
+−6,055 µs was never available. v3's veto was reached by an unauditable route and was **correct**. What remains a
+defect is **v2's** side: its oracle for that cell is a single *un-sharded* measurement filed under two directory
+names, and the configuration it shipped measures **0.99437 — failing**.
+
+So of v3's remaining gap, **phiB (implementation, two lines) and phiFN (capability) are the real losses**, and both
+are decisions or gaps against measurements v3 already held. Not one is a case of v2 finding something v3 could
+not.
 
 ---
 
