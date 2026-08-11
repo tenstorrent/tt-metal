@@ -187,6 +187,34 @@ COVERAGE_COMPILE_SKIP_OPS = [
 ]
 
 
+def _skip_coverage_unsupported(mathop):
+    """Coverage-build exclusions, shared by every sweep that drives the unary ops.
+
+    A helper rather than a copy per sweep, because the exclusions are properties of the
+    *op* under coverage instrumentation, not of one sweep's envelope: any test that
+    compiles these kernels hits the same invalid assembly. The scheduled llk-e2e job runs
+    `not perf and not quasar` — nightly included — with coverage on, so a nightly sweep
+    without this guard fails the coverage job at build time instead of being skipped.
+    """
+    if not TestConfig.WITH_COVERAGE:
+        return
+
+    # Coverage runs skip the broad profile wholesale; only the standard profile runs.
+    if mathop in BROAD_SWEEP_OPS:
+        pytest.skip(
+            reason="Broad-profile ops are not run under coverage: "
+            "https://github.com/tenstorrent/tt-llk/issues/1435"
+        )
+
+    if mathop in COVERAGE_COMPILE_SKIP_OPS:
+        pytest.skip(
+            reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
+            "assembly under coverage instrumentation: "
+            "https://github.com/tenstorrent/tt-metal/issues/33268 , "
+            "https://github.com/tenstorrent/tt-llk/issues/883"
+        )
+
+
 def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
@@ -355,20 +383,7 @@ def test_eltwise_unary_sfpu(
     """
     broad = mathop in BROAD_SWEEP_OPS
 
-    if TestConfig.WITH_COVERAGE:
-        # Coverage runs skip the broad profile wholesale; only the standard profile runs.
-        if broad:
-            pytest.skip(
-                reason="Broad-profile ops are not run under coverage: "
-                "https://github.com/tenstorrent/tt-llk/issues/1435"
-            )
-        if mathop in COVERAGE_COMPILE_SKIP_OPS:
-            pytest.skip(
-                reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
-                "assembly under coverage instrumentation: "
-                "https://github.com/tenstorrent/tt-metal/issues/33268 , "
-                "https://github.com/tenstorrent/tt-llk/issues/883"
-            )
+    _skip_coverage_unsupported(mathop)
 
     if (
         mathop == MathOperation.Exp
@@ -552,6 +567,10 @@ def test_eltwise_unary_sfpu_edges(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
+    # Same ops, same driver, same templates as test_eltwise_unary_sfpu, so the same
+    # coverage-build exclusions apply — see _skip_coverage_unsupported.
+    _skip_coverage_unsupported(mathop)
+
     _skip_bh_unless_fp32(formats, dest_acc)
 
     if (formats.input_format, formats.output_format, dest_acc) in (
