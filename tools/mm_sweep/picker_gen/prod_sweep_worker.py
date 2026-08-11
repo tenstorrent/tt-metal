@@ -76,6 +76,13 @@ def main():
     res = {"M": M, "K": K, "N": N, "outcome": "runtime", "err": "", "cfg_req": CFG}
     labels = []
     dev = ttnn.open_device(device_id=0)
+    # Report the BOARD that actually ran this measurement. Perf goldens are board-specific -- the compute grid
+    # differs between harvest configurations (an 11x10 dev part vs a 12x10 Galaxy chip), and a golden from one
+    # board is not a threshold on another. Reporting it here, from the device that ran the op, means the
+    # consumer cannot compare against the wrong board's numbers.
+    _g = dev.compute_with_storage_grid_size()
+    res["board"] = f"{_g.x}x{_g.y}"
+    res["board_cores"] = _g.x * _g.y
     ran = False
     try:
         t0 = torch.randn(1, 1, M, K)
