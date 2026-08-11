@@ -306,7 +306,26 @@ formatted sources and the numbers below updated accordingly.
   sliding **3.163 / 3.160 ms/token** at 2048 / 131071 (its SDPA is window-capped);
   full **3.080 ms/token** at 2048 and **3.575 ms/token** at 131071.
 
-## 7. Not done in this stage (by scope)
+## 7. Checkpoint commits
+
+Local only — nothing was pushed. Only `tt-metal` was touched, and only under
+`models/autoports/meta_models_muse_glimmer_30b/` (`git status --porcelain` was
+clean apart from that tree before each commit).
+
+| repo | branch | commit | contents |
+| --- | --- | --- | --- |
+| `/home/ttuser/dev/muse-glimmer/tt-metal` | `agentic-research/hous/muse-glimmer-30b` | `2e2acc13f960200541da67de286223293542f5e4` | implementation, tests, reference harness, capacity probe, docs and the first evidence set |
+| `/home/ttuser/dev/muse-glimmer/tt-metal` | `agentic-research/hous/muse-glimmer-30b` | `6363a7c9badad9d03250ea1a4539eb29a85f26bc` | evidence regenerated against the black/isort-formatted sources, docs updated to those numbers |
+
+A third, doc-only commit on the same repo and branch carries this table itself;
+its own SHA cannot be recorded inside it, so read it with
+`git log --oneline -1` (subject: "record stage checkpoint SHAs in the work log").
+
+No changes were made outside the repo except installing `transformers==5.15.0`
+and `tt-perf-report==1.2.8` into the model-specific venv
+`/home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv` (see section 1).
+
+## 8. Not done in this stage (by scope)
 
 Optimized decoder (dtype/sharding/fusion), multichip, full model, vLLM.  No
 files outside `models/autoports/meta_models_muse_glimmer_30b/` were modified.
