@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 import subprocess
 from collections import namedtuple
@@ -280,68 +279,73 @@ def _bfp_block_aware_compare(
     r_flat = result.float().flatten()
     n = g_flat.numel()
 
-    is_valid = torch.ones(n, dtype=torch.bool)
+    if n == 0:
+        return torch.ones(0, dtype=torch.bool)
 
-    for blk_start in range(0, n, BLOCK):
-        blk_end = min(blk_start + BLOCK, n)
-        g_blk = g_flat[blk_start:blk_end]
-        r_blk = r_flat[blk_start:blk_end]
+    # Batch over 16-element blocks (zero-pad a partial tail block; padded zeros never
+    # raise a block's max, so the real lanes are sized off the same ULP as before, and
+    # they are trimmed off the verdict below). Vectorised rather than looped: a [128, 256]
+    # result is ~2048 blocks, and _mxint_block_aware_compare already batches this way.
+    num_blocks = (n + BLOCK - 1) // BLOCK
+    pad = num_blocks * BLOCK - n
+    if pad:
+        g_flat = torch.cat([g_flat, g_flat.new_zeros(pad)])
+        r_flat = torch.cat([r_flat, r_flat.new_zeros(pad)])
+    g_blk = g_flat.reshape(num_blocks, BLOCK)
+    r_blk = r_flat.reshape(num_blocks, BLOCK)
 
-        both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+    # Non-finite lanes sit outside the lattice and cannot be judged by it: inf and
+    # NaN have no ULP, and the differences they produce defeat the check in both
+    # directions -- inf - inf is NaN and inf - (-inf) is inf, and neither compares
+    # <= anything, so even a matching pair of infinities fails. Judge them by exact
+    # agreement instead, and keep them out of the finite-lane verdict so a block that
+    # is entirely non-finite is not waved through: +inf against -inf, or NaN against
+    # inf, are mismatches, and the PCC pass that follows masks non-finite values too.
+    both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+    nonfinite_ok = both_nan | (
+        torch.isinf(g_blk)
+        & torch.isinf(r_blk)
+        & (torch.signbit(g_blk) == torch.signbit(r_blk))
+    )
+    g_finite = torch.isfinite(g_blk)
+    r_finite = torch.isfinite(r_blk)
+    both_finite = g_finite & r_finite
 
-        # Non-finite lanes sit outside the lattice and cannot be judged by it: inf and
-        # NaN have no ULP, and the differences they produce defeat the check in both
-        # directions -- inf - inf is NaN and inf - (-inf) is inf, and neither compares
-        # <= anything, so even a matching pair of infinities fails. Judge them by exact
-        # agreement instead, and keep them out of the finite-lane verdict so a block that
-        # is entirely non-finite is not waved through: +inf against -inf, or NaN against
-        # inf, are mismatches, and the PCC pass that follows masks non-finite values too.
-        nonfinite_ok = both_nan | (
-            torch.isinf(g_blk)
-            & torch.isinf(r_blk)
-            & (torch.signbit(g_blk) == torch.signbit(r_blk))
+    # Per-block max over the finite lanes of *either* side (a lane finite on one side
+    # only still sizes the block, as it did when the two sides were concatenated).
+    block_max = torch.maximum(
+        torch.where(g_finite, g_blk.abs(), torch.zeros_like(g_blk)).amax(dim=1),
+        torch.where(r_finite, r_blk.abs(), torch.zeros_like(r_blk)).amax(dim=1),
+    )
+    # A block with no finite lane at all, and an all-zero block, both land on max 0 and
+    # so on ULP 0: the first has no finite lane to judge, and in the second every finite
+    # lane is exactly 0, which `tiny_ok` accepts on absolute closeness below.
+    nonzero = block_max > 0
+    # log2 in float64 so floor() lands on the same integer math.log2 gave per block;
+    # in float32 an exact power of two can come back a hair under and floor a step early.
+    safe_max = torch.where(nonzero, block_max, torch.ones_like(block_max)).double()
+    one_ulp = (
+        torch.where(
+            nonzero,
+            torch.exp2(torch.floor(torch.log2(safe_max)) - (mantissa_bits - 1)),
+            torch.zeros_like(safe_max),
         )
-        both_finite = torch.isfinite(g_blk) & torch.isfinite(r_blk)
+        .float()
+        .unsqueeze(1)
+    )
 
-        finite_vals = torch.cat(
-            [
-                g_blk[torch.isfinite(g_blk)].abs(),
-                r_blk[torch.isfinite(r_blk)].abs(),
-            ]
-        )
-        if finite_vals.numel() == 0:
-            # Nothing finite anywhere in the block, so there is no block max to size a
-            # ULP from. Every lane is non-finite and judged as such.
-            is_valid[blk_start:blk_end] = nonfinite_ok
-            continue
-
-        block_max = finite_vals.max().item()
-        if block_max == 0:
-            is_valid[blk_start:blk_end] = torch.where(
-                both_finite,
-                torch.isclose(g_blk, r_blk, atol=1e-5, rtol=0.0),
-                nonfinite_ok,
-            )
-            continue
-
-        block_exp = math.floor(math.log2(block_max))
-        one_ulp = 2.0 ** (block_exp - mantissa_bits + 1)
-
-        diff = (g_blk - r_blk).abs()
-        ulp_ok = diff <= max_ulp_diff * one_ulp
-        # Padding / zero lanes can disagree slightly after pack-unpack while still
-        # printing as 0.00; ULP sizing from a large value elsewhere in the block
-        # can make those tiny residuals look like multi-ULP failures. Accept when
-        # both sides are negligible magnitude and close in absolute terms.
-        max_abs = torch.maximum(g_blk.abs(), r_blk.abs())
-        tiny_ok = (max_abs < 1e-4) & torch.isclose(
-            g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
-        )
-        is_valid[blk_start:blk_end] = torch.where(
-            both_finite, ulp_ok | tiny_ok, nonfinite_ok
-        )
-
-    return is_valid
+    diff = (g_blk - r_blk).abs()
+    ulp_ok = diff <= max_ulp_diff * one_ulp
+    # Padding / zero lanes can disagree slightly after pack-unpack while still
+    # printing as 0.00; ULP sizing from a large value elsewhere in the block
+    # can make those tiny residuals look like multi-ULP failures. Accept when
+    # both sides are negligible magnitude and close in absolute terms.
+    max_abs = torch.maximum(g_blk.abs(), r_blk.abs())
+    tiny_ok = (max_abs < 1e-4) & torch.isclose(
+        g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
+    )
+    is_valid = torch.where(both_finite, ulp_ok | tiny_ok, nonfinite_ok)
+    return is_valid.reshape(-1)[:n]
 
 
 # Per-format params for _mxint_block_aware_compare: (elem_scale, max_ulp_steps).
@@ -588,13 +592,15 @@ def passed_test(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
         )
         is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
-        is_valid = (
-            is_close
-            | is_nan
-            | _bfp_block_aware_compare(
+        is_valid = is_close | is_nan
+        # `|` does not short-circuit, so only reach for the lattice when the tolerance
+        # check has actually rejected something. Near-exact suites (test_unary_datacopy,
+        # test_sfpu_binary_float) accept every element here and would otherwise pay for a
+        # second full-tensor compare that cannot change the verdict.
+        if not torch.all(is_valid):
+            is_valid = is_valid | _bfp_block_aware_compare(
                 golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
             )
-        )
     elif output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
         is_valid = _bfp_block_aware_compare(
