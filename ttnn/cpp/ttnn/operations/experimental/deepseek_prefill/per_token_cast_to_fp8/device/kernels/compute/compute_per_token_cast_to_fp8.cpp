@@ -196,7 +196,7 @@ void kernel_main() {
             // to e4m3 -- fused divide+untilize, no cb_out_tile L1 round-trip and no separate untilize pass.
             // In 32-bit DST (fp32_dest_acc) the half-sync pack-untilize cap is 4 tiles = one block. -----
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
-            mul_bcast_cols_init_short(cb_tile_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init(cb_tile_id, cb_inv_scale_tiles_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
             cb_inv_scale_tiles.wait_front(block_ht);
             cb_output_e4m3.reserve_back(tiles_per_block);
