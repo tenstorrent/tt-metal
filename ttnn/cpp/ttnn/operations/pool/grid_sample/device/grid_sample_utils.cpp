@@ -11,13 +11,17 @@ namespace ttnn::prim {
 
 bool should_use_split_reader(
     const Tensor& input_tensor, const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode) {
-    // Split reader is only compatible with a sharded grid tensor
-    if (mode == "nearest") {
-        return true;
-    }
-
+    // Split reader is only compatible with a sharded grid tensor.
+    // For DRAM interleaved grids, the inner loop issues a DRAM read + barrier on every
+    // iteration. Enabling split reader here causes both RISCV_0 and RISCV_1 to each
+    // redundantly read the same grid stick pages from DRAM, doubling DRAM traffic.
+    // With 64 cores this produces ~65k concurrent DRAM transactions and stalls the NOC.
     if (!grid_tensor.is_sharded()) {
         return false;
+    }
+
+    if (mode == "nearest") {
+        return true;
     }
 
     // In the case when the grid is not precomputed, majority of processing time goes to computing the coordinates and

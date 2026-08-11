@@ -5,7 +5,6 @@
 #include <cmath>
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
-#include "api/debug/dprint.h"
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include "../grid_sample_reader_common.hpp"
 // experimental headers already included via grid_sample_reader_common.hpp
