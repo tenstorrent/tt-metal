@@ -33,6 +33,7 @@ on:
           - "wh_galaxy_perf (WH Galaxy perf)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_loudbox (BH LoudBox)"
+          - "bh_galaxy (BH Galaxy)"
           - "wh_n150 (N150)"
       tier:
         description: "Select tier to test (classification mirrors the e2e/unit tier; 'all' runs every tier)"
@@ -109,7 +110,7 @@ jobs:
       - name: Resolve SKU, model and tier selection
         id: resolve
         run: |
-          ALL_SKUS="wh_llmbox,wh_galaxy_perf,bh_quietbox_2,bh_loudbox,wh_n150"
+          ALL_SKUS="wh_llmbox,wh_galaxy_perf,bh_quietbox_2,bh_loudbox,bh_galaxy,wh_n150"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

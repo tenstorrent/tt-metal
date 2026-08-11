@@ -369,6 +369,32 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: "Qwen3-32B device (BH Galaxy)"
+  model: Qwen/Qwen3-32B
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-blackhole
+  tt-qwen3-text-ver: qwen3_32b_galaxy
+  # Blackhole Galaxy decode runs column-axis collectives that require a 2D-torus
+  # fabric (1D fabrics fail on the cross-column route); worker_l1_size follows the
+  # BH Qwen demo (text_qwen_demo.py).
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  sampling-tests: true
+  # Blackhole's on-device non-greedy sampling has no reproducible seeding (the full
+  # ttnn.sampling pipeline is unsupported on BH; see SAMPLING_AG_CONFIG in
+  # qwen_model_config.py), so seed-determinism tests are excluded: verified on BH Galaxy
+  # that the remaining 44 tests pass while the seeding/mixed-params ones fail flakily.
+  sampling-test-filter: "not test_seeding_and_variety and not test_mixed_params_batch"
+  multimodal: false
+  skus:
+    bh_galaxy:
+      timeout: 65
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
 # ── Qwen VL ────────────────────────────────────────────────────────
 
 - name: "Qwen2.5-VL-72B-Instruct"
