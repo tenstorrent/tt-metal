@@ -619,6 +619,8 @@ from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 from ttnn._ttnn.operations.experimental import RoutedExpertActivation
+from ttnn._ttnn.operations.experimental import SmallMMatmulConfig
+from ttnn._ttnn.operations.experimental import create_small_m_weight_memory_config
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
