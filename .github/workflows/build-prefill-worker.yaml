@@ -1,7 +1,6 @@
 name: "Build prefill-worker image"
 
 on:
-  push:
   workflow_dispatch:
     inputs:
       version:
