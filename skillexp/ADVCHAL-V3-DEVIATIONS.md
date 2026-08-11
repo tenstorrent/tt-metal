@@ -15,7 +15,7 @@ The distribution is the finding, so it goes first.
 |---|---|---|
 | **(A) wrong estimates** | 4 | credibility of the predictions — no measurement was harmed |
 | **(B) wrongly implemented** | 3 | noise: false positives that make real signals harder to see |
-| **(C) unexpected side effects** | 3 | **the actual lost wins** — at least 0.90 % on one cell, plausibly more |
+| **(C) unexpected side effects** | 4 | **the actual lost wins** — 0.90 % provably on one cell, and plausibly gemma-4-26B `-onA`'s entire sliding kind (§3.2a) |
 
 **Estimates cost credibility, implementations cost noise, side effects cost value.** And the side effects are
 the category I never looked for.
@@ -129,6 +129,21 @@ geometry should be labelled as such rather than presented as the advice.
 
 This also revises §2.3: phiB's `no_change` is **correct** — the only faster thing it found breaks the model.
 Whether v2's −5.74 % shipped that same broken geometry is now an open question about v2, not about v3.
+
+## 3.2a A correctness rejection ends the ladder for that kind — nothing says it should not
+
+Found while collecting [`PCC-BY-GRID`](ADVCHAL-V3-PCC-BY-GRID.md). gemma-4-26B `-onA` tried **one** rung on the
+kind v2 won — 1 → 11 cores, PCC 0.99457, `rejected_correctness` — and then stopped searching that kind. **The
+grid v2 shipped, 88 cores, was never tried.** On the other kind the same cell went on to a second rung and kept
+it.
+
+So this is a **better explanation of that cell's miss than §3.1**: the rule that vetoes is one problem, and
+*stopping the search on a veto* is a different one. `SKILL.md` says to sweep the ladder and says nothing about
+what to do when a rung fails correctness — so the cell did the locally sensible thing and abandoned the class.
+
+Unmodelled because I specified the ladder as a *performance* search and the oracle as a *gate*, and never
+considered their interaction. Fix: a correctness rejection continues the ladder, and the untried rungs are
+recorded as `not_screened_after_correctness_rejection` so the gap is visible rather than silent.
 
 ## 3.3 Parking a cell branch but not its run branch collides at publish
 
