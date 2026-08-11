@@ -1537,7 +1537,7 @@ void MeshDeviceImpl::init_perf_debug_profiler(const std::shared_ptr<MeshDevice>&
     if (perf_debug_profiler_) {
         return;
     }
-    // Opt-in: the drainer device-zone profiler boots the L2CPU drainer and spawns host drain threads.
+    // Opt-in: the drainer device-zone profiler boots the device-side drainer and spawns host drain threads.
     // Off by default so it never contends with a standalone drainer bring-up or the standard profiler.
     const char* s = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
     if (s == nullptr || *s == '\0' || *s == '0') {

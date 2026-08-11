@@ -10,12 +10,11 @@
 // SPSC profiler rings DIRECTLY via the resident drainer firmware and streams device zones to Tracy.
 //
 // Engine (proven in the standalone drain harness, silicon-verified):
-//   boot_profzone (idle-once + active-FW JUMP handoff)  ->  2 D2HSockets (dual relay, 4 MiB each, multi-window)
-//   ->  N continuous drain threads (pages -> spsc_decode -> WorkerZonePacket)  ->  RealtimeProfilerTracyHandler.
-// Reuses the shared contracts x280_profzone_boot.hpp + x280_spsc_decode.hpp so it can never drift from
-// the firmware. Booted once at MeshDevice bring-up (resident); P_STOP at teardown -- the drainer reset is
-// released exactly once and never re-asserted (re-asserting reset on a live L2CPU is the reservation-churn
-// trigger; only the active FW is (re)loaded via the JUMP handoff).
+//   boot_device (resident drain kernels, slow-dispatch LaunchProgram)  ->  2 D2HSockets (dual relay,
+//   4 MiB each, multi-window)  ->  N continuous drain threads (pages -> spsc_decode -> WorkerZonePacket)
+//   ->  RealtimeProfilerTracyHandler.
+// Shares the marker wire format with the drain kernel through spsc_marker_decode.hpp, so host and device
+// can never drift. Booted once at MeshDevice bring-up (resident); P_STOP at teardown.
 #pragma once
 
 #include <atomic>
