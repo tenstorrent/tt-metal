@@ -105,8 +105,14 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     // For each distribution dimension, if sharded on the gather dim, make it replicated
     const auto& logical_shape = input_tensor.logical_shape();
     const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
+    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
     for (auto& output_placement : output_placements) {
         if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
+            // Temp workaround for #52331:
+            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
+            if (shard->dim >= rank || shard->dim < -rank) {
+                continue;
+            }
             // Shard::dim is always unnormalized by construction, so normalize here
             if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
                 output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
