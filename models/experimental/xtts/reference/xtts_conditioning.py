@@ -32,11 +32,18 @@ import torch
 from torch import einsum, nn
 from torch.nn import functional as F
 
-from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HIDDEN_SIZE
+from models.experimental.xtts.reference.xtts_gpt_block import HF_REPO_ID, HF_REVISION, HIDDEN_SIZE
 
 N_MELS = 80
 NUM_ATTN_HEADS = 16  # GPT.__init__ passes heads (=16) to ConditioningEncoder
 NUM_LATENTS = 32
+
+# PerceiverResampler geometry (coqui's own defaults, named so the TTNN port imports them
+# rather than re-declaring the same numbers).
+PERCEIVER_DEPTH = 2
+PERCEIVER_HEADS = 8
+PERCEIVER_HEAD_DIM = 64
+PERCEIVER_FF_MULT = 4
 
 # Mel-spectrogram config for the perceiver-resampler path (coqui get_gpt_cond_latents).
 MEL_N_FFT = 2048
@@ -201,7 +208,7 @@ def FeedForward(dim, mult=4):
 class PerceiverAttention(nn.Module):
     """Cross-attention; latents attend to [latents ; context] (CPU math path)."""
 
-    def __init__(self, dim, dim_head=64, heads=8, cross_attn_include_queries=True):
+    def __init__(self, dim, dim_head=PERCEIVER_HEAD_DIM, heads=PERCEIVER_HEADS, cross_attn_include_queries=True):
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
@@ -230,7 +237,15 @@ class PerceiverAttention(nn.Module):
 
 
 class PerceiverResampler(nn.Module):
-    def __init__(self, dim, depth=2, num_latents=NUM_LATENTS, dim_head=64, heads=8, ff_mult=4):
+    def __init__(
+        self,
+        dim,
+        depth=PERCEIVER_DEPTH,
+        num_latents=NUM_LATENTS,
+        dim_head=PERCEIVER_HEAD_DIM,
+        heads=PERCEIVER_HEADS,
+        ff_mult=PERCEIVER_FF_MULT,
+    ):
         super().__init__()
         self.proj_context = nn.Identity()
         self.latents = nn.Parameter(torch.randn(num_latents, dim))
@@ -293,7 +308,7 @@ def load_reference_audio(sample="en_sample.wav", max_seconds=COND_CHUNK_SEC):
     from huggingface_hub import hf_hub_download
     from scipy.signal import resample_poly
 
-    path = hf_hub_download(repo_id=HF_REPO_ID, filename=f"samples/{sample}")
+    path = hf_hub_download(repo_id=HF_REPO_ID, filename=f"samples/{sample}", revision=HF_REVISION)
     audio, sr = sf.read(path, dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)

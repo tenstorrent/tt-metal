@@ -802,6 +802,6 @@ class TtResNetSpeakerEncoder(LightweightModule):
         # same either way, but on the column form the reduction is over a dim that is 1 element
         # in a 32-wide tile, so ttnn has to zero the tile padding first (a 9us FillPad) and then
         # reduce on one core; on the row form the 512 dim is tile-aligned and neither happens.
-        g = ttnn.reshape(g, [1, 512])
+        g = ttnn.reshape(g, [1, self.fc_w.shape[0]])
         norm = ttnn.sqrt(ttnn.sum(ttnn.mul(g, g), dim=-1, keepdim=True))
         return ttnn.div(g, norm)

@@ -29,6 +29,7 @@ from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_block import HIDDEN_SIZE
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
 from models.experimental.xtts.reference.xtts_hifi_decoder import LATENT_SCALE, SR_SCALE
+from models.experimental.xtts.reference.xtts_hifigan import COND_CHANNELS
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
 from models.experimental.xtts.tt.xtts_generator import TtTracedDecoder, TtXttsGenerator
@@ -345,6 +346,12 @@ class TtXttsTracedSession:
         self.voc_in = ttnn.from_torch(
             torch.zeros(1, self.N, HIDDEN_SIZE), layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32
         )
+        # The session's ONE speaker embedding, in DRAM. ``_setup`` rewrites it in place (eagerly at
+        # warmup, then on every SETUP replay) and the vocoder reads it; keeping a single object is
+        # what makes the vocoder's fast cond-bias fold trace-legal — see step 2.
+        self.g = ttnn.from_torch(
+            torch.zeros(1, 1, COND_CHANNELS), layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, dtype=ttnn.float32
+        )
 
         def _setup():
             cl = tt._style_mean(self.wav_devs)  # [1, 32, 1024], averaged over the windows
@@ -356,29 +363,47 @@ class TtXttsTracedSession:
             # per-window style embeddings go to DRAM in ``_style_window``.
             g_dram = ttnn.to_memory_config(g, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
-            return g_dram, gpt.prefill_on_device(self.text_dev, cl)
+            # ...then into the ONE persistent g (see ``self.g``). Unconditional, so the eager warmup
+            # and the captured replay run the IDENTICAL op graph — a branch here would leave this
+            # copy out of the program cache and the capture dies on "Cannot load new binaries during
+            # trace capture".
+            ttnn.copy(g_dram, self.g)
+            ttnn.deallocate(g_dram)
+            return gpt.prefill_on_device(self.text_dev, cl)
 
         # ---- 2. WARM UP (compile) all three stages eagerly, still before any capture. ----
-        g_warm, warm_prompt_len = _setup()  # also populates the mel-frontend index cache
+        # The vocoder warmup folds against ``self.g`` and the vocoder capture reads it, while the
+        # SETUP capture rewrites it IN PLACE — one object throughout.
+        #
+        # That single-object discipline is what lets the vocoder capture use the FAST cond-bias fold,
+        # which is bit-identical to eager. The fold is keyed on ``(id(cond_bias), input signature)``
+        # (xtts_conv.TtConv1d._folded_bias, via TtHifiganGenerator._cond's id(g) memo), so a fresh g
+        # per stage would miss the cache and run the fold's ``from_device`` INSIDE the capture — fatal,
+        # and it deadlocks teardown. This used to be worked around with ``cond_bias_trace_safe()``
+        # around both regions, which is trace-legal but ~82us/pass slower and NOT bit-exact (it adds
+        # post-conv in the stage's bf16, where the fold combines in fp32). Warming against the very
+        # buffer the trace will read gets the fast path legally instead.
+        #
+        # The cached folded bias is a function of g's VALUES, so the warmup must see the real ones:
+        # it does, because this eager ``_setup()`` actually computes g (a capture would only record
+        # the ops, leaving the buffer undefined). Every later replay recomputes the same values into
+        # the same buffer — the reference audio is fixed for the whole session — so it never goes stale.
+        warm_prompt_len = _setup()  # also populates the mel-frontend index cache
         assert warm_prompt_len == prompt_len, f"prefill gave prompt_len {warm_prompt_len}, expected {prompt_len}"
         self.decoder.warmup()  # needs the KV cache seeded, which the prefill above just did
-        # The vocoder folds its conditioning bias into the conv bias via a host transfer — fatal
-        # inside a trace, so both warmup and capture use the trace-safe on-device add instead.
-        with cond_bias_trace_safe():
-            _ = voc(ttnn.clone(self.voc_in), g_warm)
-            ttnn.synchronize_device(dev)
+        _ = voc(ttnn.clone(self.voc_in), self.g)  # folds + caches the cond bias against self.g
+        ttnn.synchronize_device(dev)
 
         # ---- 3. CAPTURE the three traces back to back. ----
         self.setup_tid = ttnn.begin_trace_capture(dev, cq_id=0)
-        self.g, _ = _setup()  # g + the seeded caches are the trace's persistent outputs
+        _setup()  # the seeded caches + self.g are the trace's persistent outputs
         ttnn.end_trace_capture(dev, self.setup_tid, cq_id=0)
         ttnn.synchronize_device(dev)
         self.decoder.capture()
-        with cond_bias_trace_safe():
-            self.voc_tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            self.wav_dev = voc(ttnn.clone(self.voc_in), self.g)
-            ttnn.end_trace_capture(dev, self.voc_tid, cq_id=0)
-            ttnn.synchronize_device(dev)
+        self.voc_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        self.wav_dev = voc(ttnn.clone(self.voc_in), self.g)
+        ttnn.end_trace_capture(dev, self.voc_tid, cq_id=0)
+        ttnn.synchronize_device(dev)
         # Samples per generator step, read off the capture rather than assumed.
         self.upsample = self.wav_dev.shape[-2] // _interp_len(self.N)
         self.compile_s = time.perf_counter() - t0

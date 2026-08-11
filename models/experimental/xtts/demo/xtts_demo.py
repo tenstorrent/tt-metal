@@ -7,23 +7,29 @@ Runs the whole model on a Tenstorrent device (audio conditioning -> GPT KV-cache
 autoregressive decode -> HiFi-GAN vocoder) and writes the generated 24 kHz audio
 to a WAV file you can play.
 
-Decoding is **greedy** (deterministic, the validated path). Real XTTS samples
-(temperature / top-k / top-p) for more natural prosody, so expect flatter, and at
-longer lengths possibly repetitive, output from greedy — that is an on-device
-sampling feature, not a bug in this pipeline.
+Decoding SAMPLES on device (temperature 0.65 / top-k 50 / top-p 0.85 / repetition
+penalty 5.0 — the tuned XTTS-v2 settings), which is what gives natural prosody and
+lets a take self-terminate at STOP instead of droning to the token cap.
 
-Everything runs on device except the BPE tokenizer and the conditioning 80-mel
-(both host, outside the tensor-compute path).
+Only ``--text`` / ``--ref-audio`` / ``--min-tokens`` are exposed; every other knob is
+fixed to those tuned defaults in ``main()``, so the demo always runs full-model-traced.
+
+Everything runs on device except the BPE tokenizer, the reference-audio load/resample,
+and the fade-in/out on the finished waveform — all host, outside the tensor-compute
+path. Both mels (conditioning 80-mel and speaker-encoder 64-mel) run on device, inside
+the traced setup.
 
 Usage:
     source python_env/bin/activate
     export TT_METAL_HOME=$(pwd); export PYTHONPATH=$(pwd)
-    python models/experimental/xtts/demo/xtts_demo.py \\
-        --text "Hello from Tenstorrent." --max-tokens 200
+    python models/experimental/xtts/demo/xtts_demo.py --text "Hello from Tenstorrent."
 
-    # bring your own reference voice + write the torch reference too, for A/B:
+    # bring your own reference voice:
     python models/experimental/xtts/demo/xtts_demo.py \\
-        --ref-audio /path/to/voice.wav --write-torch-ref --output out.wav
+        --ref-audio /path/to/voice.wav --text "Hello from Tenstorrent."
+
+The WAV lands in ``generated/xtts_demo/``. To also write the CPU torch reference on the
+SAME codes (an A/B of the device vocoder), set ``args.write_torch_ref = True`` in ``main()``.
 """
 
 import argparse
@@ -349,8 +355,13 @@ def main():
     )
     ap.add_argument(
         "--ref-audio",
-        default="422-122949-0013.wav",
-        # default="LJ025-0076.wav",
+        # DOWNLOADABLE by default, so the demo runs on a fresh checkout with no local audio: four
+        # single-speaker coqui-ai/TTS LJSpeech test clips (9.66 + 9.67 + 5.14 + 8.11 = 32.6 s),
+        # cached under torch.hub after the first fetch. They are joined and clipped to gpt_cond_len
+        # (30 s), which is 8 conditioning windows — the same window count a 30 s local reference
+        # gives, so the traced setup sees the shapes this demo is tuned for. The single HF samples
+        # (en_sample.wav) are ~3 s, i.e. ONE window, so they exercise none of that.
+        default="LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav",
         help="voice to clone: local WAV path, coqui-ai/TTS test clip name (LJ001-0001.wav, or "
         "'LJ001-0001.wav+LJ001-0003.wav+...' to concatenate clips into a longer reference), "
         "or HF sample name (en_sample.wav).",
