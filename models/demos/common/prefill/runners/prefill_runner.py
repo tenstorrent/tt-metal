@@ -899,22 +899,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
     _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
     _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
-    # FEATURE TOGGLE (PREFILL_MIGRATION_EXPORT_TO_FILE=1): FILE-EXPORT transport. Instead of
-    # pushing the device map to a co-located worker's shmem queues and blocking on WORKER_READY,
-    # each rank drops its local device map to a host-local text file and rank 0 leaves the table
-    # protobuf on disk; an externally-managed migration worker picks both up. See migration.py's
-    # "Migration metadata transport selection" note. Legacy shmem transport remains the default.
     from models.demos.common.prefill.runners.migration import migration_file_export_enabled
 
     _file_export = migration_file_export_enabled()
-    # The selftest/interleaved paths drive migrate()/wait_complete() through the legacy
-    # MigrationLayerClient, which the file-export transport never creates — reject the combination
-    # up front (rank-invariant: env-only) rather than fail an assert after bring-up.
+    # The selftest/interleaved paths drive migrate()/wait_complete() through the MigrationLayerClient,
+    # which file-export mode never creates — reject the combination up front (rank-invariant:
+    # env-only) rather than fail an assert after bring-up.
     if _file_export and (_selftest or _interleaved):
         raise ValueError(
             "PREFILL_MIGRATION_EXPORT_TO_FILE=1 is incompatible with PREFILL_MIGRATION_SELFTEST=1 / "
-            "PREFILL_MIGRATION_INTERLEAVED=1: the file-export transport has no MigrationLayerClient, "
-            "so the runner cannot issue migrate() itself. Use the legacy transport for the self-test."
+            "PREFILL_MIGRATION_INTERLEAVED=1: file-export mode has no MigrationLayerClient, "
+            "so the runner cannot issue migrate() itself."
         )
 
     # Both flags put a scheduler stand-in on the master's ack channel, and try_consume_all() is a
@@ -965,8 +960,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         #   * The model RUNTIME builds + serializes the model-specific KV chunk table and returns its
         #     path (runtime.build_kv_chunk_table — the model owns the cache layout / address math).
         #   * RANK 0 ONLY publishes that serialized table to the worker and blocks on WORKER_READY.
-        # FILE-EXPORT transport (PREFILL_MIGRATION_EXPORT_TO_FILE=1): the device map goes to a
-        # host-local text file and the table stays on disk instead; no worker handshake.
+        # With PREFILL_MIGRATION_EXPORT_TO_FILE=1 the device map goes to a host-local text file
+        # and the table stays on disk instead; no worker handshake.
         from models.demos.common.prefill.runners.migration import (
             allgather_kv_stage_layout,
             deliver_device_map_and_gather_stage_layout,
@@ -1020,9 +1015,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
             )
         elif _file_export:
-            # FILE EXPORT: every rank drops its local device map to a host-local text file for the
-            # externally-managed worker, then joins the same stage-layout all-gather. Never imports
-            # the worker client extension.
             stage_layout = export_device_map_file_and_gather_stage_layout(
                 mesh_device,
                 kv_base_addr,
@@ -1032,7 +1024,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 migration_device_map_file_path(),
             )
         else:
-            # LEGACY: every rank pushes its local device map to the co-located worker's shmem queues.
             stage_layout = deliver_device_map_and_gather_stage_layout(
                 mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
             )
@@ -1065,9 +1056,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
         elif _file_export:
-            # FILE EXPORT: rank 0 builds + serializes the merged table exactly like the legacy
-            # publish below, but the file on disk IS the handoff — no MigrationLayerClient, no
-            # SET_TABLE, no WORKER_READY. The device maps already landed per-host above.
+            # The files on disk are the handoff: no SET_TABLE, no WORKER_READY.
             if is_first_rank:
                 table_path = runtime.build_kv_chunk_table(
                     kv_caches,
@@ -1076,17 +1065,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     num_my_layers=num_my_layers,
                     stage_layout=stage_layout,
                 )
-                logger.info(
-                    f"[migration] merged KV chunk table -> {table_path} "
-                    f"(file-export transport; no worker handshake)"
-                )
-            logger.info(
-                f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()} "
-                f"(file-export transport)"
-            )
+                logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
+            logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
         elif is_first_rank:
-            # LEGACY, RANK 0: model runtime builds + serializes the merged table (spanning all
-            # gathered stages), then publish the serialized path + block on WORKER_READY.
+            # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
+            # stages), then publish the serialized path + block on WORKER_READY.
             table_path = runtime.build_kv_chunk_table(
                 kv_caches,
                 table_path,
