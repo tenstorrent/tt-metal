@@ -591,6 +591,27 @@ else
     echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
 fi
 
+# --- XIP disassembly dump (default OFF; kept under --dev) ---
+# MUST be set before precompile_warm: the warm pass LOADS kernel binaries, and
+# the dump fires on load, so exporting this after it is a no-op (verified — the
+# first cut sat below the warm phase and still wrote all 173 files).
+#
+# tt_memory.cpp re-writes the XIP-transformed ELF as <kernel>.xip.elf on every
+# kernel BINARY LOAD — ~514 KB per kernel, so ~1.4 GB on a 2753-kernel golden
+# run, MEASURED at ~12% of wall on a cold farm build (51s -> 45s on a 173-kernel
+# bench). The XIP transform itself is one line (`segments.front().address = 0`),
+# so the file's entire information content is a single rebase.
+#
+# Its ONLY consumer is tools/triage/check_binary_integrity.py, which byte-compares
+# L1 against the loaded image. dump_callstacks.py — the script that actually
+# diagnoses hangs — never reads any ELF, and the field is already optional
+# (kernel_xip_path is None for NCRISC on wormhole, and the check is guarded).
+# So: keep the dump under --dev, where triage is the whole point, and drop it for
+# ordinary runs. Set TT_METAL_DISABLE_XIP_DUMP=0 to force it back on.
+if [[ "$DEV_MODE" != true ]]; then
+    export TT_METAL_DISABLE_XIP_DUMP="${TT_METAL_DISABLE_XIP_DUMP:-1}"
+fi
+
 # --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
 if [[ "$PRECOMPILE" == true ]]; then
     if [[ "$SIM_MODE" == true ]]; then
