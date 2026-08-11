@@ -3,15 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <set>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +35,25 @@ struct TopologySatSession {
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
+
+// Read a non-negative integer environment variable (clause-sharing knobs); returns `fallback` if unset/empty/invalid.
+inline long topology_sat_env_long(const char* name, long fallback) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || v[0] == '\0') {
+        return fallback;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const long parsed = std::strtol(v, &end, 10);
+    if (end == v || errno != 0 || parsed < 0) {
+        return fallback;
+    }
+    return parsed;
+}
+
+inline double topology_sat_elapsed_ms(const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
 
 bool are_globals_adjacent(const TopologySatGraphView& graph_data, size_t global_i, size_t global_j) {
     if (global_i >= graph_data.n_global || global_j >= graph_data.n_global) {
@@ -1385,6 +1408,124 @@ int topology_sat_symmetry_assumption_lit(const TopologySatGraphView& graph_data,
     return enc.assign_lit[0][0];
 }
 
+// Clause-sharing portfolio (env-gated: TT_TOPO_SAT_SHARE=1). N incremental CaDiCaL workers cooperate on the single
+// hard base-embedding solve: each has its own solver + seed, connects a Learner that publishes short learned clauses
+// to a shared pool, and between conflict-budget windows imports peers' clauses via add(). This reproduces
+// gimsatul-style clause sharing while every worker stays a full incremental CaDiCaL (BVE, warm phases, and
+// blocking-clause enumeration all retained) -- CaDiCaL's ExternalPropagator import path was rejected because it needs
+// observed (frozen) vars and thus disables elimination. Sound + model-preserving: every shared clause is entailed by
+// the common base formula, so importing removes no model and changes no answer; it only prunes the search. The first
+// worker to a model cancels the rest (shared flag) and its mapping is returned.
+inline bool topology_sat_run_sharing_portfolio(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    int n_workers,
+    long base_seed,
+    bool fastsat,
+    int share_budget,
+    int share_max_size,
+    std::vector<int>& mapping_out) {
+    std::atomic<bool> done{false};
+    std::mutex mtx;  // guards encode serialization + the winner claim
+    ClauseSharingPool pool;
+    std::atomic<long> shared_total{0};
+    std::vector<int> best;
+    int winner = -1;
+    double win_ms = 0.0;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(n_workers));
+    for (int k = 0; k < n_workers; ++k) {
+        workers.emplace_back([&, k]() {
+            TopologySatSolver solver;
+            solver.set_cancel_flag(&done);
+            (void)solver.set_option("seed", static_cast<int>((base_seed >= 0 ? base_seed : 0) + k));
+            if (fastsat) {
+                (void)solver.set_option("target", 2);
+                (void)solver.set_option("phase", 1);
+            }
+            TopologySatHardEncoding enc;
+            {
+                std::lock_guard<std::mutex> lk(mtx);  // serialize encode (cheap; sidesteps any shared-state race)
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+                    return;
+                }
+            }
+            // Connect export AFTER encode so only learned (not input) clauses are published.
+            solver.enable_clause_export(&pool, k, share_max_size);
+            const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
+
+            // Budgeted incremental loop: solve a window, import peers' clauses, repeat until SAT/UNSAT/cancel.
+            bool first = true;
+            std::size_t cursor = 0;
+            std::vector<std::vector<int>> imported;
+            for (;;) {
+                if (done.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                if (first && assumption != 0) {
+                    solver.assume(assumption);  // one-shot hint (retracted after the solve)
+                }
+                const int status = solver.solve_limited(share_budget);
+                if (status == TopologySatSolver::kSat) {
+                    std::vector<int> m;
+                    if (!topology_sat_decode_hard_solution(solver, enc, m)) {
+                        return;
+                    }
+                    std::lock_guard<std::mutex> lk(mtx);
+                    if (!done.exchange(true)) {
+                        best = std::move(m);
+                        winner = k;
+                        win_ms = topology_sat_elapsed_ms(t0);
+                    }
+                    return;
+                }
+                if (status == TopologySatSolver::kUnsat) {
+                    if (first && assumption != 0) {
+                        first = false;  // the hint may have forced UNSAT -- retry the window without it
+                        continue;
+                    }
+                    return;  // genuine UNSAT for this worker
+                }
+                // status == 0: conflict budget exhausted (or cancelled) -> import peers' clauses and continue.
+                first = false;
+                imported.clear();
+                pool.drain(k, cursor, imported);
+                for (const auto& cl : imported) {
+                    for (const int lit : cl) {
+                        solver.add(lit);
+                    }
+                    solver.add(0);
+                }
+                shared_total.fetch_add(static_cast<long>(imported.size()), std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    if (winner < 0) {
+        return false;
+    }
+    mapping_out = std::move(best);
+    log_info(
+        tt::LogFabric,
+        "[topo-sat] clause-sharing portfolio: {}-way, winner=worker {} in {:.1f} ms (budget={}, max_size={}, pool={}, "
+        "imports={})",
+        n_workers,
+        winner,
+        win_ms,
+        share_budget,
+        share_max_size,
+        pool.size(),
+        shared_total.load(std::memory_order_relaxed));
+    return true;
+}
+
 bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -1449,6 +1590,34 @@ bool topology_sat_search(
     };
 
     auto solve_hard_only = [&](TopologySatSolver& solver, TopologySatHardEncoding& enc) -> bool {
+        // Opt-in cooperative clause-sharing portfolio (TT_TOPO_SAT_SHARE=1): run N incremental CaDiCaL workers that
+        // share short learned clauses to accelerate the single hard base-embedding solve. On success it populates the
+        // mapping directly (bypassing the single-solver path); on failure it falls through to the normal solve, so
+        // enabling it can never turn a solvable instance UNSAT. Default off -> production behavior unchanged.
+        if (topology_sat_env_long("TT_TOPO_SAT_SHARE", 0) != 0) {
+            const int n_workers = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_WORKERS", 16));
+            if (n_workers > 1) {
+                const long base_seed = topology_sat_env_long("TT_TOPO_SAT_SHARE_SEED", 0);
+                const bool fastsat = topology_sat_env_long("TT_TOPO_SAT_SHARE_FASTSAT", 1) != 0;
+                const int budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_BUDGET", 2000));
+                const int max_size = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_SHARE_MAX_SIZE", 8));
+                std::vector<int> m;
+                if (topology_sat_run_sharing_portfolio(
+                        graph_data, constraint_data, validation_mode, n_workers, base_seed, fastsat, budget, max_size,
+                        m)) {
+                    state.mapping = std::move(m);
+                    std::fill(state.used.begin(), state.used.end(), false);
+                    for (size_t t = 0; t < state.mapping.size(); ++t) {
+                        const int gi = state.mapping[t];
+                        if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                            state.used[static_cast<size_t>(gi)] = true;
+                        }
+                    }
+                    return true;
+                }
+                // portfolio found no model -> fall through to the normal single-solver path below.
+            }
+        }
         if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
             state.error_message = enc.trivial_reason.empty()
                                       ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
