@@ -354,32 +354,28 @@ void finalize_dfb_masks(
     }
 }
 
-// Compute cross_node_dfb_offset for all kernel groups and return the new base offset.
-// CrossNodeDFB region: word[0]=num_slots, then num_slots × 3-word entries.
-// If none are attached, launch-msg cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE.
+// Size the CrossNodeDFB kernel-config region from the workload-wide program slot count, but
+// set each program's kernel-group launch-msg offsets using only that program's participant map.
+// Region: word[0]=num_slots, then num_slots × 3-word entries. CROSS_NODE_DFB_OFFSET_NONE if
+// the program has no CrossNodeDFB participants on that kernel group's cores.
+//
+// Important for MeshWorkload: programs can share logical core coordinates across device
+// ranges. Merging participants by logical core would incorrectly give a non-NONE offset to a
+// program with no CrossNodeDFBs, causing firmware to parse stale kernel-config words.
 uint32_t finalize_cross_node_dfbs(
-    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
-    using AttachmentMap = std::unordered_map<CoreCoord, std::vector<ProgramImpl::CrossNodeDFBAttachment>>;
-    AttachmentMap merged;
+    uint32_t programmable_core_type_index, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    uint8_t max_num_cross_node_dfbs = 0;
     for (ProgramImpl* program : programs) {
-        for (const auto& [core, attachments] : program->get_per_core_cross_node_dfbs()) {
-            auto& v = merged[core];
-            v.insert(v.end(), attachments.begin(), attachments.end());
-        }
+        max_num_cross_node_dfbs = std::max(max_num_cross_node_dfbs, program->num_cross_node_dfb_slots());
     }
 
-    const bool any_cross_node_dfbs = !merged.empty() && !kernel_groups.empty();
-
-    if (!any_cross_node_dfbs) {
-        for (auto& kg : kernel_groups) {
-            kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = CROSS_NODE_DFB_OFFSET_NONE;
+    if (max_num_cross_node_dfbs == 0) {
+        for (ProgramImpl* program : programs) {
+            for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+                kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = CROSS_NODE_DFB_OFFSET_NONE;
+            }
         }
         return base_offset;
-    }
-
-    uint8_t max_num_cross_node_dfbs = 0;
-    for (const auto& [core, attachments] : merged) {
-        max_num_cross_node_dfbs = std::max(max_num_cross_node_dfbs, static_cast<uint8_t>(attachments.size()));
     }
 
     const uint32_t cross_node_dfb_offset = base_offset;
@@ -395,24 +391,87 @@ uint32_t finalize_cross_node_dfbs(
         "CrossNodeDFB config offset collides with CROSS_NODE_DFB_OFFSET_NONE (0x{:x})",
         CROSS_NODE_DFB_OFFSET_NONE);
 
-    for (auto& kg : kernel_groups) {
-        uint8_t num_cross_node_dfbs = 0;
-        for (const CoreRange& cr : kg->core_ranges.ranges()) {
-            for (const auto& core : cr) {
-                auto it = merged.find(core);
-                if (it != merged.end()) {
-                    num_cross_node_dfbs = std::max(num_cross_node_dfbs, static_cast<uint8_t>(it->second.size()));
+    for (ProgramImpl* program : programs) {
+        const auto& per_core_participants = program->get_per_core_cross_node_dfbs();
+        for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            bool has_participants = false;
+            for (const CoreRange& cr : kg->core_ranges.ranges()) {
+                for (const auto& core : cr) {
+                    auto it = per_core_participants.find(core);
+                    if (it != per_core_participants.end() && !it->second.empty()) {
+                        has_participants = true;
+                        break;
+                    }
+                }
+                if (has_participants) {
+                    break;
                 }
             }
-        }
 
-        auto kernel_config = kg->launch_msg.view().kernel_config();
-        kernel_config.cross_node_dfb_offset() =
-            (num_cross_node_dfbs > 0) ? static_cast<uint16_t>(cross_node_dfb_offset) : CROSS_NODE_DFB_OFFSET_NONE;
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            kernel_config.cross_node_dfb_offset() =
+                has_participants ? static_cast<uint16_t>(cross_node_dfb_offset) : CROSS_NODE_DFB_OFFSET_NONE;
+        }
     }
 
     return tt::align(
         base_offset + cross_node_dfb_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+}
+
+// Build the dense device config region from a core's sparse host participant records.
+// Slots this core does not participate in stay zeroed; firmware skips config_page_addr == 0.
+std::vector<uint32_t> build_cross_node_dfb_config_payload(
+    uint8_t num_program_slots, const std::vector<ProgramImpl::CrossNodeDFBParticipant>& sparse_participants) {
+    std::vector<uint32_t> payload(cross_node_dfb_config_region_words(num_program_slots), 0u);
+    payload[0] = num_program_slots;
+    for (const auto& participant : sparse_participants) {
+        TT_FATAL(
+            participant.remote_dfb_id < num_program_slots,
+            "CrossNodeDFB sparse participant remote_dfb_id {} exceeds program slot count {}",
+            participant.remote_dfb_id,
+            num_program_slots);
+        const uint32_t base =
+            CROSS_NODE_DFB_REGION_HEADER_WORDS + participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
+        payload[base + 0] = participant.config_page_addr;
+        payload[base + 1] = participant.entry_size;
+        payload[base + 2] = participant.relay_dfb_id;
+    }
+    return payload;
+}
+
+std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<ProgramImpl::CrossNodeDFBParticipant>>& per_core_cross_node_dfbs,
+    uint8_t num_program_slots) {
+    std::map<std::vector<uint32_t>, std::pair<CoreCoord, std::vector<CoreCoord>>> cores_by_payload;
+
+    for (const CoreRange& core_range : kernel_group_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            auto it = per_core_cross_node_dfbs.find(core);
+            if (it == per_core_cross_node_dfbs.end() || it->second.empty()) {
+                continue;
+            }
+
+            std::vector<uint32_t> payload = build_cross_node_dfb_config_payload(num_program_slots, it->second);
+            auto& entry = cores_by_payload[payload];
+            if (entry.second.empty()) {
+                entry.first = core;
+            }
+            entry.second.push_back(core);
+        }
+    }
+
+    std::vector<CrossNodeDFBCoreGroup> groups;
+    groups.reserve(cores_by_payload.size());
+    for (auto& [payload, representative_and_cores] : cores_by_payload) {
+        const auto& [representative_core, cores] = representative_and_cores;
+        // Constructing from CoreCoords merges them into maximal rectangles.
+        groups.push_back(
+            {std::move(payload),
+             representative_core,
+             CoreRangeSet(ttsl::Span<const CoreCoord>(cores.data(), cores.size()))});
+    }
+    return groups;
 }
 
 uint32_t finalize_kernel_bins(
@@ -1516,66 +1575,48 @@ public:
         const uint32_t cross_node_dfb_offset = program.get_program_config(index).cross_node_dfb_offset;
         TT_FATAL(
             cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
-            "CrossNodeDFBCommandGenerator: unexpected CROSS_NODE_DFB_OFFSET_NONE with attachments present");
+            "CrossNodeDFBCommandGenerator: unexpected CROSS_NODE_DFB_OFFSET_NONE with participants present");
 
+        const uint32_t start_addr = cross_node_dfb_offset;
+        const uint8_t num_program_slots = program.num_cross_node_dfb_slots();
         for (const auto& kg : kernel_groups) {
-            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
-                // Use the first core's attachments as representative for the range.
-                // In typical usage, all cores in a kernel group have identical CrossNodeDFB attachments.
-                const CoreCoord& first_core = core_range.start_coord;
-                auto it = per_core_cross_node_dfbs.find(first_core);
-                if (it == per_core_cross_node_dfbs.end() || it->second.empty()) {
-                    continue;
-                }
+            // A kernel-group range can mix participant and non-participant cores, and sender and
+            // receiver cores carry different relay metadata, so each group of cores sharing a
+            // payload gets its own multicast.
+            for (auto& group : partition_cores_by_cross_node_dfb_payload(
+                     kg->core_ranges, per_core_cross_node_dfbs, num_program_slots)) {
+                // Payload buffer must outlive the spans handed to the transfers.
+                payloads_.push_back(std::move(group.payload));
+                const auto& payload = payloads_.back();
+                const uint32_t payload_bytes = static_cast<uint32_t>(payload.size() * sizeof(uint32_t));
+                const auto& participants = per_core_cross_node_dfbs.at(group.representative_core);
 
-                const uint32_t num_cross_node_dfbs = static_cast<uint32_t>(it->second.size());
-                const uint32_t payload_words = cross_node_dfb_config_region_words(num_cross_node_dfbs);
-                const uint32_t payload_bytes = payload_words * sizeof(uint32_t);
+                for (const CoreRange& core_range : group.cores.ranges()) {
+                    const CoreCoord virtual_start =
+                        device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                    const CoreCoord virtual_end =
+                        device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                    CoreRange virtual_range(virtual_start, virtual_end);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
 
-                // Allocate payload buffer (one per range to keep lifetimes alive).
-                payloads_.emplace_back(payload_words, 0u);
-                auto& payload = payloads_.back();
-                payload[0] = num_cross_node_dfbs;
-
-                for (uint32_t slot = 0; slot < num_cross_node_dfbs; ++slot) {
-                    const auto& attachment = it->second[slot];
-                    TT_FATAL(
-                        attachment.remote_dfb_id == slot,
-                        "CrossNodeDFB slot {} expected dense remote_dfb_id {}, got {}",
-                        slot,
-                        slot,
-                        attachment.remote_dfb_id);
-                    const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
-                    payload[base + 0] = attachment.config_page_addr;
-                    payload[base + 1] = attachment.entry_size;
-                    payload[base + 2] = attachment.relay_dfb_id;
-                }
-
-                const CoreCoord virtual_start =
-                    device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
-                const CoreCoord virtual_end =
-                    device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
-                CoreRange virtual_range(virtual_start, virtual_end);
-                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
-                const uint32_t start_addr = cross_node_dfb_offset;
-
-                // CrossNode state resets on every program launch. Reset credits in the
-                // actual config pages before GO; firmware only initializes its local
-                // interface and must not zero a counter after a peer has incremented it.
-                for (const auto& attachment : it->second) {
-                    credit_reset_payloads_.emplace_back(attachment.credit_reset_size, 0u);
-                    auto& reset_payload = credit_reset_payloads_.back();
-                    credit_reset_transfers[std::make_pair(noc_xy_addr, core_range.size())]
-                                          [attachment.credit_reset_addr] =
-                        std::vector<Transfer>{
-                            {.start = attachment.credit_reset_addr,
+                    // CrossNode state resets on every program launch. Reset credits in the
+                    // actual config pages before GO; firmware only initializes its local
+                    // interface and must not zero a counter after a peer has incremented it.
+                    for (const auto& participant : participants) {
+                        credit_reset_payloads_.emplace_back(participant.credit_reset_size, 0u);
+                        auto& reset_payload = credit_reset_payloads_.back();
+                        credit_reset_transfers[std::make_pair(
+                            noc_xy_addr, core_range.size())][participant.credit_reset_addr] = std::vector<Transfer>{
+                            {.start = participant.credit_reset_addr,
                              .data = ttsl::Span<const uint8_t>(reset_payload.data(), reset_payload.size())}};
-                }
+                    }
 
-                batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
-                    {.start = start_addr,
-                     .data =
-                         ttsl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+                    batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
+                        std::vector<Transfer>{
+                            {.start = start_addr,
+                             .data = ttsl::Span<const uint8_t>(
+                                 reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+                }
             }
         }
     }

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -38,8 +37,9 @@ public:
         uint32_t num_entries,
         BufferType buffer_type = BufferType::L1);
 
-    // Borrowed-data constructor: uses `data_buffer` for the data ring (must outlive
-    // this object via shared ownership) and still allocates the config sideband.
+    // Borrowed-data constructor: uses `data_buffer` for the data ring. Caller owns
+    // `data_buffer` for the CrossNodeDFB lifetime; this object only records its address.
+    // Config sideband is still allocated here.
     CrossNodeDFB(
         IDevice* device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
@@ -52,12 +52,6 @@ public:
     CrossNodeDFB(CrossNodeDFB&&) noexcept = default;
     CrossNodeDFB& operator=(CrossNodeDFB&&) noexcept = default;
 
-    // The data ring (sharded over all_cores, one ring FIFO page per core; receivers use theirs).
-    const Buffer& dfb_buffer() const;
-    // Non-const overload so this ring can be handed to UpdateDynamicCrossNodeDFBAddress,
-    // which needs shared ownership of the buffer to borrow it.
-    Buffer& dfb_buffer();
-
     // The config sideband (sharded over all_cores = senders ∪ receivers, one page per core).
     const Buffer& config_buffer() const;
 
@@ -67,6 +61,8 @@ public:
     uint32_t credit_reset_size() const;
     uint32_t entry_size() const;
     uint32_t num_entries() const;
+    // Bytes per core of the data ring (= entry_size * num_entries).
+    uint32_t ring_size() const { return entry_size_ * num_entries_; }
 
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
@@ -76,6 +72,7 @@ public:
 
     // Retarget the data ring to `data_buffer` and rewrite config pages in place.
     // Used by UpdateDynamicCrossNodeDFBAddress; config sideband address is unchanged.
+    // Caller owns `data_buffer` for the remaining CrossNodeDFB lifetime.
     void retarget_data_buffer(Buffer& data_buffer);
 
 private:
@@ -86,9 +83,15 @@ private:
     void allocate_config_and_write_pages(BufferType config_buffer_type);
     // Fill and write config pages for the current data/config buffers (Create or UpdateDynamic).
     void write_config_pages();
+    // Point at an external data ring address; drops any CrossNode-owned ring.
+    void set_data_address(uint32_t data_address);
 
-    distributed::AnyBuffer dfb_buffer_;
+    // Owned allocation when CrossNode creates the data ring; empty when borrowing.
+    distributed::AnyBuffer owned_dfb_buffer_;
     distributed::AnyBuffer config_buffer_;
+    // Data-ring L1 address. From owned_dfb_buffer_ when owning; from the caller's Buffer
+    // when borrowing. Device config/relays only need this address.
+    uint32_t data_address_ = 0;
     IDevice* device_ = nullptr;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_mapping_;
     CoreRangeSet sender_cores_;
@@ -126,8 +129,8 @@ uint8_t CreateCrossNodeDFB(
  *
  * Config is still runtime-allocated. `data_buffer` must match the shard layout Create
  * would allocate (HEIGHT_SHARDED over senders∪receivers, page_size = entry_size *
- * num_entries). The buffer must remain alive for the CrossNodeDFB lifetime (keep a
- * shared_ptr / AnyBuffer in scope).
+ * num_entries). Caller keeps `data_buffer` alive for the CrossNodeDFB lifetime;
+ * CrossNode only records its address.
  *
  * @return Runtime-assigned CrossNode slot id.
  */

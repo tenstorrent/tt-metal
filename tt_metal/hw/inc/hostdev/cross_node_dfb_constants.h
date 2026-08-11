@@ -8,11 +8,12 @@
 
 // Shared CrossNodeDFB layout constants for host and device.
 
-// Sentinel for kernel_config_msg_t::cross_node_dfb_offset when no CrossNodeDFBs are attached.
+// Sentinel for kernel_config_msg_t::cross_node_dfb_offset when no CrossNodeDFB participants
+// are present on the kernel group.
 // Valid offsets are L1-aligned and therefore never equal 0xFF.
 inline constexpr uint16_t CROSS_NODE_DFB_OFFSET_NONE = 0xFF;
 
-// Max CrossNodeDFBs attachable per program / per core (remote_dfb_id in [0, MAX)).
+// Max CrossNodeDFBs per program / per core (remote_dfb_id in [0, MAX)).
 inline constexpr uint32_t MAX_CROSS_NODE_DFBS = 16;
 
 // Words per dense kernel-config slot: [config_page_addr, entry_size, relay_dfb_id].

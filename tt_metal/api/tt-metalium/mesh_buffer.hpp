@@ -211,10 +211,6 @@ public:
     static AnyBuffer create(
         const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
-    // Borrow an existing allocation (shares ownership via shared_ptr; no new alloc).
-    static AnyBuffer borrow(std::shared_ptr<Buffer> buffer);
-    static AnyBuffer borrow(std::shared_ptr<MeshBuffer> buffer);
-
     Buffer* get_buffer() const;
     bool is_mesh_buffer() const;
     std::shared_ptr<MeshBuffer> get_mesh_buffer() const;

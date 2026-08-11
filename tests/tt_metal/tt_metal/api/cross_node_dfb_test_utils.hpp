@@ -75,7 +75,8 @@ inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
     if (write_primitive == 2 || write_primitive == 3) {
         return static_cast<uint32_t>(SenderDataPattern::PerReceiverConstant);
     }
-    // 0 (per-entry broadcast) and 4 (decoupled broadcast batch) use counter staging.
+    // 0 (per-entry broadcast), 4 (decoupled broadcast batch) and 5 (entry-major
+    // per-receiver credit) use counter staging.
     return static_cast<uint32_t>(SenderDataPattern::MulticastCounter);
 }
 
@@ -168,7 +169,7 @@ inline void assert_staging_disjoint_from_cross_node_dfb(
     const uint32_t config_addr = gdfb.config_address();
     const uint32_t config_end = config_addr + static_cast<uint32_t>(gdfb.config_buffer().page_size());
     const uint32_t ring_addr = gdfb.buffer_address();
-    const uint32_t ring_end = ring_addr + static_cast<uint32_t>(gdfb.dfb_buffer().page_size());
+    const uint32_t ring_end = ring_addr + gdfb.ring_size();
     const bool overlaps_config = staging_addr < config_end && staging_end > config_addr;
     const bool overlaps_ring = staging_addr < ring_end && staging_end > ring_addr;
     TT_FATAL(
@@ -265,7 +266,7 @@ inline std::vector<uint8_t> expected_receiver_ring_bytes(
 inline std::vector<uint8_t> read_receiver_ring_bytes(
     IDevice* device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core, uint32_t num_bytes) {
     IDevice* physical_device = local_physical_device(device);
-    const uint32_t ring_size = static_cast<uint32_t>(gdfb.dfb_buffer().page_size());
+    const uint32_t ring_size = gdfb.ring_size();
     const uint32_t copy_size = std::min(num_bytes, ring_size);
     std::vector<uint8_t> bytes(num_bytes, 0);
     if (copy_size == 0) {
@@ -284,7 +285,7 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
 inline void zero_receiver_ring(
     IDevice* device, const experimental::CrossNodeDFB& gdfb, const CoreCoord& receiver_core) {
     IDevice* physical_device = local_physical_device(device);
-    const uint32_t ring_size = static_cast<uint32_t>(gdfb.dfb_buffer().page_size());
+    const uint32_t ring_size = gdfb.ring_size();
     const uint32_t aligned_words = (ring_size + sizeof(uint32_t) - 1) / sizeof(uint32_t);
     std::vector<uint32_t> zeros(aligned_words, 0);
     detail::WriteToDeviceL1(physical_device, receiver_core, gdfb.buffer_address(), zeros, CoreType::WORKER);

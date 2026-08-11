@@ -25,6 +25,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -1168,36 +1169,37 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
                 // CrossNodeDFB config: word[0]=num_slots, then dense
                 // [config_page_addr, entry_size, relay_dfb_id] slots.
+                // Host participant records are sparse; non-participant slots stay zero and
+                // firmware skips them.
                 const uint32_t cross_node_dfb_offset = program.impl().get_program_config(index).cross_node_dfb_offset;
                 const auto& per_core_cross_node_dfbs = program.impl().get_per_core_cross_node_dfbs();
                 auto it = per_core_cross_node_dfbs.find(logical_core);
                 if (it != per_core_cross_node_dfbs.end() && !it->second.empty()) {
                     TT_FATAL(
                         cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
-                        "CrossNodeDFB attachments present but cross_node_dfb_offset is NONE");
-                    const uint32_t num_cross_node_dfbs = static_cast<uint32_t>(it->second.size());
-                    const uint32_t payload_words = cross_node_dfb_config_region_words(num_cross_node_dfbs);
+                        "CrossNodeDFB participants present but cross_node_dfb_offset is NONE");
+                    const uint8_t num_program_slots = program.impl().num_cross_node_dfb_slots();
+                    const uint32_t payload_words = cross_node_dfb_config_region_words(num_program_slots);
                     std::vector<uint32_t> cross_node_dfb_vec(payload_words, 0u);
-                    cross_node_dfb_vec[0] = num_cross_node_dfbs;
-                    for (uint32_t slot = 0; slot < num_cross_node_dfbs; ++slot) {
-                        const auto& attachment = it->second[slot];
+                    cross_node_dfb_vec[0] = num_program_slots;
+                    for (const auto& participant : it->second) {
                         TT_FATAL(
-                            attachment.remote_dfb_id == slot,
-                            "CrossNodeDFB slot {} expected dense remote_dfb_id {}, got {}",
-                            slot,
-                            slot,
-                            attachment.remote_dfb_id);
-                        const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
-                        cross_node_dfb_vec[base + 0] = attachment.config_page_addr;
-                        cross_node_dfb_vec[base + 1] = attachment.entry_size;
-                        cross_node_dfb_vec[base + 2] = attachment.relay_dfb_id;
+                            participant.remote_dfb_id < num_program_slots,
+                            "CrossNodeDFB sparse participant remote_dfb_id {} exceeds program slot count {}",
+                            participant.remote_dfb_id,
+                            num_program_slots);
+                        const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS +
+                                              participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
+                        cross_node_dfb_vec[base + 0] = participant.config_page_addr;
+                        cross_node_dfb_vec[base + 1] = participant.entry_size;
+                        cross_node_dfb_vec[base + 2] = participant.relay_dfb_id;
 
                         // Reset the actual config-page credits before GO. Firmware only
                         // initializes its local interface, so it cannot erase a credit
                         // that a faster peer has already sent for this launch.
-                        std::vector<uint8_t> zero_credits(attachment.credit_reset_size, 0u);
+                        std::vector<uint8_t> zero_credits(participant.credit_reset_size, 0u);
                         MetalContext::instance().get_cluster().write_core(
-                            device_id, physical_core, zero_credits, attachment.credit_reset_addr);
+                            device_id, physical_core, zero_credits, participant.credit_reset_addr);
                     }
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
                     MetalContext::instance().get_cluster().write_core(

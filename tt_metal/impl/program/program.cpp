@@ -1291,7 +1291,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
         this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
     TT_FATAL(
         this->per_core_cross_node_dfbs_.empty(),
-        "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFBs attached. "
+        "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFB participants. "
         "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBufferImpl> circular_buffer =
@@ -1317,29 +1317,25 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
     const uint8_t remote_dfb_id = next_cross_node_dfb_slot_++;
     const CoreRangeSet& cores = gdfb.all_cores();
 
+    // Host map is sparse: only cores in this topology get a record for remote_dfb_id.
+    // Independent CrossNodeDFBs may introduce new cores without requiring nested topologies.
     for (const auto& core_range : cores.ranges()) {
         for (const auto& core : core_range) {
-            auto& attachments = per_core_cross_node_dfbs_[core];
-            for (const auto& a : attachments) {
+            auto& participants = per_core_cross_node_dfbs_[core];
+            for (const auto& a : participants) {
                 TT_FATAL(
                     a.remote_dfb_id != remote_dfb_id,
-                    "CrossNodeDFB slot {} already attached on core {}",
+                    "CrossNodeDFB slot {} already has a participant on core {}",
                     remote_dfb_id,
                     core.str());
             }
-            attachments.push_back(
+            participants.push_back(
                 {remote_dfb_id,
                  gdfb.config_address(),
                  gdfb.credit_reset_address(),
                  gdfb.credit_reset_size(),
                  gdfb.entry_size(),
                  std::numeric_limits<uint8_t>::max()});
-            TT_FATAL(
-                remote_dfb_id == static_cast<uint8_t>(attachments.size() - 1),
-                "CrossNodeDFB remote_dfb_id {} must be dense (expected {}) on core {}",
-                remote_dfb_id,
-                attachments.size() - 1,
-                core.str());
         }
     }
     cross_node_dfbs_.emplace(remote_dfb_id, std::move(gdfb));
@@ -1400,26 +1396,28 @@ void detail::ProgramImpl::register_cross_node_relay_dfb(
     const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
 
     for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
-        auto attachment_it = per_core_cross_node_dfbs_.find(core);
+        auto participant_it = per_core_cross_node_dfbs_.find(core);
         TT_FATAL(
-            attachment_it != per_core_cross_node_dfbs_.end(),
+            participant_it != per_core_cross_node_dfbs_.end(),
             "CrossNodeDFB must be created on relay receiver core {} before registering its relay",
             core.str());
-        auto& attachments = attachment_it->second;
+        auto& participants = participant_it->second;
+        auto participant = std::find_if(participants.begin(), participants.end(), [remote_dfb_id](const auto& a) {
+            return a.remote_dfb_id == remote_dfb_id;
+        });
         TT_FATAL(
-            remote_dfb_id < attachments.size() && attachments[remote_dfb_id].remote_dfb_id == remote_dfb_id,
+            participant != participants.end(),
             "CrossNodeDFB slot {} is not present on relay receiver core {}",
             remote_dfb_id,
             core.str());
-        auto& attachment = attachments[remote_dfb_id];
         TT_FATAL(
-            attachment.relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
-                attachment.relay_dfb_id == relay_device_slot,
+            participant->relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
+                participant->relay_dfb_id == relay_device_slot,
             "CrossNodeDFB slot {} already has relay device slot {} on core {}",
             remote_dfb_id,
-            attachment.relay_dfb_id,
+            participant->relay_dfb_id,
             core.str());
-        attachment.relay_dfb_id = relay_device_slot;
+        participant->relay_dfb_id = relay_device_slot;
     }
 }
 
@@ -2913,10 +2911,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        // CrossNodeDFB kernel-config region: header word (num_slots) + dense 2-word entries.
-        // cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE if none are attached.
+        // CrossNodeDFB kernel-config region: header word (num_slots) + dense 3-word entries.
+        // cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE if there are no participants.
         uint32_t prev_offset_before_cross_node_dfb = state.offset;
-        state.offset = program_dispatch::finalize_cross_node_dfbs(kernel_groups_getter(index), programs, state.offset);
+        state.offset = program_dispatch::finalize_cross_node_dfbs(index, programs, state.offset);
         state.cross_node_dfb_offset = (state.offset > prev_offset_before_cross_node_dfb)
                                           ? (prev_offset_before_cross_node_dfb - state.config_base_offset)
                                           : CROSS_NODE_DFB_OFFSET_NONE;

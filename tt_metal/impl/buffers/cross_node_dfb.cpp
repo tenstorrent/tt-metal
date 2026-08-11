@@ -121,6 +121,25 @@ void validate_entry_geometry(IDevice* device, uint32_t entry_size, uint32_t num_
     TT_FATAL(num_entries > 0, "num_entries must be > 0");
 }
 
+// Byte offsets within one config page. Every per-receiver region is sized by the largest
+// fanout in the topology so all pages share one size (the buffer is sharded uniformly).
+// Zeroing [counters_offset, page_size) on launch resets all credits; the sender derives
+// each receiver's write position from those credits, so no cursor state is stored.
+struct ConfigPageLayout {
+    uint32_t noc_xy_offset;
+    uint32_t counters_offset;
+    uint32_t page_size;
+};
+
+ConfigPageLayout compute_config_page_layout(uint32_t max_num_receivers_per_sender, uint32_t l1_alignment) {
+    constexpr uint32_t num_header_words = 8;
+    const uint32_t noc_xy_offset = num_header_words * sizeof(uint32_t);
+    const uint32_t counters_offset = tt::align(
+        noc_xy_offset + 2 * max_num_receivers_per_sender * static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
+    const uint32_t page_size = counters_offset + 2 * max_num_receivers_per_sender * l1_alignment;
+    return ConfigPageLayout{.noc_xy_offset = noc_xy_offset, .counters_offset = counters_offset, .page_size = page_size};
+}
+
 bool is_compatible_borrowed_device(IDevice* expected, IDevice* buffer_device) {
     if (expected == buffer_device) {
         return true;
@@ -147,12 +166,7 @@ void CrossNodeDFB::allocate_config_and_write_pages(BufferType config_buffer_type
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     const uint32_t num_all_cores = all_cores_.num_cores();
 
-    constexpr uint32_t num_header_words = 8;
-    const uint32_t noc_xy_words = 2 * max_num_receivers_per_sender_;
-    const uint32_t header_bytes = num_header_words * sizeof(uint32_t);
-    const uint32_t noc_xy_bytes = noc_xy_words * sizeof(uint32_t);
-    const uint32_t counters_size = 2 * max_num_receivers_per_sender_ * l1_alignment;
-    const uint32_t config_page_size = tt::align(header_bytes + noc_xy_bytes, l1_alignment) + counters_size;
+    const uint32_t config_page_size = compute_config_page_layout(max_num_receivers_per_sender_, l1_alignment).page_size;
 
     auto shard_params_cfg =
         ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
@@ -170,7 +184,7 @@ void CrossNodeDFB::allocate_config_and_write_pages(BufferType config_buffer_type
 
 void CrossNodeDFB::write_config_pages() {
     TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must exist before write");
-    TT_FATAL(dfb_buffer_.get_buffer() != nullptr, "CrossNodeDFB data buffer must exist before config write");
+    TT_FATAL(data_address_ != 0, "CrossNodeDFB data address must be set before config write");
 
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
@@ -191,26 +205,25 @@ void CrossNodeDFB::write_config_pages() {
     //   [7]  remote_entries_acked_ptr
     // Sender pages additionally store:
     //   words[8..8+2N-1] = NOC XY table: x0,y0,x1,y1,... for N receivers
-    //   Then entries_sent[i] / entries_acked[i] pairs at L1_ALIGNMENT stride
+    //   Then entries_sent[i] / entries_acked[i] pairs at L1_ALIGNMENT stride.
+    //   No write-cursor state: the sender derives each receiver's write position from
+    //   that receiver's entries_sent counter.
     // Receiver pages additionally store:
     //   word[8] = sender_physical_coord.x
     //   word[9] = sender_physical_coord.y
 
-    constexpr uint32_t num_header_words = 8;
-    const uint32_t noc_xy_words = 2 * max_num_receivers_per_sender_;
-    const uint32_t header_bytes = num_header_words * sizeof(uint32_t);
-    const uint32_t noc_xy_bytes = noc_xy_words * sizeof(uint32_t);
-    const uint32_t counters_size = 2 * max_num_receivers_per_sender_ * l1_alignment;
-    const uint32_t config_page_size = tt::align(header_bytes + noc_xy_bytes, l1_alignment) + counters_size;
+    const auto layout = compute_config_page_layout(max_num_receivers_per_sender_, l1_alignment);
+    const uint32_t config_page_size = layout.page_size;
 
     const uint32_t config_base_addr = static_cast<uint32_t>(config_buffer_.get_buffer()->address());
     const auto& core_to_core_id = config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
-    const uint32_t data_base_addr = static_cast<uint32_t>(dfb_buffer_.get_buffer()->address());
+    const uint32_t data_base_addr = data_address_;
 
-    // Mirror GlobalCB layout: noc_xy table at word[8], then L1-aligned pages_sent/pages_acked pairs.
-    const uint32_t noc_xy_address = config_base_addr + num_header_words * sizeof(uint32_t);
-    const uint32_t pages_sent_address = tt::align(noc_xy_address + noc_xy_words * sizeof(uint32_t), l1_alignment);
-    credit_reset_offset_ = pages_sent_address - config_base_addr;
+    const uint32_t noc_xy_address = config_base_addr + layout.noc_xy_offset;
+    const uint32_t pages_sent_address = config_base_addr + layout.counters_offset;
+    // Zeroing this window resets all credits, which also rewinds every receiver's
+    // derived write position to the start of the ring.
+    credit_reset_offset_ = layout.counters_offset;
     credit_reset_size_ = config_page_size - credit_reset_offset_;
 
     std::vector<uint32_t> config_host_buffer(config_page_size * num_all_cores / sizeof(uint32_t), 0);
@@ -235,7 +248,8 @@ void CrossNodeDFB::write_config_pages() {
             config_host_buffer[si++] = static_cast<uint32_t>(phys.x);
             config_host_buffer[si++] = static_cast<uint32_t>(phys.y);
         }
-        // entries_sent/entries_acked pairs are zero-initialized in config_host_buffer.
+        // entries_sent/entries_acked pairs are zero-initialized in config_host_buffer;
+        // zero credits put every derived write position at the start of the ring.
 
         // --- Receiver config pages (matches GlobalCircularBuffer receiver layout) ---
         const auto sender_phys = device_->worker_core_from_logical_core(sender_core);
@@ -286,7 +300,8 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type) {
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_params_data),
     };
-    dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
+    owned_dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
+    data_address_ = static_cast<uint32_t>(owned_dfb_buffer_.get_buffer()->address());
     allocate_config_and_write_pages(buffer_type);
 }
 
@@ -327,9 +342,16 @@ void CrossNodeDFB::validate_data_buffer(Buffer& data_buffer) const {
         static_cast<DeviceAddr>(ring_size) * num_all_cores);
 }
 
+void CrossNodeDFB::set_data_address(uint32_t data_address) {
+    // Drop any CrossNode-owned ring before pointing at an external address.
+    owned_dfb_buffer_ = {};
+    TT_FATAL(data_address != 0, "CrossNodeDFB data address must be non-zero");
+    data_address_ = data_address;
+}
+
 void CrossNodeDFB::setup_buffers_with_borrowed_data(Buffer& data_buffer) {
     validate_data_buffer(data_buffer);
-    dfb_buffer_ = distributed::AnyBuffer::borrow(data_buffer.shared_from_this());
+    set_data_address(static_cast<uint32_t>(data_buffer.address()));
     // Config uses the same L1 bank class as the borrowed data buffer.
     allocate_config_and_write_pages(data_buffer.buffer_type());
 }
@@ -337,17 +359,15 @@ void CrossNodeDFB::setup_buffers_with_borrowed_data(Buffer& data_buffer) {
 void CrossNodeDFB::retarget_data_buffer(Buffer& data_buffer) {
     validate_data_buffer(data_buffer);
     TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must already exist for retarget");
-    dfb_buffer_ = distributed::AnyBuffer::borrow(data_buffer.shared_from_this());
+    set_data_address(static_cast<uint32_t>(data_buffer.address()));
     // Keep the existing config allocation; rewrite pages with the new data base address.
     write_config_pages();
 }
 
 // Accessors -------------------------------------------------------------------
 
-const Buffer& CrossNodeDFB::dfb_buffer() const { return *dfb_buffer_.get_buffer(); }
-Buffer& CrossNodeDFB::dfb_buffer() { return *dfb_buffer_.get_buffer(); }
 const Buffer& CrossNodeDFB::config_buffer() const { return *config_buffer_.get_buffer(); }
-uint32_t CrossNodeDFB::buffer_address() const { return static_cast<uint32_t>(dfb_buffer().address()); }
+uint32_t CrossNodeDFB::buffer_address() const { return data_address_; }
 uint32_t CrossNodeDFB::config_address() const { return static_cast<uint32_t>(config_buffer().address()); }
 uint32_t CrossNodeDFB::credit_reset_address() const { return config_address() + credit_reset_offset_; }
 uint32_t CrossNodeDFB::credit_reset_size() const { return credit_reset_size_; }

@@ -110,7 +110,7 @@ struct ProgramConfig {
     uint32_t dfb_size;
     uint32_t local_cb_size;
     // CrossNodeDFB region byte offset from kernel_config_base, or CROSS_NODE_DFB_OFFSET_NONE
-    // when no CrossNodeDFBs are attached. Slot count lives in the region header word.
+    // when no CrossNodeDFB participants are present. Slot count lives in the region header word.
     uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
@@ -302,8 +302,9 @@ public:
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
 
-    // Per-core CrossNodeDFB attachment record.
-    struct CrossNodeDFBAttachment {
+    // Per-core CrossNodeDFB participant record. Host storage is sparse: a core only lists
+    // slots it participates in. Device config is still dense by program-wide remote_dfb_id
+    struct CrossNodeDFBParticipant {
         uint8_t remote_dfb_id;
         uint32_t config_page_addr;
         uint32_t credit_reset_addr;
@@ -312,10 +313,13 @@ public:
         uint8_t relay_dfb_id;
     };
 
-    // Read-only accessor for dispatch to iterate CrossNodeDFB attachments.
-    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>>& get_per_core_cross_node_dfbs() const {
+    // Read-only accessor for dispatch to iterate CrossNodeDFB participant records.
+    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>>& get_per_core_cross_node_dfbs() const {
         return per_core_cross_node_dfbs_;
     }
+
+    // Program-wide slot count (dense [0, num) remote_dfb_id space).
+    uint8_t num_cross_node_dfb_slots() const { return next_cross_node_dfb_slot_; }
 
     // Wire a CrossNodeDFB onto its all_cores and store it under the new slot id.
     uint8_t add_cross_node_dfb(experimental::CrossNodeDFB gdfb);
@@ -323,7 +327,7 @@ public:
     const experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id) const;
     experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id);
 
-    // Mark a normal local DFB as the typed relay for an attached CrossNodeDFB.
+    // Mark a normal local DFB as the typed relay for a CrossNodeDFB this core participates in.
     // The local DFB borrows the CrossNode data buffer; its device_slot is emitted
     // only on receiver cores and consumed by CrossNodeDFB::bind_relay().
     void register_cross_node_relay_dfb(
@@ -529,9 +533,9 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
         dataflow_buffer_by_id_;
 
-    // CrossNodeDFB attachments: per-core list of (remote_dfb_id, config_page_addr, entry_size).
+    // CrossNodeDFB participants: per-core list of (remote_dfb_id, config_page_addr, entry_size).
     // 0-based ascending index space; separate from DFB index space.
-    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>> per_core_cross_node_dfbs_;
+    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>> per_core_cross_node_dfbs_;
     // Host objects owned by this program, keyed by remote_dfb_id.
     std::unordered_map<uint8_t, experimental::CrossNodeDFB> cross_node_dfbs_;
     // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).

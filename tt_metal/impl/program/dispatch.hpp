@@ -106,13 +106,33 @@ void finalize_dfb_masks(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
-// Set cross_node_dfb_offset in each kernel group's launch msg (CROSS_NODE_DFB_OFFSET_NONE if
-// none) and reserve space in the kernel config region. Returns the new base offset; if no
-// CrossNodeDFBs are attached, sets NONE on all groups and returns base_offset unchanged.
+// Size the CrossNodeDFB kernel-config region from the workload-wide max slot count, but set
+// each program's kernel-group launch-msg offsets using only that program's participant map.
+// Region: word[0]=num_slots, then num_slots × 3-word entries. CROSS_NODE_DFB_OFFSET_NONE if
+// the program has no CrossNodeDFB participants on that kernel group's cores.
 uint32_t finalize_cross_node_dfbs(
-    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    ttsl::Span<detail::ProgramImpl*> programs,
-    uint32_t base_offset);
+    uint32_t programmable_core_type_index, ttsl::Span<detail::ProgramImpl*> programs, uint32_t base_offset);
+
+// Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
+// Each rectangle in `cores` can be covered by a single multicast.
+struct CrossNodeDFBCoreGroup {
+    // word[0]=num_slots, then num_slots x [config_page_addr, entry_size, relay_dfb_id].
+    std::vector<uint32_t> payload;
+    // Any core of the group; used to recover the participant records behind the payload.
+    CoreCoord representative_core;
+    CoreRangeSet cores;
+};
+
+// A kernel-group range is not necessarily homogeneous: non-participant cores can sit next to
+// participants, and relay_dfb_id differs between sender and receiver cores. Multicasting one
+// core's payload to the whole range would skip participants or overwrite others with the wrong
+// slot/relay config, so group by identical payload first. Non-participant cores are omitted.
+// Host participant records are sparse; num_program_slots sizes the dense device payload.
+std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::CrossNodeDFBParticipant>>&
+        per_core_cross_node_dfbs,
+    uint8_t num_program_slots);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,

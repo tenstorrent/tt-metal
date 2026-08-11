@@ -36,6 +36,10 @@ struct CrossNodeSenderDFBInterface {
     uint32_t fifo_limit_page_aligned;
     uint32_t fifo_page_size;
 
+    // Unused by the CrossNode sender: each receiver's write cursor is derived from that
+    // receiver's local entries_sent counter (credits reset to zero every launch, so
+    // sent % ring_units is the next free slot). The field is kept because the RemoteCB
+    // overlay aliases it with the receiver's fifo_rd_ptr.
     uint32_t fifo_wr_ptr;
 
     // Address of receiver NOC XY table: x0, y0, x1, y1, ...
@@ -82,7 +86,7 @@ static_assert(
 static_assert(offsetof(CrossNodeSenderDFBInterface, config_ptr) == offsetof(CrossNodeReceiverDFBInterface, config_ptr));
 
 // Same overlay pattern as CBInterface for Remote CB: a core is sender XOR receiver for a
-// given remote_dfb_id. Union size follows the larger receiver (includes relay_id).
+// given remote_dfb_id.
 struct CrossNodeDFBInterface {
     union {
         CrossNodeSenderDFBInterface sender;

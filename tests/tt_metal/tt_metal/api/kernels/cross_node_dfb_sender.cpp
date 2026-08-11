@@ -11,7 +11,8 @@
 //   [3] write_primitive    - 0=write_broadcast, 1=write_strided,
 //                            2=write_to_receiver(r)+push_back (1:1 uses r=0),
 //                            3=write_to_receiver+push_back_to_receiver (per-receiver credit),
-//                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n)
+//                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n),
+//                            5=per-receiver credit interleaved across receivers (entry-major)
 //   [4] data_pattern       - 0=multicast counter layout, 1=strided per-receiver layout,
 //                            2=per-receiver constant layout (see cross_node_dfb_test_utils.hpp)
 //   [5] do_barrier         - 1 to call barrier() after pushing all entries
@@ -63,6 +64,9 @@ void kernel_main() {
     static_assert(
         write_primitive != 4 || data_pattern == pattern_multicast_counter,
         "decoupled write_broadcast expects multicast counter staging");
+    static_assert(
+        write_primitive != 5 || data_pattern == pattern_multicast_counter,
+        "interleaved per-receiver credit expects multicast counter staging");
 
     if constexpr (write_primitive == 0) {
         for (uint32_t i = 0; i < num_entries; ++i) {
@@ -113,6 +117,20 @@ void kernel_main() {
         gdfb.write_broadcast(staging_base, num_entries, noc);
         gdfb.flush_writes(noc);
         gdfb.push_back(num_entries, noc);
+    } else if constexpr (write_primitive == 5) {
+        // Entry-major per-receiver credit: every receiver gets entry i before entry i+1.
+        // Each receiver must still land entry i in its own slot i, which only holds if the
+        // sender derives an independent write position per receiver from its credits
+        // rather than sharing one cursor for the slot.
+        const uint32_t num_recv = gdfb.num_receivers();
+        for (uint32_t i = 0; i < num_entries; ++i) {
+            for (uint32_t r = 0; r < num_recv; ++r) {
+                gdfb.reserve_back_for_receiver(r, 1);
+                gdfb.write_to_receiver(r, staging_addr(staging_base, i * entry_size), 1, noc);
+                gdfb.flush_writes(noc);
+                gdfb.push_back_to_receiver(r, 1, noc);
+            }
+        }
     }
 
     if constexpr (do_barrier) {

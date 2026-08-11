@@ -26,10 +26,12 @@
 //   word[7] = remote_pages_acked_ptr (receiver's acked counter address on sender's core)
 // Sender pages additionally store:
 //   words[8..8+2N-1] = NOC XY table: x0,y0,x1,y1,... for N receivers
-//   Then entries_sent[i] / entries_acked[i] pairs at L1_ALIGNMENT stride
+//   Then entries_sent[i] / entries_acked[i] pairs at L1_ALIGNMENT stride.
+//   There is no stored write-cursor state: the sender derives each receiver's write
+//   offset from that receiver's entries_sent counter (credits reset each launch).
 // Receiver pages additionally store:
-//   word[8]  = sender_physical_coord.x
-//   word[9]  = sender_physical_coord.y
+//   word[8] = sender_physical_coord.x
+//   word[9] = sender_physical_coord.y
 
 // 3-word kernel-config entry format per CrossNodeDFB, densely packed after a header word:
 //   region at cross_node_dfb_offset:
@@ -76,7 +78,6 @@ FORCE_INLINE void setup_one_cross_node_dfb_slot(
         iface.aligned_pages_sent_ptr = aligned_cnt_ptr;
         iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, remote_cnt_ptr);
         iface.fifo_limit_page_aligned = fifo_limit;
-
     } else {
         // Receiver page: sender NOC XY is stored at word[8..9], noc_xy_addr points there.
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
