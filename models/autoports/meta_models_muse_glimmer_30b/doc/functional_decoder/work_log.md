@@ -507,7 +507,7 @@ was pushed.
 |---|---|---|---|
 | tt-metal | `agentic-research/hous/multigoal-claude` | `c24bb9de468f` | everything under `models/autoports/meta_models_muse_glimmer_30b/` — implementation, host reference, tests, scripts and evidence |
 | tt-metal | same | `6c3a6236d44` | this section |
-| tt-metal | same | see `git log` | the final round-4 corrections: the decode page-table capacity guard, the doc fixes the review required, and the re-run evidence |
+| tt-metal | same | `6b9aa772d56` | the round-3/4 corrections: the decode page-table capacity guard, the `layer_rope_theta` assertion, the HF-snapshot fix, the tightened multi-chunk bar, the evidence-gate additions, and the re-run evidence |
 
 The commit contains only this stage's files; the one other dirty path in the worktree
 (`tt_metal/third_party/tt-cluster-descriptors/`, an untracked submodule checkout) was left
