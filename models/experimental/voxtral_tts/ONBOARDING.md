@@ -216,7 +216,7 @@ to happen here.** The three wins in `§6.31` are all that shape — a constant r
 layout conversion avoidable by reading the original layout, and a reduction sitting on the chip when
 its result was already being shipped off it.
 
-### Nine rules, each of which cost real time to learn
+### Eleven rules, each of which cost real time to learn
 
 0. **`N/288` MEANS TWO DIFFERENT THINGS IN THIS PROJECT.** `7/288`, `9/288`, `21/288` in NOTES and
    `§6.8`/`§6.10` are **8 frames x 36 codes on ONE REAL fixture**. `gate_codes`' old `97/288` was **8
@@ -230,22 +230,32 @@ its result was already being shipped off it.
 2. **Isolated measurements do not decide. The whole block decides.** Six times an isolated result
    failed to survive: `§6.18`, `§6.19`, `§6.27`, `§6.30` (1.543× isolated → *zero* whole-block),
    `§6.33` (**the wrong sign**), `§6.37` (1.14–1.20× → +0.001 ms).
-3. **Always report spread next to mean.** A single number with no spread is not a measurement. If the
+3. **A BLOCK A/B IS A SCREEN, NOT A VERDICT — and a tight loop never syncs.** The real generate loop
+   costs **+1.311 ms/frame** more than the sum of its blocks timed tight, across **10.1 host crossings**
+   (`§6.42`). A D2H's cost is not the copy but every op still in flight finishing. `§6.38`'s "dispatch is
+   0%" is true of a tight loop and false of the frame. Confirm anything under ~1 ms on the real loop.
+
+4. **A REJECTION CAN EXPIRE.** A correct measurement whose premise later stops holding: `§6.41`'s silu
+   was mis-described for the life of the port, and the P150 fork found five of these. **Any rejection
+   whose margin was small against a then-slow baseline deserves re-testing** after anything that makes
+   the surrounding code faster.
+
+5. **Always report spread next to mean.** A single number with no spread is not a measurement. If the
    effect is smaller than the spread, say INCONCLUSIVE and go measure the whole block. `§6.33` is the
    case where a ~10 µs effect was reported from a measurement whose own spread was 5.8–27.6 µs.
-4. **Compare numerics against fp32/fp64 truth, not against the current default.** `§6.25` nearly
+6. **Compare numerics against fp32/fp64 truth, not against the current default.** `§6.25` nearly
    discarded a real 1.2× because it differed from the *default* by 5.3e-03, when against fp64 every
    config was 6.6e-04 from truth.
-5. **A config that fails to BUILD tells you nothing about whether it is fast.** `§6.28` records
+7. **A config that fails to BUILD tells you nothing about whether it is fast.** `§6.28` records
    writing "the rejection holds" on the strength of an assertion about a missing `memory_config`.
-6. **Compare like for like on memory config.** `§6.31`/`§6.33`: a hand-rolled path timed writing to
+8. **Compare like for like on memory config.** `§6.31`/`§6.33`: a hand-rolled path timed writing to
    DRAM against a fused op writing to L1, read as a tie. Where q/k/v live is worth 2.5 ms/frame
    downstream. Check `t.memory_config().buffer_type` in probes.
-7. **Never put a `||` fallback in a gate.** One that silently substitutes a different input is worse
+9. **Never put a `||` fallback in a gate.** One that silently substitutes a different input is worse
    than one that fails, because it returns a plausible number (`§6.32`).
-8. **`git checkout <commit> -- <file>` STAGES the old version.** `git status` shows `MM`, and a later
+10. **`git checkout <commit> -- <file>` STAGES the old version.** `git status` shows `MM`, and a later
    `git commit` silently reverts your change. `git restore --staged <file>` after any A/B using it.
-9. **Frame counts in a multi-case run depend on the preceding cases.** An hour went into a "moved from
+11. **Frame counts in a multi-case run depend on the preceding cases.** An hour went into a "moved from
    207 to 220" that reproduced identically when the case was run alone.
 
 ### The order to work in

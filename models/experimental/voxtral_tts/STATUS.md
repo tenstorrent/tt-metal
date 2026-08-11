@@ -2890,6 +2890,74 @@ against our §6.39 null), sdpa for Block 2's interior pays (45.4 ms/frame, again
 and dispatch is 3-4% there against the 0% §6.38 measured here. None of those is a contradiction; they
 are a different cost regime, and that is the single most useful thing to carry into any P150 port.
 
+### 6.42 — read the P150 fork at RTF 0.364 in full and tried everything: one correction, nothing ships
+
+`lserbedzija/voxtral-tts-ttnn_p150` reached **RTF 0.3647 / 27.7 ms/frame** against our 0.57-0.64 / 48 ms.
+Read all 35 commits including the reasoning, and tested every candidate that could apply here.
+
+**WHAT TRANSFERRED: one correction to my own record.**
+
+Their §6.65 measured 10.1 host crossings per frame costing 2.796 ms, and showed blocks timed in a TIGHT
+LOOP are faster than the same blocks inside the real generation — because a tight loop never syncs.
+**That is exactly the mistake §6.38 made.** Measured here:
+
+| | ours (N150) | theirs (P150) |
+|---|---|---|
+| crossings/frame | **10.1** (3.0 D2H, 7.1 H2D) | 10.1 (3.0, 7.1) — exact match |
+| sum of tight blocks | 44.194 ms | 35.515 |
+| real generate loop | **45.505 ms** | 39.289 |
+| **drain penalty** | **+1.311 ms/frame** | +3.77 ms |
+
+So §6.38's "host dispatch is 0%" is **right about `_solve` in a tight loop and wrong as a description of
+the frame**. The real loop pays 1.311 ms of serialization — about a third of their penalty, consistent
+with N150's lower small-op cost. (The 15.8 ms that instrumenting attributes to `to_torch` is mostly the
+device work being WAITED FOR at the sync, not extra overhead; the 1.311 ms gap is the honest number.)
+
+**WHAT DID NOT TRANSFER, and why — all four have the same root cause.**
+
+| their change | theirs | ours | why not |
+|---|---|---|---|
+| w1 program config to fuse silu (§6.41) | -2.42 ms/frame | **loses** at every legal grid | 288 tiles / 64 cores admits no good `per_core_N`; their 12x6 of 130 gives 4 |
+| residual as matmul bias | **-1.918 ms/step** | **+0.086 ms/step**, real loop INCONCLUSIVE | their gain needed program configs making the matmul 2.3x faster to EXPOSE the add. Ours is at the roofline, so the add still hides in its shadow — which is what our old "w2's add is already free" note said |
+| trace the frame loop | **-4.244 ms/frame** | §6.38 measured `_solve` traced at **19.230 vs 19.145 eager** | their Block 2 alone was 13.3% dispatch after their matmul speedups; our device is saturated |
+| width-shard the decode norm | -5.399 ms/frame | **already ours** | their §6.39/6.40 had REMOVED it and this reinstated it; we never removed it |
+
+**The single root cause: small ops cost ~3.4x more on their card (their own measurement), and their
+matmuls were not at the roofline.** Every fix on that branch works by exposing or removing dispatch that
+had been hiding behind slow device work. We have no such hiding place — all ten weight matmuls are at
+194-202 GB/s and the tight-loop dispatch is 0%. **That is why a 1.6x-faster chip with 2x the cores needed
+an entirely different optimization set, and why almost none of it is portable.**
+
+**AND ONE OF OUR CHANGES WAS CHECKED AND SURVIVES.** Their §6.65 flagged their §6.50 as "probably stale
+… pricing the OP in isolation while ignoring the D2H drain", which is exactly what [flow-08a] did when it
+moved semantic_code's argmax to the host on an isolated 1.439x. Re-tested in the REAL loop, warmed and
+interleaved, both paths returning token 3040:
+
+    A host argmax (ships)   45.396 ms/frame  spread 0.087
+    B device argmax         45.730 ms/frame  spread 0.173     host wins by 0.335 ms
+
+The gap exceeds the spread, so **[flow-08a] is not stale on N150.** The D2H of 8320 logits is cheaper
+than the 490 us device reduce even after the drain is priced in.
+
+**THE METHODOLOGY POINT WORTH KEEPING, which is the most valuable thing on that branch.** They found
+FIVE "expired premises" — rejections that were correct when written and silently stopped being correct
+after a later change made something faster. Their words: *"a correct measurement whose PREMISE EXPIRED.
+Not a bad harness."* Their rule: **any rejection whose margin was small against a then-slow baseline
+deserves re-testing.** Our exposure is lower because our rejections were mostly made against a
+roofline-saturated baseline that has not moved — but §6.41 (silu) is precisely one of these, caught by
+them and not by us.
+
+**Also worth recording from their branch, unverified here:** an eager op map ranks ops by LAUNCH cost,
+not by what they cost in a traced path — their `concat` went 144.7 us eager to **2.6 us traced**, a
+"ghost". §6.36 lists our `concat` (line 174) and `reshape` (line 176) at 101.0 and 106.0 us, 1.449
+ms/frame, which I called the largest untouched item. If tracing ever lands here, that item may
+substantially evaporate rather than reward eager work.
+
+**STILL UNTESTED, and it is a judgement call rather than an oversight:** a full per-frame trace. Prize is
+bounded by the 1.311 ms drain (2.9% of frame). Against it: three prior tracing measurements here were
+negative, §6.38 measured `_solve` traced as slightly WORSE, and their own commit documents a K/V
+corruption bug that reached a full gate run before being caught. Not attempted.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
