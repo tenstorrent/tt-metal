@@ -78,3 +78,4 @@ recommends **not** building the 2-D partial-scaler feature.
 | 10 | remaining single-axis mask kernels: `moreh_bias_backward_h` migrated, the rest blocked | [step-10-phase3-single-axis-inventory.md](step-10-phase3-single-axis-inventory.md) |
 | 11 | `moreh_{sum,mean}_w` (matmul scaler) and the generic MIN kernels | [step-11-phase4-analyses.md](step-11-phase4-analyses.md) — **blocked, no code change** |
 | 12 | the 2-D partial scaler feature: retired, one consumer and no mechanism | [step-12-phase5-2d-partial-scaler.md](step-12-phase5-2d-partial-scaler.md) — **not recommended, no code change** |
+| 13 | which perf tests the migration needs, and why | [step-13-perf-scope-analysis.md](step-13-perf-scope-analysis.md) |
