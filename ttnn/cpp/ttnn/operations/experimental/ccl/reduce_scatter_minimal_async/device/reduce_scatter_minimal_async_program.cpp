@@ -352,7 +352,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    [[maybe_unused]] bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -843,16 +843,16 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 std::vector<uint32_t> writer_rt_args;
                 if (normalized_dim == 0) {
                     writer_rt_args = {
-                        intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
-                        output_tensor.buffer()->address(),                           // output_tensor_address
-                        virtual_core.x,                                              // this core.x
-                        virtual_core.y,                                              // this core.y
-                        opposite_core_coord.x,                                       // opposite direction core.x
-                        opposite_core_coord.y,                                       // opposite direction core.y
-                        semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
-                        semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
-                        barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
-                        barrier_semaphore.has_value()                                // barrier_sem
+                        intermediate_tensor.buffer()->address(),          // intermediate_tensor_address
+                        output_tensor.buffer()->address(),                // output_tensor_address
+                        virtual_core.x,                                   // this core.x
+                        virtual_core.y,                                   // this core.y
+                        opposite_core_coord.x,                            // opposite direction core.x
+                        opposite_core_coord.y,                            // opposite direction core.y
+                        semaphore.at(dir).address(),                      // out_ready_semaphore for this dir
+                        semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
+                        barrier_semaphore.has_value(),                    // use_barrier_sem
+                        barrier_semaphore.has_value()                     // barrier_sem
                             ? barrier_semaphore.value().address()
                             : 0,
                         dir,                  // direction
@@ -862,16 +862,16 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     };
                 } else {
                     writer_rt_args = {
-                        intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
-                        output_tensor.buffer()->address(),                           // output_tensor_address
-                        virtual_core.x,                                              // this core.x
-                        virtual_core.y,                                              // this core.y
-                        opposite_core_coord.x,                                       // opposite direction core.x
-                        opposite_core_coord.y,                                       // opposite direction core.y
-                        semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
-                        semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
-                        barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
-                        barrier_semaphore.has_value()                                // barrier_sem
+                        intermediate_tensor.buffer()->address(),          // intermediate_tensor_address
+                        output_tensor.buffer()->address(),                // output_tensor_address
+                        virtual_core.x,                                   // this core.x
+                        virtual_core.y,                                   // this core.y
+                        opposite_core_coord.x,                            // opposite direction core.x
+                        opposite_core_coord.y,                            // opposite direction core.y
+                        semaphore.at(dir).address(),                      // out_ready_semaphore for this dir
+                        semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
+                        barrier_semaphore.has_value(),                    // use_barrier_sem
+                        barrier_semaphore.has_value()                     // barrier_sem
                             ? barrier_semaphore.value().address()
                             : 0,
                         dir,                      // direction
