@@ -7,23 +7,10 @@
 #include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "ckernel_sfpu_mac.h"
 
-namespace ckernel {
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS = 8>
-inline void llk_math_eltwise_ternary_sfpu_mac(
-    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_ternary_sfpu_params_(
-        sfpu::calculate_mac<APPROXIMATE, is_fp32_dest_acc_en, data_format, ITERATIONS>,
-        dst_index0,
-        dst_index1,
-        dst_index2,
-        odst,
-        vector_mode);
-}
+namespace ckernel::sfpu {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
-inline void llk_math_eltwise_ternary_sfpu_mac_init() {
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::mac>();
+inline void mac_init() {
     // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
     // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
     // (physical slot 6, direct on Blackhole since there is no addr_mod_base
@@ -59,4 +46,4 @@ inline void llk_math_eltwise_ternary_sfpu_mac_init() {
     }
 }
 
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

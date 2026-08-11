@@ -6,7 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#include "ckernel_sfpu_mac.h"
 #include "llk_math_eltwise_ternary_sfpu_mac.h"
+#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -25,7 +27,16 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((llk_math_eltwise_ternary_sfpu_mac<APPROX, DST_ACCUM_MODE, data_format>(idst0, idst1, idst2, odst)));
+    MATH((SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_mac,
+        (APPROX, DST_ACCUM_MODE, data_format, 8 /* ITERATIONS */),
+        idst0,
+        idst1,
+        idst2,
+        odst,
+        VectorMode::RC)));
 }
 
 /**
@@ -33,7 +44,7 @@ ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst
  */
 template <DataFormat data_format>
 ALWI void mac_tile_init() {
-    MATH((llk_math_eltwise_ternary_sfpu_mac_init<APPROX, DST_ACCUM_MODE, data_format>()));
+    MATH((SFPU_TERNARY_INIT_FN(mac, sfpu::mac_init, (APPROX, DST_ACCUM_MODE, data_format))));
 }
 
 }  // namespace ckernel
