@@ -91,6 +91,14 @@ def _decode_core_grid(k, n):
     """Compute-core grid for decode DRAM-sharded matmul + matching act shard."""
     k_tiles = k // TILE_SIZE
     n_tiles = _padded_n_tiles(n)
+    # Measured on Gemma4-12B/1x4 batch-32 decode at this exact shape (down_proj:
+    # k=3840, n=3840, both 120 tiles): _find_grid_k_n's greedy largest-feasible
+    # pick (40 cores, 5x8) is 1.27x SLOWER than 5 cores/1x5 (0.0733ms vs
+    # 0.0578ms, identical PCC 0.9998) -- per-core dispatch overhead dominates
+    # this small an M=32 matmul. Narrowly scoped to the exact verified k,n so
+    # other shapes (e.g. gate_up_proj, k=3840 n=7680) keep the default search.
+    if k_tiles == 120 and n_tiles == 120:
+        return 1, 5, 5
     rows, cols = _find_grid_k_n(k_tiles, n_tiles)
     return rows, cols, rows * cols
 
