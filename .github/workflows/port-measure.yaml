@@ -16,73 +16,129 @@
 # is `CODEGEN_REPO_TOKEN`: the port harness needs the generator repo checked out, and a free-text
 # `command` input cannot carry a secret without putting it in run metadata and logs.
 #
-# `workflow_dispatch` only fires for workflow files on the default branch, so this has to be merged
-# to main before the agent can call it, regardless of which branch the port is developed on.
+# Triggered by the push of the scratch ref itself, not by `workflow_dispatch`. That is deliberate and
+# it is what lets the whole pipeline be developed on a branch: `workflow_dispatch` only fires for
+# workflow files that are already on the default branch, whereas a `push` event runs the workflow as
+# it exists *in the commit that was pushed*. The launcher has to push the code under test anyway, so
+# the push doubles as the trigger and this file needs no privileged position to be exercised.
+#
+# Two consequences worth knowing before editing this. A push made with `GITHUB_TOKEN` never starts a
+# workflow -- GitHub suppresses that to stop runs from triggering runs -- so the launcher must push
+# with a PAT or nothing happens here at all. And nothing else in the repository watches these refs:
+# every other `push` trigger is either pinned to a branch list that excludes them or filtered to
+# paths a scratch commit does not touch, so a dispatch costs exactly this workflow and no other.
 name: "(port) Build and measure a codegen port"
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "baseline proves the harness before the agent starts; build is a compile check; verify grades the port"
-        required: true
-        type: choice
-        options:
-          - baseline
-          - build
-          - verify
-      band:
-        description: "For verify: correctness, performance, or both"
-        required: false
-        type: string
-        default: both
-      op:
-        required: false
-        type: string
-        default: untilize
-      category:
-        required: false
-        type: string
-        default: data_movement
-      codegen-ref:
-        required: false
-        type: string
-        default: codegen_agentic_port
-      perf-limit:
-        description: "In-scope cases measured per performance band"
-        required: false
-        type: string
-        default: "24"
-      ref:
-        description: "Commit to build and measure -- the scratch ref the launcher pushed"
-        required: true
-        type: string
-      base-sha:
-        description: "Commit the port started from, for the write-path guard"
-        required: false
-        type: string
-        default: ""
-      runner-label:
-        required: false
-        type: string
-        default: '["tt-ubuntu-2204-N150-viommu-stable"]'
-      # `arch` would belong here beside `runner-label`, and it is hardcoded to wormhole_b0 in the
-      # device job instead only because `workflow_dispatch` caps at ten inputs and this is the
-      # eleventh. Nothing is lost yet: the porting pipeline is N150-only, so the two would always
-      # have moved together. Whoever adds a second arch should take that slot from something else.
-      nonce:
-        description: "Echoed into the run name so the launcher can find this run; the dispatch API returns no run id"
-        required: false
-        type: string
-        default: ""
+  push:
+    branches:
+      - "port-op-scratch/**"
 
-# The launcher matches on this to find the run it just created.
-run-name: "port ${{ inputs.op }} ${{ inputs.mode }} [${{ inputs.nonce }}]"
+run-name: "port measure ${{ github.ref_name }}"
 
 permissions:
   contents: read
 
 jobs:
+  # A push carries no inputs, so the launcher passes them as JSON in the commit message. Of the few
+  # free-form channels a push has, that one is the only one that is in the event payload -- so this
+  # job needs no checkout and costs seconds -- and that leaves no trace in the tree, which a params
+  # file would not: gate.py diffs the checkout against the base commit to prove the agent wrote only
+  # where it was allowed to, and an extra file would read as a violation of exactly that.
+  #
+  # Everything is validated here rather than trusted, because every one of these values is
+  # interpolated into a shell command further down. Downstream steps take them through `env:` for
+  # the same reason.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.params.outputs.mode }}
+      band: ${{ steps.params.outputs.band }}
+      op: ${{ steps.params.outputs.op }}
+      category: ${{ steps.params.outputs.category }}
+      codegen-ref: ${{ steps.params.outputs.codegen-ref }}
+      perf-limit: ${{ steps.params.outputs.perf-limit }}
+      base-sha: ${{ steps.params.outputs.base-sha }}
+      runner-label: ${{ steps.params.outputs.runner-label }}
+    steps:
+      - name: Read the dispatch parameters out of the commit message
+        id: params
+        env:
+          PORT_PARAMS: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          raw = os.environ["PORT_PARAMS"]
+          try:
+              params = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"the commit message is not the JSON dispatch.py writes ({exc}): {raw[:200]!r}")
+
+          # Deliberately a shape, not an allowlist of known ops: a new op should not have to be
+          # registered in two places. What it does exclude is anything that could end a shell word.
+          TOKEN = re.compile(r"\A[A-Za-z0-9._/-]{1,120}\Z")
+          errors, out = [], {}
+
+          def word(key, default=None, allow_empty=False):
+              value = str(params.get(key, default if default is not None else ""))
+              if not value and allow_empty:
+                  return ""
+              if not TOKEN.match(value):
+                  errors.append(f"{key}={value!r} is not a bare token")
+                  return ""
+              return value
+
+          mode = word("mode")
+          if mode not in ("baseline", "build", "verify"):
+              errors.append(f"mode={mode!r} must be baseline, build or verify")
+          band = word("band", "both")
+          if band not in ("correctness", "performance", "both"):
+              errors.append(f"band={band!r} must be correctness, performance or both")
+
+          out["mode"] = mode
+          out["band"] = band
+          out["op"] = word("op", "untilize")
+          out["category"] = word("category", "data_movement")
+          out["codegen-ref"] = word("codegen-ref", "codegen_agentic_port")
+
+          limit = str(params.get("perf-limit", "24"))
+          if not limit.isdigit() or not 1 <= int(limit) <= 1000:
+              errors.append(f"perf-limit={limit!r} must be a positive integer under 1000")
+          out["perf-limit"] = limit
+
+          base = str(params.get("base-sha", ""))
+          if base and not re.fullmatch(r"[0-9a-f]{7,40}", base):
+              errors.append(f"base-sha={base!r} is not a hex sha")
+          out["base-sha"] = base
+
+          # Re-serialised rather than passed through, so that what reaches `fromJSON` below and what
+          # was validated here cannot differ.
+          labels = params.get("runner-label") or ["tt-ubuntu-2204-N150-viommu-stable"]
+          if isinstance(labels, str):
+              try:
+                  labels = json.loads(labels)
+              except json.JSONDecodeError:
+                  labels = [labels]
+          if not isinstance(labels, list) or not labels or not all(
+              isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,80}", x) for x in labels
+          ):
+              errors.append(f"runner-label={labels!r} must be a non-empty list of plain labels")
+              labels = ["tt-ubuntu-2204-N150-viommu-stable"]
+          out["runner-label"] = json.dumps(labels)
+
+          if errors:
+              for message in errors:
+                  print(f"::error::{message}")
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
+              for key, value in out.items():
+                  handle.write(f"{key}={value}\n")
+          print(json.dumps(out, indent=2))
+          PY
+
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
 
@@ -90,7 +146,7 @@ jobs:
   # a non-profiler build would make every performance verdict inconclusive. build-wheel because the
   # measure job installs ttnn from the wheel rather than from the source tree.
   build-artifact:
-    needs: check-harbor
+    needs: [resolve, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -100,20 +156,22 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: true
       build-wheel: true
-      ref: ${{ inputs.ref }}
+      ref: ${{ github.sha }}
       platform: "Ubuntu 22.04"
       build-type: Release
 
   # Skipped for `build`, where a green build-artifact job is the entire answer and a card would only
   # add queue time to a question that does not need one.
   measure:
-    if: inputs.mode != 'build'
-    needs: [check-harbor, build-artifact]
+    if: needs.resolve.outputs.mode != 'build'
+    needs: [resolve, check-harbor, build-artifact]
     timeout-minutes: 120
-    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    runs-on: ${{ fromJSON(needs.resolve.outputs.runner-label) }}
     container:
-      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      image: ${{ contains(needs.resolve.outputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
+        # N150-only by design, and the runner label above says so too. Whoever adds a second arch
+        # should derive both from one parameter rather than let them drift apart.
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         TT_METAL_HOME: /work
@@ -135,7 +193,7 @@ jobs:
         # measure anything.
         - ${{ github.workspace }}/docker-job:/work
         - ${{ github.workspace }}/codegen:/codegen
-        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(needs.resolve.outputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -149,14 +207,14 @@ jobs:
           fetch-depth: 1
           submodules: recursive
           path: docker-job
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.sha }}
 
       - name: Checkout tt-dm-codegen
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 10
         with:
           repository: tenstorrent/tt-dm-codegen
-          ref: ${{ inputs['codegen-ref'] }}
+          ref: ${{ needs.resolve.outputs.codegen-ref }}
           token: ${{ secrets.CODEGEN_REPO_TOKEN }}
           persist-credentials: false
           path: codegen
@@ -166,11 +224,13 @@ jobs:
       # in the object store; fetching it explicitly is cheaper than deepening the whole clone, and
       # tolerating failure keeps `baseline` -- which has no base to diff against -- working.
       - name: Make the base commit reachable
-        if: inputs['base-sha'] != ''
+        if: needs.resolve.outputs.base-sha != ''
+        env:
+          PORT_BASE_SHA: ${{ needs.resolve.outputs.base-sha }}
         run: |
           git config --global --add safe.directory /work
-          git fetch --depth=1 origin "${{ inputs['base-sha'] }}" 2>/dev/null \
-            || echo "::warning::could not fetch ${{ inputs['base-sha'] }}; the write-path guard may not run"
+          git fetch --depth=1 origin "$PORT_BASE_SHA" 2>/dev/null \
+            || echo "::warning::could not fetch $PORT_BASE_SHA; the write-path guard may not run"
 
       - name: Download the build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -214,10 +274,10 @@ jobs:
       # It comes back under `workspace/`, at its repo-relative path, so the launcher can lay the
       # directory straight over the agent's checkout without knowing where anything belongs.
       - name: Emit the routing test
-        if: inputs.mode == 'baseline'
+        if: needs.resolve.outputs.mode == 'baseline'
         env:
-          PORT_OP: ${{ inputs.op }}
-          PORT_CATEGORY: ${{ inputs.category }}
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_CATEGORY: ${{ needs.resolve.outputs.category }}
         run: |
           python3 .github/scripts/port/scaffold.py \
             --op "$PORT_OP" --category "$PORT_CATEGORY" \
@@ -233,12 +293,15 @@ jobs:
       # cases. A disagreement here means every later correctness verdict was graded against the wrong
       # answer and would have read as a broken port.
       - name: Check the golden against native
-        if: inputs.mode == 'baseline'
+        if: needs.resolve.outputs.mode == 'baseline'
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
         run: |
           python3 .github/scripts/port/measure.py \
-            --op "${{ inputs.op }}" --band golden \
-            --manifest "/codegen/agentic_port/manifests/${{ inputs.op }}.yaml" \
-            --limit "${{ inputs['perf-limit'] }}" --out /tmp/port-results/golden.json
+            --op "$PORT_OP" --band golden \
+            --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --limit "$PORT_LIMIT" --out /tmp/port-results/golden.json
 
           python3 - /tmp/port-results/golden.json <<'PY'
           import json, sys
@@ -264,12 +327,16 @@ jobs:
       # `blocked` verdict, an empty ledger, or missing device attribution all mean the numbers the
       # agent later produces would be meaningless.
       - name: Native baseline
-        if: inputs.mode == 'baseline'
+        if: needs.resolve.outputs.mode == 'baseline'
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_CATEGORY: ${{ needs.resolve.outputs.category }}
+          PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
         run: |
           python3 .github/scripts/port/gate.py \
-            --op "${{ inputs.op }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op }}.yaml" \
-            --category "${{ inputs.category }}" --band performance --repo /work \
-            --work /tmp/port-baseline --limit "${{ inputs['perf-limit'] }}" --skip-write-check \
+            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --category "$PORT_CATEGORY" --band performance --repo /work \
+            --work /tmp/port-baseline --limit "$PORT_LIMIT" --skip-write-check \
             > /tmp/port-results/baseline.json || true
           cat /tmp/port-results/baseline.json
 
@@ -296,17 +363,19 @@ jobs:
       # is a result to hand back, not an infrastructure error, and the launcher decides what to do
       # with it. A crash still shows up, as an unparseable verdict on the agent's side.
       - name: Verify the port
-        if: inputs.mode == 'verify'
+        if: needs.resolve.outputs.mode == 'verify'
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_CATEGORY: ${{ needs.resolve.outputs.category }}
+          PORT_BAND: ${{ needs.resolve.outputs.band }}
+          PORT_BASE_SHA: ${{ needs.resolve.outputs.base-sha }}
+          PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
         run: |
-          case "${{ inputs.band }}" in
-            correctness|performance|both) band="${{ inputs.band }}" ;;
-            *) echo "::error::band must be correctness, performance, or both"; exit 2 ;;
-          esac
           python3 .github/scripts/port/gate.py \
-            --op "${{ inputs.op }}" --manifest "/codegen/agentic_port/manifests/${{ inputs.op }}.yaml" \
-            --category "${{ inputs.category }}" --band "$band" --repo /work \
-            --base-sha "${{ inputs['base-sha'] }}" --work /tmp/port-gate \
-            --limit "${{ inputs['perf-limit'] }}" \
+            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --category "$PORT_CATEGORY" --band "$PORT_BAND" --repo /work \
+            --base-sha "$PORT_BASE_SHA" --work /tmp/port-gate \
+            --limit "$PORT_LIMIT" \
             > /tmp/port-results/gate.json || true
           cat /tmp/port-results/gate.json
 
@@ -326,7 +395,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: port-results-${{ inputs.mode }}-${{ github.run_id }}
+          name: port-results-${{ needs.resolve.outputs.mode }}-${{ github.run_id }}
           path: /tmp/port-results
           retention-days: 7
           if-no-files-found: warn
