@@ -148,7 +148,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     // FIFO (plus a contiguous bytes_sent slot) from the MAIN hugepage channel instead -- its upper half is
     // free when the device's raw rings aren't in use, exactly what the drainer raw-ring path relies on. Each
     // socket gets a 2 MB-aligned region (one drainer posted-TLB window) via a process-wide bump. The returned
-    // dev addr is the channel OFFSET (hi=0); the L2CPU sender ORs in pcie_base (NOC_XY_PCIE_ENCODING bit60).
+    // dev addr is the channel OFFSET (hi=0); the sender ORs in pcie_base (NOC_XY_PCIE_ENCODING bit60).
     static std::atomic<uint64_t> s_hugepage_bump{0};
     uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
     uint64_t region = ((static_cast<uint64_t>(fifo_size_) + 64 + 0x1FFFFFull) & ~0x1FFFFFull);
@@ -234,9 +234,9 @@ void D2HSocket::write_socket_metadata(
     if (config_buffer_) {
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
-    } else if (sender_is_l2cpu_) {
-        // Non-worker sender (drainer L2CPU): sender_core_.core_coord is a physical NoC coord and
-        // config_buffer_address_ is the full LIM address. Write directly via the cluster using
+    } else if (sender_uses_physical_noc_addr_) {
+        // Non-worker sender (e.g. a DRISC drainer): sender_core_.core_coord is a physical NoC coord and
+        // config_buffer_address_ is the full L1 address. Write directly via the cluster using
         // the virtual coord (worker_core_from_logical_core / WORKER translation would target a
         // Tensix worker instead).
         const auto& cluster = MetalContext::instance().get_cluster();
@@ -271,15 +271,16 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
-        sender_virtual_core = sender_is_l2cpu_ ? cluster.get_virtual_coordinate_from_physical_coordinates(
-                                                     sender_device_id, sender_core_.core_coord)
-                                               : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
+        sender_virtual_core =
+            sender_uses_physical_noc_addr_
+                ? cluster.get_virtual_coordinate_from_physical_coordinates(sender_device_id, sender_core_.core_coord)
+                : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
         // ASK whether this core has a static window; do not infer it from the sender kind. Metal maps
         // static TLBs at device init for workers/eth/dispatch and, on Blackhole, one 4 GB window per DRAM
-        // channel (ll_api::configure_static_tlbs). The drainer L2CPU is not among them -- but a DRAM core
-        // (DRISC sender) may be, and a caller that wants one can configure it before constructing the
-        // socket. Keying off sender_is_l2cpu_ conflated two unrelated things: the addressing semantics
-        // above (which a non-worker sender genuinely needs) and static-TLB availability (which is a
+        // channel (ll_api::configure_static_tlbs). A non-worker sender is not automatically among them --
+        // but a DRAM core (DRISC sender) may be, and a caller that wants one can configure it before
+        // constructing the socket. Keying off the addressing flag conflated two unrelated things: the
+        // addressing semantics above (which a non-worker sender genuinely needs) and static-TLB availability (a
         // property of the core, and which UMD will answer directly). is_tlb_mapped() takes the same
         // TRANSLATED coord we just computed, and the address overload also proves the window actually
         // spans the config buffer -- notify_sender() writes bytes_acked inside it on every read().
@@ -302,8 +303,8 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     if (arch == tt::ARCH::BLACKHOLE && mesh_device && sender_core_tlb_ != nullptr) {
         // This process owns a mesh_device and the sender core has a static window covering the config
         // buffer, so writes need no driver reconfig. Gate on the window we actually obtained rather than
-        // on the sender kind -- that keeps the L2CPU (no static window) on the dynamic path while letting
-        // a DRAM/DRISC sender use the static one.
+        // on the sender kind -- that keeps a sender without a static window on the dynamic path while
+        // letting a DRAM/DRISC sender use the static one.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
@@ -325,11 +326,11 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    // NOTE: the L2CPU (drainer) reaches a socket buffer by a posted write through the PCIe tile at pcie_base|addr
+    // NOTE: the drainer reaches a socket buffer by a posted write through the PCIe tile at pcie_base|addr
     // (bit60 = NOC_XY_PCIE_ENCODING outbound routing). With IOMMU enabled that goes to the PCIe bus, so an
     // IOMMU-pinned PinnedMemory IOVA is reachable the same way the hugepage channel is -- PROVIDED the sender
-    // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the drainer). So L2CPU can use
-    // PinnedMemory too; the drainer gets the full FIFO addr from its socket config buffer (compile arg
+    // is handed the FULL pcie_base|IOVA addr (a bare lo32 offset reads wrong on the drainer). So a drainer can
+    // use PinnedMemory too; it gets the full FIFO addr from its socket config buffer (compile arg
     // kSocketConfigAddr) and writes it with bit60 set.
     // The predicate this branch used to spell out by hand -- is_iommu_enabled() ||
     // get_supports_64_bit_pcie_addressing() -- is exactly upstream's d2h_uses_hugepage_fallback(), so use theirs.
@@ -410,7 +411,7 @@ D2HSocket::D2HSocket(
         external_config.address,
         l1_alignment);
     config_buffer_address_ = external_config.address;
-    sender_is_l2cpu_ = external_config.sender_is_l2cpu;
+    sender_uses_physical_noc_addr_ = external_config.sender_uses_physical_noc_addr;
     init_common(mesh_device);
 }
 

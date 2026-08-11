@@ -116,7 +116,7 @@ public:
         // statically mapped at device init (ll_api::configure_static_tlbs), so a caller using a
         // different port should configure a window for its core BEFORE constructing the socket --
         // otherwise every read() pays a TLB reconfigure (~210 ns measured on bh-05).
-        bool sender_is_l2cpu = false;
+        bool sender_uses_physical_noc_addr = false;
     };
 
     /**
@@ -393,7 +393,7 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
-    bool sender_is_l2cpu_ = false;  // sender is not a Tensix worker (see ExternalConfigBuffer)
+    bool sender_uses_physical_noc_addr_ = false;  // non-worker sender addressing (see ExternalConfigBuffer)
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
