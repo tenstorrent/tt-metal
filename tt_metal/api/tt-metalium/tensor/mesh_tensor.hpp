@@ -6,16 +6,11 @@
 
 #include <tt-metalium/hal_types.hpp>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
-// It is intentional to not reflect the experimental status of this header in its namespace,
-// as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
-// long time, it is expected for the implementation to graduate out of experimental really quickly.
-//
-// Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
@@ -25,7 +20,7 @@ class TensorTopology;
 namespace distributed {
 class MeshDevice;
 class MeshBuffer;
-}
+}  // namespace distributed
 
 /**
  * MeshTensor is a device memory object. The user’s mental model of MeshTensor is an owning handle to

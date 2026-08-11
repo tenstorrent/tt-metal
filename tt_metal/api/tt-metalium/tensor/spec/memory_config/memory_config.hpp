@@ -9,7 +9,7 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace ttsl::json {
 template <typename T>
