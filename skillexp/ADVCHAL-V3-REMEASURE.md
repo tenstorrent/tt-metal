@@ -1,4 +1,14 @@
-# Re-measured the rejected candidate — the veto was right, and v2's win is the thing that fails
+# ⚠⚠ SUPERSEDED — read [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) instead
+
+**The central claim of this file is false.** It concluded that v2's oracle "ran with the norm sharding inactive"
+and that v2's −5,919 µs/model win should be struck. **Checking out v2's tree and running its own oracle test
+reproduces `0.9996293363224806` exactly at 88 cores, with the sharding active and engaged.** v2's win is real and
+correctness-established. → [`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 16.
+
+The re-measured ladder and the oracle-precision section below are correct and still stand. Only the attribution
+was wrong.
+
+# Re-measured the rejected candidate — the veto was right *for v3's tree*
 
 Ran the model's **own** oracle test on device, 2026-08-11, in an isolated worktree at the v3 stage tag, using the
 harness's `GEMMA4_RANGE_DOWNLOAD=1` path to fetch just layer 0's real weights.
@@ -73,11 +83,17 @@ And that single number is **1.3 × 10⁻⁶ from v3's *interleaved incumbent* (0
 (measured — [`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) §2), a genuinely engaged 88-core sharding in
 v2's tree would have read ≈0.9944, as it does here.
 
-> **The only reading consistent with the numbers is that v2's oracle ran with the norm sharding inactive.** It
-> reported an incumbent-grade PCC for a candidate it did not exercise, and v2's **−7,105.4 µs/model** for this
-> cell — **47 % of v2's entire corpus total** — rests on it.
+> ⚠⚠ **RETRACTED.** This paragraph read: *"The only reading consistent with the numbers is that v2's oracle ran
+> with the norm sharding inactive… v2's −7,105.4 µs/model rests on it."* **It is wrong.** Running v2's tree at 88
+> cores reproduces `0.9996293363224806` — sharding active and engaged. The proximity to the incumbent was not
+> evidence of inactivity; **it was the finding**: at one tile per core the sharded reduction is as accurate as the
+> interleaved one. The duplicated `shipped_default`/`norm88` files and the empty `exact_command` remain real
+> bookkeeping defects, but they do not mean the oracle skipped the candidate.
 
-By the model's own bar, the configuration v2 shipped scores **0.99437 and fails.**
+**The correct explanation is the guard**, measured in [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md): v2 shards the
+norm in **prefill and decode**, v3 shards it in **decode only**, so v3 reads a KV cache built with interleaved
+norms. Same tree, same weights, same oracle — the guard alone moves 88 cores from **0.9996293 (pass)** to
+**0.9943717 (fail)**.
 
 ## v3 rejected it with a verdict it did not compute
 
@@ -124,12 +140,14 @@ oracle actually ran.** That is one assertion in the gate, and it is now the high
 
 # Actions, revised
 
-1. **Strike v2's gemma-4-26B `-onA` sliding win (−5,919 µs/model) pending re-verification.** Its oracle evidence
-   is one un-sharded measurement filed under two names, and the config it shipped measures 0.99437 here.
+1. ~~Strike v2's gemma-4-26B `-onA` sliding win~~ — **withdrawn, the claim was false.** v2's 88-core oracle
+   reproduces exactly with sharding active; the win stands. What replaces it: **fix v3's decode-only guard and put
+   88 on the ladder** — [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md).
 2. **`oracle_passed` computed from a parsed, provenanced oracle artefact** — CRITICAL, per screened candidate.
    Covers both failure modes at once.
-3. ~~Re-run gemma-4-26B `-onA`'s sliding kind to recover −242 µs/layer~~ — **withdrawn.** Re-measured: every legal
-   rung fails the bar. There is nothing to recover under this bar, and §3.2a's "may well pass" is falsified.
+3. **Re-run gemma-4-26B `-onA`'s sliding kind — the −5,919 µs/model IS recoverable**, at 88 cores with a
+   prefill+decode-consistent guard. My earlier "nothing to recover" was drawn from v3's tree alone, where the guard
+   defect makes every rung fail.
 4. **The open question that replaces it:** the norm re-grid costs 5.1 × 10⁻³ of layer PCC and buys 13 % of layer
    latency on 25 layers. Is the 0.995 bar the right place to spend it? That is a model-owner decision, and it is
    now a *stated trade* with both numbers measured rather than a silent rejection.
