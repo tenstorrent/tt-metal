@@ -1228,6 +1228,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${UNIT_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
   model: wan-2.2-t2v
   model_family: Wan
