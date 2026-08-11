@@ -239,15 +239,15 @@ def _coarse_prefill_buckets_enabled() -> bool:
 def _reveal_buckets_enabled() -> bool:
     """Whether the up-front denoise trace binds a per-request reveal-span bucket.
 
-    Off (default), every capture binds the deployment-wide worst case
-    (DG_DENOISE_REVEAL_PMAX / max_model_len) and every denoise step pays that
-    span's SDPA regardless of the live request: measured 440 ms/step at 262144
-    against 205 ms/step at 4096 for the same block (P150x4, 2026-08-10). On,
-    captures bind the smallest power-of-two span covering the request's current
-    prefix plus one canvas, growing by release-and-recapture at block
-    boundaries when a long generation crosses its bucket.
+    Default ON: captures bind the smallest power-of-two span covering the
+    request's current prefix plus one canvas, growing by release-and-recapture
+    at block boundaries when a long generation crosses its bucket. Set
+    ``DG_DENOISE_REVEAL_BUCKETS=0`` to restore the single deployment-wide span
+    (DG_DENOISE_REVEAL_PMAX / max_model_len), where every denoise step pays the
+    worst-case SDPA regardless of the live request: measured 440 ms/step at
+    262144 against 205 ms/step at 4096 for the same block (P150x4, 2026-08-10).
     """
-    return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "0").strip().lower() in (
+    return os.environ.get("DG_DENOISE_REVEAL_BUCKETS", "1").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -517,7 +517,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             self._upfront_reveal_bucket = _resolve_reveal_bucket(
                 ttnn.TILE_SIZE + self.canvas_length, ceiling=self._upfront_pmax
             )
-            set_active_reveal_pmax(self._upfront_reveal_bucket)
+        # Register unconditionally: the active span is module-global in traced_denoise,
+        # so a wrapper built after a bucketed one (tests, restarts in-process) must not
+        # inherit a stale bucket — None restores env/default resolution.
+        set_active_reveal_pmax(self._upfront_reveal_bucket)
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
@@ -1056,9 +1059,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         bucket is detected here, at a block boundary, before the replay's own
         rebind validation would reject it.
         """
-        if not (self._upfront and _reveal_buckets_enabled()):
+        if not (getattr(self, "_upfront", False) and _reveal_buckets_enabled()):
             return None
-        adapter = self._persistent_adapter
+        adapter = getattr(self, "_persistent_adapter", None)
         controller = getattr(adapter, "_upfront_traced_denoise_controller", None) if adapter is not None else None
         if controller is None or not getattr(controller, "captured", False):
             return None
@@ -1104,6 +1107,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             if controller is not None:
                 controller.release()
                 delattr(adapter, attr)
+            # The old-span mask bookkeeping (adapter._reveal_p_max) feeds the serving
+            # capacity check BEFORE the capture re-prepares the buffers; releasing the
+            # mask here lets that check fall back to the model context limit and the
+            # capture rebuild everything at the new span.
+            release_masks = getattr(adapter, "release_reveal_mask_buffers", None)
+            if callable(release_masks):
+                release_masks()
             self._persistent_adapter = None  # republished after a successful capture
             ttnn.synchronize_device(self.model[0].mesh_device)
             set_active_reveal_pmax(new_bucket)
@@ -1275,7 +1285,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         f"aligned prefill plus canvas exceeds fixed reveal span: "
                         f"{cache_len} + {self.canvas_length} > {p_max}"
                     )
-                if _reveal_buckets_enabled() and self._upfront_reveal_bucket is not None:
+                if _reveal_buckets_enabled() and getattr(self, "_upfront_reveal_bucket", None) is not None:
                     candidate = _resolve_reveal_bucket(cache_len + self.canvas_length, ceiling=int(p_max))
                     if _resolve_reveal_bucket_change(candidate, int(self._upfront_reveal_bucket)):
                         # Committed (active span registered, tracker updated) only around

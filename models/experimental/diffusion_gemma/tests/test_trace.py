@@ -1638,3 +1638,98 @@ def test_active_reveal_pmax_overrides_env(monkeypatch):
         assert TD._resolve_reveal_pmax(adapter) == 262144
     finally:
         TD.set_active_reveal_pmax(None)
+
+
+def _serve_blocks_fresh_controller(wrapper, tokens: torch.Tensor, *, num_blocks: int):
+    """Like _serve_once, but re-reads the persistent controller every block so a
+    mid-request reveal upshift (which replaces the controller) keeps telemetry
+    readable."""
+    outputs = []
+    reveal_pmax_per_block = []
+    for block_idx in range(num_blocks):
+        output = (
+            wrapper.prefill_forward(tokens, prompt_lens=[int(tokens.shape[1])])
+            if block_idx == 0
+            else wrapper.decode_forward()
+        )
+        outputs.append(output)
+        controller = wrapper._persistent_adapter._upfront_traced_denoise_controller
+        reveal_pmax_per_block.append(int(controller.reveal_pmax))
+    wrapper.release_request(0)
+    return torch.cat(outputs, dim=1), reveal_pmax_per_block
+
+
+def test_device_reveal_bucket_mid_request_upshift_matches_fixed_span(upfront_device_bundle, monkeypatch):
+    """A generation crossing its bucket recaptures on the live session and stays bit-exact.
+
+    Geometry: floor 512, ceiling 1024 (the bundle's max_seq_len). A short prompt
+    admits at bucket 512; block 1's reveal (288 + 256 = 544) no longer fits, so
+    decode upshifts to 1024 mid-request. Same seed as the fixed-span reference,
+    so the reveal mask must make the span invisible to the committed tokens.
+    """
+    prompt = _tokenize(upfront_device_bundle, "Write one sentence about rain.")
+
+    # Mechanism test, not a quality test: the bundle's short-context model can emit
+    # canvases the degeneracy guard would end at block 0, and the request must keep
+    # growing for the bucket to overflow. Correctness is the bit-exact token match.
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "off")
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "0")
+    reference_wrapper = _make_upfront_wrapper(upfront_device_bundle, [prompt])
+    try:
+        reference_tokens, reference_spans = _serve_blocks_fresh_controller(reference_wrapper, prompt, num_blocks=3)
+    finally:
+        reference_wrapper.release_persistent_capture()
+    assert set(reference_spans) == {1024}, "reference arm must run the fixed max_seq_len span"
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    monkeypatch.setenv("DG_REVEAL_BUCKET_FLOOR", "512")
+    wrapper = _make_upfront_wrapper(upfront_device_bundle, [prompt])
+    try:
+        assert wrapper._upfront_reveal_bucket == 512
+        tokens, spans = _serve_blocks_fresh_controller(wrapper, prompt, num_blocks=3)
+        assert spans == [512, 1024, 1024], f"expected the block-1 upshift, got {spans}"
+        assert wrapper._upfront_rebuilds == 1
+        assert wrapper._upfront_reveal_bucket == 1024
+        assert torch.equal(tokens, reference_tokens)
+    finally:
+        wrapper.release_persistent_capture()
+
+
+def test_device_reveal_bucket_admission_change_matches_fixed_span(upfront_device_bundle, monkeypatch):
+    """A bigger prompt re-buckets at admission; a later small prompt keeps the
+    high bucket (4x hysteresis) without a rebuild."""
+    small = _tokenize(upfront_device_bundle, "Write one sentence about rain.")
+    large = _tokenize(upfront_device_bundle, "Explain in detail why rainbows form after a storm. " * 40)
+    assert int(large.shape[1]) + 256 > 512, "large prompt must not fit the floor bucket"
+
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "off")  # mechanism test; see the upshift test
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "0")
+    reference_wrapper = _make_upfront_wrapper(upfront_device_bundle, [small, large])
+    try:
+        small_reference, _ = _serve_blocks_fresh_controller(reference_wrapper, small, num_blocks=1)
+        large_reference, _ = _serve_blocks_fresh_controller(reference_wrapper, large, num_blocks=1)
+    finally:
+        reference_wrapper.release_persistent_capture()
+
+    monkeypatch.setenv("DG_DENOISE_REVEAL_BUCKETS", "1")
+    monkeypatch.setenv("DG_REVEAL_BUCKET_FLOOR", "512")
+    wrapper = _make_upfront_wrapper(upfront_device_bundle, [small, large])
+    try:
+        assert wrapper._upfront_reveal_bucket == 512
+        small_tokens, small_spans = _serve_blocks_fresh_controller(wrapper, small, num_blocks=1)
+        assert small_spans == [512]
+        assert wrapper._upfront_rebuilds == 0
+
+        large_tokens, large_spans = _serve_blocks_fresh_controller(wrapper, large, num_blocks=1)
+        assert large_spans == [1024], "the large prompt must re-bucket at admission"
+        assert wrapper._upfront_rebuilds == 1
+
+        small_again, again_spans = _serve_blocks_fresh_controller(wrapper, small, num_blocks=1)
+        assert again_spans == [1024], "hysteresis must keep the high bucket for the small prompt"
+        assert wrapper._upfront_rebuilds == 1, "no downshift rebuild within 4x hysteresis"
+
+        assert torch.equal(small_tokens, small_reference)
+        assert torch.equal(large_tokens, large_reference)
+        assert torch.equal(small_again, small_reference)
+    finally:
+        wrapper.release_persistent_capture()
