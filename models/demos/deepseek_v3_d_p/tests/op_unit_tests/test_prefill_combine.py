@@ -10,7 +10,6 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
-import copy
 from dataclasses import dataclass
 
 import pytest
@@ -392,25 +391,23 @@ COMBINE_MODELS = [
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
 def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
-    model_cpy = copy.copy(model)
-
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
     if ref_num_chips != target_num_chips:
         # oreder of the operation keeps the number of routed experts divisible by the number of chips
-        model_cpy.NUM_ROUTED_EXPERTS = (model_cpy.NUM_ROUTED_EXPERTS // ref_num_chips) * target_num_chips
+        model.NUM_ROUTED_EXPERTS = (model.NUM_ROUTED_EXPERTS // ref_num_chips) * target_num_chips
 
     # number of experts selected to proces every token (top-K) has to be scaled to preserve average expert activation per dispatch group
     if ref_mesh[1] != target_mesh[1]:
-        model_cpy.NUM_EXPERTS_PER_TOKEN = (model_cpy.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1]
+        model.NUM_EXPERTS_PER_TOKEN = (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1]
 
     # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
     if pcc_only:
-        model_cpy.NUM_ROUTED_EXPERTS = max(target_num_chips, model_cpy.NUM_ROUTED_EXPERTS // 16)
-        model_cpy.NUM_EXPERTS_PER_TOKEN = max(2, model_cpy.NUM_EXPERTS_PER_TOKEN // 4)
+        model.NUM_ROUTED_EXPERTS = max(target_num_chips, model.NUM_ROUTED_EXPERTS // 16)
+        model.NUM_EXPERTS_PER_TOKEN = max(2, model.NUM_EXPERTS_PER_TOKEN // 4)
 
-    return model_cpy
+    return model
 
 
 def _topo_marker(mesh, fabric_cfg):
@@ -445,7 +442,7 @@ def _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg):
 
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
-    for model_name, model_config, is_extended_model, test_meshes in COMBINE_MODELS:
+    for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
             device_params = fabric_to_device_params(fabric_cfg)
             fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
@@ -462,7 +459,7 @@ def _cross_product_conflated_cmb_test_dimensions():
             ]
             for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
                 model_config = _model_scaledown_for_combine(
-                    model_config, test_meshes.full_model_mesh, target_mesh, run_pcc
+                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
                 )
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
