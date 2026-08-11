@@ -56,6 +56,9 @@ inline void llk_unpack_AB_face_compressed_mm_init(
  * @tparam clear_src: Clear SrcB before the first unpack, values = <true/false>
  * @tparam finalize: For ct_dim == 1, leave both sources zeroed and valid so the math thread can merge its
  *                   split-accumulation partials, values = <true/false>
+ * @tparam data_follows_meta: The data section is packed directly after the meta section in one buffer, so
+ *                            per-chunk addresses are data-section-relative and the blob stays relocatable,
+ *                            values = <true/false>
  * @param operand0: CB of the activation; its read pointer becomes the SrcB base address.
  * @param operand1: CB of the compressed weights, unused here -- they are addressed from base_address_meta.
  * @param base_address_meta: L1 address of the meta buffer, holding the math metas, the per-chunk weight
@@ -64,7 +67,7 @@ inline void llk_unpack_AB_face_compressed_mm_init(
  * @note Call @ref llk_unpack_AB_face_compressed_mm_init first.
  * @note On the math thread, pair with @ref llk_math_face_compressed_mm.
  */
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true, bool data_follows_meta = false>
 inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operand0,
     [[maybe_unused]] const std::uint32_t operand1,
@@ -75,7 +78,8 @@ inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t base_address_B = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_AB_face_compressed_mm_<ct_dim, clear_src, finalize>(base_address_B, base_address_meta, kt_dim);
+    _llk_unpack_AB_face_compressed_mm_<ct_dim, clear_src, finalize, data_follows_meta>(
+        base_address_B, base_address_meta, kt_dim);
 }
 
 /**
