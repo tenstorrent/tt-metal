@@ -427,12 +427,53 @@ def _resolve_local_lora_file_path(path_input):
     return str(resolved_path)
 
 
-def _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename):
+# Same large-file cache endpoint the rest of the SDXL suite fetches from in CIv2
+# (see test_lora_perf.py and the root conftest's CIv2ModelDownloadUtils_). The env
+# override exists so the fetch path can be exercised outside the CI cluster.
+_LORA_CI_V2_CACHE_ENDPOINT = os.environ.get(
+    "SDXL_LORA_CACHE_ENDPOINT",
+    "http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+)
+
+
+def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
+    """Fetch a single adapter file from the CIv2 large-file cache.
+
+    Returns the local path on success, None on any failure (caller falls back to
+    HF). CIv2 runners have no HF egress, so for adapters that are not already in
+    the baked HF cache this is the only route that works there.
+    """
+    import subprocess
+
+    target_dir = Path("/tmp/ttnn_model_cache/lora") / cache_dir
+    target = target_dir / filename
+    if target.is_file() and target.stat().st_size > 0:
+        return str(target)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    endpoint = f"{_LORA_CI_V2_CACHE_ENDPOINT}/{cache_dir}/{filename}"
+    try:
+        subprocess.run(["wget", "-q", "-O", str(target), endpoint], check=True, timeout=300)
+    except Exception as e:
+        logger.warning(f"CIv2 LoRA cache fetch failed for {endpoint}: {e}")
+        target.unlink(missing_ok=True)
+        return None
+    if not (target.is_file() and target.stat().st_size > 0):
+        target.unlink(missing_ok=True)
+        return None
+    return str(target)
+
+
+def _resolve_lora_weights_path(
+    request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename, ci_v2_cache_dir=None
+):
     """Resolve a LoRA weights path.
 
     1) --lora-weights: full path to a local .safetensors file.
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use the supplied default weights (HF download).
+    3) If nothing provided: use the supplied default weights. In CIv2, adapters
+       with a `ci_v2_cache_dir` are fetched from the large-file cache first
+       (runners there have no HF egress); everywhere else, and as the CIv2
+       fallback, they come from HF.
 
     Shared by the LoRA fixtures below, which differ only in which adapter they
     default to; resolution order and download behaviour are identical.
@@ -452,12 +493,19 @@ def _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, default_repo_id
         )
         return
 
+    tried_ci_cache = False
     if not (hf_repo_id and hf_filename):
         logger.warning(
             f"No LoRA weights provided. Using default weights. Repo: {default_repo_id}, File: {default_filename}"
         )
         hf_repo_id = default_repo_id
         hf_filename = default_filename
+
+        if is_ci_v2_env and ci_v2_cache_dir:
+            tried_ci_cache = True
+            cached = _fetch_lora_from_ci_v2_cache(ci_v2_cache_dir, default_filename)
+            if cached:
+                return cached
 
     try:
         from huggingface_hub import hf_hub_download
@@ -466,8 +514,13 @@ def _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, default_repo_id
             repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
         )
     except Exception as _:
+        ci_cache_note = (
+            f" Also tried the CIv2 large-file cache ({ci_v2_cache_dir}/{hf_filename}) without success."
+            if tried_ci_cache
+            else ""
+        )
         pytest.skip(
-            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
+            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}).{ci_cache_note} "
             f"Use --lora-weights for a local file path, or ensure network/cache for HF."
         )
         return
@@ -485,11 +538,21 @@ def te_lora_path(request, is_ci_env, is_ci_v2_env):
 
     That default trains both CLIP encoders plus the UNet, so it is the adapter used
     to exercise the text-encoder fuse/rollback path. Resolution is identical to
-    `lora_path` — only the default differs.
-
-    TODO(#47509): confirm alienzkin-sdxl is mirrored in the CI HF cache; until then
-    this skips on offline CI runners rather than failing.
+    `lora_path` except that in CIv2 the adapter comes from the large-file cache,
+    where it was staged on 2026-07-21 (hf_hub_download cannot reach HF from those
+    runners, and this adapter is not in their baked HF cache).
     """
-    from models.demos.stable_diffusion_xl_base.lora.config import TE_TEST_LORA_FILENAME, TE_TEST_LORA_REPO_ID
+    from models.demos.stable_diffusion_xl_base.lora.config import (
+        TE_TEST_LORA_CI_CACHE_DIR,
+        TE_TEST_LORA_FILENAME,
+        TE_TEST_LORA_REPO_ID,
+    )
 
-    return _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, TE_TEST_LORA_REPO_ID, TE_TEST_LORA_FILENAME)
+    return _resolve_lora_weights_path(
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        TE_TEST_LORA_REPO_ID,
+        TE_TEST_LORA_FILENAME,
+        ci_v2_cache_dir=TE_TEST_LORA_CI_CACHE_DIR,
+    )

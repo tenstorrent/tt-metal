@@ -12,3 +12,7 @@ TEST_LORA_FILENAME = "ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensor
 # adapter above does not touch.
 TE_TEST_LORA_REPO_ID = "RalFinger/alien-style-lora-sdxl"
 TE_TEST_LORA_FILENAME = "alienzkin-sdxl.safetensors"
+# Directory under the CIv2 large-file cache's huggingface prefix where this
+# adapter is staged (CIv2 runners have no HF egress, so hf_hub_download cannot
+# fetch it there). Staged 2026-07-21 alongside the other SDXL LoRA fixtures.
+TE_TEST_LORA_CI_CACHE_DIR = "alien-style-lora"
