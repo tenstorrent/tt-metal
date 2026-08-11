@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
+#include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -31,6 +32,13 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
+
+struct RingAttentionRankMapping {
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+};
 
 // Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
 // Each device sends one local tile-row range to its logical next device and
@@ -97,6 +105,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     int32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
+    // Communication-order rank. In full-mesh mode this must be the snake transport rank,
+    // never the canonical row-major tensor rank.
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
@@ -130,7 +140,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
     // update_padded_kv_cache. Defaults (1, 0) reduce to slot, so single-layer callers are unaffected.
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    RingAttentionRankMapping rank_mapping = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

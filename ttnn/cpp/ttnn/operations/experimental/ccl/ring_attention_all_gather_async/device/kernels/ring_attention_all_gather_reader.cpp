@@ -12,6 +12,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
+#include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <cstdint>
 #include <utility>
@@ -22,7 +23,7 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr uint32_t my_transport_rank = get_compile_time_arg_val(0);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);  // 2
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
@@ -36,6 +37,10 @@ constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t num_links = get_compile_time_arg_val(13);
+constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(14);
+constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(15));
+constexpr uint32_t mesh_rows = get_compile_time_arg_val(16);
+constexpr uint32_t mesh_cols = get_compile_time_arg_val(17);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -43,7 +48,7 @@ constexpr uint32_t num_links = get_compile_time_arg_val(13);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 14;
+    constexpr uint32_t page_size_base_idx = ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -214,19 +219,25 @@ void kernel_main() {
         // Got it
         slices_received++;
 
-        int sender_chip_id;
-        uint32_t actual_sender_chip_id;
+        int sender_transport_rank_signed;
+        uint32_t sender_transport_rank;
         if constexpr (direction == 1) {
-            sender_chip_id = my_chip_id + slices_received;
-            actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
+            sender_transport_rank_signed = my_transport_rank + slices_received;
+            sender_transport_rank = (sender_transport_rank_signed >= (int)ring_size)
+                                        ? sender_transport_rank_signed - ring_size
+                                        : sender_transport_rank_signed;
         } else {
-            sender_chip_id = my_chip_id - slices_received;
-            actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
+            sender_transport_rank_signed = my_transport_rank - slices_received;
+            sender_transport_rank = (sender_transport_rank_signed < 0) ? ring_size + sender_transport_rank_signed
+                                                                       : sender_transport_rank_signed;
         }
+        const uint32_t sender_tensor_rank =
+            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                sender_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
         if constexpr (fuse_op) {
             // Signal matmul to go
-            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+            op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
         }
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
@@ -247,10 +258,9 @@ void kernel_main() {
                 uint32_t slice_Wt = input_tensor_Wt[input_idx];
                 uint32_t stride_Wt = output_tensor_Wt[input_idx];
                 if (gather_dim == 3) {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
+                    output_tile_id_start = sender_tensor_rank * input_tensor_Wt[input_idx];
                 } else {
-                    output_tile_id_start =
-                        actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+                    output_tile_id_start = sender_tensor_rank * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
                 }
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                     prefetch_batch_read_tiles<

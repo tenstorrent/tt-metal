@@ -27,6 +27,7 @@
 // per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
 // Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
@@ -63,6 +64,16 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
+constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
+constexpr auto snake_orientation =
+    static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
+constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
+constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
+
+FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
+    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+        transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
+}
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -348,7 +359,7 @@ struct FusedRingGate {
     // recv has already consumed the 6-arg fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
     FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
-        ring_index(recv.seq.ring_index),
+        ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
@@ -364,8 +375,9 @@ struct FusedRingGate {
                 cap_dir = d;
                 cap_val = v;
             });
-            shard_dir[rid] = cap_dir;
-            shard_val[rid] = cap_val;
+            const uint32_t tensor_rank = tensor_rank_from_transport_rank(rid);
+            shard_dir[tensor_rank] = cap_dir;
+            shard_val[tensor_rank] = cap_val;
         }
     }
 
