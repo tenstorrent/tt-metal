@@ -176,6 +176,7 @@ from ttnn._ttnn.fabric import (
     get_tt_fabric_max_payload_size_bytes,
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
+    get_forwarding_link_indices,
     get_all_fabric_mesh_ids,
     get_all_mgd_fabric_types,
     MeshId,
@@ -228,6 +229,10 @@ from ttnn._ttnn.d2d_stream_service import (
 
 from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
+)
+
+from ttnn._ttnn.layer_ack_service import (
+    LayerAckService,
 )
 
 from ttnn.types import (

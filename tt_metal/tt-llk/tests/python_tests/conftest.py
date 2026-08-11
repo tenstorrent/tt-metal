@@ -867,7 +867,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:
@@ -957,6 +957,21 @@ skip_for_blackhole = pytest.mark.skipif(
 skip_for_quasar = pytest.mark.skipif(
     get_chip_architecture() == ChipArchitecture.QUASAR,
     reason="Test is not supported on Quasar architecture",
+)
+
+wormhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.WORMHOLE,
+    reason="Test is only supported on Wormhole architecture",
+)
+
+blackhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
+    reason="Test is only supported on Blackhole architecture",
+)
+
+quasar_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.QUASAR,
+    reason="Test is only supported on Quasar architecture",
 )
 
 skip_for_coverage = pytest.mark.skipif(

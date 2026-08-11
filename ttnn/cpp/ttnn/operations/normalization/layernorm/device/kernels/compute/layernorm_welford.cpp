@@ -94,7 +94,7 @@ void kernel_main() {
     dfb_eps_obj.wait_front(1);  // comes from the reader
 
     if constexpr (fuse_pre_add) {
-        binary_op_init_common(dfb_in, dfb_inb, dfb_x);
+        compute_kernel_hw_startup(dfb_in, dfb_inb, dfb_x);
         pack_reconfig_data_format(dfb_x);
     } else {
         compute_kernel_hw_startup(dfb_in, dfb_ex);
@@ -112,7 +112,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
-            add_tiles_init(dfb_in, dfb_inb);
+            add_init(dfb_in, dfb_inb);
             reconfig_data_format(dfb_in, dfb_inb);
             pack_reconfig_data_format(dfb_x);
             for (auto block : generic::blocks(Wt, blk)) {
@@ -287,7 +287,7 @@ void kernel_main() {
         }
         dfb_ex_obj.wait_front(onetile);  // should have 1 tile
         dfb_xmm_obj.reserve_back(total_buffer_size);
-        sub_bcast_cols_init_short(dfb_x, dfb_ex);
+        sub_bcast_cols_init(dfb_x, dfb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             for (auto i : block.local()) {
@@ -315,7 +315,7 @@ void kernel_main() {
         }
         dfb_ex2_obj.wait_front(onetile);  // should have 1 tile
         tile_regs_acquire();
-        add_tiles_init(dfb_ex2, dfb_eps);
+        add_init(dfb_ex2, dfb_eps);
         add_tiles(dfb_ex2, dfb_eps, 0, 0, dst0);
         rsqrt_tile_init();
         rsqrt_tile(dst0);
@@ -341,7 +341,7 @@ void kernel_main() {
                 pack_reconfig_data_format(dfb_fusion);
             }
 
-            mul_bcast_cols_init_short(dfb_xmm, dfb_ex2pe);
+            mul_bcast_cols_init(dfb_xmm, dfb_ex2pe);
             tile_regs_acquire();
             for (auto i : block.local()) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
@@ -365,7 +365,7 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_ex2pe, dfb_gamma);
                 uint32_t dfb_outg = do_beta ? dfb_fusion : dfb_out;
                 DataflowBuffer dfb_outg_obj(dfb_outg);
-                mul_bcast_rows_init_short(dfb_fusion, dfb_gamma);
+                mul_bcast_rows_init(dfb_fusion, dfb_gamma);
                 dfb_gamma_obj.wait_front(
                     block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
                 dfb_fusion_obj.wait_front(block.full_block_size());
@@ -393,7 +393,7 @@ void kernel_main() {
                     reconfig_data_format_srcb(dfb_ex2pe, dfb_beta);
                 }
 
-                add_bcast_rows_init_short(dfb_fusion, dfb_beta);
+                add_bcast_rows_init(dfb_fusion, dfb_beta);
                 dfb_beta_obj.wait_front(
                     block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
                 dfb_fusion_obj.wait_front(block.full_block_size());

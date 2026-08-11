@@ -52,7 +52,12 @@ from utils.report import has_actionable_failure, normalize_health_report
 from utils.secrets_loader import load_jira_secrets, load_sftp_secrets
 from utils.sftp_upload import upload_csv_sftp
 from utils.system_info import collect_version_info
-from utils.telemetry import aggregate_telemetry_for_csv, collect_prometheus_metrics, format_prometheus_metrics
+from utils.telemetry import (
+    aggregate_telemetry_for_csv,
+    collect_prometheus_metrics,
+    format_prometheus_metrics,
+    telemetry_port_for_launch_mode,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -262,8 +267,9 @@ def main() -> int:
     )
     print(version_header, flush=True)
 
-    # Collect Prometheus metrics from local telemetry endpoint
-    prom_metrics = collect_prometheus_metrics()
+    # Collect Prometheus metrics from local telemetry endpoint. The port differs
+    # by deployment (see telemetry_port_for_launch_mode).
+    prom_metrics = collect_prometheus_metrics(port=telemetry_port_for_launch_mode(launch_mode))
     prom_output = ""
     if prom_metrics:
         prom_output = format_prometheus_metrics(prom_metrics)

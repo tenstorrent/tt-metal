@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <type_traits>
 
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -23,6 +24,23 @@
 namespace tt::tt_metal::experimental::dfb::detail {
 
 namespace {
+
+// Narrow a host-side value into an on-disk init-blob field width. Rejects silent truncation so the
+// blob always matches what HW / device unpack expect.
+template <typename NarrowT, typename WideT>
+NarrowT dfb_narrow_field(WideT value, uint32_t dfb_id, const char* field_name) {
+    static_assert(std::numeric_limits<NarrowT>::is_integer, "dfb_narrow_field requires an integer destination");
+    constexpr auto max_v = static_cast<WideT>(std::numeric_limits<NarrowT>::max());
+    TT_FATAL(
+        value <= max_v,
+        "DFB {}: {} ({}) exceeds on-disk field width max {} ({} bits)",
+        dfb_id,
+        field_name,
+        value,
+        max_v,
+        std::numeric_limits<NarrowT>::digits);
+    return static_cast<NarrowT>(value);
+}
 
 uint32_t align_dfb_config_transfer_size(uint32_t payload_bytes) {
     if (payload_bytes == 0) {
@@ -587,13 +605,15 @@ size_t serialize_dfb_config_for_core(
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
-            // Header (28B fixed).
+            // Header (28B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
             dfb_hart_init_entry_t entry = {};
-            entry.logical_dfb_id = static_cast<uint8_t>(dfb->device_slot);
+            entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs        = num_tcs;
-            entry.capacity       = rc.is_producer ? static_cast<uint8_t>(dfb->capacity) : 0u;
+            entry._reserved0 = 0;
+            entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
+                                            : static_cast<uint16_t>(0);
             entry.entry_size = dfb->config.entry_size;
-            entry.num_entries = static_cast<uint16_t>(dfb->config.num_entries);
+            entry.num_entries = dfb_narrow_field<uint16_t>(dfb->config.num_entries, dfb->id, "num_entries");
             // Precompute hart-type-specific stride_size so device can copy it directly:
             //   DM harts   (h < TENSIX_RISC_OFFSET): stride_size = entry_size_raw * stride_in_entries
             //   TRISC harts (h >= TENSIX_RISC_OFFSET): stride_size = (entry_size_raw >> 4) * stride_in_entries
@@ -604,7 +624,7 @@ size_t serialize_dfb_config_for_core(
             } else {
                 entry.stride_size_precomp = (dfb->config.entry_size >> kTRISCCbAddrShift) * dfb->stride_in_entries;
             }
-            entry.stride_size_tiles = static_cast<uint8_t>(dfb->stride_in_entries);
+            entry.stride_size_tiles = dfb_narrow_field<uint8_t>(dfb->stride_in_entries, dfb->id, "stride_size_tiles");
 
             uint8_t flags = 0;
             // Every producer initializes its own TCs and publishes a readiness signal bit.
@@ -1128,7 +1148,7 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
     constexpr uint32_t max_capacity = std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max();
     TT_FATAL(
         capacity <= max_capacity,
-        "DFB {}: capacity {} exceeds the maximum {}, reduce num_entries.",
+        "DFB {}: capacity {} exceeds the maximum {} (HW BUFFER_CAPACITY is 16 bits); reduce num_entries.",
         dfb.id,
         capacity,
         max_capacity);
@@ -1452,7 +1472,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     }
 
     if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "DFB {} size override applied: entry_size={} num_entries={} prod_threshold={} prod_per_tc={} "
             "cons_threshold={} cons_per_tc={}",
@@ -1667,7 +1687,7 @@ uint32_t finalize_dfbs(
         dfb_size = std::max(dfb_size, kg_dfb_size);
     }
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {}",
         base_offset,
@@ -1790,7 +1810,13 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             break;
         default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
     }
-    dfb->capacity = capacity;
+    TT_FATAL(
+        capacity <= std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max(),
+        "DFB {}: capacity {} exceeds the maximum {} (HW BUFFER_CAPACITY is 16 bits)",
+        dfb->id,
+        capacity,
+        std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max());
+    dfb->capacity = static_cast<uint16_t>(capacity);
     log_debug(tt::LogMetal, "Capacity: {}", capacity);
 
     dfb->configs_finalized = false;
@@ -2048,7 +2074,7 @@ void ProgramImpl::finalize_single_dfb_config(
             // Contiguous within this Neo's exact reserved block (see reserve_packer_ranges).
             const uint8_t pair_index = remapper_index_allocator_.allocate_for_packer(core, tensix_id);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={}) aliased to shadow tc_id={} "
                 "via remapper pair {}",
@@ -2408,7 +2434,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 producer_txn_ids,
                 num_producer_tcs,
                 config.pap);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
@@ -2432,7 +2458,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 consumer_txn_ids,
                 num_consumer_tcs,
                 config.cap);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,

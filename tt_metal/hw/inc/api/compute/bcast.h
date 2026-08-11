@@ -35,8 +35,11 @@ constexpr DataCopyType unary_bcast_data_copy_type =
     (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
 
 template <BroadcastType bcast_type>
-ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+ALWI void unary_bcast_init(uint32_t icb) {
+    // NOTE: no call_line parameter here — a defaulted call_line would make this 1-arg overload
+    // ambiguous with the [[deprecated]] (icb, ocb) full init below. The sentinel still tracks the
+    // operand; only the source line for this specific call is attributed to bcast.h.
+    state_configure(icb, __builtin_LINE());
 
 #ifndef ARCH_QUASAR
     // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
@@ -45,9 +48,6 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-
-    // Will configure A & B in similar way
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
@@ -59,15 +59,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
         MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, DST_ACCUM_MODE, bcast_type>(
             icb)));
     }
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #endif
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
 #else
-    UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // 32bit formats require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
     // implemented for Quasar yet; only the B2D path is supported here.
@@ -82,13 +75,20 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /*EN_32BIT_DEST*/, bcast_type>(icb)));
 #endif
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
 #endif
+}
+
+// Deprecated full init: fused hardware startup + op-specific short init. Superseded by the
+// compute_kernel_hw_startup(icb, ocb) + unary_bcast_init(icb) programming model, mirroring the
+// matmul (#46346) / transpose (#23835) / eltwise (#22943) cleanups under umbrella #22219.
+template <BroadcastType bcast_type>
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then unary_bcast_init(icb). "
+    "The unary_bcast_init(icb, ocb) full init will be removed after September 15th, 2026 (tt-metal#49924).")]]
+ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    compute_kernel_hw_startup(icb, ocb);
+    unary_bcast_init<bcast_type>(icb);
 }
 
 template <BroadcastType bcast_type>
@@ -156,7 +156,11 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 
 #ifndef ARCH_QUASAR
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
-void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
+[[deprecated(
+    "Switch broadcast operands with the generic reconfig_data_format_srca / reconfig_data_format_srcb + "
+    "pack_reconfig_data_format, then unary_bcast_init(new_icb). This will be removed after September 15th, "
+    "2026.")]] void
+reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
     constexpr DataCopyType data_copy_type = unary_bcast_data_copy_type<new_bcast_type>;
@@ -321,7 +325,10 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  */
 // clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then "
+    "bcast_init<tBcastOp, tBcastDim>(icb0, icb1). This will be removed after September 15th, 2026.")]] void
+init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, ocb, call_line);
     MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
 #ifndef ARCH_QUASAR
@@ -433,7 +440,7 @@ ALWI void mul_tiles_bcast(
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -443,7 +450,7 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_rows to be
  * executed correctly.
  */
-ALWI void sub_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -454,7 +461,7 @@ ALWI void sub_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_cols to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -465,7 +472,7 @@ ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be
  * executed correctly.
  */
-ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void add_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
@@ -477,7 +484,7 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t cal
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -501,7 +508,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -511,7 +518,7 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
 /**
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
-ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -522,7 +529,7 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_bcast_cols to be executed
  * correctly.
  */
-ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_cols_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::COL, MathFidelity::LoFi>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
@@ -533,12 +540,87 @@ ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_scalar to be
  * executed correctly.
  */
-ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void sub_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWSUB, BroadcastType::SCALAR, MathFidelity::LoFi>(
         icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+}
+
+
+// clang-format off
+/**
+ * Canonical broadcast binary init (generic op/dim). Configures the math + unpack pipeline for a
+ * broadcast binary op. The one-time hardware configuration must already have been performed via
+ * compute_kernel_hw_startup(icb0, icb1, ocb) at the start of MAIN (mirrors eltwise_binary.h). For the
+ * fixed op/dim entry points with their historical fidelity, use the
+ * {add,sub,mul}_bcast_{rows,cols,scalar}_init wrappers.
+ *
+ * | Param Type | Name      | Description                               | Type              | Valid Range | Required |
+ * |------------|-----------|-------------------------------------------|-------------------|-------------|----------|
+ * | Template   | tBcastOp  | The binary op (ELWADD / ELWSUB / ELWMUL)  | EltwiseBinaryType | N/A         | True     |
+ * | Template   | tBcastDim | The broadcast dim (ROW / COL / SCALAR)    | BroadcastType     | N/A         | True     |
+ * | Function   | icb0      | CB containing A                           | uint32_t          | 0 to 31     | True     |
+ * | Function   | icb1      | CB containing B                           | uint32_t          | 0 to 31     | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
+ALWI void bcast_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1, call_line);
+    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
+}
+
+// =====================================================================================================================
+// Deprecated broadcast init API
+// New model: compute_kernel_hw_startup(icb0, icb1, ocb) once at MAIN start, then the per-op broadcast
+// init (add_bcast_rows_init / mul_bcast_cols_init / ... , or the generic bcast_init<OP, DIM>). The
+// forwarders below preserve the old *_init_short names; init_bcast (above) is the deprecated full-config init.
+// =====================================================================================================================
+[[deprecated("Renamed to add_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_rows_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    add_bcast_rows_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to add_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_cols_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    add_bcast_cols_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to add_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void add_bcast_scalar_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    add_bcast_scalar_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to sub_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_rows_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    sub_bcast_rows_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to sub_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_bcast_cols_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    sub_bcast_cols_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to sub_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void sub_tiles_bcast_scalar_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    sub_bcast_scalar_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to mul_bcast_rows_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_rows_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    mul_bcast_rows_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to mul_bcast_cols_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_bcast_cols_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    mul_bcast_cols_init(icb0, icb1, call_line);
+}
+
+[[deprecated("Renamed to mul_bcast_scalar_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_bcast_scalar_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    mul_bcast_scalar_init(icb0, icb1, call_line);
 }
 
 }  // namespace ckernel

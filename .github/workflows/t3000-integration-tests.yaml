@@ -14,10 +14,8 @@ on:
           - trace stress
           - resnet
           - sd35_large
-          - flux1
           - motif
           - qwenimage
-          - wan2.2
           - mochi
           - deepseek-modules
       platform:

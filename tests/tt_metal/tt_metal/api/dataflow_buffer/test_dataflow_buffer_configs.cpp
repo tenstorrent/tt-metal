@@ -344,6 +344,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(entry0->logical_dfb_id, 0u);
     EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
     EXPECT_EQ(entry0->entry_size, 1024u);
+    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
+    EXPECT_EQ(entry0->_reserved0, 0u);
     EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
 
     // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
@@ -352,6 +354,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
         buf.data() + ghdr->hart_blob_offset[4]);
     EXPECT_EQ(entry4->logical_dfb_id, 0u);
     EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
     EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
 
     // participation_mask drives device init entry count; non-participating harts are zero.
