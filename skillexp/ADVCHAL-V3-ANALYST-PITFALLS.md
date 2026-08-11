@@ -267,3 +267,41 @@ proposed change, and **no row means no change**:
 | which direction the error points if wrong | surfaces the bias while it is still cheap |
 
 The last column is the one a reviewer should read first. If every row points the same way, stop.
+
+---
+
+# The pattern the 11-cell run added: I specified rules by what they should catch
+
+Three of v3's defects are the same mistake, and I made the third one **as the fix for the second**:
+
+| # | rule | applied to | holds over | cost |
+|---|---|---|---|---|
+| 1 | C5c: agreement must match the memory space | every advised/shipped pair | nothing — the profile has no output space | 14 of 15 rows false |
+| 2 | the legal ladder | every cliff candidate | only shard advice | `topk` got `[1]`, shipped on 110 |
+| 3 | a measurement faster than `final_ms` must ship or explain | all measurements vs **one global** `final_ms` | per layer kind | 12 false positives on one cell |
+| 4 | the oracle's clause 2: "no worse than the incumbent" | every candidate | nothing that re-grids a reduction | **−0.90 % lost on phiA, vetoed at a PCC gap of 1.2 × 10⁻⁷** |
+
+**Every one of these I specified by what it should catch, and never by what it would wrongly catch.** Clause 2
+was written as "don't ship something worse". Its false-positive surface is *every reduction re-grid* — the
+entire class this stage exists to find — and I never enumerated it. C5c, the ladder and #3 are the same
+omission.
+
+> The missing question, asked of each rule **before** shipping it: **"what will this reject that I want
+> kept?"** Asked four times it catches all four, in minutes. It is not the same question as *"does this address
+> the defect?"*, which is the only one I asked.
+
+**And #4 is worse than an oversight, because it reproduces the exact failure it was written to fix.** v2's
+complaint was that a differential oracle vetoes anything that perturbs the arithmetic. My clause 2 is a
+differential oracle with an absolute reference bolted on. I took the sentence verbatim from `IMPROVEMENTS` A1
+without asking whether the class of change under test can satisfy it.
+
+## And the bias flipped sign rather than disappearing
+
+The first five errors all **inflated** the value of my work. After that was named, my revised corpus estimate
+came out **7× too low** — 1 ms predicted against 6.8 ms measured, while v2's original 9.2 ms was closer than my
+correction. The mechanism: I calibrated a corpus-wide multiplier (12.5 % realised fraction) on the shakedown, a
+run whose decision defect I had **already documented in the same session**. A calibration constant inherits
+every defect of the run it was calibrated on.
+
+**So naming a bias does not remove it. It moved from over-claiming to over-correcting, which is the same
+failure with better manners** — and it is harder to spot, because under-claiming reads as rigour.
