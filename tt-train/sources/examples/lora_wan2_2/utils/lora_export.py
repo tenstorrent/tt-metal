@@ -70,20 +70,20 @@ def _gather(tensor, name: str, mesh_shape) -> np.ndarray:
     if tp_size == 1 and dp_size == 1:
         return np.asarray(tensor.to_numpy(), dtype=np.float32)
 
-    device, val_tt = _device(), tensor.get_value()
+    device = _device()
     if _is_col_parallel_lora_B(name):
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 2)
-        arr = np.asarray(ttnn.to_torch(val_tt, mesh_composer=composer).float().numpy(), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
         if dp_size > 1:
             arr = arr[:, :, : arr.shape[2] // dp_size, :]
     elif _is_row_parallel_lora_A(name):
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 3)
-        arr = np.asarray(ttnn.to_torch(val_tt, mesh_composer=composer).float().numpy(), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
         if dp_size > 1:
             arr = arr[:, :, :, : arr.shape[3] // dp_size]
     else:
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-        arr = np.asarray(ttnn.to_torch(val_tt, mesh_composer=composer).float().numpy(), dtype=np.float32)
+        arr = np.asarray(tensor.to_numpy(composer=composer), dtype=np.float32)
         arr = arr[:1]
     return arr
 

@@ -29,8 +29,6 @@ _H_AXIS, _W_AXIS = 0, 1
 
 
 def open_mesh(mesh_shape) -> ttnn.MeshDevice:
-    # Fabric must be set before the mesh is created: the VAE's sharded convs halo-exchange
-    # via neighbor_pad_async, which fails with a null fabric_context otherwise.
     shape = tuple(mesh_shape)
     if shape[0] * shape[1] > 1:
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT)
@@ -45,7 +43,6 @@ def close_mesh(mesh_device: ttnn.MeshDevice) -> None:
 
 
 def make_ccl_manager(mesh_device: ttnn.MeshDevice, num_links: int = 2) -> CCLManager:
-    # 2 links = every Blackhole preset; WH 4x8 wants 4, WH 2x4 wants 1.
     return CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
 
 
@@ -78,9 +75,6 @@ class WanVAEEncoderTT:
         self.z_dim = cfg.z_dim
         self._dtype = dtype
 
-        # The constructor value must be a concrete frame count -- it feeds
-        # compute_encoder_dims, which returns zero stage dims for None and so misses
-        # every conv3d blocking-table entry. Forward takes None for a full-T pass.
         self._ctor_t_chunk = num_frames if num_frames < 4 else 4
         self._fwd_t_chunk = None if num_frames < 4 else 4
 

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Timestep and text conditioning. Frozen under LoRA, so the whole path runs with no grad."""
+"""Timestep and text conditioning. Frozen under LoRA, so the whole path runs no-grad."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def timestep_features(
     downscale_freq_shift: float = 0.0,
     max_period: float = 10000.0,
 ) -> np.ndarray:
-    """Sinusoidal timestep features, (B, freq_dim). Depends only on t, so host maths."""
+    """Sinusoidal timestep features, (B, freq_dim). Depends only on t, so host-side."""
     half = freq_dim // 2
     exponent = -np.log(max_period) * np.arange(half, dtype=np.float32) / (half - downscale_freq_shift)
     ang = np.asarray(timesteps, dtype=np.float32).reshape(-1, 1) * np.exp(exponent)[None, :]
@@ -34,7 +34,7 @@ def timestep_features(
 
 
 def _gelu_tanh_nograd(x):
-    """Wan's activation. ttml's gelu is the exact form, so route to the tanh kernel."""
+    """ttml's gelu is the exact erf form, so route to the tanh kernel."""
     value = ttnn.gelu(x.get_value(), fast_and_approximate_mode=True)
     return ttml.autograd.create_tensor(value, False)
 
@@ -66,10 +66,7 @@ class WanConditioning(AbstractModuleBase):
         self.text_embedder = _ProjectionMLP(config.text_dim, config.dim, _gelu_tanh_nograd, init)
 
     def forward(self, timesteps, text_embed):
-        """Return (timestep_proj (B,1,6,dim), temb (B,1,1,dim), prompt (B,1,L,dim)).
-
-        timesteps is a host sequence of length B; text_embed is the cached UMT5 output.
-        """
+        """(timestep_proj (B,1,6,dim), temb (B,1,1,dim), prompt (B,1,L,dim))."""
         ctx = ttml.autograd.AutoContext.get_instance()
         previous_mode = ttml.autograd.GradMode.ENABLED
         ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)

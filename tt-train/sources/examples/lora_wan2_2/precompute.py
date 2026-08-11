@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import gc
 import json
+import time
 from pathlib import Path
 
+import ml_dtypes
 import numpy as np
 import torch
 import ttnn
@@ -17,6 +19,7 @@ from PIL import Image
 
 from pipeline_config import Config
 from preprocess import load_samples, strip_style_words
+from timing import phase, record
 from utils.tt_encoders import WanTextEncoderTT, WanVAEEncoderTT, close_mesh, make_ccl_manager, open_mesh
 
 
@@ -76,34 +79,41 @@ def precompute(cfg: Config) -> None:
     print(f"[pre] {len(samples)} (image, caption) pairs from {cfg.DATA_DIR}")
 
     print(f"[pre] opening mesh device {tuple(cfg.MESH_SHAPE)} ...")
-    mesh_device = open_mesh(cfg.MESH_SHAPE)
+    with phase("open mesh"):
+        mesh_device = open_mesh(cfg.MESH_SHAPE)
     try:
         ccl_manager = make_ccl_manager(mesh_device)
 
         print(f"[pre] building Wan VAE encoder on device (dtype={cfg.VAE_DTYPE}) ...")
-        vae = WanVAEEncoderTT(
-            checkpoint_name=cfg.MODEL_ID,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            height=cfg.TRAIN_H,
-            width=cfg.TRAIN_W,
-            num_frames=cfg.TRAIN_FRAMES,
-            dtype=_ttnn_dtype(cfg.VAE_DTYPE),
-        )
+        with phase("build VAE encoder"):
+            vae = WanVAEEncoderTT(
+                checkpoint_name=cfg.MODEL_ID,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                height=cfg.TRAIN_H,
+                width=cfg.TRAIN_W,
+                num_frames=cfg.TRAIN_FRAMES,
+                dtype=_ttnn_dtype(cfg.VAE_DTYPE),
+            )
         _validate_res(cfg, vae.config)
 
         metadata: list[dict] = []
         print(f"[pre] VAE-encoding {len(samples)} images at {cfg.TRAIN_H}x{cfg.TRAIN_W} ...")
+        vae_start = time.perf_counter()
         for i, (img, caption) in enumerate(samples):
             video = _pil_to_video_tensor(img, cfg.TRAIN_H, cfg.TRAIN_W, cfg.TRAIN_FRAMES)
             latent = vae.encode(video)
             if cfg.STRIP_STYLE_WORDS:
                 caption = strip_style_words(caption)
             triggered = cfg.TRIGGER + caption
-            torch.save({"latent": latent, "caption": triggered}, samples_dir / f"sample_{i:04d}.pt")
+            np.save(samples_dir / f"sample_{i:04d}.npy", latent.detach().float().cpu().numpy())
             metadata.append({"idx": i, "caption": triggered})
             if (i + 1) % 8 == 0 or i == len(samples) - 1:
-                print(f"  [pre] {i + 1}/{len(samples)} latent.shape={tuple(latent.shape)}")
+                done = time.perf_counter() - vae_start
+                print(
+                    f"  [pre] {i + 1}/{len(samples)} latent.shape={tuple(latent.shape)} " f"({done / (i + 1):.2f}s/img)"
+                )
+        record("VAE encode", time.perf_counter() - vae_start)
 
         (cache / "metadata.json").write_text(json.dumps(metadata, indent=2))
         del vae
@@ -114,18 +124,25 @@ def precompute(cfg: Config) -> None:
             unique_captions.append("")  # CFG drop caption
 
         print("[pre] building UMT5 text encoder on device ...")
-        text_encoder = WanTextEncoderTT(
-            checkpoint_name=cfg.MODEL_ID,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            max_sequence_length=cfg.MAX_SEQ,
-        )
+        with phase("build text encoder"):
+            text_encoder = WanTextEncoderTT(
+                checkpoint_name=cfg.MODEL_ID,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                max_sequence_length=cfg.MAX_SEQ,
+            )
         print(f"[pre] T5-encoding {len(unique_captions)} unique captions ...")
-        embeds = text_encoder.encode(unique_captions)
+        with phase("T5 encode"):
+            embeds = text_encoder.encode(unique_captions)
         del text_encoder
         gc.collect()
     finally:
-        close_mesh(mesh_device)
+        with phase("close mesh"):
+            close_mesh(mesh_device)
 
-    torch.save(embeds, cache / "embeds.pt")
-    print(f"[pre] done. cache at {cache.resolve()} — {len(metadata)} samples, {len(embeds)} embeds.")
+    with phase("write cache"):
+        captions = list(embeds.keys())
+        table = np.stack([embeds[c].float().cpu().numpy().astype(ml_dtypes.bfloat16) for c in captions], 0)
+        np.save(cache / "embeds.npy", table)
+        (cache / "embeds_index.json").write_text(json.dumps({c: i for i, c in enumerate(captions)}, indent=2))
+    print(f"[pre] done. cache at {cache.resolve()} — {len(metadata)} samples, {len(captions)} embeds.")

@@ -5,11 +5,10 @@
 """Patchify / unpatchify.
 
 Wan's patch embedding is a Conv3d whose stride equals its kernel, so it is a linear map
-over non-overlapping patches -- no conv3d op needed. Host-side rearrange plus a Linear,
-which also means it stays differentiable for free.
+over non-overlapping patches: host rearrange plus a Linear, no conv3d op.
 
-Note the two orders are not the same: the conv weight contracts over
-(channels, p_t, p_h, p_w), while proj_out lays its output out as (p_t, p_h, p_w, channels).
+The two orders differ -- the conv weight contracts over (channels, p_t, p_h, p_w) while
+proj_out emits (p_t, p_h, p_w, channels).
 """
 
 from __future__ import annotations
@@ -37,16 +36,14 @@ def patchify(latent: np.ndarray, patch_size: tuple) -> np.ndarray:
 
     ppf, pph, ppw = frames // p_t, height // p_h, width // p_w
     x = latent.reshape(batch, channels, ppf, p_t, pph, p_h, ppw, p_w)
-    # (B, ppf, pph, ppw, C, p_t, p_h, p_w): token order f,h,w -- features channel-major
-    x = x.transpose(0, 2, 4, 6, 1, 3, 5, 7)
+    x = x.transpose(0, 2, 4, 6, 1, 3, 5, 7)  # token order f,h,w; features channel-major
     return np.ascontiguousarray(x.reshape(batch, 1, ppf * pph * ppw, channels * p_t * p_h * p_w))
 
 
 def patchify_output_order(latent: np.ndarray, patch_size: tuple) -> np.ndarray:
     """(B, C, F, H, W) -> (B, 1, S, p_t*p_h*p_w*C): the order proj_out emits.
 
-    Use this on the flow-matching target so the loss can be taken in patch space and no
-    permutation is needed on device. MSE is unchanged by a consistent reordering.
+    Use on the flow-matching target so the loss needs no permutation on device.
     """
     batch, channels, frames, height, width = latent.shape
     p_t, p_h, p_w = patch_size

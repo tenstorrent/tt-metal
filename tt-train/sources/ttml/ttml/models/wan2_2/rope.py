@@ -19,8 +19,7 @@ def axis_split(head_dim: int) -> tuple[int, int, int]:
 
 
 def _axis_tables(dim: int, max_seq_len: int, theta: float):
-    # float64 frequencies, then cos/sin repeat-interleaved to `dim`: the interleaved
-    # pairing the rotary_embedding_llama trans_mat expects.
+    # repeat-interleaved, the adjacent-pair layout the trans_mat expects
     freqs = 1.0 / (theta ** (np.arange(0, dim, 2, dtype=np.float64) / dim))
     ang = np.outer(np.arange(max_seq_len, dtype=np.float64), freqs)
     cos = np.repeat(np.cos(ang), 2, axis=1).astype(np.float32)
@@ -36,10 +35,7 @@ def build_tables(
     max_seq_len: int = 1024,
     theta: float = 10000.0,
 ):
-    """Return (cos, sin) numpy tables shaped (1, 1, S, head_dim) for one latent shape.
-
-    latent_shape is the patch-embedder input (B, C, F, H, W).
-    """
+    """(cos, sin) tables shaped (1, 1, S, head_dim); latent_shape is (B, C, F, H, W)."""
     t_dim, h_dim, w_dim = axis_split(head_dim)
     _, _, frames, height, width = latent_shape
     p_t, p_h, p_w = patch_size
@@ -71,7 +67,7 @@ def _trans_mat(head_dim_tile: int = 32) -> np.ndarray:
 
 
 def _upload(arr: np.ndarray) -> ttnn.Tensor:
-    # The caches are plain ttnn tensors, so take the value out of a ttml tensor.
+    # the caches are plain ttnn tensors, hence get_value()
     arr = np.ascontiguousarray(arr, dtype=np.float32)
     return ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.bfloat16).get_value()
 

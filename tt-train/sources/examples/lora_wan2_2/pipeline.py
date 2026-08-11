@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 import argparse
+import time
 
 from pipeline_config import DEFAULT_CONFIG_PATH, Config
+from timing import summary
 
 _STAGES = ("preprocess", "precompute", "train", "infer")
 
@@ -38,25 +40,29 @@ def main() -> None:
 
     cfg = Config.from_yaml(args.config).apply_overrides(args.overrides)
 
-    if args.stage == "preprocess":
-        from preprocess import preprocess
+    started = time.perf_counter()
+    try:
+        if args.stage == "preprocess":
+            from preprocess import preprocess
 
-        preprocess(cfg)
+            preprocess(cfg)
 
-    elif args.stage == "precompute":
-        from precompute import precompute
+        elif args.stage == "precompute":
+            from precompute import precompute
 
-        precompute(cfg)
+            precompute(cfg)
 
-    elif args.stage == "train":
-        from train import train
+        elif args.stage == "train":
+            from train import train
 
-        train(cfg)
+            train(cfg)
 
-    elif args.stage == "infer":
-        from infer import infer
+        elif args.stage == "infer":
+            from infer import infer
 
-        infer(cfg)
+            infer(cfg)
+    finally:
+        summary(args.stage, time.perf_counter() - started)
 
 
 if __name__ == "__main__":

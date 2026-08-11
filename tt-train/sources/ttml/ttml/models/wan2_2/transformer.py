@@ -10,7 +10,13 @@ import ttnn
 
 import ttml
 from ttml.autograd import Function
-from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
+from ttml.modules import (
+    AbstractModuleBase,
+    ColumnParallelLinear,
+    LinearLayer,
+    Parameter,
+    RowParallelLinear,
+)
 
 from .attention import WanAttention
 
@@ -20,9 +26,7 @@ _MOD_CHUNKS = 6
 class GeluTanh(Function):
     """gelu with the tanh approximation, the variant Wan's feedforward was trained with.
 
-    ttml.ops.unary.gelu is the exact erf form in both directions (backward passes
-    approx_mode "none"), so this routes to ttnn's tanh-mode kernels instead. Both passes
-    are existing ttnn ops -- no derivative is hand-written here.
+    ttml.ops.unary.gelu is the exact erf form in both directions, hence the ttnn kernels.
     """
 
     @staticmethod
@@ -40,8 +44,30 @@ class WanFeedForward(AbstractModuleBase):
     def __init__(self, config) -> None:
         super().__init__()
         init = config.weight_init()
-        self.ff1 = LinearLayer(config.dim, config.ffn_dim, True, weight_init=init)
-        self.ff2 = LinearLayer(config.ffn_dim, config.dim, True, weight_init=init)
+        if config.use_tp:
+            tp = ttml.mesh().axis_size("tp")
+            if config.ffn_dim % tp:
+                raise ValueError(f"ffn_dim {config.ffn_dim} is not divisible by TP size {tp}")
+            # No norm between them, so the intermediate stays sharded end to end.
+            self.ff1 = ColumnParallelLinear(
+                config.dim,
+                config.ffn_dim,
+                has_bias=True,
+                weight_init=init,
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.ff2 = RowParallelLinear(
+                config.ffn_dim,
+                config.dim,
+                has_bias=True,
+                weight_init=init,
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.ff1 = LinearLayer(config.dim, config.ffn_dim, True, weight_init=init)
+            self.ff2 = LinearLayer(config.ffn_dim, config.dim, True, weight_init=init)
 
     def forward(self, x):
         return self.ff2(GeluTanh.apply(self.ff1(x)))
@@ -69,11 +95,7 @@ class WanTransformerBlock(AbstractModuleBase):
         self.scale_shift_table = Parameter(ttml.init.zeros()((1, 1, _MOD_CHUNKS, config.dim)))
 
     def _modulation(self, temb):
-        """Split the timestep embedding into the six modulation tensors.
-
-        Frozen parameters and a constant input, so this runs as raw ttnn and the results
-        enter the graph as leaves that need no gradient.
-        """
+        """Six modulation tensors from the timestep embedding. Frozen, so raw ttnn."""
         shifted = ttnn.add(self.scale_shift_table.tensor.get_value(), temb.get_value())
         shift, scale, gate, c_shift, c_scale, c_gate = ttnn.chunk(shifted, _MOD_CHUNKS, dim=2)
 

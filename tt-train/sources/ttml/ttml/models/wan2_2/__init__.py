@@ -47,6 +47,7 @@ class WanConfig:
     model_type: str = "t2v"
     runner_type: RunnerType = RunnerType.Default
     init_weights: bool = True
+    use_tp: bool = False
 
     def weight_init(self):
         return ttml.init.normal(0.0, 0.02) if self.init_weights else ttml.init.zeros()
@@ -94,10 +95,9 @@ class WanTransformer3D(AbstractModuleBase):
         return gamma, beta
 
     def forward(self, tokens, timesteps, text_embed, rope_params, mask=None):
-        """tokens: (B, 1, S, in_channels*prod(patch)) from patchify.
+        """(B, 1, S, in*prod(patch)) -> (B, 1, S, out*prod(patch)) in proj_out order.
 
-        Returns (B, 1, S, out_channels*prod(patch)) in proj_out order -- compare against
-        patchify_output_order(target) so no permutation is needed on device.
+        Compare against patchify_output_order(target); the model does not unpatchify.
         """
         x = self.patch_embed(tokens)
         timestep_proj, temb, prompt = self.condition_embedder(timesteps, text_embed)
