@@ -1076,6 +1076,18 @@ void kernel_main() {
     // Publish the LAST staged frames. Without this the final batch is written to the ring but never announced,
     // so the mover cannot drain it and the tail of every capture is silently short by up to one sweep.
     publish_head();
+    // FILLER: wait until the mover has drained everything we published before reporting anything.
+    // Without this the filler exits holding a STALE tail mirror -- observed `tail 2414` against 3089 frames
+    // staged -- because the mover is still draining when the filler's results are written. That is not just a
+    // cosmetic log: `inflight = frames_staged - *hs_tail` is the ring-room predicate, so a filler whose mirror
+    // lags believes the ring is fuller than it is and can wait for room that is already free.
+    // Bounded on the same deadline the write barrier uses: a dead or stopped mover must never wedge us here,
+    // and the host's quiesce order (fillers -> drain rings -> movers) guarantees the mover outlives this wait.
+    if constexpr (kRole == kRoleFiller) {
+        const uint64_t drain_deadline = get_timestamp() + kCreditWaitCycles;
+        while (*hs_tail != frames_staged && get_timestamp() < drain_deadline) {
+        }
+    }
     const uint64_t t_end = get_timestamp();
 
     const uint64_t cycles = t_end - t_start;
