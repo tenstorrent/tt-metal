@@ -41,15 +41,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx, compressed_fp8_dispatch",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx",
     [
         # fmt: off
-        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, False, id="random-weights"),
-        pytest.param(32, 224, 64, 64, 8, 4, 8, True, None, None, False, id="random-weights-gate"),
-        pytest.param(32, 224, 64, 256, 8, 4, 16, True, None, None, False, id="random-weights-gate-256"),
-        pytest.param(32, 256, 128, 24, 4, 4, 2, False, None, None, True, id="random-weights-fp8"),
-        pytest.param(32, 256, 64, 64, 8, 4, 8, True, None, None, True, id="random-weights-gate-fp8"),
-        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,False,id="hf-weights",marks=pytest.mark.slow,
+        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, id="random-weights"),
+        pytest.param(32, 224, 64, 64, 8, 4, 8, True, None, None, id="random-weights-gate"),
+        pytest.param(32, 224, 64, 256, 8, 4, 16, True, None, None, id="random-weights-gate-256"),
+        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
         ),
         # fmt: on
     ],
@@ -65,15 +63,13 @@ def test_moe(
     use_gate,
     model_id,
     layer_idx,
-    compressed_fp8_dispatch,
 ):
     """
     Test TorchMoe module with and without integrated gate.
 
     Without gate: pre-computed weights/indices are passed to forward.
     With gate: gate_weights are passed to TorchMoe, forward only takes x.
-    Can run with random weights (fast) or real HF weights (slow), and with the
-    fp8 dispatch path on or off (compressed_fp8_dispatch).
+    Can run with random weights (fast) or real HF weights (slow).
     """
     torch.manual_seed(42)
     use_hf_weights = model_id is not None
@@ -99,7 +95,6 @@ def test_moe(
         dispatch_group_size,
         dispatch_buffer_capacity_factor,
         emb_dim=emb_dim,
-        fp8_scaled_input=compressed_fp8_dispatch,
     )
 
     # Create expert dispatch table
@@ -169,7 +164,6 @@ def test_moe(
         n_expert_groups=1 if use_gate else None,
         n_limited_groups=1 if use_gate else None,
         route_scale=1.0 if use_gate else None,
-        compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
 
     if use_hf_weights:

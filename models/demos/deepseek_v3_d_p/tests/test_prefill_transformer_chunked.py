@@ -404,9 +404,8 @@ def run_chunked_transformer_padded(
     gate_fallback_mode,
     num_links,
     topology,
-    routing_use_l1_small_for_semaphores=False,
-    *,
     compressed_fp8_dispatch,
+    routing_use_l1_small_for_semaphores=False,
 ):
     """Chunked prefill through num_layers with VARIABLE/partial chunks `splits` (each run as a full
     CHUNK-wide tile padded with a pad token). Exercises the rotated + partial MLA path across the full
@@ -602,10 +601,9 @@ def run_chunked_transformer(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
     routing_use_l1_small_for_semaphores=False,
     preload_isl=0,
-    *,
-    compressed_fp8_dispatch,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -1132,14 +1130,13 @@ def run_chunked_transformer_updated(
     num_links,
     topology,
     num_iters,
+    compressed_fp8_dispatch,
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
-    *,
-    compressed_fp8_dispatch,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -2049,10 +2046,9 @@ def run_chunked_transformer_padded_trace(
     gate_fallback_mode,
     num_links,
     topology,
+    compressed_fp8_dispatch,
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
-    *,
-    compressed_fp8_dispatch,
 ):
     """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
     param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):

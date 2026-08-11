@@ -139,8 +139,6 @@ def run_model(
         f"emb_dim={emb_dim}, experts={num_routed_experts}"
     )
 
-    logger.info(f"compressed_fp8_dispatch={compressed_fp8_dispatch} for this run (dispatch path under test)")
-
     if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
         pytest.skip(
             f"compressed fp8 dispatch unrunnable: needs Blackhole (is_blackhole={is_blackhole()}) and a "

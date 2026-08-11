@@ -231,9 +231,6 @@ def test_dflash_prefill_integration(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,  # real cache (pretrained) or None (random)
         lm_head_is_column_parallel=True,
-        # PCC_THRESHOLD (0.999) has not been re-validated with the e4m3 dispatch round-trip in the
-        # verifier; if the fp8_dispatch case undershoots it, calibrate against the bf16_dispatch
-        # control run before touching the bar.
         compressed_fp8_dispatch=compressed_fp8_dispatch,
     )
     del verifier_state_dict

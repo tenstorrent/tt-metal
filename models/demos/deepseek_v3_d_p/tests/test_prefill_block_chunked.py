@@ -149,7 +149,6 @@ def run_chunked_block(
     gate_fallback_mode,
     num_links,
     topology,
-    *,
     compressed_fp8_dispatch,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
@@ -431,7 +430,6 @@ def run_chunked_block_multiuser(
     gate_fallback_mode,
     num_links,
     topology,
-    *,
     compressed_fp8_dispatch,
 ):
     """Multi-user slot routing: prefill ONE chunk into a single target slot of an num_users-slot KV
@@ -628,7 +626,6 @@ def run_chunked_block_padded(
     gate_fallback_mode,
     num_links,
     topology,
-    *,
     compressed_fp8_dispatch,
 ):
     """Variable/partial chunked prefill: a single prompt of sum(splits) real tokens fed in chunks of
@@ -1061,7 +1058,6 @@ def run_chunked_block_glm_indexer(
     layer_idx,
     num_links,
     topology,
-    *,
     compressed_fp8_dispatch,
 ):
     if weight_cache_path is None:

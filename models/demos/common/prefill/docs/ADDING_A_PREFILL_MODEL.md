@@ -86,20 +86,26 @@ That is the entire adapter contract — four methods plus the attributes. The ad
 a factory + descriptor; it performs no device work or comms itself, and it does not
 hold the cache (the engine does).
 
-If your adapter sets `supports_compressed_fp8_dispatch = True`, the model runs FP8 MoE
-dispatch whenever it is on Blackhole. If you don't set it, the model always uses bf16
-dispatch. Kill switch: `PREFILL_COMPRESSED_FP8_DISPATCH=0` forces bf16 for a run.
+Setting `supports_compressed_fp8_dispatch = True` only says the model is *allowed* to use FP8 MoE
+dispatch on Blackhole; without it the model always uses bf16. Who decides per run is a separate
+question, and it has two different answers — because some callers are handed the mode and some have
+to work it out themselves. Hence two accessors:
 
-Two accessors, and which one you want depends on whether the caller can be told the mode:
+- `can_compressed_fp8_dispatch()` — **capability only**: your `supports_` flag + Blackhole. The kill
+  switch is deliberately not consulted. **Tests use this.** A test is already told its mode: every
+  prefill test carries a `compressed_fp8_dispatch` parametrize axis (`fp8_dispatch` / `bf16_dispatch`
+  ids) and CI pins one with `-k bf16_dispatch`. So a test never asks *which* mode to run — it asks
+  whether the fp8 case it was told to run is possible here, and skips that instance if not, rather
+  than quietly running bf16 under an `fp8_dispatch` id.
+- `resolve_compressed_fp8_dispatch()` — **capability + kill switch**, i.e. the final answer. This is
+  for callers nobody can hand a parameter to, because they are a separate OS process: the **runner**
+  (`build_runtime`) and the **producer**.
 
-- `can_compressed_fp8_dispatch()` — capability only (your `supports_` flag + Blackhole). **Tests
-  use this.** They take the mode as a `compressed_fp8_dispatch` parametrize axis (`fp8_dispatch` /
-  `bf16_dispatch` ids), so the mode is already chosen; this only decides whether a requested fp8
-  case is runnable, and a model without `supports_compressed_fp8_dispatch` skips its fp8 instances
-  instead of silently running bf16 under an fp8 test id. The kill switch is not consulted.
-- `resolve_compressed_fp8_dispatch()` — capability + the kill switch. This is for callers with no
-  parametrization to pick a mode: the **runner** (`build_runtime`) and the **producer**, each
-  resolving inside its own process.
+  Concretely: the "Kimi Prefill Runner" CI entry runs `test_producer_runner_e2e.py`, and that test
+  builds no model at all. It `Popen`s a runner process, which builds the MoE, and a producer process,
+  which needs the mode only to pick its KV-cache PCC threshold. A pytest param cannot cross `Popen`;
+  the environment can. So each process resolves independently from its own env, and that entry is the
+  only place `PREFILL_COMPRESSED_FP8_DISPATCH=0` does anything — it affects no test.
 
 Test-only metadata (HF download coordinates, reference-model classes, PCC
 thresholds) is optional and only needed if you wire pytest coverage; see the

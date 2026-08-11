@@ -95,11 +95,10 @@ def run_model(
     is_ci_env,
     is_ci_v2_env,
     thresholds: PrefillBlockThresholds,
+    compressed_fp8_dispatch: bool,
     determinism_check: bool = False,
     num_iterations: int = 1,
     use_pretrained: bool = False,
-    *,
-    compressed_fp8_dispatch: bool,
 ):
     if compressed_fp8_dispatch and not variant.can_compressed_fp8_dispatch():
         pytest.skip("compressed fp8 dispatch unrunnable here (needs Blackhole + a model validated for it)")

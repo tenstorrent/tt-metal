@@ -131,8 +131,9 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
-    # Model is validated for FP8 MoE dispatch: it runs by default on Blackhole. Read via
-    # can_compressed_fp8_dispatch() (capability) or resolve_compressed_fp8_dispatch() (+ kill switch).
+    # Model is validated for FP8 MoE dispatch, i.e. allowed to use it on Blackhole. Who picks per run:
+    # tests via their parametrize axis (gated by can_compressed_fp8_dispatch(), capability only), the
+    # runner and producer via resolve_compressed_fp8_dispatch() (capability + the env kill switch).
     supports_compressed_fp8_dispatch: bool = False
 
     # =====================================================================
@@ -161,18 +162,18 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     def can_compressed_fp8_dispatch(self) -> bool:
-        """Whether FP8 MoE dispatch is RUNNABLE here: validated model + Blackhole (the per_token_cast
-        ops exist nowhere else). Capability only — the kill switch is deliberately not consulted, so
-        the tests' ``compressed_fp8_dispatch`` parametrize axis owns the choice of mode."""
+        """Whether FP8 MoE dispatch is runnable here: a validated model, and Blackhole only."""
         from models.common.utility_functions import is_blackhole
 
         return self.supports_compressed_fp8_dispatch and is_blackhole()
 
     def resolve_compressed_fp8_dispatch(self) -> bool:
-        """The mode to USE for callers with no parametrization to pick one — the runner
-        (``build_runtime``) and the producer, each resolving in its own process. Tests use
-        ``can_compressed_fp8_dispatch()`` instead. Under ``tt-run`` set the kill switch via the
-        manifest ``env`` map — shell exports don't reach ranks."""
+        """The final mode for callers nobody can hand a parameter to, because they are their own OS
+        process: the runner (``build_runtime``) and the producer, each resolving from its own env. So
+        this is the only path on which ``PREFILL_COMPRESSED_FP8_DISPATCH`` does anything — tests are
+        told their mode by the ``compressed_fp8_dispatch`` axis and gate on
+        ``can_compressed_fp8_dispatch()``. Under ``tt-run`` set the kill switch via the manifest
+        ``env`` map — shell exports don't reach ranks."""
         env = os.environ.get("PREFILL_COMPRESSED_FP8_DISPATCH")
         if env not in (None, "0", "1"):
             logger.warning(f"PREFILL_COMPRESSED_FP8_DISPATCH={env!r} ignored (only '0' has an effect)")
