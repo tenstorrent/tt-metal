@@ -312,9 +312,6 @@
   team: models
 
 - name: Qwen2.5-Coder-32B e2e tests (Blackhole)
-  # The TTTv2 qwen25_coder_32b demo is T3K-only (40 attn heads / 8 KV heads => 8
-  # devices), so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
-  # simple_text_demo leg — same arrangement as Qwen3-32B above. No coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
