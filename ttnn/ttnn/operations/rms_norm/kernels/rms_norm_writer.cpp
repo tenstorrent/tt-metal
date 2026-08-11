@@ -147,6 +147,21 @@ void kernel_main() {
     };
 
     // --- combine_stat_block (gather leg) -------------------------------------
+    //
+    // WHY A MEMBER'S WRITE CANNOT RACE THE ROOT'S PREVIOUS BLOCK. A member writes
+    // straight into the root's cb_stat_gather slots without inspecting the root's
+    // CB space, so the only thing keeping block b+1's partials off block b's
+    // still-unread data is the ORDERING the multicast imposes:
+    //   member: gather(b) -> receive(b) -> ... -> gather(b+1)
+    //   root:   gather(b) -> [compute pops cb_stat_gather in the combine chain,
+    //           then pushes cb_rstd_send in the finalize chain] -> send(b)
+    // receive(b) cannot return before send(b), and send(b) cannot start before
+    // cb_rstd_send holds block b — which the finalize chain only produces AFTER
+    // the combine chain has consumed the gather buffer. So the mcast doubles as
+    // the group-wide barrier that frees the slots. Any restructuring that lets a
+    // member start block b+1 without having received block b (e.g. a deeper
+    // cb_rstd, or dropping the pre-handshake) must add explicit back-pressure on
+    // cb_stat_gather.
     auto gather_partials = [&](uint32_t b, uint32_t rows_t) {
         cb_wait_front(cb_stat_partial, rows_t);
         const uint32_t src = get_read_ptr(cb_stat_partial);

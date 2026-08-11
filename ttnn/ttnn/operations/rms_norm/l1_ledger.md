@@ -167,8 +167,14 @@ The inventory above was built as designed — no buffer in it was added, and the
 | **`cb_tail_masked` does not exist.** | `cb_tail_masked` (deleted) | `mask_tail_block` is now ONE fused chain — `BinaryFpu(x_tail, wmask, Mul, Row) -> Square<> -> PackTile` — so the masked value never lands in L1. Rule 3 pattern 4 (fold into the accumulator), the same pattern that removed `cb_input_squared`. Saves `has_tail * R` fp32 tiles. |
 | **`cb_stat_sq` is `R * (1 + has_tail)` pages, not `R`.** | `cb_stat_sq` | The bulk accumulation and the masked tail write **two stat columns per tile-row** (`r * nc + col`, caller-managed strided packs into one caller-reserved window), and `reduce<SUM, REDUCE_ROW>` folds both columns in one call over `of(R, nc)`. This replaces the design's `L1Accumulation::Enabled` re-pack, which `eltwise_chain.inl:1007-1017` pins to a SINGLE output tile (`walk` is false whenever L1 accumulation is on), so it cannot accumulate into `R` distinct tiles. Net vs. the design: `+has_tail * R` fp32 tiles here, `-has_tail * R` from the deleted `cb_tail_masked` — a wash. |
 | **`cb_output_tiles` is `R * C` pages on the ROW_MAJOR-output path** (still `output_cb_depth * C` on the tiled path). | `cb_output_tiles` | `gamma_block` and `untilize_out_block` are sequential compute helpers — both own all three TRISCs, so they cannot pipeline through a depth-2 buffer: the producer would block on `cb_reserve_back` before the consumer ever runs. Same rule as `cb_normed` (`ttnn-cb-memory-fundamentals.md`). The term therefore moves from `fixed_bytes` to `per_row_bytes` on that path. |
+| **`cb_input_tiles` is `1 · R · C` pages, not `input_cb_depth · R · C`, when the busiest core's row assignment is a single block** (verifier change). | `cb_input_tiles` | `input_cb_depth` buys exactly one thing — the reader prefetching block `b+1` while compute runs block `b`. When `num_blocks == 1` on every core (which is what the selection picks for e.g. `(1,1,8192,1024)`: `core_row_tiles = 3 = R`) there is no block `b+1`, so the second buffer is dead L1 and the row's "capacity is 2× the live set for pipelining" justification is simply false there. The residency SOLVE still uses the full knob (the conservative value), so this only ever lowers the footprint and cannot change the selected `(G, C, R)`. |
+| **The CB inventory is stated ONCE** (verifier change). | all rows | `_cb_specs()` in `rms_norm_program_descriptor.py` is now the single statement of `(index, num_pages, page_size, format)`; the descriptor's CB list is a `map` over it and `_cb_bytes()` (the residency solve) *derives* `fixed_bytes` / `per_row_bytes` from it by differencing at `R = 1, 2` (every page count is affine in `R`). Previously the footprint expressions below were a second, independent statement of this table and could drift from what was actually allocated. Verified byte-identical to the previous closed form over 4608 `(dtype, gamma dtype, rm_in, rm_out, rm_γ, has_gamma, has_tail, C, G)` combinations. |
+| **`cb_stat_sq` carries `R · (1 + has_tail_global)` pages on every core, including cores that do not own the tensor's last hidden tile** (live set `R` there). | `cb_stat_sq` | Same uniform-L1-map requirement as `cb_stat_gather`: every CB is allocated identically group-wide because two of them are addressed by a peer's local pointer. The dead `R` fp32 pages on non-tail-owning cores are the accounted price; they are bounded by `MAX_GATHER_TILES` like every other `R`-scaled row. |
 
 ### Corrected footprint expressions (what the host actually computes)
+
+These are what `_cb_bytes()` *derives* from `_cb_specs()` — they are recorded here as the closed
+form, not as a second source of truth (see the last two implementation deltas above).
 
 ```
 per_row_bytes  = T_in  * C * (input_cb_depth + has_gamma + rm_out)     # cb_input_tiles, cb_normed, [cb_output_tiles]
@@ -195,11 +201,18 @@ Unchanged from the table above in kind: **input 1x DRAM, output 1x DRAM, gamma
 `num_row_groups x`**, statistics never touch DRAM. Two selection facts, measured on a
 blackhole_p150b 11x10 grid:
 
-| Shape | `G` | row-groups | `C` | `R` | cores | DRAM crossings | Cross-core per block |
-|-------|-----|-----------|-----|-----|-------|----------------|----------------------|
-| `(1,1,8192,7168)` prefill | 5 | 22 | 45 | 3 | 110 | in 1x, out 1x, gamma 22x | `4*R` fp32 tiles gathered + `R` multicast to 5 |
-| `(1,1,32,7168)` decode | 22 | 1 | 11 | 1 | 22 | in 1x, out 1x, gamma **1x** (the minimum) | `21*R` gathered + `R` multicast to 22 |
-| `(1,1,8192,1024)` prefill | 1 | 110 | 32 | 3 | 110 | in 1x, out 1x, gamma 110x | degenerate (local copy) |
+| Shape | `G` | row-groups | `C` | `R` | blocks/core | cores | DRAM crossings | Cross-core per block |
+|-------|-----|-----------|-----|-----|-------------|-------|----------------|----------------------|
+| `(1,1,8192,7168)` prefill | 2 | 55 | 112 | 1 | 5 | 110 | in 1x, out 1x, gamma 55x | `1*R` fp32 tile gathered + `R` multicast to 2 |
+| `(1,1,8192,2304)` prefill | 1 | 110 | 72 | 2 | 2 | 110 | in 1x, out 1x, gamma 110x | degenerate (local copy) |
+| `(1,1,32,7168)` decode | 22 | 1 | 11 | 1 | 1 | 22 | in 1x, out 1x, gamma **1x** (the minimum) | `21*R` gathered + `R` multicast to 22 |
+| `(1,1,8192,1024)` prefill | 1 | 110 | 32 | 3 | 1 | 110 | in 1x, out 1x, gamma 110x | degenerate (local copy) |
+
+Re-read off `_select_regime` **on the device** (blackhole, 11×10 grid, `l1_cb_budget = 1 441 792 B`)
+during verification; the first row previously recorded `G = 5, C = 45, R = 3`, which the current
+score tuple does not select (both `G = 2` and `G = 5` fill all 110 cores, and the `−G` tiebreak —
+fewest combine partners — takes `G = 2`). The `(1,1,8192,1024)` row is the `num_blocks == 1` case
+that the verifier's `input_cb_depth` change now sizes at depth 1.
 
 The decode row is the design's predicted best case: a single row-group cannot replicate gamma,
 so DRAM traffic is exactly the named-boundary minimum. The `G = 22` (rather than 110) choice is

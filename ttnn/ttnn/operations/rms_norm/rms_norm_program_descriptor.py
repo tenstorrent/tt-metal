@@ -61,6 +61,16 @@ SEM_MCAST_READY = 1  # mcast data-ready flag (mcast_pipe)
 SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
 
 # --------------------------------------------------------------------------
+# Kernel arg-layout contracts. Each mirrors a hardcoded offset in a kernel
+# (McastArgs<CT, RT> / TensorAccessorArgs<CT>), which cannot import this module;
+# the asserts below pin them so an added arg fails loudly at program build
+# instead of silently shifting a peer's args.
+# --------------------------------------------------------------------------
+READER_ACCESSOR_CT_BASE = 6  # rms_norm_reader.cpp: TensorAccessorArgs<6>
+WRITER_MCAST_CT_BASE = 5  # rms_norm_writer.cpp: MCAST_CT_BASE
+WRITER_MCAST_RT_BASE = 15  # rms_norm_writer.cpp: MCAST_RT_BASE
+
+# --------------------------------------------------------------------------
 # Blocking / buffer-depth knobs — single source of truth.
 # Each is a tunable parameter; every derived quantity below reads it.
 # --------------------------------------------------------------------------
@@ -166,47 +176,87 @@ class _Geometry:
             self.num_sticks = 0  # unused on the tiled path
             self.tensor_row_tiles = images * _div_up(shape[-2], TILE_HW)
 
+        self.in_dtype = input_tensor.dtype
         self.in_elem_bytes = input_tensor.element_size()
         self.in_tile_bytes = ttnn.tile_size(input_tensor.dtype)
 
         self.has_gamma = gamma is not None
         if self.has_gamma:
+            self.gamma_dtype = gamma.dtype
             self.gamma_elem_bytes = gamma.element_size()
             self.gamma_tile_bytes = ttnn.tile_size(gamma.dtype)
             self.is_rm_gamma = gamma.layout == ttnn.ROW_MAJOR_LAYOUT
         else:
+            self.gamma_dtype = None
             self.gamma_elem_bytes = 0
             self.gamma_tile_bytes = 0
             self.is_rm_gamma = False
 
 
-def _cb_bytes(geo, C, G, R, is_rm_out, has_tail):
-    """Per-core CB footprint at (C, G, R). Mirrors l1_ledger.md exactly.
+def _cb_specs(geo, C, G, R, is_rm_out, has_tail, input_cb_depth=INPUT_CB_DEPTH):
+    """THE statement of this op's CB inventory — `(index, num_pages, page_size, format)`.
 
-    per_row_bytes scales with R; fixed_bytes does not. Both scale with C; only
-    cb_stat_gather scales with G.
+    Both the L1 residency solve (`_cb_bytes`) and the descriptor's CB list are
+    built from this list, so a page-count change lands in exactly ONE place and
+    the solve can never drift from what is actually allocated.
+
+    Every `num_pages` here is affine in `R` (either constant or `k·R`), which is
+    what lets `_cb_bytes` recover `fixed_bytes` / `per_row_bytes` exactly by
+    differencing. Mirrors the CB table in `l1_ledger.md`.
+
+    `input_cb_depth` is a parameter rather than a direct read of the module knob
+    only so the descriptor can drop the prefetch buffer when the core's whole row
+    assignment is a single block (there is then no block b+1 to prefetch). The
+    solve always passes the knob itself, i.e. the conservative value.
     """
     T_in = geo.in_tile_bytes
-    T_g = geo.gamma_tile_bytes
-    rm_in = 1 if geo.is_rm_in else 0
-    rm_out = 1 if is_rm_out else 0
-    rm_g = 1 if geo.is_rm_gamma else 0
-    has_gamma = 1 if geo.has_gamma else 0
+    # The output CBs carry T_in / the input dtype: create_program_descriptor
+    # asserts the output dtype matches the input's, so they are the same format.
+    in_dtype = geo.in_dtype
     nc_max = 1 + has_tail  # cb_stat_sq columns per tile-row
 
-    # The output CBs use T_in too: create_program_descriptor asserts the output
-    # dtype matches the input's, so tile_size(out_dtype) == T_in by construction.
-    # cb_input_tiles + cb_normed + (RM out) cb_output_tiles ... then the stat CBs:
-    #   cb_stat_sq(nc_max) + cb_stat_partial + cb_stat_sum + cb_rstd_send + cb_rstd + cb_stat_gather(G)
-    per_row_bytes = T_in * C * (INPUT_CB_DEPTH + has_gamma + rm_out) + FP32_TILE_BYTES * (4 + nc_max + G)
+    specs = [
+        (CB_INPUT_TILES, input_cb_depth * R * C, T_in, in_dtype),
+        (CB_SCALER, 1, BF16_TILE_BYTES, ttnn.bfloat16),
+        (CB_ZERO_TILE, 1, FP32_TILE_BYTES, ttnn.float32),
+        (CB_STAT_SQ, R * nc_max, FP32_TILE_BYTES, ttnn.float32),
+        (CB_STAT_PARTIAL, R, FP32_TILE_BYTES, ttnn.float32),
+        (CB_STAT_GATHER, R * G, FP32_TILE_BYTES, ttnn.float32),
+        (CB_STAT_SUM, R, FP32_TILE_BYTES, ttnn.float32),
+        (CB_RSTD_SEND, R, FP32_TILE_BYTES, ttnn.float32),
+        (CB_RSTD, R, FP32_TILE_BYTES, ttnn.float32),
+        # RM output needs the whole block resident before untilize runs (both are
+        # compute-side, so they cannot pipeline); the tiled path streams.
+        (CB_OUTPUT_TILES, (R * C) if is_rm_out else (OUTPUT_CB_DEPTH * C), T_in, in_dtype),
+    ]
+    if has_tail:
+        specs.append((CB_WMASK, 1, BF16_TILE_BYTES, ttnn.bfloat16))
+    if geo.is_rm_in:
+        specs.append((CB_INPUT_RM, RM_CB_DEPTH * C, T_in, in_dtype))
+    if is_rm_out:
+        specs.append((CB_OUTPUT_RM, RM_CB_DEPTH * C, T_in, in_dtype))
+    if geo.has_gamma:
+        specs.append((CB_GAMMA_TILES, C, geo.gamma_tile_bytes, geo.gamma_dtype))
+        specs.append((CB_NORMED, R * C, T_in, in_dtype))
+        if geo.is_rm_gamma:
+            specs.append((CB_GAMMA_RM, C, geo.gamma_tile_bytes, geo.gamma_dtype))
+    return specs
 
-    fixed_bytes = (
-        T_in * C * ((0 if rm_out else OUTPUT_CB_DEPTH) + rm_in * RM_CB_DEPTH + rm_out * RM_CB_DEPTH)
-        + T_g * has_gamma * C * (1 + rm_g)
-        + BF16_TILE_BYTES * (1 + has_tail)
-        + FP32_TILE_BYTES
-    )
-    return fixed_bytes, per_row_bytes
+
+def _cb_bytes(geo, C, G, is_rm_out, has_tail):
+    """`(fixed_bytes, per_row_bytes)` of the per-core CB footprint at `(C, G)`.
+
+    DERIVED from `_cb_specs` — never restated — by differencing the inventory at
+    R = 1 and R = 2. Every page count there is affine in R, so
+    `footprint(R) = fixed_bytes + R · per_row_bytes` holds exactly.
+    """
+
+    def total(R):
+        return sum(pages * page_size for _, pages, page_size, _ in _cb_specs(geo, C, G, R, is_rm_out, has_tail))
+
+    at_1, at_2 = total(1), total(2)
+    per_row_bytes = at_2 - at_1
+    return at_1 - per_row_bytes, per_row_bytes
 
 
 def _max_block_row_tiles(geo, C, G, core_row_tiles, is_rm_out, has_tail, budget):
@@ -214,7 +264,7 @@ def _max_block_row_tiles(geo, C, G, core_row_tiles, is_rm_out, has_tail, budget)
 
     Returns 0 when even R == 1 does not fit.
     """
-    fixed_bytes, per_row_bytes = _cb_bytes(geo, C, G, 1, is_rm_out, has_tail)
+    fixed_bytes, per_row_bytes = _cb_bytes(geo, C, G, is_rm_out, has_tail)
     if fixed_bytes + per_row_bytes > budget:
         return 0
     cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // G))
@@ -360,7 +410,6 @@ def create_program_descriptor(
     rows_extra = geo.tensor_row_tiles % active_row_groups
 
     has_tail_global = 1 if geo.partial_w != 0 else 0
-    nc_max = 1 + has_tail_global
 
     # ---- per-core layout -------------------------------------------------
     groups = []
@@ -420,42 +469,22 @@ def create_program_descriptor(
     C = core_w_tiles_ceil
     G = w_group_size
 
-    in_dtype = input_tensor.dtype
-    in_tile = geo.in_tile_bytes
-    out_dtype = output_tensor.dtype
-    out_tile = ttnn.tile_size(out_dtype)
+    # `input_cb_depth` buys ONE thing: the reader prefetching block b+1 while
+    # compute runs block b. When the busiest core's whole row assignment is a
+    # single block there is no block b+1, so the second buffer is dead L1 —
+    # allocate depth 1 there instead of reserving a prefetch slot that provably
+    # cannot be used. The residency SOLVE above deliberately still used the full
+    # knob (the conservative value), so this only ever lowers the footprint and
+    # never changes the chosen (G, C, R) geometry.
+    max_row_count = rows_per_group + (1 if rows_extra else 0)
+    input_cb_depth = INPUT_CB_DEPTH if max_row_count > R else 1
 
     cbs = [
-        _cb(CB_INPUT_TILES, all_core_ranges, INPUT_CB_DEPTH * R * C, in_tile, in_dtype),
-        _cb(CB_SCALER, all_core_ranges, 1, BF16_TILE_BYTES, ttnn.bfloat16),
-        _cb(CB_ZERO_TILE, all_core_ranges, 1, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_STAT_SQ, all_core_ranges, R * nc_max, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_STAT_PARTIAL, all_core_ranges, R, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_STAT_GATHER, all_core_ranges, R * G, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_STAT_SUM, all_core_ranges, R, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_RSTD_SEND, all_core_ranges, R, FP32_TILE_BYTES, ttnn.float32),
-        _cb(CB_RSTD, all_core_ranges, R, FP32_TILE_BYTES, ttnn.float32),
-        # RM output needs the whole block resident before untilize runs (both are
-        # compute-side, so they cannot pipeline); the tiled path streams.
-        _cb(
-            CB_OUTPUT_TILES,
-            all_core_ranges,
-            (R * C) if is_rm_out else (OUTPUT_CB_DEPTH * C),
-            out_tile,
-            out_dtype,
-        ),
+        _cb(index, all_core_ranges, num_pages, page_size, data_format)
+        for index, num_pages, page_size, data_format in _cb_specs(
+            geo, C, G, R, is_rm_out, has_tail_global, input_cb_depth=input_cb_depth
+        )
     ]
-    if has_tail_global:
-        cbs.append(_cb(CB_WMASK, all_core_ranges, 1, BF16_TILE_BYTES, ttnn.bfloat16))
-    if geo.is_rm_in:
-        cbs.append(_cb(CB_INPUT_RM, all_core_ranges, RM_CB_DEPTH * C, in_tile, in_dtype))
-    if is_rm_out:
-        cbs.append(_cb(CB_OUTPUT_RM, all_core_ranges, RM_CB_DEPTH * C, out_tile, out_dtype))
-    if geo.has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, all_core_ranges, C, geo.gamma_tile_bytes, gamma.dtype))
-        cbs.append(_cb(CB_NORMED, all_core_ranges, R * C, in_tile, in_dtype))
-        if geo.is_rm_gamma:
-            cbs.append(_cb(CB_GAMMA_RM, all_core_ranges, C, geo.gamma_tile_bytes, gamma.dtype))
 
     semaphores = [
         ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_core_ranges, initial_value=0),
@@ -525,7 +554,7 @@ def create_program_descriptor(
                 gamma_byte_offset,
             ]
 
-            writer_args[(cx, cy)] = [
+            writer_own_args = [
                 output_tensor.buffer_address(),
                 row_start,
                 num_blocks,
@@ -541,7 +570,17 @@ def create_program_descriptor(
                 stick_start,
                 out_slice_bytes,
                 out_byte_offset,
-            ] + list(mc.runtime_args(ttnn.CoreCoord(cx, cy)))
+            ]
+            # The writer kernel reads the mcast runtime args from a hardcoded
+            # offset (`MCAST_RT_BASE`), so the count of the writer's own args is
+            # a contract with the kernel. Pin it here: appending an arg above
+            # without bumping the kernel constant would otherwise silently feed
+            # McastArgs garbage.
+            assert len(writer_own_args) == WRITER_MCAST_RT_BASE, (
+                f"rms_norm: writer runtime-arg layout drifted ({len(writer_own_args)} own args); "
+                f"update MCAST_RT_BASE in kernels/rms_norm_writer.cpp and WRITER_MCAST_RT_BASE here"
+            )
+            writer_args[(cx, cy)] = writer_own_args + list(mc.runtime_args(ttnn.CoreCoord(cx, cy)))
 
             compute_args[(cx, cy)] = [
                 num_blocks,
@@ -574,6 +613,12 @@ def create_program_descriptor(
         1 if geo.is_rm_gamma else 0,
         geo.partial_w,
     ]
+    # Same contract as the writer's runtime args: the reader reads its
+    # TensorAccessorArgs from a hardcoded CT offset.
+    assert len(reader_ct) == READER_ACCESSOR_CT_BASE, (
+        f"rms_norm: reader compile-time-arg layout drifted ({len(reader_ct)} own args); "
+        f"update TensorAccessorArgs<...> in kernels/rms_norm_reader.cpp and READER_ACCESSOR_CT_BASE here"
+    )
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -588,6 +633,10 @@ def create_program_descriptor(
         G,
         SEM_GATHER,
     ]
+    assert len(writer_ct) == WRITER_MCAST_CT_BASE, (
+        f"rms_norm: writer compile-time-arg layout drifted ({len(writer_ct)} own args); "
+        f"update MCAST_CT_BASE in kernels/rms_norm_writer.cpp and WRITER_MCAST_CT_BASE here"
+    )
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

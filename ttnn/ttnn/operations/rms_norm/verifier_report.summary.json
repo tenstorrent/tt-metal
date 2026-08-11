@@ -1,0 +1,135 @@
+{
+  "_note": "Trimmed copy of the verifier CLI's verifier_report.json (the full file, with one entry per test, is 25 MB and lives in the results dir: python3 -m eval.verify_supported <results_dir> ttnn.operations.rms_norm). Counts and the two non-empty diagnostic categories are reproduced verbatim.",
+  "summary": {
+    "total": 40828,
+    "supported_pass": 737,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 6174,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 33900,
+    "invalid_unexpected": 2,
+    "infeasible_skipped": 0,
+    "no_axes_found": 15
+  },
+  "category_counts": {
+    "supported_pass": 737,
+    "xfail_expected": 6174,
+    "invalid_skipped": 33900,
+    "no_axes_found": 15,
+    "invalid_unexpected": 2
+  },
+  "invalid_unexpected": [
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-bfloat8_b]",
+      "axes": {
+        "dtype": "BFLOAT8_B",
+        "layout": "TILE",
+        "fp32_dest_acc_en": true,
+        "gamma_mode": "gamma",
+        "gamma_dtype": "BFLOAT16",
+        "gamma_layout": "TILE",
+        "memory_layout": "WIDTH_SHARDED",
+        "alignment": "w_non_aligned",
+        "rank": 4
+      },
+      "status": "xfail"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]",
+      "axes": {
+        "dtype": "BFLOAT8_B",
+        "layout": "TILE",
+        "fp32_dest_acc_en": true,
+        "gamma_mode": "gamma",
+        "gamma_dtype": "BFLOAT16",
+        "gamma_layout": "TILE",
+        "memory_layout": "WIDTH_SHARDED",
+        "alignment": "w_non_aligned",
+        "rank": 4
+      },
+      "status": "xfail"
+    }
+  ],
+  "no_axes_found": [
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[32x64]",
+      "test_name": "test_small_magnitude_input[32x64]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[64x128]",
+      "test_name": "test_small_magnitude_input[64x128]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[128x256]",
+      "test_name": "test_small_magnitude_input[128x256]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[32x64]",
+      "test_name": "test_large_magnitude_input[32x64]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[64x128]",
+      "test_name": "test_large_magnitude_input[64x128]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[128x256]",
+      "test_name": "test_large_magnitude_input[128x256]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[32x64]",
+      "test_name": "test_uniform_input[32x64]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[64x128]",
+      "test_name": "test_uniform_input[64x128]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[128x256]",
+      "test_name": "test_uniform_input[128x256]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[32x64]",
+      "test_name": "test_positive_only_input[32x64]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[64x128]",
+      "test_name": "test_positive_only_input[64x128]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[128x256]",
+      "test_name": "test_positive_only_input[128x256]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[32x64]",
+      "test_name": "test_negative_only_input[32x64]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[64x128]",
+      "test_name": "test_negative_only_input[64x128]",
+      "status": "passed"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[128x256]",
+      "test_name": "test_negative_only_input[128x256]",
+      "status": "passed"
+    }
+  ]
+}
