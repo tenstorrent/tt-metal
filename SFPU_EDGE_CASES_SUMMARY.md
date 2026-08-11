@@ -141,7 +141,8 @@ with 270 xfails.
 
 ## What Phases 2–4 found
 
-Nine ops, none of it previously measured, because the random sweep lands near these points and
+Ten ops across 42 (op, format, dest_acc) cells — 5 unary ops over 20 cells and 5 binary over 22 —
+none of it previously measured, because the random sweep lands near these points and
 never on them. All of it is cross-checked against
 [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), which splits the
 results cleanly into "documented" and "still open". Everything stays xfailed either way — the
@@ -213,10 +214,14 @@ shows the same 1081 tests with **0 outcome differences**.
 
 **Not verified:**
 
-- **Blackhole.** Everything above is Wormhole. Two parts are arch-sensitive by construction and
-  must be re-measured there: the special-safe matrix (the unpack paths differ) and the two
-  converted xfails, whose whole purpose is the Blackhole path — on Wormhole they are a deliberate
-  no-op.
+- **Blackhole — partial.** The reduce xfail's tightening and the scalar presubmit/nightly split
+  *were* measured there (p100a: 84 passed, 28 xfailed, 0 xpassed; scalar 120 collected, all
+  passing). Everything else above is Wormhole, and two parts are arch-sensitive by construction and
+  must be re-measured: the special-safe matrix (the unpack paths differ, and it is a measurement
+  rather than a derivation, so it may be wrong there in either direction) and the shift xfail,
+  whose whole purpose is the Blackhole path — on Wormhole it is a deliberate no-op. The `SFPMAD`
+  signed-zero xfails are a **testable prediction** there: Blackhole's ISA documents sign-preserved
+  zero, so they should XPASS, and if they do not, the documentation and the hardware disagree.
 - **CI.** The broad unary profile runs in **no automated job on any arch**: every LLK pytest job
   either excludes `nightly` (pr-gate smoke, bit-exact) or runs `--coverage`, under which the
   broad profile is skipped wholesale (tt-llk#1435). That predates this branch, but it means these

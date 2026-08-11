@@ -7,6 +7,20 @@
 **Scope:** Wormhole B0 and Blackhole. Quasar and its `quasar/` suite are **out of scope for
 this plan** — it keeps its own inline stimulus definitions and is tracked separately.
 
+**Revision 8 — 2026-08-11.** Phases 2–4 are open for review as
+[#52416](https://github.com/tenstorrent/tt-metal/pull/52416); Phases 0–1 are in the merge queue as
+[#52172](https://github.com/tenstorrent/tt-metal/pull/52172). Two corrections to revision 7: the
+divergence count is **ten ops over 42 cells**, not nine, and Blackhole is **partial** rather than
+untouched — the reduce xfail and the scalar split were measured on p100a, the edge sweeps and the
+cat-B safe matrix were not.
+
+Phase 4 shipped two of its four family wrappers. **§12 is still the backlog, but the sequencing of
+it now lives in [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md)** — which also records the
+rebase collisions #52416 will hit against #52172, and argues for doing the Blackhole verification
+*before* any further cat-B work, since `specials_safe()`'s table is a Wormhole measurement that
+everything downstream reads. A short summary of the phase for PR-body reuse is in
+[SFPU_PHASE2_SUMMARY.md](SFPU_PHASE2_SUMMARY.md).
+
 **Revision 7 — 2026-08-07. Phases 2, 3 and 4 are DONE. The remaining work starts at Phase 5.**
 
 Everything through Phase 4 has landed on `ldjurovic/sfpu_edge_cases_2` and is green on Wormhole
@@ -285,7 +299,7 @@ sketch below, three of them corrections it already anticipated and one found by 
 - **`-0.0` was being deduped away against `+0.0`.** Found by inspecting the output for `Sign`,
   which came out as `[0.0]`. Both are zero ULPs apart, so the numeric dedup discarded one — and
   for `signbit`/`sign`/`heaviside`/`reciprocal` the difference between the two zeros *is* the
-  probe. Signed zeros are now keyed by sign. **This bug accounts for four of the nine findings**,
+  probe. Signed zeros are now keyed by sign. **This bug accounts for four of the recorded divergences**,
   so the sweeps would have been blind to them.
 
 For the binary side, `edge_pair_values()` crosses both operands' edges, and whichever operand has
@@ -627,21 +641,34 @@ five; `generic_moe_gate_topk` is nearly done.
 
 ### 7. Not phase work, but it bounds the value of all of it
 
-- **Blackhole.** Nothing in Phases 2–4 has been run there. Two parts are arch-sensitive by
-  construction: `specials_safe()`'s table (the unpack paths differ) and the two converted xfails,
-  whose whole purpose is the Blackhole path. Separately, the `SFPMAD` signed-zero xfails are a
-  **testable prediction**: Blackhole's ISA documents sign-preserved zero, so they should XPASS.
+- **Blackhole — partial.** The reduce xfail's tightening and the scalar presubmit/nightly split
+  were measured there (p100a); the two edge sweeps and `specials_safe()`'s matrix were not. Two
+  parts are arch-sensitive by construction: that matrix (the unpack paths differ, and it is a
+  *measurement* rather than a derivation, so it can be wrong there in either direction) and the
+  shift xfail, whose whole purpose is the Blackhole path. Separately, the `SFPMAD` signed-zero
+  xfails are a **testable prediction**: Blackhole's ISA documents sign-preserved zero, so they
+  should XPASS — and if they do not, the ISA documentation and the hardware disagree, which is
+  worth more than the rest of the verification. Sequenced first in
+  [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §1.1 for exactly that reason.
 - **CI.** The broad unary profile runs in **no automated job on any arch** — every LLK pytest job
   either excludes `nightly` or runs `--coverage`, under which the broad profile is skipped
   wholesale (tt-llk#1435). This predates the branch but means none of this coverage is currently
   guarded. `llk-e2e` needs a non-coverage companion group, or the broad profile must stop being
   coverage-gated.
-- **The nine recorded divergences.** §0.6 of the coverage audit splits them into documented ISA
+- **The ten recorded divergences.** §0.6 of the coverage audit splits them into documented ISA
   behaviour and genuine open questions. `signbit(-0.0)` and `RsqrtCompat(0)` are the two worth
   raising with kernel owners.
 - **`Float16 -> Bfp4_b`.** The dropped commit's failing cell is still unexplained: either that
   pair needs a guard on Wormhole or the pack path has a bug. Re-adding Bfp4_b as an output format
   depends on which.
+
+### 8. Which of the above PR 3 should actually take
+
+Not all of it. [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) scopes the next PR to
+finishing Phase 4 (the ternary and scalar wrappers) plus verifying Phases 2–4 on Blackhole, and
+recommends landing a **per-op cat-B opt-in list** there so that Phase 5 becomes a series of one-op
+commits instead of one impossible one. Cat B itself, category E, the per-op tolerances and category
+F are PR 4 and beyond.
 
 ---
 

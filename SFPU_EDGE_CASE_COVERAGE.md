@@ -1,9 +1,24 @@
 # SFPU LLK Edge-Case Test-Coverage Audit
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
-**Audited:** 2026-07-23 · **Revised:** 2026-08-07 (revision 4)
+**Audited:** 2026-07-23 · **Revised:** 2026-08-11 (revision 5)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific test gaps inline. Quasar has its own suite under `quasar/` and is out of scope.
 
+> ### Revision 5 — corrections, and where the work goes next
+>
+> Phases 2–4 are unchanged; this revision fixes two things revision 4 got wrong and adds a
+> forward pointer.
+>
+> 1. The divergence count is **ten ops over 42 cells**, not nine — verified against
+>    `_EDGE_KNOWN_DIVERGENCES` (5 unary ops, 20 cells) and `_BINARY_EDGE_DIVERGENCES` (5 binary,
+>    22 cells), which sum to the 20 + 22 xfails the sweeps report. §0.6's table already listed all
+>    ten; only the count above it was wrong.
+> 2. Blackhole is **partial**, not untouched: the reduce xfail and the scalar presubmit/nightly
+>    split were measured on p100a. The edge sweeps and the cat-B safe matrix still were not.
+>
+> What remains, and in what order, is now its own document:
+> [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md).
+>
 > ### Revision 4 — Phases 2–4 have landed
 >
 > Revision 3 recorded the *domains* being widened. Revision 4 records the edges being **hit on
@@ -20,7 +35,8 @@
 > closed for the 5 ops whose kernels claim the full int32 range** and documented as
 > out-of-scope for the rest.
 >
-> Nine ops disagree with their golden at these points. Cross-checked against
+> Ten ops, over 42 (op, format, dest_acc) cells, disagree with their golden at these points.
+> Cross-checked against
 > [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), some of those
 > disagreements are documented hardware behaviour rather than defects — see §0.6, which is the
 > part of this revision most likely to change what you do next.
@@ -219,7 +235,10 @@ int→fp32 reciprocal, mul < ~46340, lcm < 2¹⁵, max/min non-negative so signe
   `OperandSpecs` carrying only A and B, so there is no third operand to register.
 - **Scalar tensor-operand edges** — the scalar axis exists; the tensor operand has no `spec_A`.
 - **Entirely untested kernels** (§6) — unchanged.
-- **Blackhole** — nothing in revision 4 has been run there.
+- **Blackhole** — partial. The reduce xfail and the scalar presubmit/nightly split were measured
+  on p100a; the two edge sweeps and the cat-B safe matrix were not. The `SFPMAD` signed-zero
+  xfails are a testable prediction there (Blackhole documents sign-preserved zero, so they should
+  XPASS). See [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §1.1.
 
 ---
 
@@ -244,8 +263,8 @@ int→fp32 reciprocal, mul < ~46340, lcm < 2¹⁵, max/min non-negative so signe
 
 ## 0.6 What driving the edges found — and which of it is a defect
 
-Nine ops disagree with their golden at the newly driven points, all recorded as **non-strict
-xfails** so the case still executes and reports XPASS if the behaviour changes. Cross-checked
+Ten ops — 5 unary over 20 cells and 5 binary over 22 — disagree with their golden at the newly
+driven points, all recorded as **non-strict xfails** so the case still executes and reports XPASS if the behaviour changes. Cross-checked
 against [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), which splits
 them in two. **This distinction is the practically important part of revision 4**: half of these
 are specified hardware behaviour and chasing them would be wasted effort.

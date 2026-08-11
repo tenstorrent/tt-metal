@@ -1,6 +1,6 @@
 # SFPU Phase 1 — in short
 
-Part of [#49739](https://github.com/tenstorrent/tt-metal/issues/49739) · branch `ldjurovic/sfpu_edge_cases_1` · commits `b0f4ae8`, `1291c7a`
+Part of [#49739](https://github.com/tenstorrent/tt-metal/issues/49739) · [PR #52172](https://github.com/tenstorrent/tt-metal/pull/52172) · branch `ldjurovic/sfpu_edge_cases_1` · commits `b0f4ae8`, `1291c7a`
 
 Phase 1 applied Phase 0's reroute to the other three families, which had never imported `sfpu_domains.py` (audit finding #2) and so fed every op a positive-only `uniform(0.1, 1.1)`. Seven float elementwise binary ops now take their registered domain — add/sub/mul/rsub/div go from **0% to 50% negative operands**, and div's divisor spans both sides of the pole it is registered to avoid — while ternary and scalar gained the per-operand spec parameters later phases need. Alongside: the scalar binops sweep `{0, 1, 2, −2, 8, 0.25}` rather than one hard-coded `2.0`; `SfpuElwLt/Gt/Le/Ge` got their **first LLK-level correctness test**, driving the exact tie where lt/gt and le/ge disagree; and recording op arity made the unary sweep's exhaustiveness a collection-time error.
 
