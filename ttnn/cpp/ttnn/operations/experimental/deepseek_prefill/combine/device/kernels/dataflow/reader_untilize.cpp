@@ -73,7 +73,13 @@ void kernel_main() {
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
     constexpr uint32_t counter_offset = get_compile_time_arg_val(3);
     constexpr uint32_t cb_dispatched_buffer_id = get_compile_time_arg_val(4);
+#if IS_TILE_LAYOUT
+    // c_0 is only allocated by the program factory in TILE_LAYOUT (ROW_MAJOR reads rows straight
+    // into c_2 and runs no compute kernel).  Constructing a CircularBuffer for an unallocated CB
+    // index snapshots an unconfigured L1 slot, so keep the object itself behind the same guard as
+    // its only use site below.
     CircularBuffer cb_dispatched_buffer(cb_dispatched_buffer_id);
+#endif
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(5);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(6);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);

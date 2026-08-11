@@ -182,6 +182,25 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         "FABRIC_2D combine requires cluster_axis 0 or 1; got {}",
         operation_attributes.axis.value_or(2));
 
+    // writer_combine's init/exit handshake waits for EXACTLY combine_devices-1 increments
+    // (noc_semaphore_wait is an equality wait, so any mismatch hangs rather than passing through).
+    // With a cluster_axis set, combine_devices is derived from that axis's extent and always
+    // matches the neighbor set. Without one it falls back to num_chips (== dispatch_group_size)
+    // while get_neighbors above enumerated the whole mesh, so the two agree only when the dispatch
+    // group IS the whole mesh. FABRIC_2D static_asserts axis != NONE in the kernel; the FABRIC_1D
+    // path has no such guard, so enforce the equivalent here.
+    if (num_links > 0 && !operation_attributes.axis.has_value()) {
+        TT_FATAL(
+            operation_attributes.dispatch_group_size == mesh_rows * mesh_cols,
+            "Combine without a cluster_axis handshakes with every device on the mesh, but waits for "
+            "dispatch_group_size-1 = {} peers on a {}x{} mesh ({} devices). Pass a cluster_axis, or "
+            "use a dispatch group that spans the full mesh.",
+            operation_attributes.dispatch_group_size - 1,
+            mesh_rows,
+            mesh_cols,
+            mesh_rows * mesh_cols);
+    }
+
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
     auto max_dispatch_buffer_token_size = dispatched_shape[-2];
@@ -579,13 +598,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Compute and append num_dispatch_groups (index 34, after read_batch_size at 33) from tensor dimensions.
     // This decouples the combine kernel from the assumption that mesh_cols == num_dispatch_groups.
+    // Hoisted out of the block below because counter_offset (further down) needs it too.
+    uint32_t computed_ndg = 0;
     {
         auto counter_shape = expert_token_counts.tensor_spec().logical_shape();
         uint32_t num_routed_experts = counter_shape[-1];
         TT_FATAL(operation_attributes.experts_per_chip > 0, "experts_per_chip must be > 0");
         TT_FATAL(operation_attributes.dispatch_group_size > 0, "dispatch_group_size must be > 0");
         TT_FATAL(num_routed_experts > 0, "num_routed_experts must be > 0");
-        uint32_t computed_ndg =
+        computed_ndg =
             num_routed_experts / (operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size);
         TT_FATAL(
             computed_ndg > 0 &&
@@ -804,12 +825,53 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    // counter_offset mirrors the constexpr calculation in reader_combine.cpp
+    // Offset of this chip's per-expert slice inside the flat [num_routed_experts] token-count
+    // array.  The array is laid out as [dispatch_group][chip_in_group][expert_on_chip], so the
+    // group stride is experts_per_chip * dispatch_group_size and the group index is the mesh
+    // column folded by num_dispatch_groups.
+    //
+    // This used to substitute mesh_rows for dispatch_group_size and use the raw mesh column.  That
+    // agrees with the layout only when dispatch_group_size == mesh_rows AND num_dispatch_groups ==
+    // mesh_cols.  Under DP replicas (ndg < mesh_cols — e.g. a 4x8 mesh with dgs=4, ndg=2) the raw
+    // column ran the offset off the end of an ndg*epc*dgs-long array: every untilizer kernel then
+    // read per-expert counts from past the counter region of c_1.  All three read the same
+    // garbage, so they stayed in lockstep and it did not hang — it silently produced wrong output.
+    //
+    // This is the single source of truth: reader_combine no longer re-derives it (it forwards the
+    // whole array verbatim), and the three untilizer kernels take this value as a compile-time arg.
     uint32_t mesh_row_coord = linearized_mesh_coord / mesh_cols;
     uint32_t mesh_col_coord = linearized_mesh_coord % mesh_cols;
-    uint32_t experts_per_dispatch_group = operation_attributes.experts_per_chip * mesh_rows;
+    uint32_t dispatch_group_idx = mesh_col_coord % computed_ndg;
+    uint32_t experts_per_dispatch_group =
+        operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size;
     uint32_t counter_offset =
-        mesh_col_coord * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
+        dispatch_group_idx * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
+    TT_FATAL(
+        counter_offset + operation_attributes.experts_per_chip <=
+            detail::get_num_pages(expert_token_counts) * detail::get_aligned_page_size(expert_token_counts) /
+                sizeof(uint32_t),
+        "counter_offset {} + experts_per_chip {} runs past the {}-entry expert_token_counts array "
+        "(mesh=({}, {}) coord=({}, {}) dispatch_group_size={} num_dispatch_groups={})",
+        counter_offset,
+        operation_attributes.experts_per_chip,
+        detail::get_num_pages(expert_token_counts) * detail::get_aligned_page_size(expert_token_counts) /
+            sizeof(uint32_t),
+        mesh_rows,
+        mesh_cols,
+        mesh_row_coord,
+        mesh_col_coord,
+        operation_attributes.dispatch_group_size,
+        computed_ndg);
+    // The in-group chip index above is the mesh ROW, i.e. a dispatch group is one mesh column.
+    // That is the only layout the row/column decomposition describes, so pin it rather than
+    // computing a quietly-wrong offset for any other grouping.
+    TT_FATAL(
+        operation_attributes.dispatch_group_size == mesh_rows,
+        "Combine assumes a dispatch group is one mesh column (dispatch_group_size == mesh_rows), "
+        "because the chip's index within its group is taken to be its mesh row; got "
+        "dispatch_group_size={} mesh_rows={}",
+        operation_attributes.dispatch_group_size,
+        mesh_rows);
 
     // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
     // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel
@@ -937,6 +999,69 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         });
 
         output_init_done_semaphore_id = add_sema(worker_core_range_set);
+    }
+
+    // Pin the c_1 co-location invariant that the expert-token-counts multicast silently depends on.
+    //
+    // reader_combine derives the multicast *destination* address from its own get_write_ptr(c_1)
+    // (the sender's dispatched_metadata scratch) and fires it at the untilizer cores' c_1 (the
+    // counter receive buffer).  Those are two different tensors of two different sizes; the only
+    // thing making the multicast land in the right place is that both are the first CB allocated
+    // on their respective core grid, so the allocator hands them the same base address.  Nothing
+    // in the CB API enforces that, and a future edit inserting a CB ahead of either one would
+    // silently redirect the multicast into whatever CB now sits at that offset.
+    //
+    // NOTE: this is a *structural* proxy for the address equality, not the address check itself.
+    // CBDescriptor addresses are not resolved until program finalization, so the factory cannot
+    // compare the real L1 offsets here.  Allocation-order equality is what makes the addresses
+    // equal today; asserting the order catches the realistic way this breaks.
+    //
+    // The scan matches on *intersection*, not on CoreRangeSet equality.  CB addresses are stacked
+    // per core in allocation order, so a CB that merely overlaps one of these grids (c_18 / c_19
+    // are allocated on per-sender single-core sets, for instance) would shift the base address on
+    // the cores it covers just as effectively as one allocated on the whole grid.  An
+    // equality-only match would not see it.
+    {
+        const tt::tt_metal::CBDescriptor* first_sender_cb = nullptr;
+        const tt::tt_metal::CBDescriptor* first_untilizer_cb = nullptr;
+        for (const auto& cb : desc.cbs) {
+            if (first_sender_cb == nullptr && cb.core_ranges.intersects(sender_core_grid)) {
+                first_sender_cb = &cb;
+            }
+            if (first_untilizer_cb == nullptr && cb.core_ranges.intersects(untilizer_core_grid)) {
+                first_untilizer_cb = &cb;
+            }
+        }
+        TT_FATAL(first_sender_cb != nullptr, "No CB allocated on the sender core grid");
+        TT_FATAL(first_untilizer_cb != nullptr, "No CB allocated on the untilizer core grid");
+        TT_FATAL(
+            first_sender_cb->format_descriptors.front().buffer_index == static_cast<uint8_t>(tt::CBIndex::c_1),
+            "The first CB touching the sender core grid must be c_1: reader_combine uses get_write_ptr(c_1) as "
+            "the destination address of the expert-token-counts multicast into the untilizer cores' c_1, which "
+            "only resolves correctly while both are the first CB allocated on their cores. Got c_{} instead.",
+            first_sender_cb->format_descriptors.front().buffer_index);
+        TT_FATAL(
+            first_untilizer_cb->format_descriptors.front().buffer_index == static_cast<uint8_t>(tt::CBIndex::c_1),
+            "The first CB touching the untilizer core grid must be c_1: it is the destination of the sender's "
+            "expert-token-counts multicast, which is addressed via the sender's own c_1 offset. Got c_{} instead.",
+            first_untilizer_cb->format_descriptors.front().buffer_index);
+
+        // Size invariant: the multicast writes counter_total_size + l1_alignment bytes (the counter
+        // pages plus the one-alignment-region trailer holding receive_buf_addr / metadata_buf_addr).
+        // The untilizer's c_1 is sized (counter_pages + 1) * counter_page_size, which covers that
+        // only because counter_page_size >= l1_alignment.  That holds today but is not stated
+        // anywhere, so check the bytes the multicast actually writes rather than the page count.
+        const uint32_t counter_total_size =
+            detail::get_num_pages(expert_token_counts) * detail::get_aligned_page_size(expert_token_counts);
+        const uint32_t mcast_total_size = counter_total_size + l1_alignment;
+        TT_FATAL(
+            first_untilizer_cb->total_size >= mcast_total_size,
+            "Untilizer c_1 is {} B but the sender multicasts {} B into it ({} B of counter pages plus a {} B "
+            "trailer); the trailing bytes would overwrite whatever CB follows it in L1.",
+            first_untilizer_cb->total_size,
+            mcast_total_size,
+            counter_total_size,
+            l1_alignment);
     }
 
     if (create_writer_untilize_kernel) {

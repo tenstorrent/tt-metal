@@ -217,15 +217,12 @@ void kernel_main() {
         noc_async_read_barrier();
     }
 
-    // Expert token counts: flat [num_routed_experts] array per device.
-    // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
-    // then map col -> dispatch_group_idx via modulo num_dispatch_groups.
-    // This handles DP replicas (ndg < mesh_cols) where multiple columns share the same group.
-    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;
-    constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
-    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
-    constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    // Expert token counts: flat [num_routed_experts] array per device.  This kernel forwards the
+    // whole array verbatim; the per-chip slice offset into it (counter_offset) is computed on the
+    // host and passed as a compile-time arg to the three untilizer kernels, which are its only
+    // consumers.  Do NOT re-derive it here — a second copy of the formula drifted out of sync with
+    // the host's once already and nothing caught it, because nothing read it.
+    //
     // Multicast expert token counts + receive_buf_addr to all untilizer cores
     // Each sender multicasts token counts + its own receive_buf_addr to its dedicated untilizer
     // group. The mcast destination covers only this sender's k_s untilizer cores (per-sender
@@ -346,11 +343,17 @@ void kernel_main() {
                 // keeps draining.  ASSERT is a no-op in release builds, hence the runtime check.
                 ASSERT(output_page_idx < output_pages);
                 if (output_page_idx >= output_pages) {
-                    noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                    noc_semaphore_inc(untilizer_credits_noc_addrs[c], 1);
                     continue;
                 }
 
-                if constexpr (is_1d_topology<topology>()) {
+                // get_route / manhattan_distance are templated on the topology and handle all four
+                // (Linear, Ring, Mesh, Torus) — they branch only on has_wrap_around<>, and the
+                // row/col decomposition is the same for 1D and 2D.  This block used to sit behind
+                // `if constexpr (is_1d_topology<topology>())`, which silently dropped EVERY
+                // non-local row under Mesh/Torus: the credit was still returned and the sentinel
+                // still pushed, so the writer exited cleanly with tokens missing from the output.
+                {
                     uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
                     uint32_t distance =
                         manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
@@ -373,7 +376,7 @@ void kernel_main() {
                     }
                     cb_push_back(cb_route_info_id, 1);
                 }
-                noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                noc_semaphore_inc(untilizer_credits_noc_addrs[c], 1);
             }
         }
     }
@@ -387,4 +390,20 @@ void kernel_main() {
     route_info[2] = 0;
     route_info[3] = 0;
     cb_push_back(cb_route_info_id, 1);
+
+    // Drain every NOC transaction this kernel issued before returning.  The credit increments to
+    // the untilizer cores (noc_semaphore_inc on both the normal and the dropped-row path) are the
+    // last outstanding traffic, and nothing above waits on them.  Without a drain the kernel can
+    // retire with those atomics still in flight; the dispatcher is then free to tear down /
+    // reprogram this core while an increment to a peer's L1 semaphore slot is still landing, so it
+    // lands in whatever the NEXT program put at that offset.
+    //
+    // The credit increments are deliberately issued NON-posted (the default template arg) so this
+    // barrier is a real drain on every architecture.  Blackhole force-clears `posted` in
+    // noc_fast_atomic_increment as a 4-port hang workaround, so it was already non-posted there,
+    // but Wormhole honours it -- posted atomics never mark NOC_CMD_RESP_MARKED, never bump
+    // NIU_MST_ATOMIC_RESP_RECEIVED, and are therefore invisible to noc_async_atomic_barrier /
+    // noc_async_full_barrier.  Non-posted costs an ack round-trip on the wire but does NOT stall
+    // the issuing RISC (nothing waits on the ack until this barrier), so the hot path is unchanged.
+    noc_async_full_barrier();
 }
