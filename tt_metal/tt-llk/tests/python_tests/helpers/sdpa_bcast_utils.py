@@ -32,7 +32,12 @@ from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import IN_FACE_DIMS, NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import (
+    IN_FACE_DIMS,
+    MATH_NUM_FACES,
+    NUM_FACES,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -129,6 +134,10 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
     configuration = TestConfig(
         cpp_source,
         formats,
+        templates=[
+            # The MATH mop needs the face count as a compile-time constant (SETC16 "n" constraint).
+            MATH_NUM_FACES(SDPA_NUM_FACES),
+        ],
         runtimes=[
             NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
             TILE_COUNT(1),
