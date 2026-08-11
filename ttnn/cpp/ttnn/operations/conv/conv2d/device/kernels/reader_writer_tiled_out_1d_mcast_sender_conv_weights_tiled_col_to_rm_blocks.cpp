@@ -147,6 +147,11 @@ void kernel_main() {
     //
     // Column offset 0: the audio tail is C<=32, one tile wide, so a block covers the whole channel
     // axis. Wider outputs need the block's column offset here.
+    //
+    // Only this core has a weight TensorAccessor, so the receivers cannot fetch the two tiles
+    // themselves -- they are mcast here, reusing the weights semaphore pair. This handshake is the
+    // first one either side performs, so it stays paired with the receiver's matching block, which
+    // likewise sits ahead of its block loop.
     {
         DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
         constexpr uint32_t snake_tile_nbytes = get_tile_size(SNAKE_PARAMS_CB_ID);
@@ -162,6 +167,33 @@ void kernel_main() {
             snake_write_offset += snake_tile_nbytes;
         }
         noc.async_read_barrier();
+
+#ifndef SKIP_MCAST
+        // Wait for every receiver to have reserved its two pages, then push the pair out. The CB is
+        // at the same L1 address on every core, so the sender's own write pointer is the destination.
+        weights_mcast_sender_sem.wait(weights_mcast_num_dests);
+        weights_mcast_sender_sem.set(0);
+
+        mcast_dst.addr = dfb_snake.get_write_ptr();
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(dfb_snake.get_write_ptr()),
+            mcast_ep,
+            2 * snake_tile_nbytes,
+            weights_mcast_num_cores,
+            {},
+            mcast_dst,
+            true);
+
+        weights_mcast_receiver_sem.set_multicast(
+            noc,
+            mcast_rect.noc_x_start,
+            mcast_rect.noc_y_start,
+            mcast_rect.noc_x_end,
+            mcast_rect.noc_y_end,
+            weights_mcast_num_cores,
+            false);
+#endif
+
         dfb_snake.push_back(2);
     }
 #endif

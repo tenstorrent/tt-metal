@@ -938,6 +938,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_mcast_sender_defines["SNAKE_ALPHA_ROW_TILE_ID"] =
             std::to_string((weight_matrix_height_ntiles - 2) * weight_matrix_width_ntiles);
         writer_mcast_sender_defines["SNAKE_PARAM_ROW_STRIDE"] = std::to_string(weight_matrix_width_ntiles);
+        // The mcast receivers have no weight TensorAccessor, so the sender mcasts the two tiles to
+        // them over the weights semaphore pair. They need the CB id to reserve and push it, but not
+        // the page ids -- they never read from DRAM. writer_defines feeds only the receiver kernel.
+        writer_defines["SNAKE_PARAMS"] = "1";
+        writer_defines["SNAKE_PARAMS_CB_ID"] =
+            std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
     }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
