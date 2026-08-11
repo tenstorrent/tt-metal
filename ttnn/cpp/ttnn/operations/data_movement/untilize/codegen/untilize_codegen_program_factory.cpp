@@ -5,8 +5,6 @@
 #include "untilize_codegen_program_factory.hpp"
 
 #include <algorithm>
-#include <variant>
-#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -32,9 +30,6 @@ constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h SEQ_IDENTITY
 using ttnn::operations::data_movement::untilize_codegen::kUsableL1;
-
-using RtArg = std::variant<uint32_t, Buffer*>;
-using RtArgs = std::vector<RtArg>;
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
@@ -86,8 +81,7 @@ CbPlan plan_cb_depths(uint32_t pages_per_unit, uint32_t page_size, uint32_t bloc
     if (single_both <= kUsableL1) {
         return CbPlan{pages_per_unit, pages_per_unit, block_units};
     }
-    TT_FATAL(
-        false,
+    TT_THROW(
         "untilize codegen: single-buffer CB plan exceeds L1 and cannot be reduced without chunking "
         "(pages_per_unit={}, page_size={}, minimum_bytes={}, budget={}); supported_by_codegen() should "
         "have routed this shape to native",
@@ -185,12 +179,8 @@ struct CommonArgs {
 // second ("cliff") compute-kernel core group with its own per-core tile-row count.
 ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows) {
     auto grid = a.device->compute_with_storage_grid_size();
-    auto split = tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
-    const CoreRangeSet& core_range = std::get<1>(split);
-    const CoreRangeSet& cg1 = std::get<2>(split);
-    const CoreRangeSet& cg2 = std::get<3>(split);
-    uint32_t tpc1 = std::get<4>(split);
-    uint32_t tpc2 = std::get<5>(split);
+    auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
+        tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
     CbPlan plan = plan_cb_depths(wt, a.tile_size_for_planning, block_ct_dim);
@@ -225,8 +215,8 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
         }
         for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
             uint32_t n = std::min(wpc, total_tile_rows - assigned);
-            reader.emplace_runtime_args(core, RtArgs{a.in_buf, n * wt, assigned * wt});
-            writer.emplace_runtime_args(core, RtArgs{a.out_buf, n, assigned * TILE_HEIGHT, row_size_bytes, 0u, 0u, 0u});
+            reader.emplace_runtime_args(core, {a.in_buf, n * wt, assigned * wt});
+            writer.emplace_runtime_args(core, {a.out_buf, n, assigned * TILE_HEIGHT, row_size_bytes, 0u, 0u, 0u});
             assigned += n;
         }
     };
@@ -251,12 +241,8 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
 // tile-COLUMNS across cores instead of tile-rows.
 ProgramDescriptor build_column_parallel(const CommonArgs& a, uint32_t wt) {
     auto grid = a.device->compute_with_storage_grid_size();
-    auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
-    const CoreRangeSet& core_range = std::get<1>(split);
-    const CoreRangeSet& cg1 = std::get<2>(split);
-    const CoreRangeSet& cg2 = std::get<3>(split);
-    uint32_t tpc1 = std::get<4>(split);
-    uint32_t tpc2 = std::get<5>(split);
+    auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
+        tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
 
     uint32_t max_tpc = std::max(tpc1, cg2.empty() ? 0u : tpc2);
     uint32_t block_ct_dim = compute_block_ct_dim(max_tpc, a.fp32);
@@ -285,16 +271,15 @@ ProgramDescriptor build_column_parallel(const CommonArgs& a, uint32_t wt) {
         }
         for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
             uint32_t n = std::min(wpc, wt - assigned);
-            reader.emplace_runtime_args(core, RtArgs{a.in_buf, n, assigned});
+            reader.emplace_runtime_args(core, {a.in_buf, n, assigned});
             writer.emplace_runtime_args(
                 core,
-                RtArgs{
-                    a.out_buf,
-                    TILE_HEIGHT,
-                    assigned * TILE_WIDTH * a.out_elem_size,
-                    n * TILE_WIDTH * a.out_elem_size,
-                    n,
-                    0u});
+                {a.out_buf,
+                 TILE_HEIGHT,
+                 assigned * TILE_WIDTH * a.out_elem_size,
+                 n * TILE_WIDTH * a.out_elem_size,
+                 n,
+                 0u});
             assigned += n;
         }
     };
@@ -322,8 +307,8 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
     uint32_t num_units = total_tile_rows * ncol;
 
     auto grid = a.device->compute_with_storage_grid_size();
-    auto split = tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
-    const CoreRangeSet& core_range = std::get<1>(split);
+    auto [_num_cores, core_range, _cg1, _cg2, _tpc1, _tpc2] =
+        tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(tpc, a.fp32);
     CbPlan plan = plan_cb_depths(tpc, a.tile_size_for_planning, block_ct_dim);
@@ -353,10 +338,9 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
         uint32_t tile_row = i / ncol;
         uint32_t col_block = i % ncol;
         uint32_t start_tile = tile_row * wt + col_block * tpc;
-        reader.emplace_runtime_args(core, RtArgs{a.in_buf, tpc, start_tile});
+        reader.emplace_runtime_args(core, {a.in_buf, tpc, start_tile});
         writer.emplace_runtime_args(
-            core,
-            RtArgs{a.out_buf, TILE_HEIGHT, col_block * col_chunk_bytes, col_chunk_bytes, tpc, tile_row * TILE_HEIGHT});
+            core, {a.out_buf, TILE_HEIGHT, col_block * col_chunk_bytes, col_chunk_bytes, tpc, tile_row * TILE_HEIGHT});
     }
 
     // Kernel order [reader, writer, compute] mirrors _build_untilize_2d_column's kernels list.
@@ -399,12 +383,8 @@ ProgramDescriptor build_with_unpadding(
     uint32_t w_unpadded,
     uint32_t padded_batch_h) {
     auto grid = a.device->compute_with_storage_grid_size();
-    auto split = tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
-    const CoreRangeSet& core_range = std::get<1>(split);
-    const CoreRangeSet& cg1 = std::get<2>(split);
-    const CoreRangeSet& cg2 = std::get<3>(split);
-    uint32_t tpc1 = std::get<4>(split);
-    uint32_t tpc2 = std::get<5>(split);
+    auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
+        tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
     CbPlan plan = plan_cb_depths(wt, a.tile_size_for_planning, block_ct_dim);
@@ -442,17 +422,10 @@ ProgramDescriptor build_with_unpadding(
         for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
             uint32_t n = std::min(wpc, total_tile_rows - assigned);
             uint32_t start_stick = assigned * TILE_HEIGHT;
-            reader.emplace_runtime_args(core, RtArgs{a.in_buf, n * wt, assigned * wt});
+            reader.emplace_runtime_args(core, {a.in_buf, n * wt, assigned * wt});
             writer.emplace_runtime_args(
                 core,
-                RtArgs{
-                    a.out_buf,
-                    n,
-                    start_stick,
-                    padded_row_bytes,
-                    h_unpadded_per_batch,
-                    padded_batch_h,
-                    out_page_offset});
+                {a.out_buf, n, start_stick, padded_row_bytes, h_unpadded_per_batch, padded_batch_h, out_page_offset});
             out_page_offset += count_valid_sticks(start_stick, n * TILE_HEIGHT, padded_batch_h, h_unpadded_per_batch);
             assigned += n;
         }

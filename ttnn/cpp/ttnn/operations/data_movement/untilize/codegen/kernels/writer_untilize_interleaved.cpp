@@ -51,9 +51,11 @@ void kernel_main() {
     Noc noc;
     CircularBuffer out_cb(cb_out);
 
-    uint32_t stick_id = start_stick_id;
     uint32_t out_stick_id = (H_unpadded > 0) ? out_page_start : start_stick_id;
     bool do_unpad = (H_unpadded > 0);
+
+    // Row index within the current physical batch (0 .. padded_batch_h-1).
+    uint32_t row_in_batch = do_unpad ? (start_stick_id % padded_batch_h) : 0;
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
         out_cb.wait_front(num_tiles_per_row);
@@ -62,10 +64,7 @@ void kernel_main() {
         // Issue every valid stick of this tile-row before syncing (no
         // intermediate flush) so up to tile_height writes are in flight.
         for (uint32_t row = 0; row < tile_height; ++row) {
-            // Per-batch check: stick position within the current batch
-            // must be < H_unpadded (the per-batch valid height).
-            bool valid = !do_unpad || ((stick_id % padded_batch_h) < H_unpadded);
-            if (valid) {
+            if (!do_unpad || row_in_batch < H_unpadded) {
                 noc.async_write(
                     out_cb,
                     d,
@@ -75,7 +74,10 @@ void kernel_main() {
                 out_stick_id++;
             }
             l1_read_offset += padded_row_size_bytes;
-            stick_id++;
+            row_in_batch++;
+            if (do_unpad && row_in_batch >= padded_batch_h) {
+                row_in_batch = 0;
+            }
         }
 
         // Single barrier per tile-row (ttnn per-block cadence): drains all
