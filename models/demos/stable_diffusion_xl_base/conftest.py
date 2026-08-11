@@ -470,10 +470,14 @@ def _resolve_lora_weights_path(
 
     1) --lora-weights: full path to a local .safetensors file.
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use the supplied default weights. In CIv2, adapters
-       with a `ci_v2_cache_dir` are fetched from the large-file cache first
-       (runners there have no HF egress); everywhere else, and as the CIv2
-       fallback, they come from HF.
+    3) If nothing provided: use the supplied default weights. In CI (v1 or v2),
+       adapters with a `ci_v2_cache_dir` are fetched from the large-file cache
+       first: CIv2 runners have no HF egress, and CIv1 runners call
+       hf_hub_download with local_files_only=True, so an adapter absent from
+       the baked HF cache is unreachable on both without this. A runner outside
+       the cluster fails the fetch instantly on DNS and falls through to HF, so
+       the attempt is harmless where the cache is unreachable. Elsewhere, and
+       as the CI fallback, adapters come from HF.
 
     Shared by the LoRA fixtures below, which differ only in which adapter they
     default to; resolution order and download behaviour are identical.
@@ -501,7 +505,7 @@ def _resolve_lora_weights_path(
         hf_repo_id = default_repo_id
         hf_filename = default_filename
 
-        if is_ci_v2_env and ci_v2_cache_dir:
+        if (is_ci_env or is_ci_v2_env) and ci_v2_cache_dir:
             tried_ci_cache = True
             cached = _fetch_lora_from_ci_v2_cache(ci_v2_cache_dir, default_filename)
             if cached:
@@ -538,9 +542,9 @@ def te_lora_path(request, is_ci_env, is_ci_v2_env):
 
     That default trains both CLIP encoders plus the UNet, so it is the adapter used
     to exercise the text-encoder fuse/rollback path. Resolution is identical to
-    `lora_path` except that in CIv2 the adapter comes from the large-file cache,
-    where it was staged on 2026-07-21 (hf_hub_download cannot reach HF from those
-    runners, and this adapter is not in their baked HF cache).
+    `lora_path` except that in CI the adapter comes from the large-file cache,
+    where it was staged on 2026-07-21 (this adapter is not in the runners' baked
+    HF cache, and hf_hub_download cannot fetch it there on either CI flavour).
     """
     from models.demos.stable_diffusion_xl_base.lora.config import (
         TE_TEST_LORA_CI_CACHE_DIR,
