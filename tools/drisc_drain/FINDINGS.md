@@ -3351,3 +3351,122 @@ move the optimum, so 176 must not be adopted as a default until re-measured with
 A phase-accounting underflow: `c_proc += elapsed - nested` wrapped when the nested ship_run time exceeded
 the elapsed span, printing `proc 18727729111430.1%` and silently corrupting the whole breakdown. Now
 saturating.
+
+## §N+39 — The DRAM frame ring is RUNWAY, not headroom: the volume knee is 20k zones/RISC, and 12 MiB is enough for 5k (bh-26, 2026-08-11)
+
+Two sweeps, both at 120 cores / slow dispatch / delay 40 / full decode+publish. All numbers are 3 warm
+reps; run 1 of each JIT key discarded.
+
+### Sweep A — ring size at fixed volume (5,000 zones/RISC, 6.0 M markers, Tracy attached on rep 1)
+
+| ring | frames | producer stalls r1/r2/r3 | cores hit | ring filled | records dropped | ts regressions |
+|---|---|---|---|---|---|---|
+| 64 MiB (default) | 6355 | 0 / 0 / 0 | 0 | no | 0 | 0 |
+| **12 MiB** | 1191 | **0 / 0 / 0** | 0 | no | 0 | 0 |
+| 10 MiB | 992 | 0 / 0 / 45 | 0/0/17 | 1 of 3 | 0 | 0 |
+| 9 MiB | 893 | 662 / 102 / 80 | 16-37 | 3 of 3 | 0 | 0 |
+| 8 MiB | 794 | 698 / 448 / 656 | 30-35 | 3 of 3 | 0 | 0 |
+| 7 MiB | 695 | 1635 / 1076 / 1288 | 55-75 | 3 of 3 | 0 | 0 |
+| 6 MiB | 595 | 1712 / 1743 / 2038 | 78-83 | 3 of 3 | 0 | 0 |
+
+**Undersizing the ring never costs correctness.** Every size down to 6 MiB dropped zero records with zero
+timestamp regressions -- the back-pressure chain works exactly as designed: ring fills, filler waits for
+room, producers stall, nothing is lost. Record counts come in slightly ABOVE nominal 6,001,200 because
+the stalls themselves emit markers. What undersizing costs is workload perturbation, monotonically:
+0 -> ~600 -> ~1300 -> ~1800 stalls as you go 12 -> 8 -> 7 -> 6 MiB (at 6 MiB that is 0.034% of markers
+across 80 of 120 cores).
+
+12 MiB is the smallest size that is stall-free 3/3, and it holds because the natural burst high-water is
+~900-1,000 frames -- 1,191 gives ~20% margin. 10 MiB has essentially none and failed 1 of 3.
+
+### Sweep B — volume at the default 64 MiB ring (no tracy-capture attached)
+
+| iters | zones/RISC | markers | producer stalls r1/r2/r3 | cores | filler high-water | ring-room waits | records dropped |
+|---|---|---|---|---|---|---|---|
+| 500 | 5,000 | 6.0 M | 0 / 0 / 49 | 0-18 | 645-926 (10-15%) | 0 | **0** |
+| 1000 | 10,000 | 12.0 M | 0 / 0 / 0 | 0 | 3011-3246 (47-51%) | 0 | **0** |
+| 1500 | 15,000 | 18.0 M | 5 / 0 / 0 | 0-2 | 5696-5938 (90-93%) | 0 | 0.80-1.10 M |
+| **2000** | **20,000** | **24.0 M** | **14144 / 13793 / 12273** | **120/120** | **6355 (100%)** | **250-284** | 6.8-6.9 M |
+| 2500 | 25,000 | 30.1 M | 37982 / 35518 / 35626 | 120 | 6355 (100%) | 574-621 | 13.1-13.2 M |
+| 3000 | 30,000 | 36.1 M | 59932 / 60159 / 61007 | 120 | 6355 (100%) | 912-956 | 19.1-19.2 M |
+| 4000 | 40,000 | 48.2 M | 106891 / 109052 / 107321 | 120 | 6355 (100%) | 1581-1646 | 30.6-31.2 M |
+| 5000 | 50,000 | 60.3 M | 154485 / 153763 / 153361 | 120 | 6355 (100%) | 2232-2257 | 41.4-42.1 M |
+
+**The knee is 20,000 zones/RISC (24 M markers).** 15k is clean (0-5 stalls, ring 92%, never fills); 20k
+is a cliff -- ring pins at 100%, ring-room waits appear, ~13,000 stalls across ALL 120 cores. Past it,
+stalls grow ~11x from 20k to 50k for 2.5x the volume.
+
+### THE STRUCTURAL POINT: high-water tracks total volume and never plateaus
+
+14% -> 49% -> 92% -> 100% at 5k/10k/15k/20k zones/RISC. The movers drain permanently slower than the
+fillers stage, so the ring absorbs a running DEFICIT, not bursts. It buys a fixed amount of TIME before
+back-pressure reaches producers -- ~16-17k zones/RISC at 64 MiB -- consumed monotonically from the first
+zone.
+
+Consequences, and they invalidate two earlier readings:
+
+- **"0 stalls at 5k zones" is not a steady-state property.** The workload ends before the ring fills.
+- **A low high-water does not mean the ring is oversized.** ARCHITECTURE.md's recommendation to cut
+  `ROLE_RING_MB` "a long way" rested on the 8.4%-18.9% occupancy of 5k-zone runs; that occupancy is a
+  statement about volume, not about sizing. Corrected there.
+- **Doubling the ring cannot make a long capture stall-free** -- 128 MiB moves the knee to ~32k
+  zones/RISC and no further.
+
+### Host-side loss breaks FIRST, one sweep point earlier
+
+At 15k zones producers are still clean but the host record ring is already dropping 0.8-1.1 M records.
+The first failure as volume scales is SILENT HOST LOSS, not producer perturbation -- watch stall
+counters alone and you will call 15k healthy while a twentieth of the trace is already gone.
+
+The host consumer took ~16.9-17.6 M records in EVERY run from 15k zones up, whether 18 M or 60 M were
+published -- essentially the `TT_METAL_PERF_DEBUG_RING_RECS=16777216` cap. That flat ceiling, not the
+DRAM ring, is the real volume limit, consistent with decode being 1820% oversubscribed at 50k.
+Order integrity held everywhere: 0 regressions at publish and consume in all 42 runs.
+
+### DRAM footprint: the allocator is LOCK-STEP
+
+Cost is `page_size x num_banks`, not `npages x page_size`. `page_size == ring_bytes` here (one ring per
+page), and bh-26's allocator has **7** DRAM banks -- 8 channels, 1 harvested -- confirmed on silicon by
+forcing the ring-bank validation message (`TT_METAL_PERF_DEBUG_ROLE_RING_BANKS=99,100` ->
+"the allocator has 7 DRAM banks"). So:
+
+| ring | DRAM reserved | vs old profiler |
+|---|---|---|
+| 64 MiB (default) | **448 MiB** (128 addressed, 320 wasted) | 14x |
+| 12 MiB | **84 MiB** | 2.6x |
+| old profiler | 4.58 MiB/bank = **32.0 MiB** | 1x |
+
+The old profiler's figure is `per_risc_bytes x MaxProcessorsPerCoreType x CEIL_NUM_CORES_PER_DRAM_CHANNEL`
+= `48,000 x 5 x 20` = 4,800,000 B/bank, reserved at `DRAM_PROFILER_BASE` in every bank
+(`bh_hal.cpp:41-53`); `48,000 = 2 marker words x (2 program-id + 4 guaranteed) x 4 B x 1000`
+(`DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT`, `profiler_state_manager.cpp:19,40-60`). Note theirs is
+PROPORTIONAL (scales with RISCs x cores/bank x program count) where ours is FIXED, so the ratio is a
+property of this grid, not universal.
+
+**Two traps found here.** The runtime log understates the footprint ~4x -- it prints
+`npages x ring_bytes` (191 MiB) rather than what the allocator reserves (448 MiB); budget from that line
+and you are off by 257 MiB. And which bank a ring occupies is irrelevant to footprint: lock-step reserves
+the same offset in every bank, so keeping rings off banks 0/3 costs nothing and saves nothing. The only
+lever is `page_size`.
+
+### The two lanes are asymmetric
+
+Filler 1 fills first in every undersized run while filler 0 sometimes never fills at all (8 MiB:
+794/794 with 36 ring-room waits vs 648/794 with 0), and filler 1 consistently stages ~150 fewer frames at
+every size. One mover drains slower than the other, so **the required ring size is set by the worse
+lane** -- evening the two out would buy more headroom than any sizing change.
+
+### Measurement gotchas from this session
+
+- **`grep | tail -1` over a 4-DRISC log is a trap.** The reference high-water was first recorded as 646
+  frames; that was filler 1's MOVER line. The true peak is filler 0 at 897 (9.03 MiB). The whole "6.4 MB
+  should be enough" premise came from that mis-grep -- 6/7/8 MiB are all BELOW the natural burst, which
+  is exactly why all three fill and stall. Always print one line per DRISC.
+- **Stalls are bimodal even below the knee**: 500 iters rep 3 gave 49 stalls where reps 1-2 gave 0, and
+  10 MiB rep 3 gave 45 where reps 1-2 gave 0. A single clean run proves nothing; 3 reps minimum.
+- **`local` expands all its words before assigning any of them**, so
+  `local M=$1 TAG=$2 L=/tmp/x_${M}_${TAG}.log` reads M/TAG while still unset and aborts under `set -u`.
+  Cost one dead harness run.
+- Sweep B ran without tracy-capture attached (24 runs). Justified by the 50k pair showing the sink barely
+  moves producer stalls (152,196 without Tracy vs 153,924 with), but the knee at 2000 iters has NOT been
+  re-verified with Tracy attached.
