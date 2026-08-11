@@ -733,6 +733,7 @@ class Gemma4Model:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        allow_sharded_decode_logits=True,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1022,7 +1023,7 @@ class Gemma4Model:
                 (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
-        logits = self._apply_lm_head(hidden_states, is_decode=is_decode)
+        logits = self._apply_lm_head(hidden_states, is_decode=is_decode, allow_sharded=allow_sharded_decode_logits)
         if not is_decode:
             # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
             self._flush_deferred_bounded_fills_if_needed()
@@ -1033,7 +1034,7 @@ class Gemma4Model:
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
 
-    def _apply_lm_head(self, hidden_states, is_decode=False):
+    def _apply_lm_head(self, hidden_states, is_decode=False, allow_sharded=True):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
 
         Factored out of ``__call__`` so traced prefill can defer it (the trace
@@ -1054,6 +1055,16 @@ class Gemma4Model:
           captured — dropping them silently no-ops the cap and tanks PCC vs HF.
         - The sharded vocab is all-gathered back to full width, except in decode
           on-device sampling (the sampling module consumes sharded logits).
+
+        ``allow_sharded`` must be False whenever the HOST reads these logits, even
+        though ``self.sampling`` exists: the module is constructed for every
+        tp>1 / shard<=64K model regardless of whether the caller uses it, so
+        gating the gather on its mere existence sent a single device's 32K-wide
+        shard to ``process_output_decode``. A host argmax over 1/8 of the vocab
+        silently substitutes low-id fragments for any token above the shard
+        ("creature"->"create", "lapped"->"la"), worst on long-context tasks that
+        need rare tokens. Same trap the spec-decode path avoids by forcing
+        ``is_decode=False``.
         """
         # Bracket the lm_head matmul + softcap with a Tracy signpost so the
         # op_perf_results.py --signpost gemma4_lm_head filter sums just this
@@ -1094,7 +1105,7 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if self.sampling is not None and is_decode:
+            if self.sampling is not None and is_decode and allow_sharded:
                 pass  # Sampling module handles TP-sharded logits directly
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
@@ -1966,6 +1977,11 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
             page_tables_per_layer=page_tables_per_layer,
+            # Only the on-device sampler can consume TP-sharded logits. When the
+            # host reads them (GEMMA4_HOST_SAMPLE=1, vLLM host logits, logprobs),
+            # force the all-gather so argmax sees the full 262K vocab and not
+            # device 0's 32K shard.
+            allow_sharded_decode_logits=on_device_logits,
         )
 
         if on_device_logits:
