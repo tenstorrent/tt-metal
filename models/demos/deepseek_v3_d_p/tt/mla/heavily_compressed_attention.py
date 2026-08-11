@@ -673,9 +673,14 @@ class TtHCA(_TtHCABase):
         state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
     def _tail_tile_matrices(self, r_e, width):
-        """The two one-hot matrices depend on nothing but ``(r_e, width)``, and r_e only ever walks the
-        multiples of gcd(width, TILE_SIZE) -- one value for a 4096-token chunk, four for 5120. Uploading
-        them costs ~0.9 ms of host time that device perf does not see, so they are built once and kept."""
+        """The two one-hot matrices depend on nothing but ``(r_e, width)``, so they are built once and kept:
+        uploading a pair costs ~0.9 ms of host time, which device perf does not measure.
+
+        Bounded by TILE_SIZE keys per width, not fewer. Chunks that all carry the same entry count walk only
+        the multiples of gcd(count, TILE_SIZE) -- one r_e for 4096-token chunks, four for 5120 -- but the
+        contract only asks non-final chunks for ``real_len % compress_rate == 0``, so a run with mixed
+        lengths reaches every r_e. At 24 KB a pair for chunk 5120 that is 768 KB per layer per chip worst
+        case, which is why this fills in on demand rather than up front."""
         key = (r_e, width)
         if key not in self._tail_tile_cache:
             tile, buf = ttnn.TILE_SIZE, _buf_for_width(width)
