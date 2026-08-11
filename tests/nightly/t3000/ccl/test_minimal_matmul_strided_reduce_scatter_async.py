@@ -35,6 +35,7 @@ class MinimalMatmulStridedReduceScatterTestConfig:
     layout: object = None  # ttnn.Layout, set in __post_init__
     input_dtype: object = None  # ttnn.DataType, set in __post_init__
     num_workers_per_link: object = None  # Optional[int]
+    mm_window_blocks: object = None  # Optional[int]: rolling L1 window over the MM output, in M blocks
 
     def __post_init__(self):
         if self.layout is None:
@@ -69,8 +70,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     subblock_w,
     mm_core_grid,
     num_iters=1,
-    ops_per_trace=1,
     enable_trace=False,
+    ops_per_trace=1,
     cluster_axis=1,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -83,6 +84,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     allowed_pcc=0.99,
     addcmul_scalar=None,
     broadcast_gate=True,
+    check_correctness=True,
+    mm_window_blocks=None,
 ):
     torch.manual_seed(0)
 
@@ -102,12 +105,48 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
-    # Under trace only input sets 0..ops_per_trace-1 are ever consumed — num_iters is
-    # purely the replay count. Eager consumes one set per iteration. Building the
-    # unused trace sets costs ~450 MB of host golden per set at trunk shapes.
-    num_input_sets = max(ops_per_trace, 1) if enable_trace else num_iters
+    # RS needs 3 semaphores per iteration
+    # Caller-owned MM->RS progress counter array, the same thing CCLManager hands the model
+    # (see CCLManager.get_mm_progress_counters_buffer). Passing it exercises the shared-array path;
+    # leaving it None makes each compiled program allocate its own, which permanently lowers the
+    # device's L1 floor. One uint32 slot per matmul core, one row per core, L1 HEIGHT_SHARDED so
+    # every RS worker core sees its row at the same local address.
+    _counter_slots = compute_grid_size.x * compute_grid_size.y
+    mm_progress_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
 
-    # RS needs 3 semaphores per input set
+    # Caller-owned RS->MM window credit array, the CCLManager counterpart of the progress array
+    # above (see CCLManager.get_mm_credit_counters_buffer). One uint32 slot per RS reader, one row
+    # per matmul core; only consumed when mm_window_blocks is set.
+    mm_credit_counters = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([_counter_slots, _counter_slots]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
+    # ops_per_trace > 1 captures additional back-to-back instances (distinct semaphore
+    # trios and inputs) in the same trace with no sync between them, so a later
+    # instance's matmul cores start while an earlier instance's RS cores are still
+    # draining — the production adjacency a single-op replay loop never has.
+    assert ops_per_trace >= 1
+    assert enable_trace or ops_per_trace == 1, "ops_per_trace > 1 only applies to trace mode"
+    num_input_sets = max(num_iters, ops_per_trace)
+
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
 
@@ -166,22 +205,23 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
         # Golden: per-device MM outputs (each device has different weights)
-        torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
-        mm_outputs = []
-        for d in range(num_devices):
-            mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
-            mm_outputs.append(mm_out_d)
-        torch_mm_output_per_device_list.append(mm_outputs)
+        if check_correctness:
+            torch_weight_chunks = torch.chunk(torch_weight_global, num_devices, dim=0)  # each [1, 1, K, N]
+            mm_outputs = []
+            for d in range(num_devices):
+                mm_out_d = torch.matmul(torch_input, torch_weight_chunks[d])
+                mm_outputs.append(mm_out_d)
+            torch_mm_output_per_device_list.append(mm_outputs)
 
-        # Golden: RS reduce (sum across devices) then scatter
-        torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
-        torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
-        if addcmul_scalar is not None:
-            torch_rs_scattered = tuple(
-                torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
-                for chunk in torch_rs_scattered
-            )
-        torch_rs_output_list.append(torch_rs_scattered)
+            # Golden: RS reduce (sum across devices) then scatter
+            torch_rs_reduced = torch.sum(torch.stack(mm_outputs), dim=0)  # [1, 1, M, N]
+            torch_rs_scattered = torch.chunk(torch_rs_reduced, num_devices, dim=dim)
+            if addcmul_scalar is not None:
+                torch_rs_scattered = tuple(
+                    torch.addcmul(torch_addcmul_a, chunk, torch_addcmul_b, value=addcmul_scalar)
+                    for chunk in torch_rs_scattered
+                )
+            torch_rs_output_list.append(torch_rs_scattered)
 
         # Create device tensors
         # Input: replicated (same on all devices)
@@ -264,6 +304,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 fused_ternary_scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=mm_window_blocks,
+                mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters,
             )
             return tt_mm_out, tt_rs_out
         else:
@@ -323,17 +366,13 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ttnn.synchronize_device(mesh_device)
         logger.info("Done compiling op")
 
-        # Capture trace. ops_per_trace > 1 enqueues additional back-to-back instances
-        # (distinct semaphore trios and inputs, mirroring the trunk pool rotation)
-        # with no sync between them, so a later instance's matmul cores start while
-        # an earlier instance's RS cores are still draining — the production
-        # adjacency the single-op replay loop (device-synced per replay) never has.
+        # Capture trace. Extra instances go in front so instance 0 (the one the
+        # replay loop verifies every iteration) runs while its predecessors drain.
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        traced_ops = []
+        traced_extras = []
         for k in range(ops_per_trace - 1, 0, -1):
-            traced_ops.append((k, *run_op(k)))
+            traced_extras.append((k, *run_op(k)))
         tt_mm_out, tt_rs_out = run_op(0)
-        traced_ops.append((0, tt_mm_out, tt_rs_out))
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         logger.info("Done capturing trace")
@@ -359,23 +398,22 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     ##### Verify results #####
+    if not check_correctness:
+        logger.info("Skipping correctness check (perf/sweep mode)")
+        return
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
     concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
-    # Under trace, every replay writes the same output buffers in place, so one
-    # verification per captured instance covers the final replay; re-reading per
-    # replay adds ~40s of host readback per iteration at trunk shapes. With
-    # ops_per_trace > 1 every captured instance is a potential race victim —
-    # verify each against the golden of the input set it consumed.
-    if enable_trace and ops_per_trace > 1:
-        tt_mm_out_tensor_list = [op[1] for op in traced_ops]
-        tt_rs_out_tensor_list = [op[2] for op in traced_ops]
-        verify_pairs = [(pos, op[0]) for pos, op in enumerate(traced_ops)]
-    elif enable_trace:
-        verify_pairs = [(0, 0)]
-    else:
-        verify_pairs = [(i, i) for i in range(num_iters)]
-    for i, golden_idx in verify_pairs:
+    # Extra traced instances share the replay's output buffers across replays, so one
+    # post-replay check per instance (against its own input set's golden) suffices.
+    verify_specs = [(i, i if not enable_trace else 0) for i in range(num_iters)]
+    if enable_trace:
+        for k, extra_mm, extra_rs in traced_extras:
+            verify_specs.append((len(tt_mm_out_tensor_list), k))
+            tt_mm_out_tensor_list.append(extra_mm)
+            tt_rs_out_tensor_list.append(extra_rs)
+
+    for i, golden_idx in verify_specs:
         # Check MM output (each device has different output since weights differ)
         # Setup concatenation dimension per axis
         concat_dims = [0, 0]
@@ -390,7 +428,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         )
         mm_goldens = torch_mm_output_per_device_list[golden_idx]
 
-        for device_id in range(num_devices):
+        # With a rolling window the MM output tensor holds only the last mm_window_blocks M blocks
+        # per core, not the full [M, N] result, so there is nothing to compare it against. The RS
+        # output below is the real correctness signal — it is only right if every windowed block was
+        # produced and consumed correctly.
+        for device_id in range(0 if mm_window_blocks is None else num_devices, num_devices):
             tt_mm_slice = tt_mm_out_torch[device_id : device_id + 1, :, :, :]
             eq, output = comp_pcc(tt_mm_slice, mm_goldens[device_id], allowed_pcc)
             logger.info(f"MM output device {device_id}, iter {i}: {output}")

@@ -10,12 +10,12 @@ Tests the two-level allocator architecture:
 - Per-core and lockstep allocations never overlap on any device
 """
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from conftest import requires_hybrid_allocator
-
 
 # --- Helpers ---
 
@@ -531,6 +531,82 @@ def test_single_device_loopback(mesh_device):
         assert torch.equal(result, expected), (
             f"Device {dev_idx}: loopback data mismatch. "
             f"Expected first 8: {expected[0,:8].tolist()}, got: {result[0,:8].tolist()}"
+        )
+
+
+# Fixed kv_grid rows 8-9, columns 0-8 (see the single-device counterpart): skip where those
+# cores do not exist rather than building an invalid shard grid.
+@pytest.mark.requires_grid_size((9, 10))
+@requires_hybrid_allocator
+def test_kva_width_sharded_bfp4_replicate_data_round_trip(mesh_device):
+    """FORMAT + MESH coverage: per-core allocation coexists with WIDTH_SHARDED,
+    TILE_LAYOUT, BFLOAT4_B, (7168,576) over the 18-core grid (0,8)-(8,9) under
+    ReplicateTensorToMesh, with co-resident per-core tensors on (0,8)/(0,9).
+
+    Writes DISTINCT NONZERO data per column-shard and reads it back PER DEVICE via
+    to_torch(from_device(device_tensor)).
+
+    NOTE: this is a host round-trip, which is SYMMETRIC (write and read use the same
+    buffer address), so it does NOT catch the per-core data-movement address bug — it
+    passes even when that bug is present (the isolated co-resident topology differs from
+    the real dense run). The authoritative guard is
+    ``test_per_core_kernel_readback_honors_per_core_address`` in the single-device file
+    (kernel reads at the per-core address). This test only verifies that the replicated
+    BFP4/TILE/WIDTH-sharded per-core creation path round-trips per device.
+    """
+    H, W = 7168, 576
+    kv_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9))])
+    kv_cores = list(ttnn.corerange_to_cores(kv_grid, row_wise=True))
+    num_cores = len(kv_cores)
+    assert num_cores == 18
+    shard_w = W // num_cores  # 32
+
+    # Co-resident per-core tensors on (0,8)/(0,9) -> those cores relocate up.
+    _co = [
+        _create_per_core_single(mesh_device, ttnn.CoreCoord(0, 8), 2048),
+        _create_per_core_single(mesh_device, ttnn.CoreCoord(0, 9), 2048),
+    ]
+
+    data = torch.zeros(H, W, dtype=torch.float32)
+    # 2**c rather than consecutive integers: BFP4 quantizes neighbouring integers into each
+    # other, so only well-separated values can distinguish a shard read from the wrong address.
+    # See the single-device counterpart.
+    for c in range(num_cores):
+        data[:, c * shard_w : (c + 1) * shard_w] = float(2**c)
+
+    shard_spec = ttnn.ShardSpec(kv_grid, [H, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    mem_config.experimental_set_per_core_allocation(True)
+    tensor = ttnn.from_torch(
+        data,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # per-device per-core addresses + data round-trip
+    for dev_idx, dt in enumerate(ttnn.get_device_tensors(tensor)):
+        addrs = [_per_core_addr(dt, c) for c in kv_cores]
+        result = ttnn.to_torch(ttnn.from_device(dt)).float()
+        # Check the value, not just non-zeroness: a shard read from the wrong address usually
+        # still holds a neighbour's (nonzero) constant. See the single-device counterpart.
+        bad_shards = []
+        for c in range(num_cores):
+            block = result[:, c * shard_w : (c + 1) * shard_w]
+            expected = float(2**c)
+            max_err = float((block - expected).abs().max().item())
+            if max_err > 1e-3 * expected:
+                bad_shards.append((c, (kv_cores[c].x, kv_cores[c].y), expected, float(block.mean().item())))
+        logger.info(
+            f"[KVA-MESH] dev{dev_idx} distinct_addrs={len(set(addrs))} "
+            f"bad_shards={len(bad_shards)}/{num_cores} {bad_shards}"
+        )
+        assert not bad_shards, (
+            f"dev{dev_idx}: {len(bad_shards)}/{num_cores} replicated BFP4 per-core column-shards "
+            f"read back the wrong values (per-core creation round-trip broken on this device); "
+            f"(shard, core, expected, actual_mean): {bad_shards}"
         )
 
 

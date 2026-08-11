@@ -57,6 +57,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+    reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.cpp
+    reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.cpp
+    reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.cpp
     send_recv_async/send_async/send_async.cpp
     send_recv_async/send_async/device/send_async_op_device_operation.cpp
     send_recv_async/send_async/device/send_async_op_program_factory.cpp
@@ -111,6 +114,10 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+    reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.hpp
+    reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation_types.hpp
+    reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
+    reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -133,6 +140,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     all_to_all_async/all_to_all_async_nanobind.cpp
     all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
+    reduce_scatter_minimal_direct/reduce_scatter_minimal_direct_nanobind.cpp
     strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
     minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
     all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp

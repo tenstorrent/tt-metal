@@ -59,6 +59,10 @@ MESH_CONFIG = MeshConfig.detect()
 
 BATCH_SIZE = 1
 
+# Experimental LLK-assert override: shrink user-allocatable worker L1 by 16 KiB so the
+# kernel-config staging region grows from 69 KiB to 85 KiB on Blackhole.
+LLK_ASSERT_WORKER_L1_SIZE = 1_444_992
+
 
 @dataclass(frozen=True)
 class GPTOSSRingSinkConfig:
@@ -566,7 +570,12 @@ class RingJointSDPARuntime:
 
 
 def open_ring_joint_sdpa_runtime(
-    mesh_config, *, fp32_dest_acc_en: bool = False, trace_region_size: int = 0, topology: Topology = None
+    mesh_config,
+    *,
+    fp32_dest_acc_en: bool = False,
+    trace_region_size: int = 0,
+    topology: Topology = None,
+    reserve_llk_kernel_config: bool = True,
 ):
     use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
@@ -593,7 +602,10 @@ def open_ring_joint_sdpa_runtime(
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
+        if reserve_llk_kernel_config and os.getenv("TT_METAL_LLK_ASSERTS"):
+            mesh_device_kwargs["worker_l1_size"] = LLK_ASSERT_WORKER_L1_SIZE
+        mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -1638,6 +1650,7 @@ def run_ring_joint_sdpa_chunked(
     sliding_window_size: int = None,
     use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
+    reserve_llk_kernel_config: bool = True,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1722,7 +1735,11 @@ def run_ring_joint_sdpa_chunked(
 
     owns_runtime = runtime is None
     if runtime is None:
-        runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
+        runtime = open_ring_joint_sdpa_runtime(
+            mesh_config,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            reserve_llk_kernel_config=reserve_llk_kernel_config,
+        )
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -4620,9 +4637,11 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+# Galaxy only: the gate guards the exabox.tenstorrent.com/power=14kw label. QuietBox reports a
+# sub-130W TDP, so an unconditional gate skipped every ring-4 entry below on every CI run.
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
@@ -4787,6 +4806,26 @@ RING_MLA_CHUNKED_LATENT_D_V = 512
 RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
+
+# Kimi-K3 MLA: K2.6's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
+# nhq pinned to the production 96 / TP=4 = 24 -- no galaxy split, unlike CHUNKED_PREFILL_HEADS_PER_RING.
+KIMI_K3_HEADS_PER_DEVICE = 24
+RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
+    name="kimi_k3",
+    nhq=KIMI_K3_HEADS_PER_DEVICE,
+    nhk=1,
+    nhv=KIMI_K3_HEADS_PER_DEVICE,
+    d_q=576,
+    d_k=576,
+    d_v=RING_MLA_CHUNKED_LATENT_D_V,
+    is_causal=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[32],
+    # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
+    k_chunk_sizes=[512, 640],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+)
 
 # Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
 # heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
@@ -5354,6 +5393,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     )
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
@@ -5371,6 +5411,7 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
@@ -5463,6 +5504,7 @@ def test_ring_mla_chunked_determinism(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         num_iterations=3,
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
@@ -5713,7 +5755,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
-# Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
+# Profiles each ring_mla model's 50k+5k chunk (final, most compute-bound chunk of its chunked
 # prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
@@ -5721,12 +5763,18 @@ if MESH_CONFIG.is_galaxy:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
+        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
+        ("kimi_k3", 32, 640, 8, 61.03),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
+        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
+        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
+        ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
 
@@ -5752,9 +5800,11 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+# Galaxy only: the gate guards the exabox.tenstorrent.com/power=14kw label. QuietBox reports a
+# sub-130W TDP, so an unconditional gate skipped every ring-4 entry below on every CI run.
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
