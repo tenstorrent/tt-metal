@@ -18,3 +18,29 @@
       timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+# Codegen-path coverage for every op ported to tt-dm-codegen (untilize and repeat today).
+# `-k codegen` selects each op's forced-implementation="codegen" tests, so a newly ported op
+# joins this entry by appending its unit-test file rather than by adding another job.
+#
+# Those forced tests are the ones worth gating a merge on: they run the codegen kernels and
+# compare against native on the same input. The generated routing matrices under
+# tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
+# them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
+# why they stay in nightly. This selection is 25 tests, 1.9s of pytest on an N300 with the
+# job's warm kernel ccache (~8s cold), no single test over 0.6s.
+#
+# Hardware only. Not because codegen is broken under ttsim -- repeat's forced-codegen test runs
+# there today in the sanity data movement group -- but because untilize's kernels have never been
+# run under it. Carry the sim SKUs here once they have.
+- name: "ttnn codegen ops"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+    -k codegen
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+  team: ttnn
+  owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
