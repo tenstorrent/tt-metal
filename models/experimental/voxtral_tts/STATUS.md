@@ -4268,6 +4268,47 @@ fallback exists and that `cores × block_w == 96`.
 **RTF 0.3647 meets the 0.40 target with the model untouched** — `N_DECODING_STEPS` stays 7, so the
 port remains a faithful reproduction of the fp32 reference.
 
+### 6.68 — the stale-rejection sweep comes back EMPTY, and that is the useful result
+
+§6.67 was the fifth rejection to reverse because tracing removed the cost its reasoning rested on.
+So the three remaining op-count rejections were swept deliberately rather than rediscovered one at
+a time. **None of them reverses**, and the measurement says why in one line: traced, these ops are
+already nearly free, so restructuring them has nothing left to win.
+
+Traced marginal cost, by injection into the traced graph (one Block 1 layer = 147.0 µs):
+
+| op | eager map | **traced** |
+|---|---|---|
+| `nlp_create_qkv_heads_decode` | 71.3 µs | **6.2 µs** |
+| `paged_update_cache` | 38.2 µs | **8.1 µs** |
+| `sdpa_decode` | 66.3 µs | **22.4 µs** |
+| reshard (`to_memory_config`) | — | **2.7 µs** |
+
+**§6.44, the fused KV write.** Two `paged_update_cache` calls cost 16.2 µs/layer traced, so fusing
+saves at most 0.21 ms/frame — against the **0.687 ms/step it was measured LOSING**. That loss
+cannot be launch (fusing means fewer launches), so it is device work, and tracing removes launch
+from both arms equally. Stands, and the upside was never large.
+
+**§6.45, the hand-rolled 9-op head split.** Its premise was explicit — *"on this chip OP COUNT is
+the dominant term"* — and tracing demolished exactly that premise, so this looked like the
+strongest candidate. It is the opposite: the fused op costs **6.2 µs traced**, and nine ops doing
+the same work would cost roughly nine times that. §6.45 is **reinforced**, by a wider margin than
+when it was made.
+
+**§6.28, the DRAM-sharded matmul.** Its premise genuinely was revived: it wanted to feed the norm's
+sharded output straight into the matmul, which died when §6.39 removed the sharded norm and came
+back with §6.67. But the unshard it would eliminate costs **2.7 µs**, so 102 of them are
+**0.28 ms/frame** — and §6.28 had already measured the DRAM-sharded matmul itself as slower than
+the ordinary one. The prize does not cover the known cost.
+
+**THE STREAK ENDS HERE, AND THE REASON GENERALISES.** §6.47, §6.49, §6.26, §6.62 and §6.39 all
+reversed because a cost their reasoning depended on had been removed. Every one of those costs was
+**per-op launch**, and §6.65 removed essentially all of it at once. There is no sixth: the
+remaining op-count arguments have nothing left to be wrong about, because the ops now cost 3-22 µs
+instead of 38-71. **A rejection is stale when its premise is a cost, and someone has since removed
+that cost. Once the cost is gone, the sweep is finished** — which is why this section closes the
+line of enquiry rather than opening another.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
