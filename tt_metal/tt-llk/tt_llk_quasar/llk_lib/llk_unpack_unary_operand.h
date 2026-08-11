@@ -47,6 +47,9 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // TODO: Implement Unpack to dest for tiny tiles
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
+    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
+    _llk_sync_get_(semaphore::MOP_BANK);
+
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
@@ -86,7 +89,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
         temp.set_start_op(clr_unused_unpacr_engine);
     }
 
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -106,6 +109,9 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
+
+    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
+    _llk_sync_get_(semaphore::MOP_BANK);
 
     const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP = 1;
@@ -135,7 +141,7 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
         temp.set_end_op(clr_unused_unpacr_engine);
     }
 
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -155,6 +161,9 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
 
     LLK_ASSERT(tensor_shape.total_num_faces() == NUM_FACES, "Transpose is only supported for regular tile dimensions with 4 faces");
+
+    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
+    _llk_sync_get_(semaphore::MOP_BANK);
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = 1;
@@ -220,7 +229,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
         temp.set_end_op(clr_unused_unpacr_engine);
     }
 
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -239,6 +248,9 @@ template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest>
 inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
     static_assert(reuse_dest != EltwiseBinaryReuseDestType::NONE, "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB");
+
+    _llk_mop_bank_reclaim_if_full_<p_stall::UNPACK0>();
+    _llk_sync_get_(semaphore::MOP_BANK);
 
     // CB_UNP: the unpacker that reads real data from the Circular Buffer
     // DUMMY_UNP: the unpacker that gets a dummy dvalid (its source register is filled by MOVD2A/B on the math side)
@@ -273,7 +285,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
         // END_OP: increment CB tile counter after all faces of a tile are processed
         ckernel_template temp(num_tiles, tensor_shape.total_num_faces(), nop_op, face_inc_op);
         temp.set_end_op(TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 1 /*Value*/));
-        temp.program_bank0_sw_cntl(instrn_buffer);
+        _mop_bank_program_(temp, instrn_buffer);
     }
     else // Using tiny-tiles
     {
@@ -283,7 +295,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
         // MOP: outer=num_tiles, inner=num_faces
         // Each inner iteration: NOP (dvalid for dummy src) + FACE_INC (unpack face + inc src face)
         ckernel_template temp(num_tiles, tensor_shape.total_num_faces(), nop_op, face_inc_op);
-        temp.program_bank0_sw_cntl(instrn_buffer);
+        _mop_bank_program_(temp, instrn_buffer);
     }
 }
 
@@ -406,7 +418,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
         // Drain UNPACK0 before posting "filled" so the post does not race the writes math reads.
-        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        _mop_bank_run_(instrn_buffer);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
 
         // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
@@ -446,5 +458,5 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     }
 
     // Runs MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_run_(instrn_buffer);
 }

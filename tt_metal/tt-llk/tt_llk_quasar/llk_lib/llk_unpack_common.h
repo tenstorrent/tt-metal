@@ -10,6 +10,7 @@
 #include "cmath_common.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_sync.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 
@@ -59,6 +60,12 @@ template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 {
     _llk_unpack_hw_configure_<UNP_SEL>(tdma_desc_src);
+
+    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
+    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
+    // mid-kernel if a kernel uses multiple different ops on this thread.
+    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
+    current_program_mop_bank_id = 0;
 }
 
 /**
@@ -72,6 +79,12 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
 {
     _llk_unpack_hw_configure_<UNP_SEL_0>(tdma_desc_src0);
     _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
+
+    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
+    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
+    // mid-kernel if a kernel uses multiple different ops on this thread.
+    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
+    current_program_mop_bank_id = 0;
 }
 
 /**

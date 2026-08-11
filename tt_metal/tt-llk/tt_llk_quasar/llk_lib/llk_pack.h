@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_pack_common.h"
+#include "llk_sync.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -26,6 +27,9 @@ using namespace ckernel;
  */
 inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
+    _llk_mop_bank_reclaim_if_full_<p_stall::PACK0>();
+    _llk_sync_get_(semaphore::MOP_BANK);
+
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP =
         (static_cast<std::uint32_t>(tensor_shape.total_num_faces()) == NUM_FACES) ? 1 : static_cast<std::uint32_t>(tensor_shape.total_num_faces());
@@ -45,7 +49,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
     }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn, incr_to_next_face);
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -103,5 +107,5 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx);
 
     // Runs MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_run_(instrn_buffer);
 }

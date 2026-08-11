@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_sync.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -20,9 +21,12 @@ static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFI
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
  * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
- * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
+ * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
+ * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format, values = DataFormat enum, ex:
+ * <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
@@ -30,6 +34,12 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
     // Turn on automatic Tensix-TRISC synchronization
     // RT: This is turned on by default by HW, this should be removed
     set_ttsync_enables<TRACK_ALL>(TRISC_ID);
+
+    // Both MOP config banks start free; _llk_mop_bank_reclaim_if_full_ blocks once both are claimed.
+    // Lives here (once per kernel) rather than in each op's own _init_, so it isn't re-initialized
+    // mid-kernel if a kernel uses multiple different ops on this thread.
+    _llk_sync_init_(semaphore::MOP_BANK, 2, 2);
+    current_program_mop_bank_id = 0;
 
     static_assert(!(EN_FP32_MATH_FORMAT && EN_INT32_MATH_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
@@ -80,7 +90,8 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
  * width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent width
+ * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32, otherwise default behaviour is Float16/Float16_b depending on input format exponent
+ * width
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
 inline void _llk_math_upk_to_dest_hw_configure_()

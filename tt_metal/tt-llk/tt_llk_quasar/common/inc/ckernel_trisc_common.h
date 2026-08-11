@@ -108,6 +108,48 @@ static std::uint32_t dest_register_offset = 0;
 extern thread_local std::uint32_t dest_register_offset;
 #endif
 
+// Tracks which MOP config bank (0 or 1) the next _llk_*_mop_config_ call on this thread should
+// program into. Toggles after each program so the paired execute function can infer which bank
+// just got a fresh program (the opposite of the now-current value) vs which one is still running.
+#ifdef ENV_LLK_INFRA
+static std::uint32_t current_program_mop_bank_id = 0;
+#else
+extern thread_local std::uint32_t current_program_mop_bank_id;
+#endif
+
+/**
+ * @brief Program `temp` into whichever MOP bank current_program_mop_bank_id designates, then toggle it.
+ * @note Caller must have already acquired semaphore::MOP_BANK (see _llk_mop_bank_reclaim_if_full_ in llk_sync.h).
+ */
+inline void _mop_bank_program_(ckernel_template& temp, volatile std::uint32_t* instrn_buffer)
+{
+    if (current_program_mop_bank_id == 0)
+    {
+        temp.program_bank0_sw_cntl(instrn_buffer);
+    }
+    else
+    {
+        temp.program_bank1_sw_cntl(instrn_buffer);
+    }
+    current_program_mop_bank_id ^= 1;
+}
+
+/**
+ * @brief Run whichever MOP bank was just programmed for this op (the opposite of the now-current bank id,
+ *        since _mop_bank_program_ already toggled it).
+ */
+inline void _mop_bank_run_(volatile std::uint32_t* instrn_buffer)
+{
+    if (current_program_mop_bank_id == 0)
+    {
+        ckernel_template::run_bank1_sw_cntl(instrn_buffer);
+    }
+    else
+    {
+        ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    }
+}
+
 /**
 * @brief Check divisibility by power of 2
 * @param value: input value to check divisibility
@@ -301,6 +343,7 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t MOP_BANK    = 2; // caps concurrent in-flight MOP bank programming at 2 (one per physical bank)
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

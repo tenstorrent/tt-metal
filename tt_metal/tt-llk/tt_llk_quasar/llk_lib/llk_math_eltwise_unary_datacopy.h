@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "llk_math_common.h"
+#include "llk_sync.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -29,6 +30,9 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
 {
     // Divide number of rows by how many rows are output per fpu instruction
     // Each FPU instruction moves 8 rows at a time
+    _llk_mop_bank_reclaim_if_full_<p_stall::MATH, p_stall::WAIT_SFPU>();
+    _llk_sync_get_(semaphore::MOP_BANK);
+
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
     const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;
 
@@ -62,7 +66,7 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
 
     temp.set_last_inner_loop_instr(datacopy_func(ADDR_MOD_1));
 
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -151,7 +155,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t tile_idx)
     _set_dst_write_addr_by_rows_(tile_idx);
 
     // Run MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_run_(instrn_buffer);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
