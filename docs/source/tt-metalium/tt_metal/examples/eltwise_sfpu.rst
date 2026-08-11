@@ -166,7 +166,7 @@ The writer kernel is the exact same as the previous example.
 
 The compute kernel is the most interesting and different one. The flow is generally the same, but instead of calling functions that interact with the FPU (Matrix Engine), we use ones that invoke the SFPU. Note that some functions are postfixed with ``_sfpu`` to indicate that they are using the SFPU specifically, or they are implied by the fact that they do complex element-wise operations that are not supported by the FPU. The general flow of using the SFPU is as follows:
 
-* Initialize the SFPU with the ``init_sfpu`` function
+* Configure the hardware once with ``compute_kernel_hw_startup``, then set up the tile copy with ``copy_init``
 * Call the specific SFPU operation initialization function, such as ``exp_tile_init`` for exponential
 * Wait for data to be available in the circular buffer using ``cb_wait_front`` (same as the FPU)
 * Acquire tile registers using ``tile_regs_acquire``
@@ -190,8 +190,9 @@ The compute kernel is the most interesting and different one. The flow is genera
     void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
-        // Initialize the SFPU
-        init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
+        // Configure the hardware (called once) and set up the tile copy
+        compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+        copy_init(tt::CBIndex::c_0);
         // Setup the SFPU for exponential operation
         exp_tile_init();
         for (uint32_t i = 0; i < n_tiles; i++) {
