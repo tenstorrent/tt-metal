@@ -278,8 +278,39 @@ the TF32 signature the SFPU path exists to remove (`1.6e-03 against a float64 go
 
 So the channel multiplier is not a route to take as-is, but it does price the prize: **2.94x on the
 conv pair at the tail** if the depthwise path were extended to allow out == k * in. That is a real
-feature -- the compute kernel's tile indexing assumes the output width equals the input width -- not a
-config change. It is the most valuable open item measured so far.
+feature, not a config change, and it is the most valuable open item measured so far.
+
+### Scoping that feature -- start here, do not re-derive
+
+The four places that assume `out_channels == in_channels`, in dependency order. Each is a `.cpp`, so
+each is a minutes-long rebuild; none needs a header change.
+
+1. `conv2d_utils.cpp:542` -- `is_depthwise_conv = groups == input_channels && groups == output_channels`.
+   Relax to `output_channels % groups == 0 && groups == input_channels`, and carry the multiplier
+   `k = output_channels / groups` alongside. **Do this behind an env gate first**: it is the predicate
+   that routes every grouped conv in the repo, and widening it silently re-routes callers that the
+   depthwise factory has never seen.
+2. `prepare_conv2d_weights.cpp` -- the depthwise weight matrix is `(K*C, C)`, one tile-row per tap with
+   the tap value constant down rows and channels across columns. With a multiplier the matrix becomes
+   `(K*C, k*C)`, and output column `k*c + j` needs group `c`'s tap set `j`. This is the piece to write
+   a standalone check for before touching anything else -- everything downstream reads this layout.
+3. `conv2d_op_program_factory_common.cpp` -- CB widths keyed off `per_core_out_matrix_width_ntiles`
+   already scale with the output, so this is mostly verification, plus SNAKE_PARAMS which is already
+   `2 * per_core_out_matrix_width_ntiles` and therefore already right for `k*C` parameters.
+4. `compute_depthwise_conv1d.cpp` -- the tile indexing. The flat non-coalesced loops walk
+   `block_num_tiles` row-major and now have `block_w` threaded in (added for the snake column fix), so
+   the column is already available; what changes is that the *input* column is `c / k` while the
+   output column is `c`. The coalesced paths compute `act_tile_idx` from `in_channels_ntiles` and need
+   the same split.
+
+Verify with `band_grouped_multiplier.py`, which already measures both halves of the answer: it must
+keep the 2.94x and reach 5e-08 instead of 1.4e-03. The snake then rides it for free -- the parameter
+CB is per output column and already sized from the output width.
+
+**Why this is the right next thing rather than the chunk-wise band kernel:** it is four .cpp edits on
+machinery that now exists and is understood, against a new op with its own reader, writer, compute
+kernel and program factory. And it composes -- a band whose phase convs are one grouped call is a
+strictly better starting point for the chunk kernel than one whose phases are two calls.
 
 ### What actually unblocks this
 
