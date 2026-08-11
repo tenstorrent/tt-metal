@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_V2_TRID_STATIC (untagged).
@@ -35,7 +36,24 @@ constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
 // First TC ID in the default Tensix-only pool (not accessible by DM); used for intra/inter-tensix DFBs.
 // Note: The Remapper can be programmed to expose these TCs to DMs.
 constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 16
+// Size of the Tensix-only pool [TC_TENSIX_POOL_START, NUM_TILE_COUNTERS_PER_TENSIX), per Neo. This is a
+// counter budget, not a DFB budget: how many TCs a DFB draws depends on its access pattern and endpoint
+// count, so only the intra-tensix cost below is fixed.
+constexpr uint8_t NUM_TENSIX_ONLY_TILE_COUNTERS = NUM_TILE_COUNTERS_PER_TENSIX - TC_TENSIX_POOL_START;  // = 16
+// Intra-tensix HW workaround: a T6 update to a Tensix-only TC aliases into overlay TCs 0-15 unless the
+// remapper routes that TC somewhere. Each intra-tensix DFB therefore burns two Tensix-only TCs on its
+// Neo — the ClientL TC that packer and unpacker both drive, plus a sacrificial ClientR shadow that
+// absorbs the HW update copy. ClientL and ClientR need not be adjacent; remapper maps any pair.
+constexpr uint8_t TILE_COUNTERS_PER_INTRA_TENSIX_DFB = 2;
+
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
+// Only pairs [0, 16) can express a 1-to-many (grouped fan-out) mapping; [16, 64) are 1-to-1 only.
+// Allocate by fan-out so single-consumer mappings don't consume the scarce fan-out pairs.
+// Packer (intra-tensix) and DM1 1-to-1 share [16, 64): before finalizing a core, host reserves an
+// exact contiguous block per Neo from pair 63 downward; DM1 allocates from pair 16 upward. This
+// keeps packer pairs above DM1's high-watermark clear while leaving unused capacity available.
+constexpr uint8_t NUM_REMAPPER_ONE_TO_MANY_PAIRINGS = 16;
+constexpr uint8_t REMAPPER_ONE_TO_ONE_PAIR_START = NUM_REMAPPER_ONE_TO_MANY_PAIRINGS;
 // Max txn ids assigned to one DFB producer or consumer side
 constexpr uint8_t NUM_TXN_IDS = 4;
 static_assert(NUM_DFB_POOL_TXN_IDS >= NUM_TXN_IDS);
@@ -150,8 +168,13 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
 
 // Flag bits for dfb_hart_init_entry_t::flags
 constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
-constexpr uint8_t DFB_HART_FLAG_REMAPPER_EN  = (1u << 6);
+// DM1 owns this producer's remapper pair; the producer must wait for it before touching its TCs.
+constexpr uint8_t DFB_HART_FLAG_REMAPPER_WAIT_DM1 = (1u << 6);
 constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
+// This Neo's packer programs its own remapper pair (intra-tensix alias). DM1 cannot do it: the
+// Tensix-only TC pool is invisible to DM, and one Neo cannot see another Neo's TCs.
+// Mutually exclusive with DFB_HART_FLAG_REMAPPER_WAIT_DM1.
+constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
 // Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header, followed by
@@ -172,7 +195,7 @@ struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t  capacity;                       // producer: TC capacity; consumer: 0
+    uint8_t _reserved0;                      // kept zeroed for 28B layout stability
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -186,11 +209,15 @@ struct dfb_hart_init_entry_t {
     uint8_t  producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
     uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // TRISC layout bytes 18-21; DM pack bytes 14-17
     uint8_t  remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 23
-    uint8_t  _pad;                           // byte 23; DM pack p[11] overwrites with remapper_pair_index
+    uint8_t intra_shadow_tc_id;              // TRISC byte 23: intra-tensix ClientR shadow TC id, 0xFF if unused.
+                                             // Intra-tensix never targets a DM hart, so DM pack p[11]
+                                             // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
-    uint8_t  _pad2[2];                       // pad header to 28B → 4B-aligned TC arrays follow
+    uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
+static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
 // DM only: bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
 // (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device

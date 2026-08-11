@@ -13,7 +13,7 @@ git submodule update --init --recursive
 source python_env/bin/activate
 ```
 Prereqs on every host: same clone path + commit, a populated tilized weight cache, and the golden trace
-(the adapter defaults to `/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240`;
+(the adapter defaults to `/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240`;
 `PREFILL_TRACE_DIR` overrides).
 
 ## Allocate the galaxies (slurm)
@@ -99,7 +99,7 @@ Then, on that node:
 cd $TT_METAL_HOME && source python_env/bin/activate
 LOGURU_LEVEL=INFO \
 PREFILL_MODEL=minimax_m3 \
-PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_56320 \
+PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320 \
 PREFILL_H2D_SERVICE_ID=ds_prefill \
 PREFILL_SP=8 PREFILL_TP=4 PREFILL_NUM_LAYERS=60 \
 PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=56320 \

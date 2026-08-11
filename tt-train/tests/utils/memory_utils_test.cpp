@@ -4,7 +4,10 @@
 
 #include "utils/memory_utils.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <array>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -15,6 +18,9 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 class DISABLED_MemoryUtilsTest : public ::testing::Test {
 protected:
@@ -447,4 +453,91 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
     EXPECT_EQ(all_l1_usage[0].first, "add_operation");
     EXPECT_EQ(all_l1_usage[1].first, "matmul_operation");
     EXPECT_EQ(all_l1_usage[2].first, "multiply_l1_operation");
+}
+
+class MemoryUsageTrackerTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::utils::MemoryUsageTracker::clear();
+    }
+
+    void TearDown() override {
+        ttml::utils::MemoryUsageTracker::clear();
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(MemoryUsageTrackerTest, DuplicateSnapshotNamesRecordSeparateSegments) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // 64x apart in bytes, so a segment holding the small tensor stays far below the large tensor's
+    // size even with program cache, watcher and LLK assert overhead added on top.
+    constexpr std::array<uint32_t, 2> sides = {64, 512};
+    std::vector<long long> tensor_sizes;
+
+    auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
+    for (uint32_t side : sides) {
+        {
+            // Inner scope: the tensor is freed before the snapshot, keeping each segment self-contained.
+            const std::vector<float> data(static_cast<size_t>(side) * side, 1.0F);
+            auto tensor = ttml::core::from_vector(data, ttnn::Shape({side, side}), device);
+            tensor_sizes.push_back(static_cast<long long>(compute_tensor_size(tensor)));
+        }
+        ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    }
+
+    ttml::utils::MemoryUsageTracker::end_capture("unique");
+
+    auto trace_names = ttml::utils::MemoryUsageTracker::get_trace_names();
+    ASSERT_EQ(trace_names.size(), 3);
+    EXPECT_EQ(trace_names[0], "repeated");
+    EXPECT_EQ(trace_names[1], "repeated");
+    EXPECT_EQ(trace_names[2], "unique");
+
+    auto all_dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage_all();
+    ASSERT_EQ(all_dram_usage.size(), trace_names.size());
+    EXPECT_EQ(all_dram_usage[0].first, "repeated");
+    EXPECT_EQ(all_dram_usage[1].first, "repeated");
+    EXPECT_EQ(all_dram_usage[2].first, "unique");
+
+    // Each segment reports its own allocations; overwriting duplicates would make both entries
+    // report the second, larger one.
+    ASSERT_EQ(tensor_sizes.size(), 2);
+    EXPECT_GE(all_dram_usage[0].second.total_allocations, tensor_sizes[0]);
+    EXPECT_LT(all_dram_usage[0].second.total_allocations, tensor_sizes[1]);
+    EXPECT_GE(all_dram_usage[1].second.total_allocations, tensor_sizes[1]);
+    EXPECT_LT(all_dram_usage[0].second.peak, all_dram_usage[1].second.peak);
+
+    auto all_l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage_all();
+    ASSERT_EQ(all_l1_usage.size(), trace_names.size());
+    EXPECT_EQ(all_l1_usage[0].first, "repeated");
+    EXPECT_EQ(all_l1_usage[1].first, "repeated");
+    EXPECT_EQ(all_l1_usage[2].first, "unique");
+}
+
+TEST_F(MemoryUsageTrackerTest, SingularLookupRejectsDuplicateName) {
+    auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+    ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    ttml::utils::MemoryUsageTracker::end_capture("unique");
+
+    ASSERT_EQ(ttml::utils::MemoryUsageTracker::get_trace_names().size(), 3);
+
+    // Matching the message, not just the type: find_trace() throws std::runtime_error for both
+    // failure modes, so only the text tells "ambiguous" apart from "not found".
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_dram_usage("repeated"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'repeated' is ambiguous")));
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_l1_usage("repeated"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'repeated' is ambiguous")));
+
+    // Unambiguous names still resolve, and a name nobody captured is still rejected.
+    EXPECT_NO_THROW(ttml::utils::MemoryUsageTracker::get_dram_usage("unique"));
+    EXPECT_NO_THROW(ttml::utils::MemoryUsageTracker::get_l1_usage("unique"));
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_dram_usage("no_such_trace"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'no_such_trace' not found")));
 }

@@ -125,6 +125,14 @@ class Attention1DConfig:
     # default — byte-identical to leaving the reduce untouched).
     prefill_reduce_ccl_dtype: ttnn.DataType | None = None
 
+    # Optional CCL dtype for the prefill all-gather. When the fused all-gather+WO path IS selected,
+    # attention all-gathers the bf16 concat-heads output before the WO matmul; casting that input to a
+    # smaller dtype (e.g. bfloat8_b) halves the collective's cross-device payload. Model files that also
+    # own norm-reconstruction all-gathers may thread this same dtype through them. None keeps the input
+    # dtype (no cast, default — byte-identical). to_memory_config does not cast an already-DRAM tensor,
+    # so an explicit typecast is required (mirrors prefill_reduce_ccl_dtype).
+    prefill_ag_ccl_dtype: ttnn.DataType | None = None
+
     # Model dimensions (derived from weights if None)
     dim: int | None = None
     n_heads: int | None = None
@@ -190,6 +198,16 @@ class Attention1DConfig:
     prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None  # f(seq_len)
     prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # f(seq_len) for KV cache write
 
+    # WO-matmul prefill M-chunk cutoff. The folded [1,1,seq_len,dim] prefill activation (seq_len = B*S
+    # when batched) is reshaped into [1, seq_len//cutoff, cutoff, dim] so the WO matmul tiles at
+    # per_core_M = ceil(cutoff / 256). None → MAX_MM_SEQ_LEN (1024 = TTTv1 model_config.py parity);
+    # resolved+written back in _resolve_attention1d_config so forward and the prg config agree. A
+    # per-model override (e.g. 2048) regroups the folded batch-32 prefill into fewer/larger M-chunks —
+    # bit-identical, since only per_core_M / the chunk count change (the K-contraction, in0_block_w, and
+    # n_dim are all independent of M-tiling). Deliberately DECOUPLED from the fused all_gather_matmul
+    # n_dim, which stays on MAX_MM_SEQ_LEN so the fused output width / sharding is untouched.
+    wo_prefill_len_cutoff: int | None = None
+
     # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the QKV prefill
     # matmul above seq_len > 128 — matches TTTv1's long-prefill path (attention.py L907-913), which is
     # ~2x faster on the large folded-batch QKV matmul. Default OFF so untouched models / decode stay
@@ -197,6 +215,18 @@ class Attention1DConfig:
     # folded seq_len (sibling to prefill_xqkv_prg_config, NOT a replacement — both coexist).
     prefill_qkv_minimal_matmul: bool = False
     prefill_xqkv_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None  # f(seq_len)
+
+    # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the WO prefill
+    # matmul above seq_len > 128 — the completion of PLAN_01's QKV+FF2-only minimal plumbing. On the
+    # folded batched prefill the WO projection is the least-efficient prefill matmul on ttnn.linear
+    # (a per-op profile measured it ~3x slower than the same-fidelity QKV minimal_matmul); switching
+    # it to minimal_matmul recovers most of that gap. Default OFF so untouched models / decode stay
+    # byte-identical; the caller opts in. The factory yields a ttnn.MinimalMatmulConfig keyed on the
+    # folded seq_len (sibling to prefill_wo_prg_config, NOT a replacement — both coexist). NOT
+    # byte-identical vs the ttnn.linear WO (minimal accumulation differs) — same numerical class as
+    # the already-shipped QKV/FF2 minimal path; gate on token-accuracy + eval-32, not a byte-compare.
+    prefill_wo_minimal_matmul: bool = False
+    prefill_wo_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None  # f(seq_len)
 
     # Fused all-gather matmul (Ring topology only, decode path)
     use_fused_all_gather_matmul: bool | None = None  # None = auto-detect based on topology + dim
@@ -235,6 +265,15 @@ class Attention1DConfig:
         per-model opt-in is set. ``seq_len`` is the folded ``B*S`` length.
         """
         return bool(self.prefill_qkv_minimal_matmul) and seq_len > 128
+
+    def use_minimal_wo_matmul(self, seq_len: int) -> bool:
+        """Whether the WO prefill matmul should use ttnn.experimental.minimal_matmul.
+
+        Mirrors ``use_minimal_qkv_matmul`` — minimal_matmul only above ``seq_len > 128`` (the
+        folded-batch / long-prompt regime), and only when the per-model opt-in is set. ``seq_len``
+        is the folded ``B*S`` length.
+        """
+        return bool(self.prefill_wo_minimal_matmul) and seq_len > 128
 
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
@@ -595,25 +634,40 @@ class Attention1D(LightweightModule):
             attn_output_concat = ttnn.reshape(attn_output_concat, [1, 1, seq_len, -1])
 
         # --- STAGE 12: Reshape for long sequences (to fit WO matmul on device) ---
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+        # wo_prefill_len_cutoff (resolved: None → MAX_MM_SEQ_LEN) sets the WO M-chunk size; a per-model
+        # override regroups the folded prefill into fewer/larger M-chunks (bit-identical M-reblocking).
+        wo_cutoff = cfg.wo_prefill_len_cutoff
+        if seq_len > wo_cutoff:
+            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // wo_cutoff, wo_cutoff, -1])
 
         # --- STAGE 13: All-Gather for Ring topology ---
         # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
         attn_output_concat = self._all_gather_before_wo_prefill(attn_output_concat)
 
         # --- STAGE 14: WO Matmul ---
-        output = ttnn.linear(
-            attn_output_concat,
-            self.wo,
-            compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
-            dtype=cfg.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=cfg.prefill_wo_prg_config(seq_len),
-        )
+        # Above seq_len > 128 the folded-batch WO matmul is large and is the least-efficient prefill
+        # matmul on ttnn.linear; minimal_matmul (already used for QKV/FF2) recovers most of the gap.
+        # Opt-in via prefill_wo_minimal_matmul; output shape matches the ttnn.linear path so STAGE-15
+        # and the all-reduce/no-op are unchanged.
+        if cfg.use_minimal_wo_matmul(seq_len):
+            output = ttnn.experimental.minimal_matmul(
+                attn_output_concat,
+                self.wo,
+                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                config=cfg.prefill_wo_minimal_matmul_config(seq_len),
+            )
+        else:
+            output = ttnn.linear(
+                attn_output_concat,
+                self.wo,
+                compute_kernel_config=cfg.li_o_prefill_compute_kernel_cfg,
+                dtype=cfg.activation_dtype or ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=cfg.prefill_wo_prg_config(seq_len),
+            )
 
         # --- STAGE 15: Reshape back (undo long sequence reshape) ---
-        if seq_len > MAX_MM_SEQ_LEN:
+        if seq_len > wo_cutoff:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         ttnn.deallocate(attn_output_concat)
@@ -922,6 +976,13 @@ class Attention1D(LightweightModule):
     def _all_gather_before_wo_prefill_fused(self, attn_output_concat: ttnn.Tensor) -> ttnn.Tensor:
         """Fused path: all-gather before WO matmul (Ring topology)."""
         cfg = self.config
+        # Optionally cast the gather input (bf16) to a smaller CCL dtype (e.g. bfloat8_b) to halve this
+        # per-layer collective's cross-device payload. None (default) leaves the dtype unchanged. an
+        # explicit typecast is required (to_memory_config does not cast an already-DRAM tensor).
+        if cfg.prefill_ag_ccl_dtype is not None and attn_output_concat.dtype != cfg.prefill_ag_ccl_dtype:
+            attn_output_cast = ttnn.typecast(attn_output_concat, cfg.prefill_ag_ccl_dtype)
+            ttnn.deallocate(attn_output_concat)
+            attn_output_concat = attn_output_cast
         return ttnn.experimental.all_gather_async(
             attn_output_concat,
             persistent_output_buffer=None,
@@ -1775,6 +1836,23 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
         to_set["prefill_xqkv_minimal_matmul_config"] = xqkv_minimal_matmul_config
 
+    # minimal_matmul config for WO (only materialized when the opt-in is set). Same block sizes / grid
+    # as the QKV minimal config — the folded WO matmul is the same shape class (full-K activation @ a
+    # PlacementShard(-1) column-sharded weight), so it tiles identically.
+    if config.prefill_wo_minimal_matmul and config.prefill_wo_minimal_matmul_config is None:
+        minimal_wo_grid = ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8)
+
+        @lru_cache
+        def wo_minimal_matmul_config(seq_len: int):
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=minimal_wo_grid,
+            )
+
+        to_set["prefill_wo_minimal_matmul_config"] = wo_minimal_matmul_config
+
     if config.prefill_sdpa_prg_config is None:
 
         @lru_cache
@@ -1795,6 +1873,14 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
         to_set["prefill_sdpa_prg_config"] = sdpa_prg_config
 
+    # Resolve the WO-matmul prefill M-chunk cutoff (None → MAX_MM_SEQ_LEN = TTTv1 parity) and write it
+    # back, so prefill_forward's STAGE-12/15 reshape and the prg config below agree. Only the M-tiling
+    # reads it; the fused all_gather_matmul n_dim stays on MAX_MM_SEQ_LEN (decoupled — see the field doc).
+    wo_prefill_len_cutoff = config.wo_prefill_len_cutoff
+    if wo_prefill_len_cutoff is None:
+        wo_prefill_len_cutoff = MAX_MM_SEQ_LEN
+        to_set["wo_prefill_len_cutoff"] = wo_prefill_len_cutoff
+
     if config.prefill_wo_prg_config is None:
         use_fused = to_set.get("use_fused_all_gather_matmul", config.use_fused_all_gather_matmul)
         if use_fused is None:
@@ -1807,12 +1893,14 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             to_set["use_fused_all_gather_matmul"] = use_fused
 
         k_dim = (n_heads * head_dim) // num_devices
+        # n_dim intentionally stays on the MAX_MM_SEQ_LEN constant (NOT wo_prefill_len_cutoff): it drives
+        # the fused all_gather_matmul output width / sharding, which must be untouched by the M-cutoff.
         n_dim = MAX_MM_SEQ_LEN if use_fused and MAX_MM_SEQ_LEN % (dim // num_devices) == 0 else dim
         prefill_rows = 8
 
         @lru_cache
         def wo_prefill_prg_config(seq_len: int):
-            num_rows = min(seq_len, MAX_MM_SEQ_LEN)
+            num_rows = min(seq_len, wo_prefill_len_cutoff)
             grid_size = _find_prefill_grid(prefill_rows, k_dim // tile_size)
             return _matmul_config(
                 m=num_rows,
@@ -1820,7 +1908,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 n=n_dim,
                 grid_size=grid_size,
                 in0_block_w=1,
-                fuse_batch=seq_len <= MAX_MM_SEQ_LEN,
+                fuse_batch=seq_len <= wo_prefill_len_cutoff,
                 per_core_n=math.ceil(n_dim / (tile_size * dram_shard_grid_width)) if not use_fused else None,
             )
 

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import lcm
 from typing import Optional
 
 import ttnn
@@ -43,7 +42,7 @@ class LlamaConfig:
     size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
     and ``intermediate_size`` — this is validated in ``__post_init__``.  The
     vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to ``lcm(32, tp_size)``, exposed as
+    weights are padded internally to a multiple of ``32 * tp_size``, exposed as
     ``Llama.padded_vocab_size``.
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
@@ -142,12 +141,13 @@ class Llama(AbstractModuleBase):
         if config.use_tp:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
-            # each shard needs to be divisible by 32.  The trailing padded
+            # each shard needs to be divisible by 32 -- i.e. the padded global
+            # size must be a multiple of 32 * tp_size. The trailing padded
             # columns are kept on-device and handled by the downstream
             # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
             # free to be arbitrary.
             tp_size = ttml.mesh().axis_size("tp")
-            align = lcm(32, tp_size)
+            align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
             # gather_output=False: keep the LM head output vocab-sharded
             # ([B,1,S,padded_V/tp_size] per device) so callers can route through

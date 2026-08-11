@@ -20,6 +20,7 @@ from safetensors.torch import load_file
 from tracy import signpost
 
 import ttnn
+from models.tt_dit.models.transformers.ltx.quant_config import LtxQuantProfile
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
@@ -33,7 +34,9 @@ from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
+
+from .ltx_mesh_params import LTX_TRANSFORMER_MESH_PARAMS, _4x8sp1tp0nl2_ring_is_fsdp0
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -102,19 +105,6 @@ _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), T
 # ---------------------------------------------------------------------------
 # Parametrize lists
 # ---------------------------------------------------------------------------
-_LTX_TRANSFORMER_MESH_PARAMS = [
-    # No 1x1 (sp=1) config: real-grid shapes require SP padding, and video self-attention only
-    # masks padded keys via ring SDPA's logical_n (sp>1). Plain SDPA (sp=1) would attend padded
-    # keys and corrupt real outputs. Production never runs sp=1.
-    # 2x4sp0tp1 keeps is_fsdp=True for FSDP-path coverage on a 2D mesh.
-    pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-    # 2x4sp1tp0 mirrors production BH 2x4: is_fsdp=False (production loads via dynamic_load, not
-    # per-layer FSDP gathers) or the profile shows phantom weight-gather collectives.
-    pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0"),
-    pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-    pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
-    pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
-]
 
 # 1080p fast-pipeline real latent grids (F, H_lat, W_lat) — the exact (latent_frames, h//32,
 # w//32) production feeds RoPE. These are NOT tile/SP-aligned, so the test SP-pads the sequence
@@ -401,7 +391,7 @@ _AV_ATTN_HEAD_DIM = {
 
 
 def _convert_lightricks_av_to_diffusers(state: dict, *, num_heads: int) -> dict:
-    """Raw Lightricks/ltx_core AV state_dict → diffusers LTX2VideoTransformer3DModel (AV) names."""
+    """Raw Lightricks AV state_dict → diffusers LTX2VideoTransformer3DModel (AV) names."""
     rename_top = {
         "patchify_proj.": "proj_in.",
         "adaln_single.": "time_embed.",
@@ -469,7 +459,7 @@ def _make_diffusers_av_model(num_layers: int = 1):
         rope_double_precision=False,
         use_prompt_embeddings=False,
         rope_type="interleaved",
-        # =1 matches ltx_core's av_ca_timestep_scale_multiplier (a2v/v2a gate adaln sees raw sigma).
+        # =1 matches Lightricks' av_ca_timestep_scale_multiplier (a2v/v2a gate adaln sees raw sigma).
         cross_attn_timestep_scale_multiplier=1,
     )
 
@@ -603,7 +593,7 @@ def _tt_rope_full(freqs_fn, *args, mesh_device, tp_axis, pad_to=None):
     return tt_cos, tt_sin
 
 
-def _make_tt_block(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio):
+def _make_tt_block(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio, quant_config=None):
     return LTXTransformerBlock(
         video_dim=DIM,
         video_ffn_dim=DIM * 4,
@@ -621,6 +611,7 @@ def _make_tt_block(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_au
         has_audio=has_audio,
         apply_gated_attention=has_audio,
         cross_attention_adaln=True,
+        quant_config=quant_config,
     )
 
 
@@ -673,7 +664,7 @@ def _scale_init_(module: torch.nn.Module, seed: int = WEIGHT_SEED) -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -697,6 +688,7 @@ def test_ltx_transformer_block(
 ) -> None:
     """Test LTXTransformerBlock: TT forward, with optional PCC vs the diffusers LTX-2 block."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
+    skip_if_unsupported_num_links(mesh_device, num_links)
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
@@ -903,6 +895,119 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
 
 
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [_4x8sp1tp0nl2_ring_is_fsdp0],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ltx_transformer_block_bf8(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+    reset_seeds,
+) -> None:
+    """Shipped bf8 DiT-linear quant path (``all_bf8_lofi``) on the production 4x8 ring.
+
+    Covers two things a bf16-only run cannot: (1) the profile actually produced bf8 device weights with
+    the ``to_out`` carve-out kept bf16 — a mis-wired role or a silent no-quant fails the dtype asserts;
+    (2) the bf8 forward still tracks the fp32 diffusers oracle. Video-only, matching the block test's
+    PCC path; the gate-role carve-out only exists under gated (audio) attention, so it is out of scope.
+    """
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    F, H, W = 19, 17, 30  # stage_1 latent grid
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+
+    torch_block = _make_diffusers_video_block()
+    torch_block.eval()
+    _scale_init_(torch_block)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_block = _make_tt_block(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=False,
+        quant_config=LtxQuantProfile.all_bf8_lofi(),
+    )
+    conv = _convert_diffusers_video_block_to_tt(torch_block.state_dict(), num_heads=NUM_HEADS, head_dim=HEAD_DIM)
+    tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in conv.items()})
+
+    # Assert the loaded device-tensor dtypes the profile is supposed to map: projections bf8, the
+    # fused-addcmul to_out carve-out bf16. A wrong role or a silent no-quant (bf16 everywhere) fails here.
+    def wdtype(linear):
+        return linear.weight.data.dtype
+
+    assert wdtype(tt_block.attn1.to_qkv) == ttnn.bfloat8_b, "self-attn qkv should be bf8"
+    assert wdtype(tt_block.attn1.to_out) == ttnn.bfloat16, "self-attn to_out carve-out should stay bf16"
+    assert wdtype(tt_block.attn2.to_q) == ttnn.bfloat8_b, "cross-attn q should be bf8"
+    assert wdtype(tt_block.attn2.to_kv) == ttnn.bfloat8_b, "cross-attn kv should be bf8"
+    assert wdtype(tt_block.attn2.to_out) == ttnn.bfloat16, "cross-attn to_out carve-out should stay bf16"
+    assert wdtype(tt_block.ffn.ff1) == ttnn.bfloat8_b, "ff1 should be bf8"
+    assert wdtype(tt_block.ffn.ff2) == ttnn.bfloat8_b, "ff2 should be bf8"
+
+    # Activation casts ride LTX_QUANT_ACTIVATIONS (default on): the projections and the bf16-weight
+    # to_out both narrow their activation to bf8. PCC can't catch a missing cast (bf16 activations only
+    # raise it), so assert it directly.
+    assert tt_block.attn1.to_qkv.activation_dtype == ttnn.bfloat8_b, "self-attn qkv activation should be bf8"
+    assert tt_block.attn1.to_out.activation_dtype == ttnn.bfloat8_b, "to_out consumes the shared bf8 activation"
+    assert tt_block.attn2.to_q.activation_dtype == ttnn.bfloat8_b, "cross-attn q activation should be bf8"
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+    cos_int, sin_int = _video_rope_freqs(F, H, W, rope_type=LTXRopeType.INTERLEAVED)
+    torch_out = _diffusers_video_block_ref(
+        torch_block, x=x, context=context, temb=temb, prompt_temb=prompt_temb, cos_i=cos_int, sin_i=sin_int
+    )
+
+    spatial = _pad_seq_dim(x, video_N, dim=1).unsqueeze(0)
+    tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
+    tt_temb = bf16_tensor(
+        temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+    )
+    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device)
+    tt_cos, tt_sin = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    tt_out = tt_block(
+        video_1BND=tt_spatial,
+        video_prompt=tt_prompt,
+        video_temb=tt_temb,
+        video_N=video_N_real,
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
+        trans_mat=tt_trans_mat,
+        video_prompt_temb=tt_prompt_temb,
+    )
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+    tt_v = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+    ).squeeze(0)[:, :video_N_real, :]
+    assert tt_v.shape == (1, video_N_real, DIM), f"video shape {tt_v.shape}"
+    assert torch.isfinite(tt_v).all(), "bf8 video output NaN/Inf"
+
+    # bf8 measures PCC 99.93% / RMSE 4.2% on BH 4x8. Floor PCC at the bf16 block test's ring-noise
+    # tolerance (0.988), not tighter — the RMSE gate (0.08 vs observed 0.042) is the real quant-
+    # regression catch; a broken quant path craters PCC or blows up RMSE and trips here regardless.
+    assert_quality(torch_out, tt_v, pcc=0.988, relative_rmse=0.08)
+    logger.info(f"PASSED bf8 block PCC: video {tuple(tt_v.shape)}")
+
+
 def _run_inner_step(
     *,
     mesh_device,
@@ -920,6 +1025,7 @@ def _run_inner_step(
     use_forward_alias: bool,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
@@ -1095,7 +1201,7 @@ def _run_inner_step(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -1137,7 +1243,7 @@ def test_ltx_transformer_model(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    _LTX_TRANSFORMER_MESH_PARAMS,
+    LTX_TRANSFORMER_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
@@ -1182,7 +1288,7 @@ def test_ltx_transformer_inner_step(
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    [pytest.param((2, 4), 1, 0, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
@@ -1205,6 +1311,7 @@ def test_ltx_per_token_timestep_equivalence(
     ``image_conditioning=False`` scalar path (T2V/AV stays bit-similar). The frame-0 pinning
     behaviour itself is covered end-to-end by the pipeline; here we isolate the DiT plumbing.
     """
+    skip_if_unsupported_num_links(mesh_device, num_links)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     video_N_real = F * H * W
     video_N = _sp_pad_len(video_N_real, sp_factor)
@@ -1283,7 +1390,7 @@ def test_ltx_per_token_timestep_equivalence(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    [pytest.param((2, 4), 1, 0, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
@@ -1306,6 +1413,7 @@ def test_ltx_per_token_timestep_nonuniform(
     not reach the fused attn/FFN epilogues, non-frame-0 tokens get the wrong (frame-0) gate and
     the output diverges from the oracle — the DiT-level signature of "frame 0 ok, rest collapses".
     """
+    skip_if_unsupported_num_links(mesh_device, num_links)
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     video_N_real = F * H * W
     video_N = _sp_pad_len(video_N_real, sp_factor)

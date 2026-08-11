@@ -754,6 +754,20 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, Sending131072Pages) {
     }
 }
 
+// Covers the band of page sizes that take more than one NoC burst each but still stream through the prefetcher's
+// scratch buffer, between the single-burst read path and the one for pages too large to buffer. The other page sizes
+// here all fit in one burst. 32 KB clears Blackhole's 16 KB NOC_MAX_BURST_SIZE while staying under the worker
+// prefetcher's scratch buffer and the max prefetch command size. It does not clear Quasar's 64 KB burst, and it
+// exceeds the 19 KB scratch of an eth prefetcher, so on those two it exercises the single-burst and the large-page
+// path respectively rather than the one it is named for.
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiPacketPagesStreamedThroughScratch) {
+    for (const auto& mesh_device : devices_) {
+        TestBufferConfig config = {.num_pages = 32, .page_size = 32 * 1024, .buftype = BufferType::DRAM};
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestPageLargerThanAndUnalignedToTransferPage) {
     constexpr uint32_t num_round_robins = 2;
     for (const auto& mesh_device : devices_) {
@@ -785,6 +799,53 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
             .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
+// Page sizes that straddle the thresholds process_relay_paged_cmd picks its scratch layout on: a page that fits in
+// one ring buffer streams through the ring, a larger page falls back to the two-buffer split at half the scratch,
+// and above the half the command goes to process_relay_paged_cmd_large. A page landing on the wrong side of either
+// threshold gets a buffer smaller than a page, which reads zero pages per pass and hangs the prefetcher, so cover
+// both boundaries and their neighbors.
+//
+// Mirrors the derivation in cq_prefetch.cpp. Every size is a multiple of the NoC alignment so the buffer's padded
+// page size is the page size the kernel sees, and the aligned-down half is the largest page a buffer read can
+// hand to the fallback loop.
+static std::vector<uint32_t> relay_paged_scratch_threshold_page_sizes() {
+    const uint32_t scratch_db_size = MetalContext::instance().dispatch_mem_map().scratch_db_size();
+    const uint32_t alignment = std::max(
+        MetalContext::instance().hal().get_alignment(HalMemType::DRAM),
+        MetalContext::instance().hal().get_alignment(HalMemType::L1));
+    constexpr uint32_t ring_nbuf = 3;
+    constexpr uint32_t min_ring_buf_size = 32 * 1024;
+    const uint32_t nbuf = (scratch_db_size / ring_nbuf >= min_ring_buf_size) ? ring_nbuf : 2;
+    const uint32_t ring_buf_size = (scratch_db_size / nbuf) / alignment * alignment;
+    const uint32_t half_size = (scratch_db_size / 2) / alignment * alignment;
+
+    std::vector<uint32_t> page_sizes{
+        ring_buf_size - alignment,  // ring, one alignment short of filling a buffer
+        ring_buf_size,              // ring, exactly one page per buffer
+        ring_buf_size + alignment,  // first page too large for the ring: two-buffer fallback
+        half_size,                  // largest page still on the fallback loop
+        half_size + alignment,      // first page handed to process_relay_paged_cmd_large
+    };
+    // The ring collapses to a double buffer on a scratch too small to divide (eth dispatch), where ring_buf_size
+    // and half_size name the same threshold.
+    std::sort(page_sizes.begin(), page_sizes.end());
+    page_sizes.erase(std::unique(page_sizes.begin(), page_sizes.end()), page_sizes.end());
+    return page_sizes;
+}
+
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestPagesAtRelayPagedScratchThresholds) {
+    // Pages this large make 8 of them several trips around the deepest ring, so the reads also cover reusing a
+    // buffer whose previous write is still outstanding.
+    constexpr uint32_t num_pages = 8;
+    for (const auto& mesh_device : devices_) {
+        for (const uint32_t page_size : relay_paged_scratch_threshold_page_sizes()) {
+            TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+            local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+                mesh_device, mesh_device->mesh_command_queue(), config);
+        }
     }
 }
 

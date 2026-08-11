@@ -416,7 +416,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     if (num_mux_cores_per_direction_per_link) {
         uint32_t core_id = 0;
         for (uint32_t link = 0; link < num_links; link++) {
@@ -694,6 +696,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
     // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
     std::vector<uint32_t> writer_compile_args;
+    // Each TensorAccessorArgs always emits args_config and aligned_page_size; a sharded accessor reserves the
+    // extra space for its own shape/bank words when appending.
+    constexpr uint32_t min_args_per_tensor_accessor = 2;
+    writer_compile_args.reserve(
+        unicast_forward_args.size() + mcast_forward_args.size() + unicast_backward_args.size() +
+        mcast_backward_args.size() + 2 * min_args_per_tensor_accessor);
 
     writer_compile_args.insert(writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
@@ -839,6 +847,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         output_tensor.buffer()->address(),                           // output_tensor_address
                         virtual_core.x,                                              // this core.x
                         virtual_core.y,                                              // this core.y
+                        opposite_core_coord.x,                                       // opposite direction core.x
+                        opposite_core_coord.y,                                       // opposite direction core.y
                         semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
                         semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
                         barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
@@ -986,28 +996,22 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                if (normalized_dim == 0) {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
-                    }
-                } else {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
-                    }
-                    if (penult_intermediate.has_value()) {
-                        // Index 16 — see the writer RT arg list in
-                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
-                        // connection args are appended after it, so the position is fixed.
-                        worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
-                    }
+                // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
+                // dim-0 and non-dim-0 writer arg lists agree up to index 15.
+                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
+                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
+                }
+                if (penult_intermediate.has_value()) {
+                    // Index 16 — see the writer RT arg list in
+                    // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
+                    // connection args are appended after it, so the position is fixed. Only the
+                    // non-dim-0 layout has this arg, and penult_intermediate is only set there
+                    // (reduce_scatter_use_contiguous_interm returns false for scatter dim 0).
+                    worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
                 }
             }
         }
@@ -1111,8 +1115,23 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+    const bool use_fabric_2d_neighbor_barrier =
+        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // A logical line embedded in a 2D fabric can turn at an intermediate device. A single line
+    // multicast range follows the physical direction selected by its first hop, so it cannot
+    // represent such a turn. The reduce-scatter data path already relays through immediate logical
+    // neighbors; use the same one-hop connectivity for its startup barrier on Fabric2D.
+    const uint32_t barrier_targets_forward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_forward, 1u) : num_targets_forward;
+    const uint32_t barrier_targets_backward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_backward, 1u) : num_targets_backward;
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        sender_device_coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        barrier_targets_forward,
+        barrier_targets_backward,
+        mesh_device);
 
     uint32_t num_cores_per_link = ttnn::experimental::ccl::reduce_scatter_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
@@ -1125,8 +1144,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     };
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -1252,7 +1274,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
-
     // KERNEL CREATION
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -1372,6 +1393,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         mux_kernel_config,
         num_workers_per_direction,
         sender_writer_compile_args);
+
+    sender_writer_compile_args.push_back(
+        use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
+                                       : ring_size - 1);  // barrier_target_count
 
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());

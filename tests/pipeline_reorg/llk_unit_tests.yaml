@@ -17,6 +17,7 @@
     wh_n300_civ2:
       timeout: 40
   team: llk
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: sd
 
@@ -28,5 +29,6 @@
     bh_p100:
       timeout: 40
   team: llk
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: sd
