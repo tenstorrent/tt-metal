@@ -16,9 +16,9 @@ Two placements, both sharded:
   * `(8, 4)` — Galaxy. Same TP factor over a wider sequence axis, which the op is
     indifferent to; it is here to be run on the box, not to add coverage.
 
-No single-device arm. `tp_factor == 1` makes `_reduce_stats` the identity, so a green
-`(1, 1)` run certifies a score chain the model never executes — the one thing this
-file exists to gate is the reduction, and that arm has none.
+No single-device arm. The read's exchange is what its one dispatch is built around, so
+`TtAttnRes` rejects `tp_factor == 1` outright rather than degrading to something the
+model never executes.
 
 `mesh_device` skips a placement asking for more chips than the host has, so this file
 is inert rather than failing on a runner that cannot hold it — single-card Blackhole
@@ -98,64 +98,49 @@ def _from_device(op, tensor):
     return ttnn.to_torch(tensor, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
 
 
-@on_placements
-@pytest.mark.parametrize("num_sealed", [0, 1, 8], ids=["S0", "S1", "S8"])
-def test_read_matches_reference(mesh_device, num_sealed, device_params):
-    """The direct read at 640 rows per chip.
+def _read_sites(op, tt_block, tt_prefix, tt_query, sites=READ_SITES):
+    """Every read site of one block, as the walk issues them: one `inter_block`, `sites` folds.
 
-    `S = 0` is the identity path and communicates nothing, so it is the control: if it
-    fails, the failure is placement rather than the reduction. `S = 8` is the full
-    snapshot set, where every candidate-axis kernel appears."""
+    Every site gets the same query, so every one of them has to land on the same oracle.
+    """
+    partials, shifts, masses = op.inter_block(tt_block, [tt_query] * sites)
+    try:
+        for site in range(sites):
+            merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)
+            yield _from_device(op, merged)
+            ttnn.deallocate(merged)
+    finally:
+        ttnn.deallocate(partials)
+        ttnn.deallocate(shifts)
+        ttnn.deallocate(masses)
+
+
+@on_placements
+@pytest.mark.parametrize("num_sealed", [1, 8], ids=["S1", "S8"])
+def test_read_matches_reference(mesh_device, num_sealed, device_params):
+    """A whole 12-layer block's reads at 640 rows per chip — production's schedule.
+
+    `S = 1` is the narrowest sealed set the walk ever reads, and the one where the
+    statistics cross unfolded; `S = 8` is where every candidate-axis kernel appears."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     assert op.shard_width == HIDDEN_SIZE // op.tp_factor
 
     prefix_sum, block_residual, query = _make_case(num_tokens, num_sealed)
     tt_prefix, tt_block, tt_query = _to_device(op, prefix_sum, block_residual, query)
-
-    out = op.forward(tt_prefix, tt_block, tt_query)
-    got = _from_device(op, out)
-    ttnn.deallocate(out)
-
-    want = attn_res(prefix_sum, block_residual, query, EPS)
-    pcc, rel_err = _pcc(got, want), _rel_err(got, want)
-    logger.info(
-        f"{tuple(mesh_device.shape)} S={num_sealed} T={num_tokens} ({PER_CHIP_TOKENS}/chip): "
-        f"PCC {pcc:.7f}, rel err {rel_err:.2e}"
-    )
-    assert pcc >= PCC_GATE, f"S={num_sealed}: PCC {pcc:.7f} < {PCC_GATE}"
-    assert rel_err <= REL_ERR_GATE, f"S={num_sealed}: rel err {rel_err:.2e} > {REL_ERR_GATE}"
-
-
-@on_placements
-def test_split_matches_reference(mesh_device, device_params):
-    """The split form over a whole 12-layer block — production's schedule.
-
-    `inter_block` computes the sealed set once for all 24 read sites and `merge` folds
-    the live stream in per site. Every site gets the same query here, so every site
-    must land on the same read as the direct form's oracle."""
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    num_tokens = PER_CHIP_TOKENS * op.sp_factor
-
-    prefix_sum, block_residual, query = _make_case(num_tokens, 8)
-    tt_prefix, tt_block, tt_query = _to_device(op, prefix_sum, block_residual, query)
     want = attn_res(prefix_sum, block_residual, query, EPS)
 
-    partials, shifts, masses = op.inter_block(tt_block, [tt_query] * READ_SITES)
     worst_pcc, worst_rel_err = 1.0, 0.0
-    for site in range(READ_SITES):
-        merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)
-        got = _from_device(op, merged)
-        ttnn.deallocate(merged)
+    for got in _read_sites(op, tt_block, tt_prefix, tt_query):
         worst_pcc = min(worst_pcc, _pcc(got, want))
         worst_rel_err = max(worst_rel_err, _rel_err(got, want))
 
     logger.info(
-        f"{tuple(mesh_device.shape)} split x{READ_SITES} sites T={num_tokens}: "
-        f"worst PCC {worst_pcc:.7f}, worst rel err {worst_rel_err:.3e}"
+        f"{tuple(mesh_device.shape)} S={num_sealed} x{READ_SITES} sites T={num_tokens} "
+        f"({PER_CHIP_TOKENS}/chip): worst PCC {worst_pcc:.7f}, worst rel err {worst_rel_err:.3e}"
     )
-    assert worst_pcc >= PCC_GATE, f"split: worst PCC {worst_pcc:.7f} < {PCC_GATE}"
-    assert worst_rel_err <= REL_ERR_GATE, f"split: worst rel err {worst_rel_err:.3e} > {REL_ERR_GATE}"
+    assert worst_pcc >= PCC_GATE, f"S={num_sealed}: worst PCC {worst_pcc:.7f} < {PCC_GATE}"
+    assert worst_rel_err <= REL_ERR_GATE, f"S={num_sealed}: worst rel err {worst_rel_err:.3e} > {REL_ERR_GATE}"
 
 
 @on_placements
@@ -185,9 +170,9 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params):
         tt_prefix, tt_block, tt_query = _to_device(
             op, prefix_sum[:tokens], block_residual[:tokens], query, stream_mapper=mapper
         )
-        out = op.forward(tt_prefix, tt_block, tt_query)
-        outputs.append(_from_device(op, out))
-        ttnn.deallocate(out)
+        # One site is enough — the sealed half is what the placement change moves, and
+        # the batch over sites does not touch the token axis.
+        outputs.extend(_read_sites(op, tt_block, tt_prefix, tt_query, sites=1))
 
     sharded, duplicated = outputs
     # Both SP rows of run B ran identical inputs, so they must agree too.

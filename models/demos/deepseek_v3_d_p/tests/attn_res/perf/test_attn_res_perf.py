@@ -7,16 +7,15 @@ No timing assertion appears in this file. A wall-clock threshold on a shared box
 flake generator, and the numbers here exist to be read off a bringup run, not to fail CI.
 `_report` writes through loguru, so `pytest -s` is what makes them visible at all.
 
-What runs here are the two numbers the schedule is chosen on:
+What runs here is the number the schedule is chosen on: a whole 12-layer block of reads
+replayed from a captured trace, swept over `S`. A trace replaces per-program host dispatch
+with one `execute_trace`, so the total is device time and nothing else — the untraced
+counterpart, which is what production pays, lives in `test_attn_res_e2e.py`.
 
-  * one read replayed from a captured trace, swept over `S` — the only form whose total
-    is device time rather than host dispatch;
-  * the split read form against the direct one over a whole 12-layer block.
-
-Both run at the production per-chip shape, 640 rows and `d/4` per device, on the two
-meshes that shape occurs on: `(2, 4)` LoudBox and `(8, 4)` Galaxy. Per-device tensors and
-the all-reduce's ring size are identical across the pair, so what differs is the fabric
-beneath them — 8 concurrent TP rows against 2, on links half as wide.
+It runs at the production per-chip shape, 640 rows and `d/4` per device, on the two meshes
+that shape occurs on: `(2, 4)` LoudBox and `(8, 4)` Galaxy. Per-device tensors and the
+all-reduce's ring size are identical across the pair, so what differs is the fabric beneath
+them — 8 concurrent TP rows against 2, on links half as wide.
 """
 
 import time
@@ -134,109 +133,55 @@ def _report(label, enqueue_us, total_us):
 
 @on_placements
 @pytest.mark.parametrize("num_sealed", [1, 4, 8])
-def test_perf_read_traced(mesh_device, request, num_sealed):
-    """One read replayed from a captured trace, against `S`.
-
-    A trace replaces the per-program host dispatch with one `execute_trace`, so this is
-    the only configuration here whose total time is device time and nothing else. A
-    forward touches `12(S+1)` planes of `[rows, d/tp]` and captures the same ~22 programs
-    at every `S`, so the slope against `S` is DRAM and the intercept is dispatch.
-
-    The output tensor stays live until after `release_trace`. A trace replays into the
-    buffer addresses it captured, so freeing the output would let the allocator hand that
-    memory to something else and the next replay would overwrite it.
-    """
-    placement = request.node.callspec.id
-
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    prefix_sum, block_residual, query = _make_case(PRODUCTION_ROWS * op.sp_factor, HIDDEN_SIZE, num_sealed)
-    tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
-
-    # Compile outside the trace: capture records dispatch commands, and a program
-    # that has to be built during capture is not what gets replayed.
-    ttnn.deallocate(op.forward(tt_prefix, tt_block, tt_query))
-    ttnn.synchronize_device(mesh_device)
-
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = op.forward(tt_prefix, tt_block, tt_query)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-
-    def body():
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-
-    enqueue_us, total_us = _bench(mesh_device, body)
-    _report(f"{placement} S={num_sealed} traced", enqueue_us, total_us)
-
-    ttnn.release_trace(mesh_device, trace_id)
-    for tensor in (out, tt_prefix, tt_block, tt_query):
-        ttnn.deallocate(tensor)
-
-
-@on_placements
-@pytest.mark.parametrize("num_sealed", [1, 4, 8])
-@pytest.mark.parametrize("fused_mix", [True], ids=["fused-mix"])
 @pytest.mark.parametrize("rows_per_chip", ROWS_PER_CHIP, ids=lambda rows: f"rows-{rows}")
-def test_perf_block_split_vs_direct(mesh_device, num_sealed, fused_mix, rows_per_chip):
-    """The two read forms over a whole 12-layer block, traced.
+def test_perf_block_traced(mesh_device, num_sealed, rows_per_chip):
+    """A whole 12-layer block of reads, traced.
 
-    The split form's premise is that a sealed snapshot is write-once, so the sealed half
-    of a read is loop-invariant across a block's 24 read sites. What it pays for that is
-    collectives: 26 per block against the direct form's 24, one for the sealed RMS, one
-    for the batched sealed dots, one per site inside `merge`.
+    The read's premise is that a sealed snapshot is write-once, so the sealed half is
+    loop-invariant across a block's 24 read sites and belongs in one `inter_block`. What a
+    block then costs is that one hoisted pass plus 24 `merge`s, and the per-site number
+    below is the whole block divided by `READ_SITES`.
 
-    Swept over `S` because the split form's saving *is* the sealed half, which is the
-    part that grows with it: at `S = 1` there is almost nothing to amortize. The
-    schedule's blocks run `S = 0..7`, so a single peak-shape number would flatter the
-    form the model actually runs.
+    Swept over `S` because the hoisting *is* the sealed half, which is the part that grows
+    with it: at `S = 1` there is almost nothing to amortize. The schedule's blocks run
+    `S = 1..8`, so a single peak-shape number would flatter the read the model runs.
 
-    The fused mixture is priced inside this comparison rather than on its own, because
-    its share of a block differs between the forms — 24 of the split form's 26 passes
-    against 1 of each of the direct form's 24 — so an isolated number answers for the
-    wrong schedule.
-
-    Both forms are captured whole, so the comparison is device time for the entire block
-    and the per-site number is that divided by `READ_SITES`.
+    The block is captured whole. Anything else prices `inter_block` against the wrong
+    number of sites.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, fused_mix=fused_mix)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     prefix_sum, block_residual, query = _make_case(rows_per_chip * op.sp_factor, HIDDEN_SIZE, num_sealed)
     tt_prefix, tt_block, tt_query = _place(op, prefix_sum, block_residual, query)
     queries = [tt_query] * READ_SITES
 
-    def direct():
-        return [op.forward(tt_prefix, tt_block, q) for q in queries]
-
-    def split():
+    def block():
         partials, shifts, masses = op.inter_block(tt_block, queries)
         merged = [op.merge(partials, shifts, masses, tt_prefix, tt_query, site) for site in range(len(queries))]
         for tensor in (partials, shifts, masses):
             ttnn.deallocate(tensor)
         return merged
 
-    for label, form in (("direct", direct), ("split", split)):
-        for tensor in form():
-            ttnn.deallocate(tensor)
-        ttnn.synchronize_device(mesh_device)
+    # Compile outside the trace: capture records dispatch commands, and a program that has
+    # to be built during capture is not what gets replayed.
+    for tensor in block():
+        ttnn.deallocate(tensor)
+    ttnn.synchronize_device(mesh_device)
 
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        outputs = form()
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outputs = block()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
-        enqueue_us, total_us = _bench(
-            mesh_device,
-            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False),
-            iterations=5,
-            warmup=2,
-        )
-        mix_label = "fused mix" if fused_mix else "composed mix"
-        _report(
-            f"{rows_per_chip} rows/chip, S={num_sealed}, {label}, {mix_label}, traced",
-            enqueue_us,
-            total_us / READ_SITES,
-        )
+    enqueue_us, total_us = _bench(
+        mesh_device,
+        lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False),
+        iterations=5,
+        warmup=2,
+    )
+    _report(f"{rows_per_chip} rows/chip, S={num_sealed}, traced", enqueue_us, total_us / READ_SITES)
 
-        ttnn.release_trace(mesh_device, trace_id)
-        for tensor in outputs:
-            ttnn.deallocate(tensor)
-
-    for tensor in (tt_prefix, tt_block, tt_query):
+    # The outputs stay live until after `release_trace`. A trace replays into the buffer
+    # addresses it captured, so freeing them would let the allocator hand that memory to
+    # something else and the next replay would overwrite it.
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (*outputs, tt_prefix, tt_block, tt_query):
         ttnn.deallocate(tensor)
