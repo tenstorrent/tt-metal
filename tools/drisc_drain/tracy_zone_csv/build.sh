@@ -6,9 +6,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ../../.. -- this tool lives at tools/drisc_drain/tracy_zone_csv/, so the repo root is THREE levels up.
-# It was ../.. while the tool lived at tools/x280_bm/tracy_zone_csv/; the X280 removal moved it one level
-# deeper and the relative path was not updated, so ROOT silently resolved to tools/ and every find below
-# missed. Keep this in step with any future move.
+# This was ../.. after an earlier move left the relative path one level too shallow, so ROOT silently
+# resolved to tools/ and every find below missed. Keep this in step with any future move.
 ROOT="${TT_METAL_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 TRACY="$ROOT/tt_metal/third_party/tracy"
 PPQ="$(dirname "$(find "$ROOT/.cpmcache/ppqsort" -name ppqsort.h | head -1)")"

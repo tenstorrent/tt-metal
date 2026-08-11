@@ -200,7 +200,7 @@ struct ppfmt {
     // drainer wire type codes -- this wire's OWN space, NOT hostdevcommon PacketTypes values. The DRAM
     // readback path never co-exists with this one and shares no decode, so the two numberings are
     // independent. Passing a PacketTypes value straight through (the old 3-bit `>> 16 & 0x7`) is what
-    // made ZONE_TOTAL alias PP_drainer_ZONE and TS_DATA_16B alias PP_BULK_CORE.
+    // made ZONE_TOTAL and TS_DATA_16B collide with unrelated types on this wire.
     static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
     static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
@@ -231,7 +231,7 @@ struct ppfmt {
         return w0(T_DATA, ((size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT) | (id & DATA_ID_MASK));
     }
     // Runtime-id event. Separate type because the id is NOT a source-location hash, so the host must not
-    // resolve a name for it -- see PP_EVENT in prof_packet.h.
+    // resolve a name for it -- see PP_EVENT in spsc_packet.h.
     static inline uint32_t event_w0(uint32_t runtime_id, uint32_t size_words) {
         return w0(T_EVENT, ((size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT) | (runtime_id & DATA_ID_MASK));
     }
@@ -593,7 +593,7 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 // The three point markers. DeviceData/DeviceFlag take a compile-time tag (string literal) and therefore
 // get a source location and a resolvable name; DeviceRuntimeEvent takes a runtime value and gets neither,
-// which is why it is a distinct wire type (see PP_EVENT in prof_packet.h).
+// which is why it is a distinct wire type (see PP_EVENT in spsc_packet.h).
 #define DeviceData(name, data)                                                     \
     {                                                                              \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
@@ -659,13 +659,13 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 // KERNEL wrapper: REPORTS, as an ordinary scope -- same profileScope path as DeviceZoneScopedN, so a real
 // model run shows a "<RISC>-KERNEL" span per kernel invocation alongside any op-level zones.
-// Toggle kept as a bisect handle: set drainer_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
+// Toggle kept as a bisect handle: set SPSC_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
 // clear this change of a ResNet teardown hang in wait_for_dispatch_cores -- the hang reproduces with the
 // wrapper zone OFF too, so it is NOT caused by emitting KERNEL zones (see FINDINGS / the perf_debug
 // teardown note). Useful because the SPSC ring is lossless-BLOCKING: any core emitting into a ring that
 // nobody drains wedges forever, so "who is emitting" is always worth being able to bisect.
-#define drainer_KERNEL_WRAPPER_ZONE 1
-#if drainer_KERNEL_WRAPPER_ZONE
+#define SPSC_KERNEL_WRAPPER_ZONE 1
+#if SPSC_KERNEL_WRAPPER_ZONE
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \

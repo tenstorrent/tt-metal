@@ -10,7 +10,7 @@
 // format (the drift -- manager decoding a stale 4-word layout while the drainer emits the 2-word
 // linearized stream -- is exactly what this module exists to prevent).
 //
-// The wire is a self-framed variable-length stream of packets (prof_packet.h):
+// The wire is a self-framed variable-length stream of packets (spsc_packet.h):
 //   STICKY_SRC   (1 word): sets the CURRENT lane (reader-injected on each source switch)
 //   STICKY_TIMER (1 word): sets the current lane's wall-clock high half (timer_hi)
 //   STICKY_PROG  (2 word): sets the program-global runtime host-id (prog)
@@ -33,7 +33,7 @@
 
 static_assert(
     PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
-    "prof_packet.h (plain C, drainer firmware) and profiler_common.h (C++, metal kernels) must agree on the "
+    "spsc_packet.h (plain C, drainer firmware) and profiler_common.h (C++, metal kernels) must agree on the "
     "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
 
 namespace tt::tt_metal::profiler {
@@ -79,7 +79,6 @@ struct SpscDecodeState {
 // where type is PP_ZONE_START/END/TOTAL, zone_hash is the low-16 srcloc hash, and full_ts is the 59-bit
 // device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
-// No-op default for the optional drainer hart-zone sink (see the PP_drainer_ZONE branch below).
 // No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
 // unchanged. `type` is the wire type: PP_DATA ids are compile-time tags and can be name-resolved, PP_EVENT
 // ids are runtime values and must NOT be.
