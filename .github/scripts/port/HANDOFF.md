@@ -162,6 +162,29 @@ Worth knowing, because it means these paths are no longer speculative:
 - A cold build on CIv2 takes about 12 minutes, so a failed run costs roughly 25 minutes to reach the
   same point again. It is worth reading ahead for the next failure rather than fixing one at a time.
 
+## Checkout was the slowest thing in the pipeline, and it is not our fault
+
+`build-artifact.yaml` checks out with `fetch-depth: 500` and `fetch-tags: true`. On a repo with ~1300
+tags that means fetching 500 commits of trees and blobs per tag: measured off-CI at over 3GB and more
+than 6 minutes without finishing, against `--filter=tree:0` at 34MB and 3 seconds for the same commit.
+
+That has always been wasteful, but it only started failing because GitHub's fetch throughput drifted:
+the same checkout on `main` went from about 1.5 minutes to about 9 minutes over two days, and the
+first `baseline` probe hit the 20 minute step timeout on both build jobs. A plain rerun then passed in
+7m48s, so this is a slow-afternoon problem sitting on top of a fetch that was always too expensive --
+not the scratch ref, which the server serves normally.
+
+`port-measure.yaml` therefore passes `checkout-filter: "tree:0"` to `build-artifact`. That input
+already existed and reaches both build jobs, the release build directly and the wheel build through
+`wheels.yaml`, so no shared workflow was modified. The filter keeps every tag and the full worktree at
+the target commit and defers only historical trees, so the wheel version is unchanged: `git describe
+--abbrev=10 --first-parent`, the command in `cmake/version.cmake`, returns the identical string under
+`tree:0` and under a full clone. That equivalence was checked directly rather than assumed.
+
+Nothing else in the repo uses `checkout-filter`, so we are the first, and a partial clone does fetch
+lazily if something later walks history. Nothing in this build does. If a future step starts reading
+old trees it will silently refetch them and the win will quietly disappear.
+
 ## The one thing CIv2 cannot do
 
 Routed around rather than fixed, by the split described at the top. The diagnosis is kept because it
