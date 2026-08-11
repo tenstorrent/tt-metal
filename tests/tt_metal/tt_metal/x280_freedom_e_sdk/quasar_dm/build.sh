@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/../../../.." && pwd)}"
+TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/../../../../.." && pwd)}"
 WORK="${WORK:-$HERE/build}"
 ESDK="$WORK/freedom-e-sdk"
 SHIM="$WORK/shim"

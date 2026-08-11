@@ -4,231 +4,217 @@ SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# freedom-e-sdk on Quasar DM cores (SiFive X280)
+# Is sifive/freedom-e-sdk integratable with X280?
 
-Can [sifive/freedom-e-sdk](https://github.com/sifive/freedom-e-sdk) be integrated
-with tt-metal's existing X280 code?
+**Yes — and for the real X280 it is close to trivial.**
 
-**Yes.** `./build.sh` produces a single ELF that contains SiFive's freedom-metal
-(entry code, libc glue, hart and cache HAL) *and* tt-metal's unmodified
-`risc_common.h` X280 cache primitives, built for `-mcpu=tt-qsr64-rocc` and linked
-at the address tt-metal loads Quasar DM kernels to. 14 verification checks pass.
+There are two different things at Tenstorrent that the phrase "X280 code" can mean,
+and the answer is much stronger for the first one:
 
-It is **not executed**: there is no Quasar silicon and no Quasar simulator
-available, so this demonstrates build, link and ISA compatibility, not runtime
-behaviour. See [Not executed](#not-executed) below.
+| | **[`l2cpu/`](l2cpu/) — the real X280** | [`quasar_dm/`](quasar_dm/) — X280-*derived* |
+| --- | --- | --- |
+| Hardware | SiFive X280 cluster in Blackhole's L2CPU tiles | Quasar DM cores (rocket-chip/X280 heritage) |
+| Code lives in | **tt-llm-engine `x280/`** | tt-metal `tt_metal/hw/inc/internal/tt-2xx/` |
+| Toolchain | **stock `riscv64-unknown-elf-gcc`** (vendored) | tt-metal's `sfpi` fork, `riscv-tt-elf-gcc` |
+| ISA | **`rv64gc` / `lp64d`** (real core is rv64gcv, VLEN=512) | `rv64imab_…_xttcache_xttroccqsr` / `lp64` |
+| Link base | LIM `0x08001000` | TL1 `0x00400000` |
+| Silicon | **Blackhole — available on this host** | none exists yet |
+| Work to integrate | **2 weak hooks, 0 patches** | shim + multilib flag + relink |
+
+`l2cpu/` is the answer to the question as asked. `quasar_dm/` was written first,
+before the tt-llm-engine code was located; it is kept because it is a real result
+about a real (future) target, not because it is the better answer.
 
 ---
 
-## What "the existing X280 code" is
+## The short version for the real X280
 
-There is no directory called `x280` in tt-metal. The X280 lineage lives in the
-Quasar (`tt-2xx`) data-movement core support:
+freedom-e-sdk assumes a stock SiFive core built by `riscv64-unknown-elf-gcc`.
+A Blackhole L2CPU X280 **is** a stock SiFive core built by
+`riscv64-unknown-elf-gcc`. There is essentially nothing to bridge:
 
-| Where | What |
-| --- | --- |
-| [risc_common.h:170-330](../../../../tt_metal/hw/inc/internal/tt-2xx/risc_common.h#L170-L330) | The X280 code proper: `flush_l1_dcache`, `invalidate_l1_dcache`, `invalidate_l1_icache`, `flush_l2_cache_*`, `invalidate_l2_cache*`. Its own comments cite the *SiFive X280 Core Manual* §3.4.2/6.1.1/6.1.2 for `CFLUSH.D.L1` / `CDISCARD.D.L1`, name rocket-chip as the basis for the Quasar DM cores, and point at **freedom-metal's `src/cache.c` as the reference implementation**. |
-| [quasar_dm_cache_management.md](../data_movement/quasar_cache/quasar_dm_cache_management.md) | The cache hierarchy those primitives drive: per-core 4 KB 2-way L1 D$/I$, a shared 128 KB 4-way L2, backed by Tensix L1. |
-| [qa_hal.cpp:348](../../../../tt_metal/llrt/hal/tt-2xx/quasar/qa_hal.cpp#L348) | The DM cores are compiled `-mcpu=tt-qsr64-rocc`. |
-| [dev_mem_map.h](../../../../tt_metal/hw/inc/internal/tt-2xx/quasar/dev_mem_map.h) | `MEM_KERNEL_BASE` = 0x400000, `MEM_DM_KERNEL_SIZE` = 48 KB — where DM kernels are linked. |
+- **Same toolchain.** tt-llm-engine vendors
+  `riscv64-unknown-elf-gcc 15.2.0` at `x280/toolchain/` (fetched from
+  riscv-collab). That is the exact triple freedom-e-sdk defaults to
+  (`CROSS_COMPILE ?= riscv64-unknown-elf`). No shim, no `config.sub` patch, no
+  multilib juggling — all three of which the Quasar port needed.
+- **Same ISA and ABI.** tt-llm-engine's `x280/Makefile` uses
+  `-march=rv64gc -mabi=lp64d -mcmodel=medany`. freedom-e-sdk's rv64 BSPs use
+  the same string spelled `rv64imafdc` / `lp64d`. The vendored toolchain's
+  newlib is built for exactly that, non-multilib.
+- **Same memory region — literally.** freedom-e-sdk's stock
+  `bsp/sifive-hifive-unmatched` linker scripts already declare
 
-So the integration question is really: *does freedom-e-sdk work against the
-Quasar DM core's toolchain, ISA and memory map?*
+  ```
+  lim (airwx) : ORIGIN = 0x8000000, LENGTH = 0x1e0000
+  ```
 
-## What the demo proves
+  which is byte for byte the X280's LIM region on Blackhole
+  (`[0x08000000, 0x081E0000)`, 1.875 MiB, per `x280/include/x280.h`). Not a
+  coincidence: it is the same SiFive core-complex LIM convention.
+- **Same boot steps.** freedom-metal's `src/entry.S` and tt-llm-engine's
+  hand-written `x280/boot/entry.S` do nearly the same things in the same order,
+  because both are bringing up a SiFive core:
 
-Each of these is checked mechanically by `build.sh` stage 7.
+  | `x280/boot/entry.S` | freedom-metal `_enter` |
+  | --- | --- |
+  | 1. init `gp` | yes (`.option norelax; la gp, __global_pointer$`) |
+  | 2. set `mtvec` | yes (`early_trap_vector`) |
+  | 3. clear Feature Disable CSR `0x7c1` | **yes — `csrwi 0x7C1, 0`**, gated on `__metal_chicken_bit` |
+  | 3b. `mstatus.VS` = Initial | **no** → the one gap |
+  | 4. per-hart stack pointer | yes (`sp -= hartid * __stack_size`) |
+  | 5. zero `.bss` | yes — *and* copies `.data`, which `x280/boot/entry.S` lists as a "Level 3 / future" item |
+  | 6. `call main` | yes, via `_start` → `__libc_init_array` → `main` |
+  | 7. spin if `main` returns | yes (`__metal_after_main`) |
 
-**1. The toolchain accepts freedom-e-sdk's build model.** freedom-metal's own
-autoconf build, driven by freedom-e-sdk's `scripts/libmetal.mk`, produces
-`libmetal.a` (1.7 MB) and `libmetal-gloss.a` (300 KB) for `-mcpu=tt-qsr64-rocc`.
-No source changes to either upstream repo.
+  freedom-metal's boot path is a **superset** of the existing one except for the
+  vector-unit enable.
 
-**2. Stock upstream code builds unmodified.** freedom-e-sdk's own
-`software/hello` — untouched program, untouched build system — links for the
-`tt-quasar-dm` BSP. sfpi ships a full newlib for the `qsr64-lp64` multilib
-(`libc.a`, `libm.a`, `libgloss.a`), so `printf` works.
+So `l2cpu/` needed exactly two things, both of them weak symbols freedom-metal's
+`entry.S` already calls if you define them — see
+[`l2cpu/src/x280_bringup.c`](l2cpu/src/x280_bringup.c):
 
-**3. tt-metal's X280 header compiles inside a freedom-e-sdk program.**
-`src/x280_cache_tt.cc` includes `internal/tt-2xx/risc_common.h` unmodified, using
-the same include set and defines `qa_hal.cpp` hands the JIT compiler for a DM
-kernel.
+1. `__metal_before_start` → set `mstatus.VS` = Initial, so the vector unit is
+   usable (at reset `VS = Off` and any vector instruction, including a read of
+   `vlenb`, traps).
+2. `__metal_after_main` → `CEASE` (`0x30500073`, SiFive's halt instruction) instead
+   of spinning. freedom-metal's `metal_shutdown()` drives a `sifive,test0` block,
+   which an L2CPU tile does not have.
 
-**4. The two codebases emit the same instruction.** This is the sharpest result.
-Both implementations of X280 L1 D$ flush end up in the same ELF:
+**No patches to freedom-e-sdk, freedom-metal, or tt-llm-engine.**
+
+## What `l2cpu/build.sh` produces
+
+A 23424-byte raw binary that tt-llm-engine's existing loader can take as-is,
+with 21 checks passing:
 
 ```
-# tt-metal, risc_common.h:  __asm__("tt.cache.cflush.d.l1 %0")
-00000000004013e8 <tt_x280_flush_l1_dcache>:
-  4013ec:  fc050073   tt.cache.cflush.d.l1  a0      # flush one line
-  4013f8:  fc000073   tt.cache.cflush.d.l1  zero    # rs1=x0: flush all of L1 D$
-
-# freedom-metal, src/cache.c:  .insn i 0x73, 0, x0, %2, -0x40
-00000000004030f8 <metal_dcache_l1_flush>:
-  403154:  fc068073   tt.cache.cflush.d.l1  a3
+entry 0x08001000 == X280_ACTIVE_FW_LOAD_ADDR
+freedom-metal's _enter is the image's first instruction
+image ends 0x08006ed8, below the sentinel at 0x08100000
+freedom-metal clears SiFive Feature Disable CSR 0x7c1
+__metal_before_start writes mstatus (VS enable)
+CEASE (0x30500073) present
+Tag_RISCV_arch: rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0_…
 ```
 
-freedom-metal hand-encodes the instruction with `.insn`; tt-metal spells it as a
-mnemonic that sfpi's assembler knows. Same opcode, same operand form — sfpi's
-objdump decodes freedom-metal's `.insn` back to the same mnemonic. That is the
-X280 heritage in `risc_common.h`'s comments turning out to be literally true at
-the encoding level.
+The `_enter`-is-first check matters: the loader writes a raw `.bin` to
+`X280_ACTIVE_FW_LOAD_ADDR` and releases reset, so the first byte of the image
+*is* the entry point. freedom-metal's linker script puts `.init` (containing
+`_enter`) first, so this works with no intervention — but it is a contract worth
+asserting rather than assuming.
 
-**5. It lands where tt-metal puts DM kernels.** Entry point 0x00400000
-(`MEM_KERNEL_BASE`), image 36244 B inside the 48 KB `MEM_DM_KERNEL_SIZE` window.
-`build.sh` reads both numbers out of `dev_mem_map.h` with the preprocessor rather
-than hardcoding them.
-
-**6. The ISA is the real one.** `Tag_RISCV_arch` on the linked ELF:
-
-```
-rv64i2p0_m2p0_a2p0_b1p0_zihpm2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zba1p0_zbb1p0_zbc1p0_zbs1p0_xttcache1p0_xttroccqsr1p0
-```
-
-`xttcache` (the `CFLUSH.D.L1` family) and `xttroccqsr` (Quasar's RoCC interface)
-are present. `f`, `d`, `c` and `v` are absent — everything in the image,
-including newlib's `printf`, came out soft-float and uncompressed.
-
-## What the hello world actually does
-
-`src/hello_x280.c` prints its own build provenance, then performs a cache handoff
-between the two APIs on one buffer:
-
-```c
-metal_dcache_l1_flush(hartid, addr);            // SiFive freedom-metal
-tt_x280_flush_l1_dcache(addr);                  // tt-metal risc_common.h
-tt_x280_flush_l2_cache_range(addr, sizeof(handoff));   // L2 -> Tensix L1
-tt_x280_invalidate_l1_icache();                 // FENCE.I
-```
-
-Layer by layer, nothing reimplemented:
-
-| Layer | Comes from |
-| --- | --- |
-| entry / crt0 / stdio plumbing | freedom-metal (freedom-e-sdk) |
-| libc | newlib, from tt-metal's sfpi toolchain |
-| hart identity, cache availability | freedom-metal `metal/cpu.h`, `metal/cache.h` |
-| cache maintenance | tt-metal `risc_common.h` |
-| console | `src/quasar_tty.c` (this demo) |
-| link addresses | tt-metal `dev_mem_map.h` |
-
-`src/quasar_tty.c` is where the integration earns its keep. freedom-metal routes
-all stdio through one hook, `metal_tty_putc()`, implemented against the BSP's
-`stdout-path` UART — and left *weak* when a BSP has no UART. A Quasar DM core has
-no UART; the way data leaves a DM core is by landing in Tensix L1 and being made
-visible to the NoC, which is what tt-metal's DPRINT does. So `quasar_tty.c`
-replaces the UART shim with a TL1 ring buffer and flushes it with tt-metal's X280
-cache primitives. **freedom-metal `printf` on top of Tenstorrent cache
-management** is the integration, concretely.
-
-## What had to be adapted
-
-Three things, none of them a source change to either upstream repo:
-
-1. **Toolchain triple.** freedom-metal configures with autoconf, and `config.sub`
-   rejects `riscv-tt-elf` ("machine `riscv-tt` not recognized"). `build.sh`
-   symlinks sfpi's binaries as `riscv64-unknown-elf-*`, the triple freedom-e-sdk
-   already expects. Target and multilibs are baked into the compiler, so the name
-   it is invoked under changes nothing about the output. The alternative — a
-   one-line `config.sub` patch — was avoided to keep upstream pristine.
-
-2. **Multilib selection.** freedom-e-sdk derives `-march`/`-mabi` from
-   `RISCV_ARCH`/`RISCV_ABI` in the BSP's `settings.mk`. `-march` alone selects
-   sfpi's *default* multilib, whose libc is built for a different ISA; only
-   `-mcpu=tt-qsr64-rocc` selects `qsr64-lp64`. `bsp/settings.mk` appends the
-   `-mcpu` to `RISCV_CFLAGS` etc., which standalone.mk already supports.
-
-3. **Link address.** The nearest upstream rv64 BSP links at 0x80000000, which is
-   exactly out of range for `medlow`-compiled newlib (`R_RISCV_HI20` reaches
-   ±2 GiB around 0) — the first attempt failed with a wall of "relocation
-   truncated to fit". Quasar's low TL1 addresses have no such problem, so
-   retargeting the linker script at `MEM_KERNEL_BASE` fixed the ISA problem and
-   the memory-map problem at once.
-
-## Limits and honest gaps
-
-**The BSP is derived, not generated.** The right way to produce a freedom-e-sdk
-BSP is to run `freedom-devicetree-tools` over a `design.dts`. Those tools need
-`dtc`, and neither is installed here, so `build.sh` starts from
-`bsp/qemu-sifive-u54` and retargets the ISA and the memory map.
-`bsp/quasar-dm.dts` is a hand-written devicetree recording what a
-generated-from-scratch BSP should describe (8 DM cores, `compatible =
-"sifive,x280"`, TL1, cache geometry, no UART), so that step is a matter of
-running the tools rather than working out the hardware description. **What is
-left over from the u54 BSP is its peripheral description** — a CLINT at
-0x2000000, a PLIC at 0xc000000, a UART at 0x10013000. None of those exist on a
-Quasar DM core. Nothing in this demo touches them, but `metal_cpu_get_timer()`
-and anything interrupt-related would read garbage on real hardware until the BSP
-is regenerated.
-
-**A Quasar DM core is not a stock X280.** A stock X280 is RV64GCV. This target is
-`rv64imab_...` plus TT custom extensions: no hardware float, no compressed
-instructions, no vector unit. Any freedom-metal or freedom-e-sdk code assuming
-F/D or V does not apply — that rules out most of freedom-e-sdk's floating-point
-benchmarks (`dhrystone`, `coremark` will build; anything V-based will not).
-
-**Peripheral drivers do not transfer.** freedom-metal's `gpio.c`, `spi.c`,
-`i2c.c`, `pwm.c`, `rtc.c`, `uart.c` and friends drive SiFive Freedom E/S
-peripherals that Quasar does not have. What transfers is the core-level HAL:
-`cpu.c`, `cache.c`, `atomic.c`, `lock.c`, `csr`, `pmp.c`, `time.c`, the entry
-code and the gloss syscall layer.
-
-**L2 needs a driver either way.** freedom-metal's `metal_l2cache_*` dispatch to a
-`sifive,ccache0`-style driver. Quasar's L2 controller is its own, driven through
-`L2_FLUSH_ADDR` / `L2_INVALIDATE_ADDR` / `L2_FULL_INVALIDATE_ADDR` in
-`quasar/overlay/overlay_addresses.h`. tt-metal's `risc_common.h` already
-implements those operations, which is why the demo calls the tt-metal side for L2
-and can call either side for L1 D$.
-
-**Fabric-level integration is a separate, larger job.** See [wip/](wip/).
-
-## Not executed
-
-The demo builds and inspects; it does not run. There is no Quasar silicon (this
-host has Blackhole), no Quasar simulator, and no `spike` or `qemu-system-riscv64`
-installed. The `xttcache` and `xttroccqsr` instructions in the image would not be
-understood by a stock RISC-V simulator anyway.
-
-Two routes to actually seeing "Hello, World" on a screen, in increasing order of
-fidelity:
-
-1. **Retarget the same sources at a generic rv64 core** (`-march=rv64imac`, the
-   `qemu-sifive-u54` BSP as-is) and run under `qemu-system-riscv64`. The
-   freedom-metal side and `hello_x280.c`'s structure survive; the X280 cache
-   calls have to be stubbed, because that is precisely what a generic core lacks.
-   This proves the program logic, not the integration.
-2. **Run the existing ELF on a Quasar RTL/emulation target**, loading it into the
-   DM kernel window and reading the TL1 console buffer (magic `0x28028028`) back
-   over the NoC. This needs no changes to what `build.sh` already produces.
+The program itself ([`l2cpu/src/hello_x280_lim.c`](l2cpu/src/hello_x280_lim.c))
+prints core identity CSRs (`mvendorid`, `marchid`, `mimpid`, `misa`), `vlenb`
+(→ VLEN, which only reads back if the `mstatus.VS` hook ran), freedom-metal's
+hart API, the LIM layout it was linked into, and a real double-precision divide
+(this target has hardware F/D, unlike Quasar DM). Output goes to a LIM block at
+`0x08101000` — an L2CPU tile has no UART, so
+[`x280_lim_console.c`](l2cpu/src/x280_lim_console.c) points freedom-metal's
+`metal_tty_putc()` hook at memory the host NOC-reads instead. It finishes by
+writing `0xDEADBEEFCAFEBABE` to `0x08100000`, the sentinel
+`x280/host/loader.py` already polls, so existing tooling can confirm it ran
+without knowing anything about it.
 
 ## Building
 
 ```bash
-cd tests/tt_metal/tt_metal/x280_freedom_e_sdk
+cd tests/tt_metal/tt_metal/x280_freedom_e_sdk/l2cpu
 ./build.sh              # clones freedom-e-sdk, builds, verifies
-./build.sh --clean      # remove build/
+./build.sh --clean
 ```
 
-Requires network access on first run (clones freedom-e-sdk plus its
-freedom-metal and BSP-generator submodules into `build/`), `python3`, and sfpi.
-sfpi is picked up from `$TT_METAL_HOME/runtime/sfpi/compiler`; if this checkout
-has not been built, point at another one:
+Needs network on first run and a `riscv64-unknown-elf` toolchain. It prefers
+tt-llm-engine's vendored one so the demo and the production firmware share a
+compiler; point at it explicitly if autodetection misses:
 
 ```bash
-SFPI=/path/to/tt-metal/runtime/sfpi/compiler ./build.sh
+X280_TOOLCHAIN=/path/to/tt-llm-engine/x280/toolchain ./build.sh
+# or
+TT_LLM_ENGINE=/path/to/tt-llm-engine ./build.sh
 ```
 
-Artifacts land in `build/out/`: `hello_x280.elf`, `.lst`, `.map`, and the
-function-scoped disassembly the cache-instruction checks compare.
+## Running it on hardware — read this first
+
+`build.sh` does not touch hardware. Unlike the Quasar target, this one *can*
+actually run: Blackhole silicon is present on this host. But there is a real
+hazard, quoted from `tt-llm-engine/x280/README.md` §2.1:
+
+> This toolkit is designed and validated for **single-card Blackhole hosts**
+> (e.g. P150). On a Galaxy / multi-chip chassis the pyluwen boot path
+> **WILL hang the chip and require a host PSU power cycle to recover** —
+> SSH and IPMI both go down.
+
+**This host is a Blackhole Galaxy** (32 chips, `tt-galaxy-*` board type), so the
+default pyluwen path is exactly the unsafe one. The documented Galaxy-safe route
+is the tt-exalens backend, which does all register access over the NOC debug
+path:
+
+```bash
+cd /path/to/tt-llm-engine
+X280_BACKEND=exalens TT_DEVICE=<n> python3 x280/host/boot_idle_x280.py
+```
+
+and then, for this binary specifically, `x280/host/loader.py`:
+`detect_l2cpu` → `assert_l2cpu_reset` → `prime_lim_ecc` →
+`load_binary_at(chip, x, y, "hello_x280_lim.bin", 0x08001000)` →
+`release_l2cpu_reset` → `poll_flag(… 0x08100000, 0xDEADBEEFCAFEBABE)`, then read
+the console block at `0x08101000` (check `magic == 0x2800C0FFEE000280`, then read
+`len` bytes of `data`).
+
+I have not run any of that. Booting an L2CPU on a shared Galaxy chassis is not
+something to do unannounced, and tt-llm-engine's own `CLAUDE.md` adds a hard rule
+that pyluwen and UMD/tt-metal must never open the same device in one process —
+violating it corrupts ARC firmware and needs a physical power cycle. Say the word
+and I will drive the exalens path on a specific device.
+
+## Limits and honest gaps
+
+**The BSP is derived, not generated** (same caveat as the Quasar port). Producing
+one properly means running `freedom-devicetree-tools` over a `design.dts`; that
+needs `dtc`, which is not installed. `build.sh` starts from
+`bsp/qemu-sifive-u54` — chosen because its linker script is single-region, which
+is how a LIM-resident firmware runs — and retargets the ISA and the memory
+window. **What is left over is the u54 peripheral description**: a CLINT at
+`0x2000000`, a PLIC at `0xc000000`, a UART at `0x10013000`. The CLINT address
+happens to be right (the X280 memory map has CLINT at `0x02000000`), but the PLIC
+and UART are fiction on an L2CPU tile. Nothing in this demo touches them;
+`metal_cpu_get_timer()` reads the CLINT and so is plausibly correct, while
+anything interrupt-driven needs the BSP regenerated first.
+
+**Single hart.** `main()` runs on whichever hart is released from reset.
+freedom-metal's `_enter` gives every hart its own stack and only hart 0 zeroes
+`.bss`, so the multi-hart structure is there, but the demo does not exercise the
+CLINT `msip` IPI protocol that `x280/boot/entry.S`'s `_trap_ipi` implements.
+freedom-metal has a `riscv_clint0` driver and `metal_cpu_software_set_ipi()`, so
+this is a port, not a redesign.
+
+**Vector unit enabled but unused.** `mstatus.VS` is set and `vlenb` is read back,
+but no vector instructions are issued: the vendored toolchain's newlib is
+non-multilib `rv64gc`, so `-march=rv64gcv` would apply per translation unit only.
+tt-llm-engine's RVV paths do exactly that.
+
+**Peripheral drivers do not transfer.** freedom-metal's `gpio.c`, `spi.c`,
+`i2c.c`, `pwm.c`, `rtc.c`, `uart.c` drive SiFive Freedom E/S peripherals Blackhole
+does not have. What transfers is the core-level HAL — `cpu.c`, `cache.c`,
+`atomic.c`, `lock.c`, `pmp.c`, `time.c`, CSR access, entry code, gloss syscalls —
+plus the build system and linker-script machinery.
+
+**Nothing here uses tt-llm-engine's own drivers.** Its `dma_engine.h` (Synopsys
+DW_ahb_dmac), `noc.h` (2 MiB / 128 GiB NOC TLBs) and `socket_api.h` are
+freestanding headers that would compile in this program unchanged; wiring them up
+is the obvious next step and needs no freedom-metal changes.
 
 ## Layout
 
 ```
-build.sh                 8-stage build + 14 verification checks
-bsp/settings.mk          freedom-e-sdk BSP settings for -mcpu=tt-qsr64-rocc
-bsp/quasar-dm.dts        reference devicetree for a properly generated BSP
-src/hello_x280.c         the hello world
-src/quasar_tty.c         freedom-metal stdio -> Tensix L1, via X280 cache ops
-src/x280_cache_tt.cc     C wrappers over tt-metal's risc_common.h primitives
-wip/                     earlier, unfinished attempt at fabric-level integration
+README.md              this assessment
+l2cpu/                 Blackhole L2CPU SiFive X280 -- the real X280
+  build.sh             6-stage build + 21 verification checks
+  bsp/settings.mk      freedom-e-sdk BSP settings (rv64gc/lp64d, sifive-7-series)
+  src/hello_x280_lim.c the hello world
+  src/x280_lim_console.c  freedom-metal stdio -> LIM, read back over the NOC
+  src/x280_bringup.c   the two weak hooks: mstatus.VS enable, CEASE halt
+quasar_dm/             Quasar DM cores (X280-derived); see quasar_dm/README.md
+wip/                   unfinished fabric-level integration attempt
 ```
