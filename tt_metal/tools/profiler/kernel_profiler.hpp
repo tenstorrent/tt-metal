@@ -31,8 +31,8 @@
 #pragma once
 
 // ---- Arch dispatch -------------------------------------------------------
-// The SPSC backend below requires an drainer (L2CPU) consumer to drain the rings, and the drainer is
-// Blackhole hardware. Quasar has no L2CPU drainer, so an SPSC producer there would have no consumer
+// The SPSC backend below requires a drainer consumer to drain the rings, and the drainer is
+// Blackhole hardware. Quasar has no such drainer, so an SPSC producer there would have no consumer
 // and the first full ring would block the RISC forever.
 //
 // Quasar therefore keeps the DRAM producer (kernel_profiler_push.hpp), which is where upstream's
