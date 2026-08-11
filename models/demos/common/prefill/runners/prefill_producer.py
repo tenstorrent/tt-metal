@@ -179,7 +179,9 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+    # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
+    # runner's cache can't hold, and the runner asserts on the overrunning chunk.
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -630,7 +632,10 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
     golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
-    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers."""
+    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
+    
+    The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
+    a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
@@ -1193,8 +1198,10 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    # Read the KV table BEFORE pushing (the runner publishes it at setup).
-    kv_table = _read_kv_chunk_table(timeout_s)
+    # Read the KV table BEFORE pushing (the runner publishes it at setup). Only the read-back needs it,
+    # and a runner that publishes no table (no migration, no PREFILL_MOCK_MIGRATION) would otherwise cost
+    # a full connect timeout of dead air before the first push.
+    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
     # The LayerAck channel is a shared counter and try_consume_all() REMOVES completions. Draining it
     # serves ONLY the golden-trace KV read-back below
 
@@ -1210,8 +1217,8 @@ def main() -> None:
         sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — not consuming the LayerAck channel (pure token feeder; "
-            "the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
+            "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no

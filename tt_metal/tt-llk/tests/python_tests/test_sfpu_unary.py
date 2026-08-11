@@ -6,7 +6,6 @@ from itertools import chain, product
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -23,11 +22,17 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    build_param_id,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op
+from helpers.sfpu_domains import (
+    _UNARY_OPS_NOT_SWEPT,
+    exclude_undefined,
+    for_op_pipeline,
+    sfpu_unary_ops,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -49,7 +54,28 @@ SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Sqrt,
 ]
 
-ALL_MATHOPS = [
+# ─────────────────────────────────────────────────────────────────────────────
+# The unary op sweep: two coverage profiles, one test
+#
+# Every op below runs through eltwise_unary_sfpu(), which takes its stimuli from the
+# op's registered domain in _OP_DOMAIN_REGISTRY. The only thing that differs between
+# the two lists is *how much of the format/mode matrix* each op is worth spending, so
+# they are coverage profiles rather than different kinds of test:
+#
+#   BROAD_SWEEP_OPS    - the full format matrix including the block floats (and the
+#                        Bfp4_b input formats), both approximation modes and both tile
+#                        shapes. For ops whose kernels have format-specific or
+#                        approx-mode-specific paths.
+#   STANDARD_SWEEP_OPS - Float16_b + Float32, approximation mode off, one tile shape.
+#                        Enough to validate the op's own math, and ~8x cheaper.
+#
+# Only the broad profile is listed by hand. The standard profile is every other unary
+# SFPU op the registry knows about, so registering a domain is all it takes to get an op
+# swept -- there is no second list to remember. Opting an op out of the sweep entirely is
+# still a deliberate act: it goes in sfpu_domains._UNARY_OPS_NOT_SWEPT with a reason.
+# ─────────────────────────────────────────────────────────────────────────────
+
+BROAD_SWEEP_OPS = [
     MathOperation.Abs,
     MathOperation.Atanh,
     MathOperation.Asinh,
@@ -83,7 +109,23 @@ ALL_MATHOPS = [
     MathOperation.ReluMin,
 ]
 
-FORMATS = input_output_formats(
+# Every registered unary SFPU op that the broad profile does not already cover, minus the
+# ops sfpu_domains marks as deliberately unswept. Sorted so the parametrize ids are stable
+# across runs.
+STANDARD_SWEEP_OPS = sorted(
+    sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
+    key=lambda op: op.name,
+)
+
+# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
+# per-format default in passed_test.
+CUSTOM_TOLERANCES = {
+    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
+    MathOperation.SigmoidAppx: (0.13, 0.05),
+    MathOperation.GeluAppx: (0.13, 0.05),
+}
+
+BROAD_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
         DataFormat.Float16,
@@ -92,9 +134,16 @@ FORMATS = input_output_formats(
     ]
 )
 
-# Bfp4_b is only exercised as an input format. The original sweep built the full 4x4
-# matrix and skipped every combo whose input was not Bfp4_b, so pin the input to Bfp4_b
-# directly here: same coverage, without generating (and skipping) the other 12 combos.
+# The standard profile keeps the two formats that exercise the SFPU's own math without
+# a block-float or 16-bit-exponent path in the way: bf16 for the 16-bit dst rounding
+# and fp32 for full precision.
+STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+
+BROAD_DIMENSIONS = [[64, 64], [128, 256]]
+STANDARD_DIMENSIONS = [[64, 64]]
+
+# Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
+# rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
     InputOutputFormat(DataFormat.Bfp4_b, output_format)
     for output_format in [
@@ -105,38 +154,12 @@ FORMATS_BFP4_B = [
     ]
 ]
 
-MATHOPS_INCLUDE_BFP4_B = [
-    MathOperation.Abs,
-    MathOperation.Atanh,
-    MathOperation.Asinh,
-    MathOperation.Acosh,
-    MathOperation.Cos,
-    MathOperation.Log,
-    # MathOperation.Log1p,
-    # MathOperation.Reciprocal,
-    # MathOperation.Sin,
-    # MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Tanh,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Gelu,
-    MathOperation.GeluTanh,
-    MathOperation.Neg,
-    MathOperation.Fill,
-    MathOperation.Elu,
-    # MathOperation.Exp,
-    # MathOperation.Exp2,
-    # MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-]
-
 # Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
-# instrumentation (tt-metal#33268), so they are skipped only when WITH_COVERAGE is set.
-COVERAGE_UNROLL_SKIP_OPS = [
+# instrumentation, so they are skipped only when WITH_COVERAGE is set:
+#   https://github.com/tenstorrent/tt-metal/issues/33268
+#   https://github.com/tenstorrent/tt-llk/issues/883
+# Covers ops from both sweep profiles.
+COVERAGE_COMPILE_SKIP_OPS = [
     MathOperation.Acosh,
     MathOperation.Log,
     MathOperation.Log1p,
@@ -154,34 +177,104 @@ COVERAGE_UNROLL_SKIP_OPS = [
     MathOperation.ReluMax,
     MathOperation.ReluMin,
     MathOperation.Tanh,
+    MathOperation.Gelu,
+    MathOperation.GeluDerivative,
+    MathOperation.LogWithBase,
+    MathOperation.GeluAppx,
 ]
 
 
-def _float_sweep_params(formats, mathops):
-    """Build (formats, approx_mode, mathop, fast_mode, dest_acc) combinations.
+def _sweep_params(formats, mathops, approx_modes, input_dimensions):
+    """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. approx_mode and dest_acc always sweep both values.
+    runs with FastMode.No only. dest_acc always sweeps both values.
     """
-    approx_modes = [ApproximationMode.No, ApproximationMode.Yes]
     dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
     return list(
         chain(
             product(
-                formats, approx_modes, fast_ops, [FastMode.No, FastMode.Yes], dest_accs
+                formats,
+                approx_modes,
+                fast_ops,
+                [FastMode.No, FastMode.Yes],
+                dest_accs,
+                input_dimensions,
             ),
-            product(formats, approx_modes, non_fast_ops, [FastMode.No], dest_accs),
+            product(
+                formats,
+                approx_modes,
+                non_fast_ops,
+                [FastMode.No],
+                dest_accs,
+                input_dimensions,
+            ),
         )
     )
 
 
-# Standard float formats sweep every op; the Bfp4_b input formats sweep only the subset
-# of ops validated for Bfp4_b. Both share the same driver, skip logic and test below.
-FLOAT_TEST_PARAMS = _float_sweep_params(FORMATS, ALL_MATHOPS) + _float_sweep_params(
-    FORMATS_BFP4_B, MATHOPS_INCLUDE_BFP4_B
+def _assert_broad_profile_valid():
+    """Everything the derived standard profile cannot check for itself.
+
+    Non-overlap, registration and exhaustiveness hold by construction now that
+    STANDARD_SWEEP_OPS is the complement of BROAD_SWEEP_OPS within sfpu_unary_ops(). What
+    is left is the hand-written half:
+
+    - a repeated entry in BROAD_SWEEP_OPS runs that op's whole matrix twice,
+    - a non-unary op in BROAD_SWEEP_OPS fails to compile once the sweep reaches it, and
+      also silently drops out of the standard profile's complement,
+    - an _UNARY_OPS_NOT_SWEPT entry that is not a unary op exempts nothing, so the reason
+      recorded against it is misleading.
+    """
+    duplicates = sorted(
+        {op.name for op in BROAD_SWEEP_OPS if BROAD_SWEEP_OPS.count(op) > 1}
+    )
+    assert not duplicates, (
+        "These ops are listed more than once in BROAD_SWEEP_OPS and would run their "
+        f"whole matrix twice: {duplicates}"
+    )
+    not_unary = sorted(op.name for op in set(BROAD_SWEEP_OPS) - sfpu_unary_ops())
+    assert not not_unary, (
+        "These broad-profile ops are classified as having no unary SFPU kernel "
+        f"(sfpu_domains._NON_SFPU_UNARY_OPS): {not_unary}"
+    )
+    stale_exemptions = sorted(
+        op.name for op in set(_UNARY_OPS_NOT_SWEPT) - sfpu_unary_ops()
+    )
+    assert not stale_exemptions, (
+        "These ops are exempted in sfpu_domains._UNARY_OPS_NOT_SWEPT but are not unary "
+        f"SFPU ops, so the exemption does nothing: {stale_exemptions}"
+    )
+
+
+# The broad profile sweeps the full float matrix and the Bfp4_b input formats over the
+# same op list — Bfp4_b is a second format axis, not a second op set. The standard
+# profile is bf16/fp32 only, approx mode off, one tile shape.
+UNARY_SWEEP_PARAMS = (
+    _sweep_params(
+        BROAD_FORMATS,
+        BROAD_SWEEP_OPS,
+        [ApproximationMode.No, ApproximationMode.Yes],
+        BROAD_DIMENSIONS,
+    )
+    + _sweep_params(
+        FORMATS_BFP4_B,
+        BROAD_SWEEP_OPS,
+        [ApproximationMode.No, ApproximationMode.Yes],
+        BROAD_DIMENSIONS,
+    )
+    + _sweep_params(
+        STANDARD_FORMATS,
+        STANDARD_SWEEP_OPS,
+        [ApproximationMode.No],
+        STANDARD_DIMENSIONS,
+    )
 )
+
+
+_assert_broad_profile_valid()
 
 
 def _skip_bh_unsupported_float_combo(formats, dest_acc):
@@ -207,18 +300,23 @@ def _skip_bh_unless_fp32(formats, dest_acc):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
 
-# Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
-@skip_for_coverage
+_UNARY_SWEEP_ARGNAMES = (
+    "formats",
+    "approx_mode",
+    "mathop",
+    "fast_mode",
+    "dest_acc",
+    "input_dimensions",
+)
+
+
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS,
+    ",".join(_UNARY_SWEEP_ARGNAMES),
+    UNARY_SWEEP_PARAMS,
+    ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in UNARY_SWEEP_PARAMS],
 )
-@pytest.mark.parametrize(
-    "input_dimensions",
-    [[64, 64], [128, 256]],
-)
-def test_eltwise_unary_sfpu_float(
+def test_eltwise_unary_sfpu(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -226,11 +324,27 @@ def test_eltwise_unary_sfpu_float(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if TestConfig.WITH_COVERAGE and mathop in COVERAGE_UNROLL_SKIP_OPS:
-        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
-        pytest.skip(
-            reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
-        )
+    """Every float unary SFPU op, over its registered domain.
+
+    Stimuli come from the per-op registry for every op; the sweep envelope (which profile
+    the op is in) is the only thing that varies. See BROAD_SWEEP_OPS.
+    """
+    broad = mathop in BROAD_SWEEP_OPS
+
+    if TestConfig.WITH_COVERAGE:
+        # Coverage runs skip the broad profile wholesale; only the standard profile runs.
+        if broad:
+            pytest.skip(
+                reason="Broad-profile ops are not run under coverage: "
+                "https://github.com/tenstorrent/tt-llk/issues/1435"
+            )
+        if mathop in COVERAGE_COMPILE_SKIP_OPS:
+            pytest.skip(
+                reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
+                "assembly under coverage instrumentation: "
+                "https://github.com/tenstorrent/tt-metal/issues/33268 , "
+                "https://github.com/tenstorrent/tt-llk/issues/883"
+            )
 
     if mathop == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
@@ -238,13 +352,13 @@ def test_eltwise_unary_sfpu_float(
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
-        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
-        pytest.skip(
-            reason="Compilation error when this mathop gets compiled with coverage"
-        )
-
-    _skip_bh_unsupported_float_combo(formats, dest_acc)
+    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
+    # format set: the broad profile runs everything except a Float16 input or
+    # Float32->Float16, while the standard profile allows only Float32->Float32.
+    if broad:
+        _skip_bh_unsupported_float_combo(formats, dest_acc)
+    else:
+        _skip_bh_unless_fp32(formats, dest_acc)
 
     # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
     # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
@@ -261,6 +375,8 @@ def test_eltwise_unary_sfpu_float(
             reason="Exp-related operations are not supported for bf8_b format in approximation mode."
         )
 
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -269,6 +385,8 @@ def test_eltwise_unary_sfpu_float(
         mathop,
         fast_mode,
         input_dimensions,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     )
 
 
@@ -327,135 +445,6 @@ def test_eltwise_unary_sfpu_int(
         FastMode.No,
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
-    )
-
-
-# Unary SFPU ops that require per-op input domains
-DOMAIN_MATHOPS = [
-    MathOperation.Add1,
-    MathOperation.CastFp32ToFp16a,
-    MathOperation.Cbrt,
-    MathOperation.Clamp,
-    MathOperation.Digamma,
-    MathOperation.EqualZero,
-    MathOperation.Erf,
-    MathOperation.Erfc,
-    MathOperation.Erfinv,
-    MathOperation.Expm1,
-    MathOperation.Expm1Cw,
-    MathOperation.Fmod,
-    MathOperation.GreaterThanEqualZero,
-    MathOperation.GreaterThanZero,
-    MathOperation.Hardmish,
-    MathOperation.Hardshrink,
-    MathOperation.Hardtanh,
-    MathOperation.Heaviside,
-    MathOperation.I0,
-    MathOperation.I1,
-    MathOperation.Identity,
-    MathOperation.LessThanEqualZero,
-    MathOperation.LessThanZero,
-    MathOperation.Lgamma,
-    MathOperation.Lrelu,
-    MathOperation.Mish,
-    MathOperation.NotEqualZero,
-    MathOperation.Polygamma,
-    MathOperation.Prelu,
-    MathOperation.Rdiv,
-    MathOperation.Remainder,
-    MathOperation.Rpow,
-    MathOperation.RsqrtCompat,
-    MathOperation.Selu,
-    MathOperation.Sigmoid,
-    MathOperation.SigmoidAppx,
-    MathOperation.Sign,
-    MathOperation.Signbit,
-    MathOperation.Softplus,
-    MathOperation.Softshrink,
-    MathOperation.Softsign,
-    MathOperation.SqrtCustom,
-    MathOperation.TanhDerivative,
-    MathOperation.TanhDerivativeLut,
-    MathOperation.UnaryGe,
-    MathOperation.UnaryGt,
-    MathOperation.UnaryLe,
-    MathOperation.UnaryLt,
-    MathOperation.UnaryMax,
-    MathOperation.UnaryMin,
-    MathOperation.UnaryPower,
-    MathOperation.Xielu,
-    # Trigonometric / inverse / hyperbolic and round (per-op safe domains).
-    MathOperation.Tan,
-    MathOperation.Atan,
-    MathOperation.Asin,
-    MathOperation.Acos,
-    MathOperation.Sinh,
-    MathOperation.Cosh,
-    MathOperation.Round,
-    # gelu derivative and log-with-base (log2).
-    MathOperation.GeluDerivative,
-    MathOperation.LogWithBase,
-    # gelu LUT approximation and exp-with-base (exp(0.5*x)).
-    MathOperation.GeluAppx,
-    MathOperation.ExpWithBase,
-]
-
-# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
-# per-format default in passed_test.
-DOMAIN_CUSTOM_TOLERANCES = {
-    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
-    MathOperation.SigmoidAppx: (0.13, 0.05),
-    MathOperation.GeluAppx: (0.13, 0.05),
-}
-
-
-# Large matrix (2 formats x ~52 ops x 2 dest_acc); nightly-gated to keep presubmit fast.
-@pytest.mark.nightly
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    approx_mode=[ApproximationMode.No],
-    mathop=DOMAIN_MATHOPS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_dimensions=[[64, 64]],
-)
-def test_eltwise_unary_sfpu_domain(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
-    _skip_bh_unless_fp32(formats, dest_acc)
-
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.GeluDerivative,
-        MathOperation.LogWithBase,
-        MathOperation.GeluAppx,
-    ]:
-        # gelu/log-family `#pragma GCC unroll` loops compile to invalid assembly
-        # under coverage instrumentation (tt-metal#33268 / tt-llk#883), same as the
-        # float-sweep skips for Gelu/Log above.
-        pytest.skip(
-            reason="gelu/log-family ops fail to compile under coverage instrumentation"
-        )
-
-    # Per-op input domain, clipped to where the op is defined (e.g. erfinv: |x| < 1).
-    specs = for_op(mathop, formats.input_format)
-    spec_A = exclude_undefined(mathop, specs.spec_A)
-
-    custom_atol, custom_rtol = DOMAIN_CUSTOM_TOLERANCES.get(mathop, (None, None))
-
-    eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        dest_acc,
-        approx_mode,
-        mathop,
-        FastMode.No,
-        input_dimensions,
-        spec_A=spec_A,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
     )
 
 
@@ -619,6 +608,18 @@ def eltwise_unary_sfpu(
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
+
+    # The op's own signed domain, not generate_stimuli's positive-only format default,
+    # which would leave the x<0 branch, the piecewise knees and the saturation tails
+    # unreached. A KeyError means a new op arrived with no _OP_DOMAIN_REGISTRY entry:
+    # register it rather than falling back to the positive-only default.
+    # The domain has to hold for the whole pipeline, so for_op_pipeline resolves against
+    # both formats and keeps the tighter — see its docstring for why both matter.
+    if spec_A is None:
+        spec_A = exclude_undefined(
+            mathop,
+            for_op_pipeline(mathop, formats.input_format, formats.output_format).spec_A,
+        )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
