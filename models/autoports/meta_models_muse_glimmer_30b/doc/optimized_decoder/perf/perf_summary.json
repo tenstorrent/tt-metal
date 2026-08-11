@@ -1,0 +1,1748 @@
+{
+  "records": [
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 1.0447298436702113,
+      "tokens_per_second": 957.1852532583237,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 1.0755265842211277,
+      "tokens_per_second": 929.7771107389016,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 1.2720642498607049,
+      "tokens_per_second": 25155.96205419978,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 1.2862695839430671,
+      "tokens_per_second": 24878.144052745,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 1.06422168755671,
+      "tokens_per_second": 939.653844393875,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 1.1032945840270258,
+      "tokens_per_second": 906.3762430066496,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 1.1609631874307524,
+      "tokens_per_second": 27563.32013491056,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 1.1968064172833692,
+      "tokens_per_second": 26737.82454529012,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 25.086328602628782,
+      "tokens_per_second": 163276.18380837052,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 25.099832800333388,
+      "tokens_per_second": 163188.33804923174,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 53.54237900173757,
+      "tokens_per_second": 153000.29906654224,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "layer_idx": 3,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 52.83194999792613,
+      "tokens_per_second": 155057.68763639368,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 25.755880199722014,
+      "tokens_per_second": 159031.64513260193,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 25.712230600765906,
+      "tokens_per_second": 159301.62044665194,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 54.81156480091158,
+      "tokens_per_second": 149457.51010311893,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "layer_idx": 0,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 54.94539960054681,
+      "tokens_per_second": 149093.46477695787,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true,
+      "config": {
+        "precision_policy": "bfp4_all",
+        "dtypes": {
+          "activation": "DataType.BFLOAT16",
+          "attn_weights": "DataType.BFLOAT4_B",
+          "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+          "mlp_down_weights": "DataType.BFLOAT4_B",
+          "kv_cache": "DataType.BFLOAT8_B",
+          "norm_weights": "DataType.BFLOAT16"
+        },
+        "fidelity": {
+          "attn_decode": "MathFidelity.LoFi",
+          "mlp_decode": "MathFidelity.LoFi",
+          "mlp_down_decode": "MathFidelity.LoFi",
+          "attn_prefill": "MathFidelity.LoFi",
+          "mlp_prefill": "MathFidelity.LoFi",
+          "mlp_down_prefill": "MathFidelity.LoFi",
+          "norm": "MathFidelity.HiFi4",
+          "sdpa": "MathFidelity.HiFi4"
+        },
+        "decode": {
+          "matmul_family": "dram_sharded",
+          "residual_grid": [
+            8,
+            2
+          ],
+          "residual_cores": 16,
+          "residual_shard_width": 416,
+          "attn_gate_shard_width": 256,
+          "mlp_working_cores": 52,
+          "mlp_working_shard_width": 128,
+          "sdpa_grid": [
+            8,
+            4
+          ],
+          "sdpa_k_chunk": 64,
+          "packer_l1_acc": true,
+          "fp32_dest_acc_en": false,
+          "pack_qkv_gate": false,
+          "pack_mlp_gate_up": false,
+          "program_configs": {
+            "qkv": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 9,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "attn_gate": {
+              "fused_activation": null,
+              "in0_block_w": 13,
+              "per_core_M": 1,
+              "per_core_N": 8,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "wo": {
+              "fused_activation": null,
+              "in0_block_w": 8,
+              "per_core_M": 1,
+              "per_core_N": 13,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_gate_up": {
+              "fused_activation": null,
+              "in0_block_w": 4,
+              "per_core_M": 1,
+              "per_core_N": 12,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            },
+            "mlp_down": {
+              "fused_activation": null,
+              "in0_block_w": 12,
+              "per_core_M": 1,
+              "per_core_N": 4,
+              "type": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+            }
+          }
+        },
+        "prefill": {
+          "matmul_grid": [
+            11,
+            8
+          ],
+          "matmul_cutoff": 512,
+          "in0_block_w_cap": 8,
+          "out_subblock_max": 8,
+          "weight_memory": "dram_sharded",
+          "chunk_size": 8192,
+          "sdpa_q_chunk": 256,
+          "sdpa_k_chunk": 256
+        },
+        "block_size": 64
+      }
+    }
+  ]
+}

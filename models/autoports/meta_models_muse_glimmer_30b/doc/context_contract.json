@@ -1,7 +1,7 @@
 {
   "hf_model_id": "meta-models/Muse-Glimmer-30B",
-  "stage": "functional_decoder",
-  "stage_number": 1,
+  "stage": "optimized_decoder",
+  "stage_number": 2,
   "hf_advertised_context": 131072,
   "hf_context_source": "config.json text_config.max_position_embeddings",
   "current_supported_context": 131072,
@@ -9,8 +9,9 @@
   "limiting_reason": null,
   "capacity_evidence": null,
   "notes": [
-    "Functional decoder-layer stage: one MuseGlimmerTextDecoderLayer on a (1, 1) Blackhole mesh.",
-    "No capability reduction. Prefill and decode were both exercised at the full advertised context.",
+    "Optimized decoder-layer stage: one MuseGlimmerTextDecoderLayer on a (1, 1) Blackhole mesh, BFP4 weights at LoFi, BFP8 paged KV cache, L1 width-sharded decode residual, DRAM-sharded decode matmuls, explicit 2D prefill program configs.",
+    "No capability reduction. The advertised 131072 context is unchanged and the optimization *reduced* the KV-cache footprint by half (BF16 -> BFP8), so the capacity headroom grew.",
+    "Prefill and decode were exercised at the full advertised context in the functional stage; this stage did not change the chunking, padding, page-table or position handling that makes that work, and re-tests every non-aligned length the functional stage covered.",
     "The vision tower / projector are a separate stage; their absence is the stage split, not a context or capability reduction."
   ],
   "device": {
@@ -93,21 +94,24 @@
   },
   "kv_cache": {
     "paged": true,
-    "dtype": "bfloat16",
+    "dtype": "bfloat8_b",
+    "previous_dtype": "bfloat16",
     "block_sizes_tested": [
       32,
       64,
       128
     ],
-    "bytes_per_token_per_layer": 1024,
-    "bytes_at_full_context_batch1_per_layer": 134217728,
-    "bytes_at_full_context_batch32_per_layer": 4294967296,
-    "comment": "2 KV heads * 128 head_dim * 2 bytes * 2 (K and V) = 1024 B per token per layer; at 131072 tokens that is 128 MiB for batch 1 and 4 GiB for batch 32, both well inside the 34.18 GB device DRAM."
+    "bytes_per_token_per_layer": 544,
+    "bytes_at_full_context_batch1_per_layer": 71303168,
+    "bytes_at_full_context_batch32_per_layer": 2281701376,
+    "comment": "2 KV heads * 128 head_dim * 2 (K and V) tokens at BFLOAT8_B, which stores a 32x32 tile in 1088 B (1024 mantissa + 64 shared exponents) = 1.0625 B/element: 544 B per token per layer against the functional stage's 1024 B. At 131072 tokens that is 68 MiB for batch 1 and 2.125 GiB for batch 32, both well inside the 34.18 GB device DRAM and half the previous footprint. Cache PCC against the HF reference is 0.9985-0.9995 on real weights (doc/optimized_decoder/pcc/policy_sweep.json)."
   },
   "pcc": {
     "bar": 0.995,
-    "bar_source": "$functional-decoder default; no model-specific exception claimed",
-    "artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/functional_decoder/pcc/pcc_results.json"
+    "bar_source": "unchanged from the functional stage; no model-specific exception claimed",
+    "artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/pcc/pcc_results.json",
+    "policy_sweep_artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/optimized_decoder/pcc/policy_sweep.json",
+    "note": "The shipped bfp4_all policy is accepted on real checkpoint weights (prefill 0.9986/0.9990, decode 0.9970/0.9984). On synthetic i.i.d. weights the same code measures 0.960-0.970; that is a block-float quantisation property of adversarial synthetic blocks, not an implementation defect, and the structural tests run the same code path at bfp8_all_lofi so they still assert the full bar on synthetic weights."
   },
   "layer_kinds": {
     "sliding_rope": {
@@ -131,5 +135,26 @@
     "affects_advertised_context": false,
     "note": "Not a context reduction: a single prefill_forward call still accepts any length up to the full 131072 advertised context and chunks internally. This restricts only segmented/continued prefill, which later prefix-caching or chunked-prefill serving paths will need.",
     "test": "tests/test_functional_decoder.py::test_continued_prefill_contract"
+  },
+  "decode_activation_contract": {
+    "layout": "L1 width-sharded",
+    "cores": 16,
+    "core_grid": [
+      8,
+      2
+    ],
+    "shard_width_elements": 416,
+    "note": "decode_forward returns the hidden state in this layout and accepts it as input, so stacking layers needs no reshard. Prefill activations stay DRAM interleaved. This changes memory layout, not capacity: the decode activation is 32 tile-padded rows x 6656 either way."
+  },
+  "precision_policy": {
+    "name": "bfp4_all",
+    "activations": "bfloat16",
+    "norm_weights": "bfloat16",
+    "attention_weights": "bfloat4_b",
+    "mlp_weights": "bfloat4_b",
+    "kv_cache": "bfloat8_b",
+    "decode_math_fidelity": "LoFi",
+    "norm_and_sdpa_math_fidelity": "HiFi4",
+    "conservative_alternative": "bfp8_attn_bfp4_mlp (+3.3% traced decode)"
   }
 }

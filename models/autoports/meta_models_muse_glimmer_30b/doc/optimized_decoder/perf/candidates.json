@@ -1,0 +1,111 @@
+{
+  "harness": "scripts/sweep_optimized_decoder.py (traced warmed decode, batch 1, context 4096, sliding_rope, synthetic real-scale weights, 32 replays; prefill 8192 tokens, 3 warmed iterations)",
+  "baseline": {
+    "functional_decoder_decode_ms": 3.2422,
+    "functional_decoder_prefill_8192_ms": 97.6538,
+    "source": "doc/functional_decoder/perf/perf_summary.json"
+  },
+  "notes": [
+    "Decode candidates are comparable across sections: the decode path never uses the 2D prefill matmul, so the prefill program-config fix did not change any decode number.",
+    "Prefill candidates are only from after the DRAM-sharded-weight grid_x fix; earlier prefill timings were collected on a configuration that silently returned NaN (see scripts/repro_prefill_matmul_grid_x9.py) and are excluded rather than published."
+  ],
+  "sections": [
+    {
+      "title": "Precision / fidelity policy (decode, DRAM-sharded, mlp_cores=52)",
+      "rows": [
+        {"label": "bf16_baseline (functional numerics, optimized layout only)", "decode_ms": 2.2020, "kept": false, "note": "layout+sharding alone: 1.47x over functional"},
+        {"label": "bfp8_all_hifi2", "decode_ms": 1.8454, "kept": false, "note": "BFP8 weights, HiFi2"},
+        {"label": "bfp8_all_lofi", "decode_ms": 1.2540, "kept": false, "note": "same dtype, LoFi: fidelity alone is worth 32%"},
+        {"label": "bfp8_attn_bfp4_gateup", "decode_ms": 1.1534, "kept": false, "note": "BFP4 gate/up only"},
+        {"label": "bfp8_attn_bfp4_mlp", "decode_ms": 1.0987, "kept": false, "note": "BFP4 all MLP; conservative alternative, +3.3%"},
+        {"label": "bfp4_all", "decode_ms": 1.0639, "kept": true, "note": "BFP4 attention + MLP, LoFi; real-weight PCC 0.9970-0.9990"}
+      ]
+    },
+    {
+      "title": "Decode matmul family (bfp4_all)",
+      "rows": [
+        {"label": "DRAM-sharded matmul, DRAM width-sharded weights", "decode_ms": 1.0647, "kept": true, "note": "12 DRAM-reader cores, 52-54% of peak DRAM BW"},
+        {"label": "default program config, DRAM-interleaved weights", "decode_ms": 1.4019, "kept": false, "note": "the functional stage's family at the same dtype: 32% slower"},
+        {"label": "DRAM-sharded, bfp8_all_lofi", "decode_ms": 1.2540, "kept": false, "note": "family comparison at the other dtype"},
+        {"label": "default program config, bfp8_all_lofi", "decode_ms": 1.8676, "kept": false, "note": "family comparison at the other dtype: 49% slower"}
+      ]
+    },
+    {
+      "title": "SwiGLU working-shard core count (phase-specific activation shard, OPT-011)",
+      "rows": [
+        {"label": "mlp_cores=8  (in0_block_w=8)", "decode_ms": 1.2199, "kept": false, "note": ""},
+        {"label": "mlp_cores=13", "decode_ms": null, "error": "L1 circular buffers exceed 1572864 B", "kept": false, "note": "13 does not divide the tiled N of the down projection cleanly enough to fit"},
+        {"label": "mlp_cores=16 (in0_block_w=1)", "decode_ms": 1.5056, "kept": false, "note": "the residual grid: K/cores=13 leaves only in0_block_w 1 or 13, and 13 does not fit L1"},
+        {"label": "mlp_cores=26 (in0_block_w=8)", "decode_ms": 1.0798, "kept": false, "note": ""},
+        {"label": "mlp_cores=52 (in0_block_w=4)", "decode_ms": 1.0643, "kept": true, "note": "selected"},
+        {"label": "mlp_cores=104 (in0_block_w=2)", "decode_ms": 1.1160, "kept": false, "note": "narrower shards force in0_block_w down to 2"}
+      ]
+    },
+    {
+      "title": "Decode residual shard grid",
+      "rows": [
+        {"label": "8x2 (16 cores, 416-wide shards)", "decode_ms": 1.0798, "kept": true, "note": "selected; 4x4 is the same core count and within noise"},
+        {"label": "4x4 (16 cores)", "decode_ms": 1.0793, "kept": false, "note": "identical core count, no measurable difference"},
+        {"label": "4x2 (8 cores)", "decode_ms": 1.1019, "kept": false, "note": ""},
+        {"label": "8x1 (8 cores)", "decode_ms": null, "error": "L1 circular buffers exceed 1572864 B", "kept": false, "note": "K/cores=26 pushes the attention in0_block_w past L1"}
+      ]
+    },
+    {
+      "title": "in0_block_w per matmul role (bfp4_all, mlp_cores=52)",
+      "rows": [
+        {"label": "budget-derived defaults (qkv/gate 13, wo 8, gate_up 4, down 12)", "decode_ms": 1.0643, "kept": true, "note": "the L1 model picks the largest legal value in every role"},
+        {"label": "qkv/attn_gate in0_block_w=1", "decode_ms": 1.2452, "kept": false, "note": "17% slower: the K block matters"},
+        {"label": "wo in0_block_w=4", "decode_ms": 1.0694, "kept": false, "note": ""},
+        {"label": "wo in0_block_w=2", "decode_ms": 1.0803, "kept": false, "note": ""},
+        {"label": "gate_up in0_block_w=2", "decode_ms": 1.1097, "kept": false, "note": ""},
+        {"label": "gate_up in0_block_w=1", "decode_ms": 1.4612, "kept": false, "note": "37% slower"},
+        {"label": "down in0_block_w=6", "decode_ms": 1.0796, "kept": false, "note": ""},
+        {"label": "down in0_block_w=4", "decode_ms": 1.0960, "kept": false, "note": ""},
+        {"label": "down in0_block_w=3", "decode_ms": 1.1127, "kept": false, "note": ""},
+        {"label": "mlp_cores=26 with in0_block_w=8 (gate_up and down)", "decode_ms": 1.0776, "kept": false, "note": "larger K block, fewer shards: still loses to 52/4"},
+        {"label": "mlp_cores=26 with in0_block_w=4", "decode_ms": 1.1171, "kept": false, "note": "precision-locked geometry cross-check"}
+      ]
+    },
+    {
+      "title": "Same-input projection packing (OPT-001 / OPT-010)",
+      "rows": [
+        {"label": "separate QKV-packed + attention gate, separate SwiGLU gate/up", "decode_ms": 1.0636, "kept": true, "note": "selected"},
+        {"label": "packed SwiGLU gate+up (one 39936-wide matmul + 2 slices)", "decode_ms": 1.0929, "kept": false, "note": "2.8% slower: the two slices cost more than the saved launch"},
+        {"label": "packed QKV+attention-gate (one 8704-wide matmul + 2 slices)", "decode_ms": 1.0651, "kept": false, "note": "0.1% slower, i.e. a tie; kept separate as the simpler contract"},
+        {"label": "both packed", "decode_ms": 1.0929, "kept": false, "note": "dominated by the packed SwiGLU cost"}
+      ]
+    },
+    {
+      "title": "KV cache dtype and decode SDPA geometry (bfp4_all)",
+      "rows": [
+        {"label": "BFP8 KV cache, SDPA grid 8x4, k_chunk 64", "decode_ms": 1.0636, "kept": true, "note": "selected; also halves cache DRAM (64 MiB vs 128 MiB per layer at 131072/batch 1)"},
+        {"label": "BF16 KV cache", "decode_ms": 1.0655, "kept": false, "note": "no latency win and twice the cache footprint"},
+        {"label": "SDPA grid 11x10", "decode_ms": 1.0641, "kept": false, "note": ""},
+        {"label": "SDPA grid 8x8", "decode_ms": 1.0640, "kept": false, "note": ""},
+        {"label": "SDPA grid 4x4", "decode_ms": 1.0653, "kept": false, "note": ""},
+        {"label": "SDPA k_chunk 128", "decode_ms": 1.0634, "kept": false, "note": "within noise of 64; 64 kept because the page-table capacity rounding is validated for it"},
+        {"label": "SDPA k_chunk 32", "decode_ms": 1.0672, "kept": false, "note": ""}
+      ]
+    },
+    {
+      "title": "Decode compute-kernel config (bfp4_all)",
+      "rows": [
+        {"label": "LoFi, packer_l1_acc=True, fp32_dest_acc_en=False", "decode_ms": 1.0641, "kept": true, "note": "selected"},
+        {"label": "packer_l1_acc=False", "decode_ms": 1.3434, "kept": false, "note": "26% slower"},
+        {"label": "fp32_dest_acc_en=True", "decode_ms": 1.0868, "kept": false, "note": "2% slower, no PCC benefit at BFP4 weights"}
+      ]
+    },
+    {
+      "title": "Prefill 2D matmul geometry (bfp4_all; grid_x forced to the 8 DRAM banks)",
+      "rows": [
+        {"label": "grid_y cap 8, fold block 512 rows", "decode_ms": 1.0616, "prefill_ms": 54.23, "kept": true, "note": "selected"},
+        {"label": "grid_y cap 10", "decode_ms": 1.0618, "prefill_ms": 80.36, "kept": false, "note": "48% slower despite 25% more cores"},
+        {"label": "grid_y cap 6", "decode_ms": 1.0617, "prefill_ms": 111.82, "kept": false, "note": ""},
+        {"label": "grid_y cap 4", "decode_ms": 1.0626, "prefill_ms": 78.91, "kept": false, "note": ""},
+        {"label": "grid_y cap 2", "decode_ms": 1.0625, "prefill_ms": 134.03, "kept": false, "note": ""},
+        {"label": "fold cutoff 1024 rows", "decode_ms": 1.0889, "prefill_ms": 57.77, "kept": false, "note": "bigger per_core_M costs in0_block_w"},
+        {"label": "fold cutoff 2048 rows", "decode_ms": 1.1006, "prefill_ms": 57.79, "kept": false, "note": ""}
+      ]
+    }
+  ]
+}
