@@ -4,44 +4,12 @@
 
 #pragma once
 
-#include <cstddef>
-#include <optional>
-#include <vector>
-
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tile.hpp>
 
-#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
-class MemoryConfig;
-}
-
-namespace tt::tt_metal {
-
-// ======================================================================================
-//                   Uniform enqueue_read/write_tensor
-// ======================================================================================
-
-HostTensor enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking = true);
-
-void enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking = true);
-
-MeshTensor enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    distributed::MeshDevice& mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
-
-void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
 //                                  .to_layout()

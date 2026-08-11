@@ -10,9 +10,9 @@
 
 #include <tt-metalium/tile.hpp>
 
-#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/layout.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 

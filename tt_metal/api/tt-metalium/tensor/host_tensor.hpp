@@ -10,16 +10,11 @@
 // Tensor related constructs
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
-// It is intentional to not reflect the experimental status of this header in its namespace,
-// as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
-// long time, it is expected for the implementation to graduate out of experimental really quickly.
-//
-// Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
 // Implementation details for HostTensor
