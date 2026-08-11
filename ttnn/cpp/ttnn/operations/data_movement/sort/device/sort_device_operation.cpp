@@ -159,8 +159,11 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // index CB.  Force UINT32 indices in that case so CB sizing, writer tile
     // generation, and LLK SFPU mode all agree.
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
+    // UINT16 indices corrupt above a sort width of 256 (SFPU LO16 tracking limit),
+    // independent of input dtype; select UINT32 past that boundary.
+    constexpr int32_t kMaxUint16SafeWidth = 256;
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32) {
+    if (output_shape[-1] > kMaxUint16SafeWidth || input_is_fp32) {
         index_dtype = DataType::UINT32;
     }
 
