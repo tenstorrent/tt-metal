@@ -42,6 +42,7 @@ from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
     preprocess_semantic_tokenizer_weights,
     _materialize,
     _no_cache,
+    _untilize_rm,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig, TokenizerConfig
 
@@ -280,6 +281,14 @@ class TTConvTranspose1d:
         B, _, T, _ = x.shape
         S = self.stride
 
+        # Every phase reads the SAME x, and TTConv1d's streaming path starts by untilizing its input
+        # (_untilize_rm).  Left alone that is S identical TILE->ROW_MAJOR conversions of one tensor —
+        # on the deployed frame the S=8 upsample showed the `unpadUT ... i2s [CONV]` preamble
+        # repeating once per phase.  Untilize ONCE here and every phase then short-circuits on its
+        # `layout != ROW_MAJOR` guard.  Byte-identical: same untilize op, same result, just shared
+        # instead of recomputed (the per-phase streaming caches and concats are untouched).
+        if use_cache and S > 1 and x.layout == ttnn.TILE_LAYOUT:
+            x = _untilize_rm(x)
         phase_outs = [p(x, use_cache=use_cache, is_final_chunk=is_final_chunk) for p in self._phases]
         if S == 1:
             return phase_outs[0]
