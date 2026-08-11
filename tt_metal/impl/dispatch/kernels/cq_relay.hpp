@@ -84,7 +84,9 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
-#if defined(GALAXY_CLUSTER)
+// An express mesh decodes destination-indexed action maps, which the direction/hop-count form
+// below cannot express; go through the unicast producer so the express encode is selected.
+#if defined(GALAXY_CLUSTER) && !defined(FABRIC_EXPRESS_ENABLED)
             tt::tt_fabric::fabric_set_route(
                 (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)router_direction,

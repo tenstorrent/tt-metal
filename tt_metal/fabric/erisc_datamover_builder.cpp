@@ -1265,20 +1265,20 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // express_routing_enabled. The kernel reads these named args only under that define, and a
     // missing arg fails the compile.
     if (control_plane.express_routing_enabled(this->local_fabric_node_id.mesh_id)) {
-        const auto mesh_shape = control_plane.get_mesh_graph().get_mesh_shape(this->local_fabric_node_id.mesh_id);
+        // Same accessor and scope the packer and the worker defines use. The router decodes with
+        // these as its coordinate bounds, so any disagreement with the shape the L1 vectors were
+        // packed against reads the wrong row.
+        const auto mesh_shape =
+            control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
-        // All-zero ingress flags are correct for intramesh-only-facing routers. A boundary-facing
-        // router needs a per-VC ingress derivation that is not implemented yet — fail instead of
-        // silently never re-encoding landings.
-        TT_FATAL(
-            !is_intermesh_router_on_edge,
-            "Skip-link mesh with an intermesh-facing router (M{}D{}): "
-            "IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS derivation is not implemented",
-            *this->local_fabric_node_id.mesh_id,
-            this->local_fabric_node_id.chip_id);
+        // Inter-mesh landings arrive on the VC1 receiver channel (flat RX index 1): VC1 is the
+        // intermesh carrier VC, and its receiver maps to flat index 1 on both mesh and Z router
+        // variants. This router's other receiver channels carry same-mesh traffic (VC0 ingress,
+        // intrachip egress relays) and must not be re-encoded. A router receives inter-mesh
+        // landings iff its eth peer is in another mesh.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = 0;
+            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i == 1) ? 1 : 0;
         }
     }
 

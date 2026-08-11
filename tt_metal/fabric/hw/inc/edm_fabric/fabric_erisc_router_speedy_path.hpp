@@ -96,7 +96,8 @@ template <
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
     typename ReceiverChannelT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename SenderChannelFromReceiverCreditsT>
 FORCE_INLINE bool run_sender_channel_step_speedy(
     SenderChannelT& local_sender_channel,
     WorkerInterfaceT& local_sender_channel_worker_interface,
@@ -104,7 +105,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     ReceiverChannelT& remote_receiver_channel,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
-    auto& sender_channel_from_receiver_credits,
+    SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry,
     SpeedySenderState& sender_state) {
@@ -235,14 +236,15 @@ template <
     typename ReceiverChannelPointersT,
     typename LocalRelayInterfaceT,
     typename LocalTelemetryT,
-    size_t VC_ID>
+    size_t VC_ID,
+    typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE bool run_receiver_channel_step_speedy(
     ReceiverChannelBufferT& local_receiver_channel,
     LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    auto& receiver_channel_response_credit_sender,
+    ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry,
     SpeedyReceiverState<VC_ID>& receiver_state) {

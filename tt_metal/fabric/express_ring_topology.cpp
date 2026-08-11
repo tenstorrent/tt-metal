@@ -7,13 +7,13 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
@@ -260,6 +260,28 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     // Baseline fact: whether the ordinary grid closes the axis. Distinct from a pattern's tiling
     // wrap, which the overlay declares and which only decides which blocks exist.
     const bool wraps = axis_wraps(mesh_graph, mesh_id, axis, len);
+
+    // Closing a ring needs either the ordinary axis wrap, which joins the ends of a single pattern's
+    // class, or a second pattern whose blocks merge with the first into one cycle. With neither, this
+    // mesh has no express decomposition: it routes on the base grid and the declared chords go unused.
+    //
+    // This is a configuration outcome, not a malformed descriptor, so it degrades rather than throws.
+    // Connectivity is built from the effective fabric type, which a supplied FabricConfig replaces
+    // outright (mesh_graph.cpp), and get_fabric_type() maps everything that is not an explicit torus
+    // request to FabricType::MESH. A RING-declared axis therefore has no wrap edges whenever the
+    // control plane is constructed at a non-torus config -- which every caller does at least once
+    // before any torus config is selected, since the config change is what rebuilds the control plane.
+    if (!wraps && patterns.size() != 2) {
+        log_warning(
+            tt::LogFabric,
+            "Mesh M{} declares express links but its dim-{} axis has no end wrap under the current fabric "
+            "config, and one pattern cannot close a ring on its own. Express routing is off for this mesh; "
+            "it routes on the base grid. Select a torus fabric config along that axis to enable it.",
+            *mesh_id,
+            axis);
+        return std::nullopt;
+    }
+
     for (auto& pattern : patterns) {
         pattern.wraps = pattern.declared_wrap.value_or(wraps);
         fill_blocks(pattern, mesh_id, len);
@@ -326,10 +348,8 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
             cycles.push_back(canonicalize(pattern_cycle(pattern, len)));
         }
     } else {
-        TT_FATAL(
-            patterns.size() == 2,
-            "ExpressRingTopology: mesh M{} has no end wrap, so a single express pattern cannot close a ring",
-            *mesh_id);
+        // Two patterns, guaranteed by the early return above: without the axis wrap the only way to
+        // close a cycle is to merge both patterns' blocks.
         cycles.push_back(canonicalize(merged_cycle(patterns.front(), patterns.back())));
     }
     for (std::size_t domain = 0; domain < cycles.size(); domain++) {
@@ -471,92 +491,6 @@ std::optional<ExpressRingTopology> derive_ordinary_ring_topology(
         }
     }
     return topo;
-}
-
-std::string describe_express_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo) {
-    const int axis = topo.axis_dim;
-    const int len = topo.axis_len;
-    const int ortho_len = static_cast<int>(mesh_graph.get_mesh_shape(mesh_id)[1 - axis]);
-    const bool wraps = axis_wraps(mesh_graph, mesh_id, axis, len);
-    const auto hop = [&](int from, int to) {
-        const auto dir = edge_dir(mesh_graph, mesh_id, axis, 0, from, to);
-        return dir.has_value() ? std::string{enchantum::to_string(*dir)} : std::string{"??"};
-    };
-
-    std::ostringstream out;
-    out << "express rings: mesh M" << *mesh_id << "  axis dim " << axis << "  len " << len
-        << "  end wrap: " << (wraps ? "yes" : "no") << "\n";
-
-    int declared_chords = 0;
-    int probe_axis = kNone;
-    auto patterns = read_patterns(mesh_graph, mesh_id, probe_axis);
-    out << "declared patterns:";
-    for (auto& pattern : patterns) {
-        pattern.wraps = pattern.declared_wrap.value_or(wraps);
-        fill_blocks(pattern, mesh_id, len);
-        declared_chords += static_cast<int>(pattern.blocks.size());
-        out << " (start " << pattern.start << " step " << pattern.step << (pattern.wraps ? " wrap" : " no-wrap")
-            << " -> " << pattern.blocks.size() << " blocks:";
-        for (const auto& [first, last] : pattern.blocks) {
-            out << " [" << first << "," << last << "]";
-        }
-        out << ")";
-    }
-    out << "\n";
-
-    for (int domain = 0; domain < static_cast<int>(topo.forward_cycle.size()); domain++) {
-        const auto& cycle = topo.forward_cycle[domain];
-        out << "domain " << domain << " (" << cycle.size() << " members, canonical forward):\n  ";
-        for (std::size_t p = 0; p < cycle.size(); p++) {
-            const int next = cycle[(p + 1) % cycle.size()];
-            out << cycle[p] << " -" << hop(cycle[p], next) << "-> ";
-        }
-        out << cycle.front() << "\n";
-    }
-
-    int attachments = 0;
-    for (std::size_t id = 0; id < topo.leaf_runs.size(); id++) {
-        const auto& run = topo.leaf_runs[id];
-        out << "leaf run " << id << " (len " << run.rows.size() << "): " << run.anchor_before << " -"
-            << hop(run.anchor_before, run.rows.front()) << "-> ";
-        for (std::size_t i = 0; i < run.rows.size(); i++) {
-            out << run.rows[i] << " -" << hop(run.rows[i], i + 1 < run.rows.size() ? run.rows[i + 1] : run.anchor_after)
-                << "-> ";
-        }
-        out << run.anchor_after << "\n";
-        attachments += static_cast<int>(run.rows.size()) + 1;
-    }
-
-    if (topo.continue_src_domain == ExpressRingTopology::kNone) {
-        out << "transitions: single family, no cross-ring transition\n";
-    } else {
-        out << "transitions: domain " << topo.continue_src_domain << " may continue into the other; the reverse "
-            << "crossing is terminal\ncrossovers (ordered):";
-        for (const auto& [a, b] : topo.crossovers) {
-            out << " " << a << " -" << hop(a, b) << "-> " << b;
-        }
-        out << "\n";
-    }
-
-    out << "storage (row -> domain/pos, or leaf):\n";
-    for (int row = 0; row < len; row++) {
-        out << "  row " << row << ": ";
-        if (topo.is_leaf(row)) {
-            out << "leaf run " << topo.leaf_run_of[row] << ", index " << topo.leaf_index_of[row];
-        } else {
-            out << "domain " << topo.domain_of[row] << ", pos " << topo.pos_in_domain[row];
-        }
-        out << "\n";
-    }
-
-    int ring_edges = 0;
-    for (const auto& cycle : topo.forward_cycle) {
-        ring_edges += static_cast<int>(cycle.size());
-    }
-    out << "verified against materialized edges: " << ortho_len << " line(s) x (" << ring_edges << " ring + "
-        << topo.crossovers.size() << " crossover + " << attachments << " attachment) edges present, " << declared_chords
-        << " chords per line matching the declared blocks\n";
-    return out.str();
 }
 
 }  // namespace tt::tt_fabric
