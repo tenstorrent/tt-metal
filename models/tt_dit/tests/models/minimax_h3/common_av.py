@@ -16,15 +16,28 @@ half-clip offset, a channel swap, a soundtrack for a different length of video. 
 an audio envelope against frame-to-frame motion energy would test something the model is not
 trained to guarantee (generated audio need not be causally tied to visible motion), so it is
 reported as a diagnostic and never asserted on.
+
+The artifact and metric helpers shared by the e2e gates (`write_artifacts`, `run_vbench`,
+`clip_prompt_alignment`, the ref2va reference sets) also live here, so no test module has to
+import from another test module.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
+import pytest
 import torch
 from loguru import logger
 
-from ....pipelines.minimax_h3.packing import prepare_keyframe_image
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, prepare_keyframe_image
+from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
+from .common import create_fractal_image
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
@@ -325,3 +338,288 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
     )
     results["control"] = mean_control
     return results
+
+
+def _ffmpeg():
+    """An ffmpeg executable: the system binary, else imageio-ffmpeg's bundled static build."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "imageio-ffmpeg"],
+            check=False,
+            capture_output=True,
+        )
+        try:
+            import imageio_ffmpeg
+        except ImportError:
+            return None
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+    """Write the video, the soundtrack, and a muxed mp4. Returns the paths that were produced.
+
+    `stem` names the files. It defaults to `t2va` so every existing caller and every recorded artifact
+    path is unchanged; the fl2va gate passes its own so the two tasks' artifacts coexist in one
+    directory rather than overwriting each other.
+    """
+    import wave
+
+    paths = {}
+    wav_path = directory / f"{stem}.wav"
+    interleaved = np.ascontiguousarray(audio[0].T if audio.ndim == 3 else audio.T)
+    pcm = np.clip(interleaved, -1.0, 1.0)
+    with wave.open(str(wav_path), "wb") as handle:
+        handle.setnchannels(pcm.shape[1])
+        handle.setsampwidth(2)
+        handle.setframerate(sampling_rate)
+        handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
+    paths["wav"] = wav_path
+    logger.info(f"wrote {wav_path}")
+
+    exe = _ffmpeg()
+    if exe is None:
+        logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
+        return paths
+
+    silent = directory / f"{stem}_silent.mp4"
+    num_frames, height, width, _ = frames.shape
+    subprocess.run(
+        [
+            exe,
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            str(MINIMAX_H3_FPS),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "17",
+            "-pix_fmt",
+            "yuv420p",
+            str(silent),
+        ],
+        input=frames.tobytes(),
+        check=True,
+        capture_output=True,
+    )
+    paths["silent_mp4"] = silent
+
+    muxed = directory / f"{stem}.mp4"
+    subprocess.run(
+        [
+            exe,
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(silent),
+            "-i",
+            str(wav_path),
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(muxed),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    paths["mp4"] = muxed
+    logger.info(f"wrote {muxed} and {silent}")
+    return paths
+
+
+def probe_streams(path: Path) -> dict:
+    """Per-stream duration from the written container, via ffprobe if it is available."""
+    exe = shutil.which("ffprobe")
+    if exe is None:
+        return {}
+    import json as _json
+
+    result = subprocess.run(
+        [
+            exe,
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,duration,nb_frames,sample_rate,channels,width,height",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    streams = {}
+    for stream in _json.loads(result.stdout).get("streams", []):
+        streams[stream.get("codec_type", "?")] = stream
+    return streams
+
+
+def decoded_frames(path: Path, count: int, *, fallback_height: int = 768, fallback_width: int = 1344) -> np.ndarray:
+    """Sample `count` frames evenly out of the written file, as uint8 luma.
+
+    The fallbacks are only reached when ffprobe is unavailable, and default to the production
+    768x1344 working point every e2e gate runs at.
+    """
+    exe = _ffmpeg()
+    if exe is None:
+        return np.empty((0,))
+    result = subprocess.run(
+        [
+            exe,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"select='not(mod(n\\,{max(1, count)}))'",
+            "-vsync",
+            "0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    probe = probe_streams(path).get("video", {})
+    height = int(probe.get("height") or fallback_height)
+    width = int(probe.get("width") or fallback_width)
+    buffer = np.frombuffer(result.stdout, dtype=np.uint8)
+    usable = (buffer.size // (height * width)) * height * width
+    return buffer[:usable].reshape(-1, height, width)
+
+
+VBENCH_VENV_ENV = "MINIMAX_H3_VBENCH_PYTHON"
+DEFAULT_VBENCH_PYTHON = "/data/kevinmi/vbench_env/bin/python"
+
+
+def run_vbench(video: Path, prompt: str, dimensions) -> dict[str, float]:
+    """Score `video` by running VBench in its own interpreter, and return the dimension scores.
+
+    VBench cannot live in `python_env`: it pins numpy < 2 and transformers 4.33, so installing it
+    would downgrade numpy 2.2.6 -> 1.26.4 and transformers 5.12.1 -> 4.33.2, breaking `ttnn`'s numpy
+    ABI and the Qwen3-VL reference the text-encoder gate depends on. It evaluates a *file* and needs
+    nothing from this process, so it runs out-of-process instead of not at all.
+    """
+    interpreter = os.environ.get(VBENCH_VENV_ENV, DEFAULT_VBENCH_PYTHON)
+    if not os.path.isfile(interpreter):
+        pytest.skip(
+            f"no VBench interpreter at {interpreter}; set {VBENCH_VENV_ENV}, or create it with "
+            "`uv venv --python 3.10 <path> && uv pip install --python <path>/bin/python vbench decord "
+            "'numpy==1.26.4' 'opencv-python-headless<4.11' 'setuptools<81'` (set RUN_VBENCH=0 to skip)"
+        )
+    runner = Path(__file__).with_name("tools") / "vbench_runner.py"
+    result = subprocess.run(
+        [interpreter, str(runner), str(video), ",".join(dimensions), "--prompt", prompt],
+        capture_output=True,
+        text=True,
+        timeout=5400,
+    )
+    marker = "VBENCH_JSON "
+    line = next((l for l in result.stdout.splitlines() if l.startswith(marker)), None)
+    if line is None:
+        raise AssertionError(
+            f"VBench produced no scores (exit {result.returncode}).\n"
+            f"stdout tail:\n{result.stdout[-2000:]}\nstderr tail:\n{result.stderr[-2000:]}"
+        )
+    import json as _json
+
+    return _json.loads(line[len(marker) :])
+
+
+def clip_prompt_alignment(frames: np.ndarray, prompt: str, num_frames: int = 8) -> dict[str, float]:
+    """Mean CLIP similarity between the prompt and evenly-spaced frames, x100.
+
+    Uses `open_clip` (already in `python_env`) over the frames this test already decoded, so unlike
+    the wan2.2 and LTX versions it needs no `decord`.
+    """
+    from PIL import Image
+
+    from ...dataset_eval.clip_encoder import CLIPEncoder
+
+    indices = np.linspace(0, frames.shape[0] - 1, num_frames).astype(int)
+    encoder = CLIPEncoder()
+    scores = [encoder.get_clip_score(prompt, Image.fromarray(frames[i])).item() * 100.0 for i in indices]
+    return {"mean": float(np.mean(scores)), "min": float(min(scores)), "max": float(max(scores))}
+
+
+def temporal_seam_score(frames: np.ndarray, period: int) -> float:
+    """Ratio of inter-frame delta *at* chunk boundaries to the delta everywhere else.
+
+    The video VAE decodes in temporal chunks and cross-fades them on the host. If that stitching is
+    wrong, the discontinuity concentrates at multiples of the chunk's pixel-frame count -- which a
+    whole-video mean delta averages away entirely. ~1.0 means boundaries look like ordinary frames.
+    """
+    deltas = np.abs(np.diff(frames.astype(np.float32), axis=0)).mean(axis=(1, 2))
+    if len(deltas) < 2 * period:
+        return float("nan")
+    index = np.arange(1, len(deltas) + 1)
+    at_boundary = deltas[index % period == 0]
+    elsewhere = deltas[index % period != 0]
+    if not len(at_boundary) or not elsewhere.mean():
+        return float("nan")
+    return float(at_boundary.mean() / elsewhere.mean())
+
+
+REFERENCE_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
+DEFAULT_REFERENCE_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
+
+
+def reference_video() -> Path:
+    path = Path(os.environ.get(REFERENCE_MEDIA_ENV) or DEFAULT_REFERENCE_MEDIA)
+    if not path.is_file():
+        pytest.skip(f"no reference video at {path}; set {REFERENCE_MEDIA_ENV} to a clip with a soundtrack")
+    return path
+
+
+def ref2va_references(case: str) -> list[MiniMaxH3Reference]:
+    """The reference set per e2e case, shared by the ref2va correctness and perf gates.
+
+    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
+    useful property is a reference nothing in the prompt could produce. It is also the most
+    adversarial of the three and sits at the bottom of the quality table in
+    `test_pipeline_ref2va_minimax_h3.py` -- 0.4826 imaging_quality is this case, not ref2va
+    generally, which reaches 0.6575 on a photographic reference. The discriminator uses real
+    photographs instead.
+    """
+    if case == "one_image":
+        return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
+    if case == "video_with_sound":
+        return [reference_from_video_file(reference_video())]
+    if case == "mixed":
+        # One of each, and in an order that is not the natural one: the image first,
+        # then a SILENT video, then a standalone audio reference. So the request
+        # exercises a video block with no soundtrack rows of its own next to an audio
+        # block with no video rows, which is where the per-modality row cursors of
+        # `split_condition_blocks` can disagree with the layout.
+        sounded = reference_from_video_file(reference_video())
+        return [
+            MiniMaxH3Reference(image=create_fractal_image(1024, 1024)),
+            reference_from_video_file(reference_video(), with_audio=False),
+            MiniMaxH3Reference(audio=sounded.audio, sample_rate=sounded.sample_rate),
+        ]
+    raise ValueError(case)

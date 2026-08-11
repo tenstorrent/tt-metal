@@ -204,7 +204,7 @@ def request_step_timesteps(
 
     ``audio_condition_timestep`` adds a **fourth** level, and only ``ref2va`` needs it:
     a reference soundtrack's rows are clean and run at a literal ``t = 1.0`` at every
-    step (am. 115). Left out for ``t2va`` and ``fl2va``, which have no audio
+    step. Left out for ``t2va`` and ``fl2va``, which have no audio
     conditioning rows -- so their tables are unchanged, and the pipeline's table cache
     key already separates the two partitions.
 

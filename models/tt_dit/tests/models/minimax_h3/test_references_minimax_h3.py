@@ -394,7 +394,7 @@ def _weights_dir() -> Path:
 # the video path adds is the entry point (`vae.encode`, with its 17-frames-per-5-latents
 # chunking) and the frame trim, and 22 frames -> 7 latent frames exercises both.
 
-# 16384, not the 65536 every other MiniMax-H3 gate uses. MEASURED, not chosen (am. 124/126): the
+# 16384, not the 65536 every other MiniMax-H3 gate uses. MEASURED, not chosen: the
 # taps=3 video-reference encoder's static circular buffers clash with L1 by 4224 bytes at 65536 and
 # still clash at 32768; 16384 is the first value that fits. `l1_small_size` reserves the TOP of L1,
 # so a smaller reservation pushes those small allocations above the CB region rather than into it.
@@ -403,7 +403,7 @@ _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
 # The same ring fabric params the e2e gates use, so the encode is measured in the configuration it
 # will actually run in. A LINE config happens to work here -- the VAE encoders use no ring CCL -- but
-# "it passed under a config production does not use" is exactly how am. 124 and 125 got missed.
+# "it passed under a config production does not use" is exactly how two earlier L1-clash bugs got missed.
 MESH_4X8 = [
     pytest.param(
         (4, 8),
@@ -480,8 +480,7 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
     Parametrized per modality rather than one request carrying all three, because the three
     take different code paths with different device requirements and a single case would
     report the first failure as a failure of all of them. `video` in particular needs the
-    taps=3 encoder, whose L1 footprint is a separate question from the other two
-    (am. 124).
+    taps=3 encoder, whose L1 footprint is a separate question from the other two.
 
     Also asserts the resolved **geometry**, because the packed layout is built from it: a
     latent frame count or a latent height off by one produces a valid request conditioned on

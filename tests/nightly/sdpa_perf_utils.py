@@ -184,6 +184,56 @@ def compute_cores_used(seqlen, q_chunk_size, compute_cores, num_heads, ring_size
     return min(compute_cores, total_work_items)
 
 
+def compute_flat_work_distribution(
+    seqlen, q_chunk_size, k_chunk_size, compute_cores, num_heads, ring_size=1, batch_size=1
+):
+    """
+    Derive per-core work metrics from the flat (b, h, q)-chunk distribution.
+
+    Same model as compute_cores_used (see its docstring): all B * NH * q_num_chunks work
+    items are split flat across the grid, so per-core imbalance is at most one chunk.
+    Callers should take q_per_core / iters_per_core / slot_waste_pct from here rather
+    than re-deriving them from a parallelism hierarchy the program factory doesn't use.
+
+    Args:
+        seqlen: Total (global) sequence length.
+        q_chunk_size: Q chunk size.
+        k_chunk_size: K chunk size (K/V traverses the full global sequence via the ring).
+        compute_cores: Available compute cores.
+        num_heads: Attention heads on this device.
+        ring_size: Sequence-parallel ring size (1 for single-chip).
+        batch_size: Batch size (default 1).
+
+    Returns a dict with:
+        q_num_chunks: Local q chunks per (batch, head).
+        k_num_chunks: Global k chunks.
+        total_work_items: batch_size * num_heads * q_num_chunks.
+        cores_used: min(compute_cores, total_work_items).
+        q_per_core: Max work items (q chunks) on any core.
+        iters_per_core: q_per_core * k_num_chunks.
+        slot_waste_pct: Percent of the cores_used * q_per_core slots left empty.
+    """
+    local_seq_len = seqlen // ring_size
+    q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
+    k_num_chunks = math.ceil(seqlen / k_chunk_size)
+
+    total_work_items = int(batch_size * num_heads * q_num_chunks)
+    cores_used = min(compute_cores, total_work_items)
+    q_per_core = math.ceil(total_work_items / cores_used) if cores_used > 0 else 0
+    total_slots = cores_used * q_per_core
+    slot_waste_pct = ((total_slots - total_work_items) / total_slots) * 100 if total_slots > 0 else 0.0
+
+    return {
+        "q_num_chunks": q_num_chunks,
+        "k_num_chunks": k_num_chunks,
+        "total_work_items": total_work_items,
+        "cores_used": cores_used,
+        "q_per_core": q_per_core,
+        "iters_per_core": q_per_core * k_num_chunks,
+        "slot_waste_pct": slot_waste_pct,
+    }
+
+
 # ============================================================================
 # Math utilization
 # ============================================================================

@@ -25,7 +25,6 @@ The bars are set generously. They exist to catch a regression or a pathology, no
 tuned number -- nothing here has been through ``bruteforce_conv3d_sweep.py`` yet.
 """
 
-import json
 import math
 import os
 import time
@@ -41,13 +40,19 @@ from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3Au
 from ....models.vae.minimax_h3.decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
 from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 from ....utils.check import assert_quality
+from .common import (
+    CLIP_FRAMES,
+    DECODE_LATENT_FRAMES,
+    LATENT_TILE,
+    TILE,
+    load_config,
+    random_decoder_state,
+    random_encoder_state,
+    weights_subdir,
+)
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
-TILE = 256
-CLIP_FRAMES = 17
-LATENT_TILE = 16
-DECODE_LATENT_FRAMES = 7
 HOP_LENGTH = 800
 
 # Work-unit counts per supported working point, so a full-clip projection is a
@@ -81,68 +86,6 @@ EXPECTED_METRICS = {
     "audio_encode_5s": 60.0,  # 207 latent frames, stereo as batch 2
     "audio_decode_5s": 60.0,
 }
-
-
-def _weights_dir(subfolder: str) -> str | None:
-    base = os.environ.get("MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers")
-    candidate = os.path.join(base, subfolder)
-    return candidate if os.path.isfile(os.path.join(candidate, "config.json")) else None
-
-
-def _config(weights_dir: str) -> dict:
-    return {
-        k: v
-        for k, v in json.loads(open(os.path.join(weights_dir, "config.json")).read()).items()
-        if not k.startswith("_")
-    }
-
-
-def _reference_class(name: str):
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers.models.autoencoders import autoencoder_kl_minimax_h3 as ref
-
-    return getattr(ref, name)
-
-
-def _random_encoder_state(config: dict) -> dict:
-    """State dict from a randomly-initialised reference encoder -- fast, and enough for timing."""
-    cls = _reference_class("MiniMaxH3VideoEncoder3d")
-    module = cls(
-        in_channels=3,
-        out_channels=2 * config["latent_channels"],
-        block_out_channels=tuple(config["block_out_channels"]),
-        layers_per_block=config["layers_per_block"],
-        spatial_downsample_factors=tuple(config["spatial_downsample_factors"]),
-        temporal_downsample_factors=tuple(config["temporal_downsample_factors"]),
-        norm_num_groups=config["norm_num_groups"],
-        norm_eps=config["norm_eps"],
-        spatial_padding_mode=config["spatial_padding_mode"],
-    )
-    return dict(module.state_dict())
-
-
-def _random_decoder_state(config: dict, *, num_layers: int | None = None) -> dict:
-    """Likewise for the 36-layer decoder: 2.4 B random parameters beat a 10.4 GB read.
-
-    ``num_layers`` overrides the config depth, for gates that only need the ops exercised
-    rather than the full 2.4 B parameters materialised.
-    """
-    cls = _reference_class("MiniMaxH3VideoViTDecoder3d")
-    module = cls(
-        in_channels=config["latent_channels"],
-        out_channels=config["out_channels"],
-        patch_size=16,
-        patch_size_t=4,
-        num_layers=config["decoder_num_layers"] if num_layers is None else num_layers,
-        num_attention_heads=config["decoder_num_attention_heads"],
-        attention_head_dim=config["decoder_attention_head_dim"],
-        num_register_tokens=config["decoder_num_register_tokens"],
-        ffn_mult=config["decoder_ffn_mult"],
-        rope_theta=config["decoder_rope_theta"],
-        rope_dim_ratio=config["decoder_rope_dim_ratio"],
-        norm_eps=config["decoder_norm_eps"],
-    )
-    return dict(module.state_dict())
 
 
 def _psnr(reference: torch.Tensor, test: torch.Tensor) -> float:
@@ -191,10 +134,10 @@ def test_visual_encoder_baseline(mesh_device):
     """Per-invocation time for both encoder shapes, plus the full-clip projections."""
     from loguru import logger
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(0)
 
     measurements = {}
@@ -217,7 +160,7 @@ def test_visual_encoder_baseline(mesh_device):
         )
         # Random-init weights: timing does not depend on their values, and skipping the
         # 10.4 GB checkpoint read is what keeps this baseline quick enough to iterate on.
-        encoder.load_torch_state_dict(_random_encoder_state(config))
+        encoder.load_torch_state_dict(random_encoder_state(config))
         x = torch.randn(1, num_frames, TILE, TILE, encoder.conv_in.in_channels)
         x_device = ttnn.from_torch(x, dtype=ttnn.float32, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
         measurements[label] = _time_it(lambda: encoder(x_device), mesh_device=mesh_device)
@@ -234,10 +177,10 @@ def test_visual_decoder_baseline(mesh_device):
     """Per-invocation time for the 36-layer decoder at the shipping latent tile."""
     from loguru import logger
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(1)
 
     decoder = MiniMaxH3ViTDecoder3d(
@@ -257,7 +200,7 @@ def test_visual_decoder_baseline(mesh_device):
         eps=config["decoder_norm_eps"],
         mesh_device=mesh_device,
     )
-    decoder.load_torch_state_dict(_random_decoder_state(config))
+    decoder.load_torch_state_dict(random_decoder_state(config))
     num_patches = DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE
     tokens = torch.randn(1, num_patches, config["latent_channels"])
     tokens_device = ttnn.from_torch(tokens, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
@@ -279,14 +222,14 @@ def test_audio_baselines_and_roundtrip(mesh_device):
     against the input waveform: a VAE round trip is lossy by construction, so the reference
     is the contract.
     """
-    weights_dir = _weights_dir("audio_vae")
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
     from safetensors.torch import load_file
 
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
     reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
     converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
@@ -351,10 +294,10 @@ def test_audio_decoder_durations(mesh_device):
     """
     from loguru import logger
 
-    weights_dir = _weights_dir("audio_vae")
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(3)
 
     decoder = MiniMaxH3AudioDecoder(
@@ -401,13 +344,13 @@ def test_visual_roundtrip_quality(mesh_device):
 
     from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3
 
-    raw = _config(weights_dir)
+    raw = load_config(weights_dir)
     raw["decoder_num_layers"] = 2
     reference = AutoencoderKLMiniMaxH3(**raw).eval()
     with torch.no_grad():
@@ -457,10 +400,10 @@ def test_visual_data_parallel_throughput(mesh_device):
     """
     from loguru import logger
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
@@ -477,7 +420,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         temporal_taps=3,
         mesh_device=mesh_device,
     )
-    encoder.load_torch_state_dict(_random_encoder_state(config))
+    encoder.load_torch_state_dict(random_encoder_state(config))
     x = torch.randn(devices, CLIP_FRAMES, TILE, TILE, encoder.conv_in.in_channels)
     x_device = ttnn.from_torch(
         x,
@@ -498,7 +441,7 @@ def test_visual_data_parallel_throughput(mesh_device):
         num_layers=config["decoder_num_layers"],
         mesh_device=mesh_device,
     )
-    decoder.load_torch_state_dict(_random_decoder_state(config))
+    decoder.load_torch_state_dict(random_decoder_state(config))
     tokens = torch.randn(devices, DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE, config["latent_channels"])
     tokens_device = ttnn.from_torch(
         tokens,
@@ -567,10 +510,10 @@ def test_visual_encoder_hw_vs_dp(mesh_device, h_factor, w_factor):
     from ....parallel.config import ParallelFactor, VaeHWParallelConfig
     from ....parallel.manager import CCLManager
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
@@ -600,7 +543,7 @@ def test_visual_encoder_hw_vs_dp(mesh_device, h_factor, w_factor):
         parallel_config=parallel_config,
         ccl_manager=ccl,
     )
-    encoder.load_torch_state_dict(_random_encoder_state(config))
+    encoder.load_torch_state_dict(random_encoder_state(config))
     in_channels = encoder.conv_in.in_channels
 
     if sharded:
@@ -670,10 +613,10 @@ def test_tracy_visual_decode_unit(mesh_device):
     from loguru import logger
     from tracy import signpost
 
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(1)
 
     decoder = MiniMaxH3ViTDecoder3d(
@@ -693,7 +636,7 @@ def test_tracy_visual_decode_unit(mesh_device):
         eps=config["decoder_norm_eps"],
         mesh_device=mesh_device,
     )
-    decoder.load_torch_state_dict(_random_decoder_state(config))
+    decoder.load_torch_state_dict(random_decoder_state(config))
     num_patches = DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE
     tokens = ttnn.from_torch(
         torch.randn(1, num_patches, config["latent_channels"]),
@@ -722,23 +665,22 @@ def test_tracy_audio_decode(mesh_device):
     """One audio decode at the shipping duration, signposted for Tracy.
 
     Not reducible to a smaller unit the way the video decode is: the audio decoder is one pass over the
-    whole 207-latent sequence, and amendment 64 measured it at ~1680 ops. That is past Tracy's per-device
+    whole 207-latent sequence, which measures at ~1680 ops. That is past Tracy's per-device
     buffer, so `--op-support-count` is required:
 
         timeout 1800 ./python_env/bin/python -m tracy -p -r -v --op-support-count 4000 -m pytest \\
           <this file> -k tracy_audio_decode -s --timeout 900 &> tracy_audio.log
 
-    Amendment 66 is the reading caveat that matters here: Tracy **undercounts** this stage's device time
-    by ~6x against wall clock, and amendment 64's 224 ms device against 1284 ms wall is the recorded
-    example. Treat the per-op ranking as the product, not the absolute total.
+    The reading caveat that matters here: Tracy **undercounts** this stage's device time by ~6x
+    against wall clock -- 224 ms device against 1284 ms wall is the recorded example. Treat the per-op ranking as the product, not the absolute total.
     """
     from loguru import logger
     from tracy import signpost
 
-    weights_dir = _weights_dir("audio_vae")
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(2)
 
     decoder = MiniMaxH3AudioDecoder(

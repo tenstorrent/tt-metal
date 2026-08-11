@@ -29,7 +29,7 @@ MATH_FIDELITY = {
 #                      accumulating in L1 at the output dtype.
 #   "max"              both of the above.
 #
-# What prompted it: STATE.md amendment 101. The MiniMax-H3 fl2va conditioner reproduces 4 of the
+# What prompted it: the MiniMax-H3 fl2va conditioner reproduces 4 of the
 # reference's 7 massive-activation rows at production shape and content, and the ~9 % per-row error that
 # decides which near-threshold rows blow up is attributable here. Note `fp32_dest_acc_en` is *already*
 # on, so the "bf16 acc" the comment below refers to is the packer's L1 accumulation at the output dtype,

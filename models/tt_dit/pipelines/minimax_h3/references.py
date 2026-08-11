@@ -29,7 +29,7 @@ soundtrack    **mean** (``mode()``)       audio normalization, channel-major
 ============  ==========================  ====================================
 
 The visual rows are then noise-augmented to ``t = 0.999``; the audio rows are **not**,
-and run at a literal ``t = 1.0`` for every denoising step (am. 115). Getting that
+and run at a literal ``t = 1.0`` for every denoising step. Getting that
 backwards produces a plausible soundtrack that ignores its reference, and no downstream
 check would catch it.
 

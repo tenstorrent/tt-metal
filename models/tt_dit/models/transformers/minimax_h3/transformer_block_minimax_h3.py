@@ -17,7 +17,7 @@ from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
-from .mmrs_config import has_mmrs_config
+from .mmrs_config import has_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -312,7 +312,11 @@ class MiniMaxH3TransformerBlock(Module):
         # the device's 120 cores at subblock 1x1, which made this fusion a 45% regression on the stage
         # before mmrs_config existed -- and silently, since an unknown shape did not warn. See
         # mmrs_config for the sweep and the grid/bandwidth tradeoff behind it.
-        if self.tp_factor > 1 and has_mmrs_config(normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size):
+        ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
+        if self.tp_factor > 1 and has_mmrs_config(*ff2_shape):
+            # M is only known here (it tracks the packed sequence length), so the blocking is
+            # registered at the point of use rather than at construction. Idempotent and cheap.
+            register_mmrs_config(*ff2_shape)
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,

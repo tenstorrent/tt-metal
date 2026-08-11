@@ -90,7 +90,7 @@ _PATTERNS = [f"{_SUBFOLDER}/*"]
 #   1344x768  16:9, max area   grid [1, 48, 84]   4032 patches   1008 image tokens
 #    768x768  1:1              grid [1, 48, 48]   2304 patches    576 image tokens
 #
-# 448x448 is absent because it is not a canvas `resolve_canvas_size` yields, so by amendment 76 it
+# 448x448 is absent because it is not a canvas `resolve_canvas_size` yields, so a green run there
 # would be evidence about 448x448 alone. The full 1008-token presentation runs in a few minutes, so
 # the smaller shape buys nothing.
 KEYFRAME_IMAGE = (1344, 768)
@@ -272,7 +272,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     reason=(
         "Massive-activation rows disagree: the reference produces 7 rows whose norm exceeds 10x the "
         "median (up to 79x) and we reproduce 4 of them, missing 3 and inventing 1. Cause IS now "
-        "established, unlike the version of this xfail it replaces -- see STATE.md amendment 101. Text "
+        "established, unlike the version of this xfail it replaces. Text "
         "rows (2.5% max) and the median vision row (9.0%) both pass; the shape, content and tap are all "
         "production now. strict=True so improving the conditioner's precision forces a return here."
     ),
@@ -281,9 +281,9 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
 def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
     """The `fl2va` conditioner with an image, on released weights, at the production canvas and tap.
 
-    Three properties this gate depends on, all named in STATE.md amendments 90 and 95:
+    Three properties this gate depends on:
 
-    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so by amendment 76 it was
+    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so a run there was
       evidence about 448x448 alone. Production is 1344x768 -> 1008 image tokens, seq 1028.
     - **the content.** `torch.rand` uniform noise is invented *and* degenerate for this metric; see
       `_test_image`.
@@ -293,10 +293,10 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
       but it gated a tensor production never reads and paid for 14 layers it never needed.
 
     The bar is set from the production measurement rather than inherited, and the reason a *loose* bar
-    is a gate here rather than an admission is that the floor behind it has been measured. Amendment 93:
+    is a gate here rather than an admission is that the floor behind it has been measured:
     the reference vision tower's own bf16-vs-fp32 floor is 99.87 % at this canvas, against our tower's
     99.5953 %, so ~0.28 points of the tower's error is `layers/linear.py`'s bf16 accumulation -- a
-    deliberate, repo-wide precision choice. Amendment 95: pushing a perturbation of *that magnitude*
+    deliberate, repo-wide precision choice. And pushing a perturbation of *that magnitude*
     through the **reference** decoder scores 98.97-99.49 % at this geometry, so the conditioner cannot
     reach four nines with the tower it is fed, and the reference itself does not.
 

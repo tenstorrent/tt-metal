@@ -60,8 +60,7 @@ Mind the two selectors: `real_weights-` (trailing dash) is the 2-layer parameter
 `transformer_real_weights` is the separate full-depth test. Plain `-k real_weights` matches both.
 
 The 2-layer case reads only the first two blocks (62 of 638 tensors) and takes about a minute; the
-50-layer case spends ~145 s loading weights onto the mesh. Block performance is tracked separately in
-[MiniMaxH3_perf_log.md](MiniMaxH3_perf_log.md).
+50-layer case spends ~145 s loading weights onto the mesh.
 
 ## Text conditioner
 
@@ -81,7 +80,7 @@ Verified against the released weights on a 4x8 Blackhole Galaxy, TP=4 axis 0 wit
 **PCC 99.9892%, RMSE/sigma 1.5%, at the production 512-token prompt** —
 `tests/models/minimax_h3/test_text_encoder_minimax_h3.py::test_text_encoder_tap_matches_reference`.
 Short prompts read far better (99.9999% at 13-22 tokens); a 50-layer causal stack accumulates over
-its context, so the bar is set from the 512-token row. See STATE.md amendment 76.
+its context, so the bar is set from the 512-token row.
 
 Two conditioner facts that break naive assumptions:
 
@@ -114,7 +113,7 @@ released weights, `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py
 **The tower is green on released weights; the fused conditioner is not.** Merged tokens read 99.6532%
 at 448x448 and 99.5953% at 1344x768 (~9.4% RMSE/sigma), but `test_fused_conditioner_real_weights` is
 `xfail` at PCC 98.6224% against a 0.99 bar, cause not established. Do not read a green run of that
-file as `fl2va` being verified end to end. See STATE.md amendment 90.
+file as `fl2va` being verified end to end.
 
 Note the demos port at `models/demos/qwen3_vl/` is built on `LightweightModule` /
 `tt_transformers`, not `tt_dit`. It is an algorithm reference, not reusable code.
@@ -213,7 +212,7 @@ Artifacts land as `fl2va_<case>.mp4` / `_silent.mp4` / `.wav` plus four inspecti
 
 **The gated keyframe is frame 0 of the calibrated `t2va` artifact**, read from
 `MINIMAX_H3_T2VA_ARTIFACT_DIR` (default `~/h3_t2va_artifacts`), so run the `t2va` gate first — this one
-skips rather than inventing content. The reason is amendment 87: a keyframe forces the content, and
+skips rather than inventing content. The reason: a keyframe forces the content, and
 `imaging_quality` is a no-reference IQA metric, so an arbitrary photograph would invalidate the
 tier-6 calibration outright. Tier-6 numbers are therefore **recorded, not gated**, for `fl2va`.
 
@@ -227,7 +226,7 @@ A keyframe enters at two independent places, and both matter:
 The two read the same `(H/32) x (W/32)` grid: at 1344x768 that is 1008 image tokens **and** 1008
 conditioning rows. Packed sequence 39746 -> 39936 padded for one anchor, 41756 -> 41984 for two.
 
-Measured, all three cases green (STATE.md amendment 97):
+Measured, all three cases green:
 
 | case | decoded anchor frame vs keyframe |
 |---|---|
@@ -258,7 +257,7 @@ error. First run populates ~68 GB of cache.
 
 ## Working point
 
-The gates run at one shape and it is the one the perf log is tuned for:
+The gates run at one shape:
 
 | | |
 |---|---|
@@ -295,11 +294,11 @@ scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performanc
 | realtime factor | 14.1x | 12.4x | compute / video seconds |
 
 **Do not read this as `fl2va` being faster than `t2va`.** It is one run of each, and run-to-run variance
-at identical shape and seed is **±8 %** (STATE.md amendment 82 measured denoise between 56.6 and 71.3 s).
+at identical shape and seed is **±8 %** (denoise measured between 56.6 and 71.3 s across repeats).
 What the numbers do establish is that `fl2va` is **not materially slower** despite a 5.4 % longer packed
 sequence. Claiming a direction needs repeats.
 
-Where the time goes, from the Tracy captures in STATE.md amendment 103:
+Where the time goes, from Tracy captures:
 
 | stage | device FW | dominated by |
 |---|---|---|
@@ -331,7 +330,7 @@ So it is free at this shape, `packer_l1_acc` has no effect, and the vision tower
 is all in the 50-layer decoder. **The default is deliberately left alone**: one model's measurement is
 not evidence about LTX, Wan or Ideogram-4. And it changes the video not at all (40-48 dB PSNR
 frame-to-frame, identical anchor and CLIP numbers), so this is a conditioner-fidelity knob rather than a
-quality one. See STATE.md amendments 101-102.
+quality one.
 
 ## Audio decode precision
 
@@ -369,7 +368,7 @@ fidelity can help. Elementwise fp32 ops, by contrast, are exact.
 Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
 **not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot
 widen — and 512 fails outright. And `ttnn.snake_beta` is already fp32-grade at 7.2e-08, so the fused op
-is not worth replacing. Full derivation in `STATE.md` amendments 111–113.
+is not worth replacing.
 
 Accurate mode needs a **larger trace region** (375463936 B measured, against the default path's 300 MB)
 and runs long enough to exceed the traced audio decode's 300 s pytest timeout; pass

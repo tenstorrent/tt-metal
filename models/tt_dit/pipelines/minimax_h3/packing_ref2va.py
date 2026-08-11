@@ -24,12 +24,12 @@ Two properties separate this from ``fl2va``:
   own resolution -- 2048 px short edge for an image with no area cap, the 768 px canvas
   of its own aspect ratio for a video -- with its own aspect-normalized spatial grid. One
   2048x2048 reference contributes 4096 vision tokens to the text stream *and* 4096 video
-  condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's (am. 114).
+  condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
 * **A video reference packs its soundtrack rows immediately before its own video rows**,
   sharing one rotary origin, as the generated audio and video do.
 
 Audio reference rows are clean: posterior mean, no float16 round trip, no noise
-augmentation, and a literal ``t = 1.0`` at every step (am. 115).
+augmentation, and a literal ``t = 1.0`` at every step.
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ def _temporal_position_span(num_latent_frames: int) -> float:
     Summed sequentially in float64, which is *not* how
     :func:`packing._temporal_position_span` sums the same series -- that one reproduces a
     numpy pairwise sum. The two differ in the last ulp from 16 latent frames on, and by
-    ~2 ulp in the opposite direction at the production 37 (am. 116):
+    ~2 ulp in the opposite direction at the production 37:
 
         n=16  pairwise 86.66666666666667   sequential 86.66666666666669
         n=37  pairwise 206.66666666666663  sequential 206.66666666666657
@@ -611,9 +611,16 @@ def decode_reference_video(path: str | os.PathLike) -> tuple[np.ndarray, float, 
         stream = container.streams.video[0]
         frames, rotation = [], 0.0
         for frame in container.decode(stream):
-            rotation = frame.rotation
+            # `VideoFrame.rotation` arrived in PyAV 14.1; older releases decode
+            # fine, they just can't report a display matrix, so stay upright.
+            rotation = getattr(frame, "rotation", 0.0)
             frames.append(frame.to_ndarray(format="rgb24"))
-        frame_rate = float(stream.average_rate or stream.guessed_rate)
+        reported_rate = stream.average_rate or stream.guessed_rate
+        if reported_rate is None:
+            raise ValueError(
+                f"the video stream in {path} reports no frame rate; decode it yourself and pass the frames plus their fps"
+            )
+        frame_rate = float(reported_rate)
         soundtrack = None
         if container.streams.audio:
             # Decoding the frames drained the container, so the soundtrack needs a second pass.

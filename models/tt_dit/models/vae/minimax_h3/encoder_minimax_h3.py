@@ -22,8 +22,8 @@ group) statistics itself. Three in-tree alternatives were measured and all lost 
 ``ttnn.group_norm`` with T as batch (2.7x slower, and bf16-only, which made every norm a
 bf16 island in an otherwise fp32 encoder), a fused distributed GroupNorm device op written
 for this branch and since dropped (1.6x slower per frame, ~30 GB/s against the stats norm's
-~112), and carrying the resnet chain in TILE to avoid the round trip (a wash). STATE.md
-amendments 52, 56 and 61 carry the numbers; do not re-derive them.
+~112), and carrying the resnet chain in TILE to avoid the round trip (a wash). All three
+were measured before being rejected; do not re-derive them.
 
 Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
 the *global* element count per (frame, group) and only the constructor knows the mesh factor.
@@ -66,7 +66,7 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
     * A fused distributed GroupNorm device op was written for this branch and dropped: it
       hard-rejects ``N > 1``, and here ``N`` is ``T`` (17/9/5) because the statistic is per
       frame. It also took a single ``cluster_axis``, so it could not reduce over both mesh
-      axes -- and it measured 1.6x slower than this anyway (STATE.md amendment 56).
+      axes -- and it measured 1.6x slower than this anyway.
 
     So the statistics are computed directly: per ``(frame, group)`` local sums, an
     all-reduce of **only those** -- ``T x 32`` scalars, against a full-activation gather --
@@ -78,7 +78,7 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
     flag because the group means here are *not* near zero -- exactly the cancellation
     ``GroupNorm3D`` uses Welford to avoid. What contains it is that the subtraction happens
     on the ``(T,1,1,G)`` stats tensor in fp32, never on the activation; PCC gates the
-    difference at 0.02 pp (STATE.md amendment 61).
+    difference at 0.02 pp.
 
     Runs in the activation dtype, so unlike ``ttnn.group_norm`` -- which is bf16-only, and
     was the encoder's precision floor while it was in use -- fp32 activations stay fp32.
@@ -327,8 +327,7 @@ class MiniMaxH3ResnetBlock3d(Module):
         """``(1,T,H,W,C)`` ROW_MAJOR in and out -- what ``conv3d`` requires on both sides.
 
         Carrying the chain in TILE instead, to make the residual add cheaper, was measured
-        and is a wash: it moves the cost into Tilize rather than removing it (STATE.md
-        amendment 56).
+        and is a wash: it moves the cost into Tilize rather than removing it.
         """
         norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
         h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))

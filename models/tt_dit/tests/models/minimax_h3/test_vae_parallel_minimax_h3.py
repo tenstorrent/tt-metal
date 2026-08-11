@@ -45,15 +45,15 @@ from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from .test_performance_vae_minimax_h3 import (
+from .common import (
     CLIP_FRAMES,
     DECODE_LATENT_FRAMES,
     LATENT_TILE,
     TILE,
-    _config,
-    _random_decoder_state,
-    _random_encoder_state,
-    _weights_dir,
+    load_config,
+    random_decoder_state,
+    random_encoder_state,
+    weights_subdir,
 )
 
 # One fp32 ulp at unit magnitude (2^-22). The edge correction blends rather than assigns.
@@ -237,13 +237,13 @@ def test_trailing_reflect_halo_exact(mesh_device, h_factor, w_factor):
 )
 def test_encoder_sharded_matches_unsharded(mesh_device, h_factor, w_factor):
     """Sharding is a decomposition: the encoder's answer must not depend on the factor."""
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     torch.manual_seed(0)
 
-    state = _random_encoder_state(config)
+    state = random_encoder_state(config)
     common = dict(
         num_frames=CLIP_FRAMES,
         height=TILE,
@@ -324,10 +324,10 @@ PROBE_UNITS = (0, 7, 31)
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_encoder_data_parallel_independence(mesh_device):
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
@@ -346,7 +346,7 @@ def test_encoder_data_parallel_independence(mesh_device):
     )
     # Random weights: independence is a property of the program, not of the values, and
     # skipping the 10.4 GB checkpoint read is what keeps this gate quick.
-    encoder.load_torch_state_dict(_random_encoder_state(config))
+    encoder.load_torch_state_dict(random_encoder_state(config))
 
     in_channels = encoder.conv_in.in_channels
     units = [torch.randn(1, CLIP_FRAMES, TILE, TILE, in_channels) for _ in range(num_devices)]
@@ -404,10 +404,10 @@ DECODER_PROBE_LAYERS = 2
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 def test_decoder_data_parallel_independence(mesh_device):
     """Same independence gate for the ViT decoder: each (chunk, tile) unit is its own decode."""
-    weights_dir = _weights_dir("vae")
+    weights_dir = weights_subdir("vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     num_devices = mesh_device.get_num_devices()
     torch.manual_seed(0)
 
@@ -420,7 +420,7 @@ def test_decoder_data_parallel_independence(mesh_device):
         num_layers=DECODER_PROBE_LAYERS,
         mesh_device=mesh_device,
     )
-    decoder.load_torch_state_dict(_random_decoder_state(config, num_layers=DECODER_PROBE_LAYERS))
+    decoder.load_torch_state_dict(random_decoder_state(config, num_layers=DECODER_PROBE_LAYERS))
 
     tokens = DECODE_LATENT_FRAMES * LATENT_TILE * LATENT_TILE
     units = [torch.randn(1, tokens, config["latent_channels"]) for _ in range(num_devices)]

@@ -25,13 +25,16 @@ _ZEROS_CACHE: dict = {}
 
 CONV_SPLIT_MODES = ("off", "weight", "full")
 
+# Default cap on conv3d's C_in_block for the H3 audio blocking table; see `audio_max_c_in_block`.
+DEFAULT_MAX_C_IN_BLOCK = 128
+
 
 def audio_accurate_mode() -> bool:
     """Whether ``MINIMAX_H3_AUDIO_ACCURATE`` is set, turning on every precision lever at once.
 
     The three levers below are independent but strongly complementary, because the chain error is set by
     whichever source is worst -- so enabling one moves the total far less than enabling all three.
-    Measured end to end on the audio VAE decode at 5 s stereo (STATE.md am. 113):
+    Measured end to end on the audio VAE decode at 5 s stereo:
 
         split  mac   tap    rel_rmse     PCC          PSNR
         off    off   off    0.1046       99.5451 %    40.29 dB    <- default
@@ -67,7 +70,9 @@ def conv_split_mode() -> str:
     * ``full`` -- 3 convs, splitting both. ``lo*lo`` is genuinely negligible (a 4-term form measures
       identically), so it is omitted. Measured 1.9x.
 
-    See STATE.md amendment 111 for the measurements and 112 for the end-to-end result.
+    The conv classes never read this themselves: they take an explicit ``split_mode`` argument
+    (default ``"off"``), and only the MiniMax-H3 modules derive that argument from this helper --
+    so exporting the env var cannot change LTX's audio path.
     """
     mode = os.environ.get("MINIMAX_H3_AUDIO_CONV_SPLIT", "full" if audio_accurate_mode() else "off").lower()
     if mode not in CONV_SPLIT_MODES:
@@ -96,10 +101,50 @@ def conv_tap_matmul_enabled() -> bool:
         C128 k3 d1   conv3d 5.278e-04   tap-matmul 2.808e-04   1.88x
         C32  k3 d1   conv3d 5.292e-04   tap-matmul 2.702e-04   1.96x
 
-    Costs ``kernel_size`` tilizes plus one untilize per conv on top of the extra matmuls, and am. 103
-    profiled this stage as layout-dominated, so see STATE.md am. 113 for the measured end-to-end cost.
+    Costs ``kernel_size`` tilizes plus one untilize per conv on top of the extra matmuls, and this
+    stage profiles as layout-dominated, so the extra layout ops carry a real end-to-end cost.
+
+    Like `conv_split_mode`, the conv classes never read this themselves: they take an explicit
+    ``tap_matmul`` argument (default off) that only the MiniMax-H3 modules derive from this helper.
     """
     return os.environ.get("MINIMAX_H3_AUDIO_TAP_MATMUL", "1" if audio_accurate_mode() else "0") == "1"
+
+
+def audio_max_c_in_block() -> int:
+    """Effective cap on conv3d's ``C_in_block`` for the H3 audio blocking table, from
+    ``MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK`` (default 128).
+
+    Consumed by ``blockings_minimax_h3_audio`` when it seeds ``_FP32_BLOCKINGS``. This is a
+    cache-relevant lever, not just a performance knob: `prepare_conv3d_weight_state` blocks the
+    prepared weight **bytes** by ``C_in_block``, so weights prepared under a different cap are not
+    interchangeable even though the parameter names and shapes match -- which is why
+    `audio_weights_variant` folds a non-default cap into the cache suffix.
+    """
+    return int(os.environ.get("MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK", str(DEFAULT_MAX_C_IN_BLOCK)))
+
+
+def audio_weights_variant() -> str:
+    """Cache-key suffix for the precision levers that change the prepared parameter set.
+
+    `conv_split_mode` decides whether the ``weight_lo`` / ``tap_w{k}_lo`` residual parameters exist, and
+    `conv_tap_matmul_enabled` swaps a stride-1 conv's ``weight`` for per-tap ``tap_w{k}`` matmul weights
+    -- so device-weight caches prepared under different settings hold different ``.tensorbin`` sets and
+    are not interchangeable. `audio_max_c_in_block` changes the prepared weight *bytes* with an
+    unchanged file set (`prepare_conv3d_weight_state` blocks by ``C_in_block``), so it gets a term
+    too. Appending this to the cache subfolder keys the cache by the *effective* configuration
+    (``MINIMAX_H3_AUDIO_ACCURATE`` only moves the two defaults, so it needs no term of its own).
+    The default configuration maps to ``""``, leaving pre-existing cache paths untouched.
+
+    The H3 modules resolve the same helpers once at construction and pass them down as explicit
+    conv arguments, so the modules this key describes and the key itself derive from one source.
+    """
+    split = conv_split_mode()
+    tap = conv_tap_matmul_enabled()
+    suffix = "" if split == "off" and not tap else f"_split-{split}_tap{int(tap)}"
+    c_in_cap = audio_max_c_in_block()
+    if c_in_cap != DEFAULT_MAX_C_IN_BLOCK:
+        suffix += f"_cinb{c_in_cap}"
+    return suffix
 
 
 def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -107,7 +152,7 @@ def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
 
     Verified on ROW_MAJOR fp32: the typecast round trip reproduces torch's ``.bfloat16()`` bit-for-bit and
     ``hi + lo`` reconstructs ``x`` exactly, so this costs two elementwise ops and no tilize -- which
-    matters, since am. 103 profiled the audio decode stage at ~70 % layout ops.
+    matters, since the audio decode stage profiles at ~70 % layout ops.
     """
     hi = ttnn.typecast(ttnn.typecast(x, ttnn.bfloat16), ttnn.float32)
     return hi, ttnn.subtract(x, hi)
@@ -332,25 +377,29 @@ def depthwise_mac_preferred() -> bool:
 
     That 1.5437e-03 was the *entire* error injected by an `Activation1d` -- `snake_beta` and the
     upsampler both measure at ~7e-08 -- so for the audio decode this matters more than the conv3d
-    operand split does. It is not free: the MAC form does K passes over the tensor, so see STATE.md
-    am. 113 for the measured cost.
+    operand split does. It is not free: the MAC form does K passes over the tensor.
+
+    Consumed by the MiniMax-H3 call sites, which pass it into `depthwise_tap_filter` as
+    ``prefer_mac``; LTX call sites never read it and keep the fast conv1d path.
     """
     return os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", "1" if audio_accurate_mode() else "0") == "1"
 
 
-def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
+def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, prefer_mac: bool = False):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
     ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``, or via the exact
-    shift-multiply-add form when `depthwise_mac_preferred`.
+    shift-multiply-add form when ``prefer_mac``. ``prefer_mac`` is an explicit opt-in so that
+    only call sites that ask for it (MiniMax-H3, via `depthwise_mac_preferred`) take the slower
+    K-pass MAC form; the default keeps the fast conv1d path regardless of env vars.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
 
-    if depthwise_mac_preferred():
-        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
+    if prefer_mac:
+        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
@@ -392,19 +441,22 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
         # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
         # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration. Fall back to the shift-multiply-add form, which has no sharding
-        # constraint at all -- slower, but this is a correctness path.
-        if "slice configuration" not in str(exc) and "found_valid_config" not in str(exc):
-            raise
-        logger.warning(f"depthwise conv1d unavailable at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback")
-        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out)
+        # configuration. The exact threshold is internal to the slicer's core-grid search and
+        # its error text is not a stable API, so any RuntimeError from the conv takes the
+        # fallback: the shift-multiply-add form, which has no sharding constraint at all --
+        # slower, but this is a correctness path (and MAC is the *more* accurate form).
+        logger.warning(
+            f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})"
+        )
+        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
 
-def _depthwise_tap_mac(x_BTC, taps, stride, *, T_out: int):
+def _depthwise_tap_mac(x_BTC, taps, stride, *, T_out: int, dtype):
     """Depthwise K-tap filter as ``sum_k tap_k * x[k : k + stride*T_out : stride]``.
 
     No convolution op, so no shard-layout or slicing constraints. Used when ``ttnn.conv1d``
-    cannot find a valid configuration for the shape.
+    cannot find a valid configuration for the shape. The result is cast to ``dtype`` so both
+    forms return the caller's requested conv dtype.
     """
     accumulator = None
     for offset, tap in enumerate(taps):
@@ -418,6 +470,8 @@ def _depthwise_tap_mac(x_BTC, taps, stride, *, T_out: int):
         )
         scaled = ttnn.multiply(window, float(tap))
         accumulator = scaled if accumulator is None else ttnn.add(accumulator, scaled)
+    if accumulator is not None and accumulator.get_dtype() != dtype:
+        accumulator = ttnn.typecast(accumulator, dtype)
     return accumulator
 
 
@@ -655,11 +709,14 @@ class Conv2dViaConv3d(Module):
         padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        split_mode: str = "off",
     ) -> None:
         super().__init__()
 
         if padding_mode not in ("zeros", "causal_height", "causal_width"):
             raise ValueError(f"padding_mode must be zeros/causal_height/causal_width, got {padding_mode!r}")
+        if split_mode not in CONV_SPLIT_MODES:
+            raise ValueError(f"split_mode must be one of {CONV_SPLIT_MODES}, got {split_mode!r}")
 
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
@@ -708,8 +765,9 @@ class Conv2dViaConv3d(Module):
             packer_l1_acc=False,
         )
 
-        # See `conv_split_mode`; splitting only helps an fp32 datapath.
-        self.split_mode = conv_split_mode() if dtype == ttnn.float32 else "off"
+        # An explicit argument, never the env var, so only call sites that opt in (MiniMax-H3) can
+        # change the parameter set. See `conv_split_mode`; splitting only helps an fp32 datapath.
+        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
@@ -807,11 +865,15 @@ class Conv1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
         if padding_mode not in ("zeros", "causal"):
             raise ValueError(f"padding_mode must be zeros/causal, got {padding_mode!r}")
+        if split_mode not in CONV_SPLIT_MODES:
+            raise ValueError(f"split_mode must be one of {CONV_SPLIT_MODES}, got {split_mode!r}")
         sharded = parallel_config is not None and parallel_config.factor > 1
         if sharded:
             assert ccl_manager is not None, "T-sharding requires ccl_manager"
@@ -898,9 +960,11 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
-        # Resolved once at construction, so a test setting the env var mid-process cannot desync the
-        # allocated residual from what forward() expects. Splitting only helps an fp32 datapath.
-        self.split_mode = conv_split_mode() if dtype == ttnn.float32 else "off"
+        # Both levers are explicit arguments, never the env vars, so only call sites that opt in
+        # (MiniMax-H3, which resolves `conv_split_mode` / `conv_tap_matmul_enabled` once at module
+        # construction) can change the parameter set or op graph -- LTX's audio path keeps the
+        # defaults regardless of env. Splitting only helps an fp32 datapath.
+        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
 
         self.same_pad = same_pad
         self.eff_k = eff_k
@@ -909,7 +973,7 @@ class Conv1dViaConv3d(Module):
         # route owns the halo exchange and the C_in gather, and duplicating that here would be a second
         # place for the same invariant to be wrong. Sharded audio decode is off by default.
         self.tap_matmul = (
-            conv_tap_matmul_enabled()
+            tap_matmul
             and dtype == ttnn.float32
             and stride == 1
             and not sharded
@@ -1156,6 +1220,8 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -1171,6 +1237,8 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             channel_shard_output=channel_shard_output,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -1200,6 +1268,8 @@ class ConvTranspose1dViaConv3d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1224,6 +1294,8 @@ class ConvTranspose1dViaConv3d(Module):
             dtype=dtype,
             parallel_config=None,
             ccl_manager=None,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
         # We supply our own symmetric padding instead.
         self.conv.external_pad_front = 0

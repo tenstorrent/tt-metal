@@ -103,7 +103,7 @@ def _modality_metadata(
 
     The timestep indices give conditioning rows their own levels rather than reusing 0 or 1, because
     production runs them at different noise than the generated rows: **2** for video conditioning
-    (`max(t, 0.999)`) and **3** for audio conditioning (a literal `t = 1.0`, am. 115). So a
+    (`max(t, 0.999)`) and **3** for audio conditioning (a literal `t = 1.0`). So a
     ref2va request with a soundtrack addresses four distinct timestep levels where t2va and fl2va
     address three, and the AdaLN table is exercised wider.
     """
@@ -216,7 +216,7 @@ def _modality_metadata(
         # ---- ref2va: a MODALITY-INTERLEAVED conditioning region ----
         #
         # The shape a single 2048x2048 image reference ships at, measured against the reference
-        # packing (am. 114): 4104 presentation tokens (4096 of them one vision block) and
+        # packing: 4104 presentation tokens (4096 of them one vision block) and
         # 4096 condition rows, giving 45910 -> padded to 46080. All-video conditioning, so what this
         # adds over fl2va is scale (1.22x t2va's packed length) and a condition block whose 64x64
         # spatial grid is NOT the target's 24x42 -- a reference is prepared at its own resolution.
@@ -232,7 +232,7 @@ def _modality_metadata(
         # the interleaved region can get wrong is which projection a block takes and which rows it
         # lands on, both residue- and order-sensitive rather than length-sensitive. The full lengths
         # cost more than the budget allows here because the torch reference's attention is O(n^2) on
-        # CPU (am. 122); they are covered at full depth by the real-weights test below.
+        # CPU; they are covered at full depth by the real-weights test below.
         pytest.param(
             512,
             414,
@@ -647,7 +647,7 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
         # ---- ref2va: does it fit? ----
         #
         # The ref2va shape probe. Its packed lengths were measured host-only against the
-        # reference packing (am. 114) and run 1.2x-3.0x t2va's, which is a residency question the
+        # reference packing and run 1.2x-3.0x t2va's, which is a residency question the
         # 2-layer correctness test cannot answer and the t2va shape above does not reach. These three
         # run the real 50 layers with the real checkpoint at the real padded lengths, so what they
         # answer is exactly "does the shape the e2e gate will ask for fit on the mesh".

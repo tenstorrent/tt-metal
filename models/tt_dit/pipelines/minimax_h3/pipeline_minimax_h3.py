@@ -62,6 +62,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
+from ...layers.audio_ops import audio_weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
@@ -124,7 +125,7 @@ PRECOMPUTE_ADALN_ENV = "MINIMAX_H3_PRECOMPUTE_ADALN"
 
 # The timestep a ref2va reference soundtrack's rows run at: a literal 1.0, every step. They are
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
-# conditioning rows, which sit at max(t, 0.999). See `references.py` and am. 115.
+# conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
 # Read from the two scheduler_config.json files, which hold nothing else.
@@ -756,7 +757,7 @@ class MiniMaxH3Pipeline:
 
         # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
         # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
-        # the two layouts are bit-identical -- measured, see amendment 74.
+        # the two layouts are bit-identical -- measured.
         rope_scaling = config["rope_scaling"]
         position_ids = None
         if has_vision:
@@ -1089,7 +1090,9 @@ class MiniMaxH3Pipeline:
             cache.load_model(
                 encoder,
                 model_name=MODEL_NAME,
-                subfolder="audio_encoder",
+                # The audio precision levers change the module's parameter set, so they are part of
+                # the cache key -- see `audio_weights_variant`.
+                subfolder="audio_encoder" + audio_weights_variant(),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -1164,7 +1167,9 @@ class MiniMaxH3Pipeline:
             cache.load_model(
                 decoder,
                 model_name=MODEL_NAME,
-                subfolder="audio_decoder",
+                # The audio precision levers change the module's parameter set, so they are part of
+                # the cache key -- see `audio_weights_variant`.
+                subfolder="audio_decoder" + audio_weights_variant(),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -1482,7 +1487,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 5. Noise-augment the VISUAL condition rows to t = 0.999. The audio rows are left clean and
-        # run at a literal t = 1.0 for every step -- see `references.py` and am. 115.
+        # run at a literal t = 1.0 for every step -- see `references.py`.
         if condition_rows is not None:
             condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
 
@@ -1705,8 +1710,7 @@ class MiniMaxH3Pipeline:
         # Constant for the whole loop: the rotary tables, the text stream, and the conditioning
         # blocks. The blocks are invariant -- the loop writes only rows from `num_cond` /
         # `num_cond_audio` on, and raises if a conditioning row moved. Hoisting them is
-        # bit-identical and worth ~0 % of wall time, the upload having overlapped device work
-        # (am. 133).
+        # bit-identical and worth ~0 % of wall time, the upload having overlapped device work.
         t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, padded_len)
         t_rope = time.time() - t_rope

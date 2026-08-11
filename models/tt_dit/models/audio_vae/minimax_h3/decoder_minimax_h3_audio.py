@@ -38,7 +38,7 @@ import torch
 
 import ttnn
 
-from ....layers.audio_ops import _AlignedOutConv1d
+from ....layers.audio_ops import _AlignedOutConv1d, conv_split_mode, conv_tap_matmul_enabled, depthwise_mac_preferred
 from ....layers.module import Module
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
@@ -80,6 +80,14 @@ class MiniMaxH3AudioDecoder(Module):
         for rate in decoder_rates:
             self.hop_length *= rate
 
+        # The precision levers, resolved from the env helpers once here (like prefer_mac below) and
+        # passed down as explicit arguments. H3-only opt-in: LTX constructs the same conv classes
+        # without them, so MINIMAX_H3_AUDIO_* cannot change LTX's parameter set or op graph. The
+        # pipeline's device-weight cache key (`audio_weights_variant`) reads the same helpers, so
+        # the cached parameter set and these modules cannot drift apart.
+        split_mode = conv_split_mode()
+        tap_matmul = conv_tap_matmul_enabled()
+
         # k1 conv, so no padding mode to get wrong. _AlignedOutConv1d rather than the base
         # class per its own docstring: a non-32-multiple out count reaches conv3d and
         # produces a buffer whose page size does not divide its length.
@@ -92,6 +100,8 @@ class MiniMaxH3AudioDecoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
         self.decoder = Vocoder(
             resblock_kernel_sizes=list(resblock_kernel_sizes),
@@ -108,6 +118,11 @@ class MiniMaxH3AudioDecoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            # Resolved once at construction. H3-only opt-in: LTX's vocoder keeps the default fast
+            # conv1d filters and single-conv weights regardless of env vars.
+            prefer_mac=depthwise_mac_preferred(),
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
@@ -143,8 +158,7 @@ class MiniMaxH3AudioDecoder(Module):
 
         ``traced`` replays a captured device graph for the vocoder instead of dispatching it
         op by op. The vocoder is ~70 % host-bound, so this is its dominant lever -- unlike the
-        *visual* halves, which measured 1.00x traced because they are device-bound (STATE.md
-        amendment 57). Needs a ``trace_region_size`` on the mesh device; the first call at a
+        *visual* halves, which measured 1.00x traced because they are device-bound. Needs a ``trace_region_size`` on the mesh device; the first call at a
         shape captures, later calls replay.
         """
         _, channels, _ = latents_BCT.shape

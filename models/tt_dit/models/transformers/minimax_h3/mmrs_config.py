@@ -13,9 +13,9 @@ where the unfused path runs on 110 cores at subblock (2, 2). Measured, that fall
 
 Unlike `agmm_config` these must be keyed on the full `(M, K, N)`, because that is what
 `get_fused_mmrs_config` looks up -- there is no `default_block_size` hook to key more loosely. M is the
-per-device packed sequence length, so it varies with the video duration; `has_mmrs_config` registers
-the blocking for whichever M it is asked about, and gates the fused path off entirely for shapes it
-cannot serve.
+per-device packed sequence length, so it varies with the video duration; `has_mmrs_config` gates the
+fused path off entirely for shapes it cannot serve, and `register_mmrs_config` registers the blocking
+for whichever M the fused path is about to run at.
 
 `compute_with_storage_grid_size` is the *matmul* grid, and the reduce-scatter workers occupy the rows
 between it and the full device grid:
@@ -33,7 +33,7 @@ grids at M=4768:
     12x9  108 mm cores,  2 RS workers/link   M=6 K=2 N=8  sb(2,2)   1.487 ms
 
 The optimum is interior: 12x9 starves the reduce-scatter and 12x7 starves the matmul. The longer
-durations reuse that blocking rather than being swept -- see `has_mmrs_config`.
+durations reuse that blocking rather than being swept -- see `register_mmrs_config`.
 """
 
 from __future__ import annotations
@@ -63,19 +63,30 @@ _TILE = 32
 
 
 def has_mmrs_config(m: int, k: int, n: int) -> bool:
-    """Whether the fused MM+RS+addcmul path should be taken for this shape, registering it if so.
+    """Whether the fused MM+RS+addcmul path should be taken for this shape. Pure query, no side effects.
 
-    Gate the fused path on this. Where no config is registered, `get_fused_mmrs_config` falls back to
-    `default_fused_mmrs_config`, whose 56-core matmul grid at subblock 1x1 makes the fused op far
-    *slower* than not fusing -- measured as a 45% regression on this stage.
+    Gate the fused path on this, and call `register_mmrs_config` before running the fused op. Where no
+    config is registered, `get_fused_mmrs_config` falls back to `default_fused_mmrs_config`, whose
+    56-core matmul grid at subblock 1x1 makes the fused op far *slower* than not fusing -- measured as
+    a 45% regression on this stage.
 
-    Rather than a whitelist of the shipped durations, the swept blocking is registered on demand for
-    any M, so an arbitrary duration gets the fused path. `M_block` does *not* have to divide the M tile
-    count -- a partial trailing block along M is fine, unlike along K, where the ring delivers the
-    gathered input in fixed chunks. M=4768 was swept successfully at `M_block=4` despite being 149
-    tiles; requiring divisibility here silently disabled the fused path at both 5s and 15s.
+    Rather than a whitelist of the shipped durations, any tile-aligned M is accepted and reuses the
+    swept blocking, so an arbitrary duration gets the fused path. `M_block` does *not* have to divide
+    the M tile count -- a partial trailing block along M is fine, unlike along K, where the ring
+    delivers the gathered input in fixed chunks. M=4768 was swept successfully at `M_block=4` despite
+    being 149 tiles; requiring divisibility here silently disabled the fused path at both 5s and 15s.
     """
-    if k != _K or n != _N or m % _TILE:
-        return False
+    return k == _K and n == _N and m % _TILE == 0
+
+
+def register_mmrs_config(m: int, k: int, n: int) -> None:
+    """Register the swept blocking for this shape into the global fused-MMRS table.
+
+    Call at the site that is about to take the fused path (idempotent, cheap), for a shape
+    `has_mmrs_config` accepts; registration is explicit so that merely *querying* a shape never
+    mutates the global table.
+    """
+    if not has_mmrs_config(m, k, n):
+        msg = f"No fused MMRS blocking for (M, K, N) = ({m}, {k}, {n}); gate on has_mmrs_config first"
+        raise ValueError(msg)
     register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): _SWEPT_BLOCKING}})
-    return True

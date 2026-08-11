@@ -166,9 +166,8 @@ def gathered_tile_order(mesh_rows: int, mesh_cols: int) -> list[int]:
     Returns `order`, where `order[i]` is the index of the **original** shard sitting at position `i` of
     dim 0 in the gathered tensor. So `gathered[i] == original[order[i]]`.
 
-    This exists because the gather is **not** order-preserving, which STATE.md amendment 84 measured
-    the hard way (`gathered replica matches host: False, maxdiff 7.93`) and then left unpinned as its
-    first loose end. `ShardTensorToMesh(dim=0)` lays shard `k` on device `k` in row-major order, so
+    This exists because the gather is **not** order-preserving, which was measured
+    the hard way (`gathered replica matches host: False, maxdiff 7.93`) and initially left unpinned. `ShardTensorToMesh(dim=0)` lays shard `k` on device `k` in row-major order, so
     shard `k` is at mesh position `(k // cols, k % cols)`. Gathering `cluster_axis=0` concatenates each
     mesh *column*'s four shards along dim 0; gathering `cluster_axis=1` then concatenates those
     per-column groups. The result is dim 0 **transposed**: position `c * rows + r` holds shard
@@ -192,7 +191,7 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
     2. the order is exactly `gathered_tile_order`, i.e. a transpose, not row-major;
     3. every device agrees on that order, so a caller may read any single replica.
 
-    Claim 1 matters because amendment 86's readback bug looked like a 39 % speedup precisely because it
+    Claim 1 matters because an earlier readback bug looked like a 39 % speedup precisely because it
     moved no data. A test that only compared *sets* of values would pass on a no-op too.
     """
     rows, cols = tuple(mesh_device.shape)
@@ -230,7 +229,7 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
         range(num_devices)
     ), f"gathered dim 0 is not a permutation of the shards: {observed}"
     assert observed != list(range(num_devices)), (
-        "the gather preserved shard order, so amendment 84's permutation no longer exists -- "
+        "the gather preserved shard order, so the measured permutation no longer exists -- "
         "`gathered_tile_order` is now wrong and must become the identity"
     )
     assert observed == expected, f"order is {observed}, gathered_tile_order predicts {expected}"

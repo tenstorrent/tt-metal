@@ -4,8 +4,8 @@
 
 """The T-axis halo exchange, isolated.
 
-STATE.md amendment 107 measured T-parallel audio decode producing saturated garbage on every shard but
-the first, at every factor, and showed it is *not* a halo-width problem: the error is uniform within each
+T-parallel audio decode was measured producing saturated garbage on every shard but
+the first, at every factor, and the failure is *not* a halo-width problem: the error is uniform within each
 shard rather than banded at the boundaries. That points at the halo exchange delivering wrong data
 wholesale, and the audio decoder makes **381** halo calls per forward across many shapes -- far too
 coarse a scope to debug in.
@@ -82,8 +82,8 @@ def _expected(host_BTC: torch.Tensor, *, factor: int, pad_left: int, pad_right: 
 def test_t_neighbor_pad_matches_host(mesh_device, pad_left, pad_right, mode):
     """One halo exchange, factor 4 on the 4-wide axis, against the host expectation.
 
-    Gated per shard rather than on a whole-tensor metric, because amendment 107's whole point is that
-    *which* shard is wrong is the diagnosis. A single PSNR over the concatenation cannot say that.
+    Gated per shard rather than on a whole-tensor metric, because *which* shard is wrong is the
+    diagnosis. A single PSNR over the concatenation cannot say that.
     """
     factor, mesh_axis = 4, 0
     parallel_config = ParallelFactor(factor=factor, mesh_axis=mesh_axis)

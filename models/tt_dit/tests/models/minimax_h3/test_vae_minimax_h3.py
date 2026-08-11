@@ -666,7 +666,7 @@ def test_encoder_moments(mesh_device, num_frames, temporal_taps, expected_latent
 #   the pairing is ``(i, i+24)``, so the usual full-width RoPE op is simply wrong here.
 # * **swiglu half order**, host: the checkpoint's ``ff.net.0.proj`` packs ``[value; gate]``
 #   and tt_dit's swiglu wants the same, so no swap is needed -- unlike the H3 *DiT*, where
-#   a recorded amendment says the halves must be swapped. Applying that amendment here
+#   the halves must be swapped. Applying that swap here
 #   would corrupt every FFN, so the order is asserted rather than assumed.
 # * **one block** (which is where a missing ``scale1``/``scale2`` shows
 #   up as PCC near zero), then the **full 36 layers**.
@@ -758,7 +758,7 @@ def test_permuted_rope_matches_reference_rotation():
 def test_swiglu_half_order_needs_no_swap():
     """Host-only: the checkpoint packs ``[value; gate]``, matching tt_dit -- no swap.
 
-    A recorded amendment says the H3 *DiT*'s ``fc1`` halves must be swapped. That came from
+    The H3 *DiT*'s ``fc1`` halves must be swapped. That swap came from
     the raw MiniMax layout, not the diffusers-converted one, so applying it to the VAE
     decoder would silently corrupt every FFN. Exactly one of the two orders must match.
     """

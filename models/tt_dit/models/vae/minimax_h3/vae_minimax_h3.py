@@ -217,7 +217,7 @@ class MiniMaxH3Vae(Module):
         self._weight_loader = weight_loader
         self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
         self._stitcher = None
-        # Unproven, so it defaults to the host path. Amendment 84 projected the stage at 4.3 -> ~2.9 s
+        # Unproven, so it defaults to the host path. The projection put the stage at 4.3 -> ~2.9 s
         # from this; `MINIMAX_H3_VAE_DEVICE_STITCH=1` is the A/B.
         self.device_stitch = os.environ.get("MINIMAX_H3_VAE_DEVICE_STITCH", "0") == "1"
         self._encoder_state: dict[str, torch.Tensor] | None = None
@@ -646,12 +646,12 @@ class MiniMaxH3Vae(Module):
 
         The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
         28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
-        on host. Blending first and reading back the canvas moves ~0.77 GB instead, and amendment 84
-        measured the two-axis all-gather that co-locates the neighbours at 4-8 ms against a 91-231 ms
-        readback, so the collective is nearly free.
+        on host. Blending first and reading back the canvas moves ~0.77 GB instead, and the two-axis
+        all-gather that co-locates the neighbours measured 4-8 ms against a 91-231 ms readback, so
+        the collective is nearly free.
 
         The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
-        row-major: amendment 105 pinned the two-axis gather as transposing dim 0, so position
+        row-major: the two-axis gather was measured to transpose dim 0, so position
         `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
         place, which the seam gate catches loudly -- but only because something finally reads them.
         """
@@ -728,7 +728,7 @@ class MiniMaxH3Vae(Module):
         profile["device_each"].append(elapsed)
 
         mark = time.perf_counter()
-        # One replica: the gather made every device identical, which amendment 105 asserts.
+        # One replica: the gather made every device identical (the stitch-device test asserts this).
         out = ttnn.to_torch(ttnn.get_device_tensors(canvas)[0]).float()
         elapsed = time.perf_counter() - mark
         profile["readback"] += elapsed

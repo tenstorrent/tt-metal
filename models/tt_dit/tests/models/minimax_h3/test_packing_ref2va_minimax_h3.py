@@ -39,7 +39,7 @@ reference_base_packing = pytest.importorskip(
 PATCH_SIZE = (1, 2, 2)
 
 # The target working point every ref2va gate runs at, and the one the measured padded
-# lengths of am. 114 were taken at: 1344x768, 124 frames.
+# lengths were taken at: 1344x768, 124 frames.
 TARGET_HEIGHT, TARGET_WIDTH, TARGET_FRAMES = 768, 1344, 124
 VAE_RATIO = 16
 AUDIO_HOP = 800

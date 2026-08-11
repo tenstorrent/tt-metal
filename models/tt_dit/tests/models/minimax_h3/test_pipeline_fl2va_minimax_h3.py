@@ -29,7 +29,7 @@ reason this file exists:
 
 Tier 6 and the keyframe's content
 ---------------------------------
-Amendment 87: the gated prompt and the tier-6 thresholds are a **matched pair**, and
+The gated prompt and the tier-6 thresholds are a **matched pair**, and
 `imaging_quality` is a no-reference IQA metric that moves with content, not just with correctness.
 A keyframe *forces* the content, so an arbitrary photograph would invalidate the t2va calibration
 outright.
@@ -60,24 +60,19 @@ import ttnn
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
+from .common import create_fractal_image
 from .common_av import (
     check_audio_sanity,
     check_av_sync,
     check_keyframe_anchor,
     check_spatial_seams,
     check_tile_boundary_gradient,
+    clip_prompt_alignment,
+    decoded_frames,
     log_spectral_flatness,
-)
-
-# The artifact and metric helpers are imported from the t2va gate rather than moved into `common_av`.
-# They are pure functions with no import side effects, so relocating them would churn a green e2e gate
-# for no gain here. Recorded in STATE.md as a deviation.
-from .test_pipeline_minimax_h3 import (
-    _clip_prompt_alignment,
-    _decoded_frames,
-    _probe_streams,
-    _temporal_seam_score,
-    _write_artifacts,
+    probe_streams,
+    temporal_seam_score,
+    write_artifacts,
 )
 
 # The t2va working point, unchanged, so the two are comparable. One anchor adds 1008 conditioning rows.
@@ -121,8 +116,8 @@ MESH_4X8 = [
 #   last             frame -1 vs keyframe   0.9943
 #   first_and_last   frame  0 / frame -1    0.9971 / 0.9946
 #
-# 0.95 keeps ~9x margin on `1 - PCC` against the worst of those, which is the same convention amendment
-# 74 used for the conditioner. Not tighter: the anchors go through a VAE round trip
+# 0.95 keeps ~9x margin on `1 - PCC` against the worst of those, which is the same margin convention
+# the conditioner bar uses. Not tighter: the anchors go through a VAE round trip
 # and 49 denoising steps of a *neighbouring* frame's influence, so some spread is expected, and a
 # genuinely broken conditioning path scores near zero rather than 0.9.
 ANCHOR_PCC_FLOOR = 0.95
@@ -153,8 +148,8 @@ def _gated_keyframe() -> Image.Image:
     produces is confounded.** It is taken from t2va's *own output*, so a pipeline that ignored the
     keyframe entirely and merely re-ran t2va would also score ~0.997 against it. That is what
     `test_fl2va_follows_the_keyframe` exists to rule out, with a keyframe the model would never
-    produce. What this one is for is tier 6: the CLIP and VBench bars were calibrated on this content
-    (amendment 87), so it is the only keyframe those bars legitimately apply to.
+    produce. What this one is for is tier 6: the CLIP and VBench bars were calibrated on this content,
+    so it is the only keyframe those bars legitimately apply to.
 
     Read from the t2va gate's artifact rather than generated here: a second generation would cost
     another 90 s of Galaxy time to produce content this file only needs to *read*, and reusing the
@@ -170,23 +165,6 @@ def _gated_keyframe() -> Image.Image:
     frame = _first_frame(artifact)
     assert frame.size == (WIDTH, HEIGHT), f"t2va artifact is {frame.size}, expected {(WIDTH, HEIGHT)}"
     return frame
-
-
-def create_fractal_image(width: int, height: int) -> Image.Image:
-    """A Mandelbrot escape-time image, the repo's existing convention for an I2V seed.
-
-    Copied from `tests/models/wan2_2/test_pipeline_wan_i2v.py`, and it is the right tool for the
-    *discriminating* case for one reason: a fractal is content the model would never generate for this
-    prompt, so "decoded frame 0 resembles the keyframe" cannot be satisfied by a pipeline that ignores
-    the keyframe. See `test_fl2va_follows_the_keyframe`.
-    """
-    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
-    z = np.zeros_like(c)
-    img = np.zeros(c.shape, dtype=np.uint8)
-    for i in range(32):
-        z = z * z + c
-        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
-    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def _first_frame(path: Path) -> Image.Image:
@@ -272,9 +250,9 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
 
     # ---- tier 5: the written file, not just the tensor ----
     artifacts = _artifact_dir()
-    paths = _write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}")
+    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}")
     if "mp4" in paths:
-        streams = _probe_streams(paths["mp4"])
+        streams = probe_streams(paths["mp4"])
         if streams:
             assert "video" in streams and "audio" in streams, f"muxed file is missing a stream: {list(streams)}"
             durations = {k: float(v["duration"]) for k, v in streams.items() if v.get("duration")}
@@ -284,12 +262,12 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
                 assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
                 logger.info(f"muxed A/V skew: {skew:+.4f} s")
 
-        decoded = _decoded_frames(paths["mp4"], count=1)
+        decoded = decoded_frames(paths["mp4"], count=1)
         if decoded.size:
             assert (
                 decoded.shape[0] >= expected_frames - 1
             ), f"the written mp4 decodes to {decoded.shape[0]} frames, expected ~{expected_frames}"
-            seam = _temporal_seam_score(decoded, period=17)
+            seam = temporal_seam_score(decoded, period=17)
             logger.info(f"temporal seam score at the 17-frame chunk period: {seam:.3f} (1.0 = no seam)")
             if np.isfinite(seam):
                 assert seam < 3.0, (
@@ -306,10 +284,10 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
     # The bar is t2va's, and it is applied because it was *measured* to transfer rather than assumed to.
     # First-run values, all three cases: mean 36.63 / 37.30 / 37.00 against t2va's 37.37, min 34.86.
     # That the keyframe is frame 0 of the calibrated t2va generation is what makes this legitimate --
-    # amendment 87 is the counterexample, where a night scene scored imaging_quality 0.4884 against a
+    # the recorded counterexample is a night scene that scored imaging_quality 0.4884 against a
     # 0.64 bar while being visually perfect, purely because the content moved.
     if os.environ.get("RUN_CLIP", "1") == "1":
-        alignment = _clip_prompt_alignment(frames, PROMPT)
+        alignment = clip_prompt_alignment(frames, PROMPT)
         logger.info(
             f"fl2va[{case}] CLIP prompt alignment: mean={alignment['mean']:.2f} "
             f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {CLIP_THRESHOLD})"

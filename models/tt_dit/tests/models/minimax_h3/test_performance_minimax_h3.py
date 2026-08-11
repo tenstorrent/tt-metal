@@ -53,6 +53,7 @@ from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from .common_av import ref2va_references
 
 # The production working point, identical to the correctness gate's.
 HEIGHT, WIDTH = 768, 1344
@@ -191,7 +192,7 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
     3. **The embedding cache must be populated.** `warmup` runs with `use_prompt_cache=False`, so it
        compiles the conditioner and writes nothing; without the priming call the measured run would pay
        a full device conditioner encode -- now including the vision tower -- inside the timed Encoder
-       row, which is exactly what amendment 81's `Encoder (cache) 0.0 s` row does not include.
+       row, which is exactly what the reported `Encoder (cache) 0.0 s` row does not include.
     """
     base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
     missing = [p for p in ("transformer", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]
@@ -262,7 +263,7 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
 
 # `l1_small_size` 16384, not the 65536 the t2va and fl2va rows use. Measured, not chosen: a video
 # reference goes through the video VAE's taps=3 encoder, whose static circular buffers clash with L1
-# above 16384 (am. 124/126). The mesh and every other device parameter are unchanged, so the
+# above 16384. The mesh and every other device parameter are unchanged, so the
 # ref2va row stays comparable to the other two on everything that affects the denoise loop.
 REF2VA_MESH_4X8 = [
     pytest.param(
@@ -283,17 +284,6 @@ REF2VA_CASES = [
 REF2VA_MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
 
 
-def _ref2va_references(case: str):
-    """The correctness gate's own reference sets, imported rather than restated.
-
-    A perf row measured on a different request than the one that was gated is a number about
-    nothing.
-    """
-    from .test_pipeline_ref2va_minimax_h3 import _references
-
-    return _references(case)
-
-
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESH_4X8, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize(("case", "expected_padded_len"), REF2VA_CASES)
@@ -301,7 +291,7 @@ def test_ref2va_warm_latency(mesh_device, case, expected_padded_len, reset_seeds
     """Fully-warm `ref2va` latency, by the same method as the t2va and fl2va rows.
 
     A cold total says almost nothing about the loop: at 81664 padded rows the shape probe measured
-    a cold forward of 114 s against a warm 3.26 s (am. 123), the difference being kernel
+    a cold forward of 114 s against a warm 3.26 s, the difference being kernel
     compilation.
 
     The same three conditions as for fl2va apply:
@@ -327,7 +317,9 @@ def test_ref2va_warm_latency(mesh_device, case, expected_padded_len, reset_seeds
     if case != "one_image" and not media.is_file():
         pytest.skip(f"no reference video at {media}; set {REF2VA_MEDIA_ENV}")
 
-    references = _ref2va_references(case)
+    # The correctness gate's own reference sets, shared rather than restated: a perf row measured
+    # on a different request than the one that was gated is a number about nothing.
+    references = ref2va_references(case)
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=base, task="ref2va")
 
     # (1) and (2): warm at the real shape, with the real references and the real prompt.

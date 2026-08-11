@@ -38,7 +38,7 @@ import torch
 
 import ttnn
 
-from ....layers.audio_ops import Snake, _AlignedOutConv1d
+from ....layers.audio_ops import Snake, _AlignedOutConv1d, conv_split_mode, conv_tap_matmul_enabled
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
@@ -69,15 +69,19 @@ class MiniMaxH3AudioResidualUnit(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
+        # Conv-only levers: Snake takes neither, so they ride a separate dict from `shared`.
+        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
         self.block = ModuleList(
             [
                 Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
-                DilatedConv1d(dim, dim, kernel_size=7, dilation=dilation, **shared),
+                DilatedConv1d(dim, dim, kernel_size=7, dilation=dilation, **shared, **levers),
                 Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
-                _AlignedOutConv1d(dim, dim, kernel_size=1, **shared),
+                _AlignedOutConv1d(dim, dim, kernel_size=1, **shared, **levers),
             ]
         )
 
@@ -104,16 +108,19 @@ class MiniMaxH3AudioEncoderBlock(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
+        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
         inner = dim // 2
         self.stride = stride
         self.block = ModuleList(
             [
-                MiniMaxH3AudioResidualUnit(inner, 1, **shared),
-                MiniMaxH3AudioResidualUnit(inner, 3, **shared),
-                MiniMaxH3AudioResidualUnit(inner, 9, **shared),
+                MiniMaxH3AudioResidualUnit(inner, 1, **shared, **levers),
+                MiniMaxH3AudioResidualUnit(inner, 3, **shared, **levers),
+                MiniMaxH3AudioResidualUnit(inner, 9, **shared, **levers),
                 Snake(inner, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
                 # kernel = 2 * stride with padding = ceil(stride / 2) is what makes the output
                 # exactly L / stride; the class's default eff_k // 2 would give one extra frame.
@@ -124,6 +131,7 @@ class MiniMaxH3AudioEncoderBlock(Module):
                     stride=stride,
                     padding=math.ceil(stride / 2),
                     **shared,
+                    **levers,
                 ),
             ]
         )
@@ -151,18 +159,21 @@ class MiniMaxH3AudioDACEncoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
         no_ccl = {k: v for k, v in shared.items() if k != "ccl_manager"}
+        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
 
-        layers: list[Module] = [_AlignedOutConv1d(1, encoder_dim, kernel_size=7, **shared)]
+        layers: list[Module] = [_AlignedOutConv1d(1, encoder_dim, kernel_size=7, **shared, **levers)]
         dim = encoder_dim
         for stride in encoder_rates:
             dim *= 2
-            layers.append(MiniMaxH3AudioEncoderBlock(dim, stride, **shared))
+            layers.append(MiniMaxH3AudioEncoderBlock(dim, stride, **shared, **levers))
         layers.append(Snake(dim, alpha_logscale=False, **no_ccl))
-        layers.append(_AlignedOutConv1d(dim, latent_dim, kernel_size=3, **shared))
+        layers.append(_AlignedOutConv1d(dim, latent_dim, kernel_size=3, **shared, **levers))
         self.block = ModuleList(layers)
         self.hop_length = math.prod(encoder_rates)
 
@@ -323,6 +334,14 @@ class MiniMaxH3AudioEncoder(Module):
         self.latent_channels = latent_channels
         self.hop_length = math.prod(encoder_rates)
 
+        # The precision levers, resolved from the env helpers once here (same pattern as the
+        # decoder) and passed down as explicit arguments. H3-only opt-in: LTX constructs the same
+        # conv classes without them, so MINIMAX_H3_AUDIO_* cannot change LTX's audio path. The
+        # pipeline's cache key (`audio_weights_variant`) reads the same helpers, keeping the cached
+        # parameter set and this module in step.
+        split_mode = conv_split_mode()
+        tap_matmul = conv_tap_matmul_enabled()
+
         self.encoder = MiniMaxH3AudioDACEncoder(
             encoder_dim=encoder_dim,
             encoder_rates=encoder_rates,
@@ -331,15 +350,29 @@ class MiniMaxH3AudioEncoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
         self.pre_block = MiniMaxH3AudioAttnProjection(
             latent_dim, latent_channels, num_attention_heads, mesh_device=mesh_device, dtype=dtype
         )
         self.mean_proj = _AlignedOutConv1d(
-            latent_channels, latent_channels, kernel_size=1, mesh_device=mesh_device, dtype=dtype
+            latent_channels,
+            latent_channels,
+            kernel_size=1,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
         self.logs_proj = _AlignedOutConv1d(
-            latent_channels, latent_channels, kernel_size=1, mesh_device=mesh_device, dtype=dtype
+            latent_channels,
+            latent_channels,
+            kernel_size=1,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
     def forward(self, waveform_BCT: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

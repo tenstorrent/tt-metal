@@ -40,7 +40,7 @@ from ....layers.audio_ops import Conv1dViaConv3d
 # Imported for the decoder gates below -- but note the import itself also runs
 # ``register_h3_audio_blockings()``, which is what puts the H3 audio conv shapes into
 # ``_FP32_BLOCKINGS``. Without it every conv here would silently fall back to the conservative
-# ``C_in_block = 32`` default and measure a *different op* than production (STATE.md am. 111).
+# ``C_in_block = 32`` default and measure a *different op* than production.
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import (
     assert_weight_norm_axes_consistent,
     convert_minimax_h3_audio_state_dict,
@@ -71,12 +71,12 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 #
 # That chain depth is not a floor, though: `MINIMAX_H3_AUDIO_ACCURATE=1` reaches **0.45 %** RMSE
 # (PCC 99.9990 %, PSNR 67.5 dB) for ~3x the stage time, by fixing the three sources this bar's 10.5 %
-# is made of -- see `audio_accurate_mode` and STATE.md am. 111-113. This bar describes the
+# is made of -- see `audio_accurate_mode`. This bar describes the
 # **default** path, so it must be re-derived if that default ever changes.
 AUDIO_RELATIVE_RMSE = 0.12
 
 # `conv_pre`: the decoder's widest reduction, Cin 2048 x k 7 = 14336, and the shape every operand-split
-# measurement in am. 111 was taken at. Its T is the 5 s latent length, as in the decode gates.
+# measurement was taken at. Its T is the 5 s latent length, as in the decode gates.
 CONV_PRE_SHAPE = (2048, 1024, 7)
 CONV_PRE_LATENT_FRAMES = 207
 
@@ -232,7 +232,7 @@ def test_decode(mesh_device, num_latent_frames):
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_conv_operand_split_improves_precision(mesh_device, monkeypatch):
+def test_conv_operand_split_improves_precision(mesh_device):
     """Operand splitting really does beat the fp32 conv floor, at `conv_pre`'s production shape.
 
     The floor is the multiplier, not the accumulator: an fp32 conv3d keeps ~11 significand bits per
@@ -243,7 +243,7 @@ def test_conv_operand_split_improves_precision(mesh_device, monkeypatch):
     Gated as an inequality against the ``off`` baseline rather than at absolute values, because the
     absolute numbers are hardware- and blocking-dependent while the *ordering* is the claim. The
     baseline itself does carry a loose absolute ceiling, which is what would catch the blocking
-    registration silently regressing (am. 111): unregistered, this shape measures 2.40e-03 instead of
+    registration silently regressing: unregistered, this shape measures 2.40e-03 instead of
     1.86e-03 because ``C_in_block`` falls back to 32.
     """
     in_channels, out_channels, kernel = CONV_PRE_SHAPE
@@ -257,8 +257,8 @@ def test_conv_operand_split_improves_precision(mesh_device, monkeypatch):
     x_device = None
     errors = {}
     for mode in ("off", "weight", "full"):
-        # Read at construction, so it must be set before the layer is built.
-        monkeypatch.setenv("MINIMAX_H3_AUDIO_CONV_SPLIT", mode)
+        # The env var no longer reaches the layer; MiniMax-H3 modules resolve it once at
+        # construction and pass the explicit ``split_mode`` argument, so drive that directly.
         layer = Conv1dViaConv3d(
             in_channels,
             out_channels,
@@ -267,6 +267,7 @@ def test_conv_operand_split_improves_precision(mesh_device, monkeypatch):
             bias=True,
             mesh_device=mesh_device,
             dtype=ttnn.float32,
+            split_mode=mode,
         )
         assert layer.split_mode == mode, f"layer resolved split_mode {layer.split_mode!r}, expected {mode!r}"
         assert (layer.weight_lo is None) == (mode == "off"), f"weight residual allocation wrong for {mode!r}"
@@ -309,7 +310,7 @@ def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
 
     Shape is the real stage-1 downsampler: K=12 kaiser-sinc taps at stride 2.
     """
-    from ....layers.audio_ops import depthwise_tap_filter
+    from ....layers.audio_ops import depthwise_mac_preferred, depthwise_tap_filter
 
     channels, t_pad, kernel, stride = 512, 2081, 12, 2
     torch.manual_seed(0)
@@ -323,9 +324,19 @@ def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
 
     errors = {}
     for prefer_mac in ("0", "1"):
+        # The env var no longer switches depthwise_tap_filter directly; call sites derive the
+        # explicit ``prefer_mac`` argument from it, so route through the same derivation here.
         monkeypatch.setenv("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", prefer_mac)
         x_device = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
-        out = depthwise_tap_filter(x_device, taps, stride, mesh_device=mesh_device, dtype=ttnn.float32, cache={})
+        out = depthwise_tap_filter(
+            x_device,
+            taps,
+            stride,
+            mesh_device=mesh_device,
+            dtype=ttnn.float32,
+            cache={},
+            prefer_mac=depthwise_mac_preferred(),
+        )
         actual = ttnn.to_torch(out).float()
         assert actual.shape[1] == t_out, f"T_out {actual.shape[1]} != {t_out}"
         errors[prefer_mac] = float((actual.double() - golden).pow(2).mean().sqrt() / golden.std())
@@ -348,7 +359,7 @@ def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
     ],
     ids=["amp_k3", "amp_k3_d5", "conv_pre", "causal_narrow_out"],
 )
-def test_tap_matmul_beats_conv3d(mesh_device, monkeypatch, in_channels, out_channels, kernel, dilation, padding_mode):
+def test_tap_matmul_beats_conv3d(mesh_device, in_channels, out_channels, kernel, dilation, padding_mode):
     """The shifted-matmul form of a stride-1 conv is more accurate than conv3d, at equal split.
 
     conv3d's residual after operand splitting is partial-sum rounding across ``C_in_block`` -- not the
@@ -375,8 +386,8 @@ def test_tap_matmul_beats_conv3d(mesh_device, monkeypatch, in_channels, out_chan
 
     errors, shapes = {}, {}
     for tap in ("0", "1"):
-        monkeypatch.setenv("MINIMAX_H3_AUDIO_TAP_MATMUL", tap)
-        monkeypatch.setenv("MINIMAX_H3_AUDIO_CONV_SPLIT", "full")
+        # The env vars no longer reach the layer; MiniMax-H3 modules resolve them once at
+        # construction and pass the explicit arguments, so drive those directly here.
         layer = Conv1dViaConv3d(
             in_channels,
             out_channels,
@@ -386,6 +397,8 @@ def test_tap_matmul_beats_conv3d(mesh_device, monkeypatch, in_channels, out_chan
             bias=True,
             mesh_device=mesh_device,
             dtype=ttnn.float32,
+            split_mode="full",
+            tap_matmul=tap == "1",
         )
         assert layer.tap_matmul == (tap == "1"), f"tap_matmul resolved to {layer.tap_matmul} for flag {tap}"
         layer.load_torch_state_dict(dict(state), strict=False)
@@ -641,8 +654,7 @@ def test_real_checkpoint_fusion_matches_reference_module():
 #
 # T-parallel audio decode: correctness against the single-device path, and the speedup.
 #
-# Audio decode is 1.284 s against a ~0.05 s target, is **device-bound** (trace buys 1.07 %,
-# STATE.md amendment 60), and runs on **one device**. The visual halves got 32x from
+# Audio decode is 1.284 s against a ~0.05 s target, is **device-bound** (trace buys 1.07 %), and runs on **one device**. The visual halves got 32x from
 # data-parallelism over `(clip, tile)` work units; a single 5 s audio stream is one unit, so
 # none of that applies. The equivalent lever here is sharding the time axis across the mesh --
 # which ``vocoder_ltx.Vocoder`` already implements (``parallel_config.factor`` threads through
@@ -669,7 +681,7 @@ MESH = [
 # t_factor=8 on axis 1 measures 0.898 s but returns a *different signal* (PSNR -6.3 dB vs
 # the single-device path), so it is xfail-marked rather than removed: the bug is worth
 # finding, and 207 frames padding to 256 makes 256/8 = 32 exactly one tile per shard, which
-# is the obvious suspect. See STATE.md amendment 63.
+# is the obvious suspect.
 FACTORS = [(1, 1), (4, 0), (8, 1)]
 KNOWN_BROKEN = {(8, 1)}
 NUM_LATENT_FRAMES = 207
@@ -848,7 +860,7 @@ def test_audio_decode_t_parallel(mesh_device):
 #
 # Traced vs untraced audio decode, with a correctness gate between them.
 #
-# Audio decode measures 1.273 s against a ~0.05 s target (STATE.md amendment 59). It gets
+# Audio decode measures 1.273 s against a ~0.05 s target. It gets
 # nothing from the data-parallelism that carried the visual path -- a 5 s clip is one stream,
 # not 224 independent work units -- but it is the opposite kind of workload from the visual
 # halves: ~1 MB tensors over many ops, so **host dispatch**, not device time, is expected to

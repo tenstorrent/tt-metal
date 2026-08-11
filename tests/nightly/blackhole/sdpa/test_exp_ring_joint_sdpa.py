@@ -24,7 +24,7 @@ from ttnn.operations.ccl import Topology
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.nightly.sdpa_perf_utils import (
-    compute_cores_used,
+    compute_flat_work_distribution,
     compute_math_utilization,
     compute_sdpa_flops,
     post_process_ops_log,
@@ -783,19 +783,16 @@ def test_exp_ring_joint_attention_create_perf_table(b, nh, total_seq, d, q_chunk
             fpu_util_min = float(fpu_util_col.min()) if len(fpu_util_col) > 0 else 0.0
             fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
 
-            B = b
-            batch_parallel = min(B, total_compute_cores)
-            nh_parallel = min(total_compute_cores // batch_parallel, local_nh)
-            max_q_parallel = total_compute_cores // (batch_parallel * nh_parallel)
-
-            cores_used = compute_cores_used(total_seq, q_chunk_size, total_compute_cores, local_nh, ring_size, b)
+            # Flat (b, h, q)-chunk distribution — must match compute_cores_used's model
+            work = compute_flat_work_distribution(
+                total_seq, q_chunk_size, k_chunk_size, total_compute_cores, local_nh, ring_size, b
+            )
+            cores_used = work["cores_used"]
             cores_idle = total_compute_cores - cores_used
             compute_util_pct = (cores_used * 100.0) / total_compute_cores
 
-            k_num_chunks = math.ceil(total_seq / k_chunk_size)
-            local_q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
-            q_per_core = math.ceil(local_q_num_chunks / max_q_parallel) if max_q_parallel > 0 else local_q_num_chunks
-            iters_per_core = q_per_core * k_num_chunks
+            local_q_num_chunks = work["q_num_chunks"]
+            iters_per_core = work["iters_per_core"]
 
             # Padding waste
             local_q_padded = local_q_num_chunks * q_chunk_size
@@ -807,10 +804,8 @@ def test_exp_ring_joint_attention_create_perf_table(b, nh, total_seq, d, q_chunk
             padded_work = global_q_padded * global_k_padded
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
 
-            # Slot waste
-            total_q_slots = max_q_parallel * q_per_core if max_q_parallel > 0 else local_q_num_chunks
-            wasted_q_slots = max(0, total_q_slots - local_q_num_chunks)
-            slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
+            # Slot waste (empty slots in the cores_used x q_per_core grid)
+            slot_waste_pct = work["slot_waste_pct"]
 
             # Math utilization — round down to per-column-multiple for consistency with ring_joint_sdpa table
             effective_cores = measured_core_count - measured_core_count % 10

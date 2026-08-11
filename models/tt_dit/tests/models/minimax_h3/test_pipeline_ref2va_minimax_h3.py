@@ -5,7 +5,7 @@
 """MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on the 4x8 mesh.
 
 A separate file from the ``t2va`` / ``fl2va`` e2e gates so it defaults to its own
-process: a ref2va request is 1.2x-3.0x t2va's packed length (am. 114), and one process
+process: a ref2va request is 1.2x-3.0x t2va's packed length, and one process
 holding DiT programs plus CCL buffers at several of those lengths is a memory risk.
 
 WHY THE fl2va QUALITY GATE DOES NOT TRANSFER
@@ -26,7 +26,7 @@ The gate is built from a measured floor instead:
    0.128143.
 
 What this gate does not assert: that each output resembles the reference it was given more
-than the one it was not. No instrument is known to measure that here (am. 128) -- whole-frame
+than the one it was not. No instrument is known to measure that here -- whole-frame
 luminance correlation is positional where conditioning is not, and CLIP image-image
 similarity separates the two outputs rather than the two references. Those numbers are
 logged only.
@@ -47,17 +47,22 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
+from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.test import ring_params_req_exact_devices
-from .common_av import check_audio_sanity, check_av_sync, check_spatial_seams
-from .test_pipeline_fl2va_minimax_h3 import create_fractal_image
-from .test_pipeline_minimax_h3 import _clip_prompt_alignment, _run_vbench, _write_artifacts
+from .common_av import (
+    check_audio_sanity,
+    check_av_sync,
+    check_spatial_seams,
+    clip_prompt_alignment,
+    ref2va_references,
+    reference_video,
+    run_vbench,
+    write_artifacts,
+)
 
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 ARTIFACT_ENV = "MINIMAX_H3_REF2VA_ARTIFACT_DIR"
-MEDIA_ENV = "MINIMAX_H3_REFERENCE_MEDIA"
-DEFAULT_MEDIA = Path.home() / "h3_fl2va_artifacts" / "fl2va_first.mp4"
 
 # The working point. Fixed: changing it invalidates the numbers below.
 WIDTH, HEIGHT, NUM_FRAMES, STEPS, SEED = 1344, 768, 124, 50, 0
@@ -66,7 +71,7 @@ FPS = 24
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
 # Quality bars for REFERENCE-DRIVEN content, set below the minimum measured across the three shapes
-# and NOT inherited from t2va (am. 131), three of whose six bars ref2va does not meet:
+# and NOT inherited from t2va, three of whose six bars ref2va does not meet:
 #
 #   dimension               one_image  video+sound  mixed  | min     t2va bar
 #   CLIP prompt alignment      29.05      29.97     29.38  | 29.05   33.0
@@ -79,7 +84,7 @@ PROMPT = "a slow push-in through a quiet room as afternoon light moves across th
 # None of the three shortfalls is a defect. CLIP tracks prompt specificity, and ref2va's prompt is
 # one clause against t2va's dialogue scene. The consistency pair penalises change over time while
 # `dynamic_degree` is 1.0 everywhere, so the lowest pair belongs to the case conditioned on a moving
-# clip. `imaging_quality` is no-reference IQA and spreads 0.17 on one pipeline; am. 87 records 0.4884
+# clip. `imaging_quality` is no-reference IQA and spreads 0.17 on one pipeline; 0.4884 was recorded
 # on a visually perfect scene. Headroom follows t2va's convention: its 33.0 sits ~4 under a measured
 # 37.05.
 REF2VA_CLIP_THRESHOLD = 25.0
@@ -93,7 +98,7 @@ REF2VA_VBENCH_THRESHOLDS = {
 
 # 16384 rather than the 65536 the t2va/fl2va gates use. A video reference goes through the video
 # VAE's taps=3 encoder, whose static circular buffers clash with L1 at 65536 and at 32768; 16384 is
-# the first value that fits (am. 124/126). t2va and fl2va never reach that encoder. One process holds
+# the first value that fits. t2va and fl2va never reach that encoder. One process holds
 # every stage, so this value also has to serve the audio decode.
 _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 
@@ -124,18 +129,11 @@ def _artifact_dir() -> Path:
     return directory
 
 
-def _reference_video() -> Path:
-    path = Path(os.environ.get(MEDIA_ENV) or DEFAULT_MEDIA)
-    if not path.is_file():
-        pytest.skip(f"no reference video at {path}; set {MEDIA_ENV} to a clip with a soundtrack")
-    return path
-
-
 def _real_frame_image() -> Image.Image:
     """One decoded frame of the real clip, as a photographic image reference."""
     from ....pipelines.minimax_h3.packing_ref2va import decode_reference_video
 
-    frames, _, _ = decode_reference_video(_reference_video())
+    frames, _, _ = decode_reference_video(reference_video())
     return Image.fromarray(frames[0])
 
 
@@ -145,7 +143,7 @@ def _inverted(image: Image.Image) -> Image.Image:
     Holds size constant, so the packed layout and the noise stream are unchanged, along with
     texture and edge statistics. Only the palette differs, which is both transferable and
     measurable. A synthetic pattern would leave nothing for a direction check to find, being
-    content the model cannot render for the prompt (am. 128).
+    content the model cannot render for the prompt.
     """
     return Image.fromarray(255 - np.asarray(image.convert("RGB")))
 
@@ -199,14 +197,14 @@ def _divergence(a: torch.Tensor, b: torch.Tensor) -> float:
 def _write(output, stem: str) -> dict:
     """Frames and audio for a human to look at: four sampled PNGs, a wav, and a muxed mp4.
 
-    The mp4 comes from the shared `_write_artifacts` the t2va and fl2va gates use, so VBench
+    The mp4 comes from the shared `write_artifacts` the t2va and fl2va gates use, so VBench
     scores every task from the same kind of file and the numbers stay comparable.
     """
     directory = _artifact_dir()
     frames = _frames_of(output)
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
-    paths = _write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
+    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
     logger.info(f"{stem}: artifacts in {directory} ({sorted(paths)})")
     return paths
 
@@ -214,14 +212,13 @@ def _write(output, stem: str) -> dict:
 def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
     """Record CLIP prompt alignment and the five VBench dimensions.
 
-    Asserted against bars derived from these same measurements (am. 131). t2va's bars do not
+    Asserted against bars derived from these same measurements. t2va's bars do not
     transfer to reference-driven content: `imaging_quality` scored 0.4884 on a visually perfect
-    night scene against a 0.64 bar (am. 80/87), and the seam ratio gave a false failure at 2.29x
-    (am. 130).
+    night scene against a 0.64 bar, and the seam ratio gave a false failure at 2.29x.
     """
     if os.environ.get("RUN_CLIP", "1") in ("1", "true", "True"):
         pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is missing (set RUN_CLIP=0)")
-        alignment = _clip_prompt_alignment(frames, PROMPT)
+        alignment = clip_prompt_alignment(frames, PROMPT)
         logger.info(
             f"QUALITY ref2va[{case}] CLIP prompt alignment: mean={alignment['mean']:.2f} "
             f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {REF2VA_CLIP_THRESHOLD})"
@@ -239,7 +236,7 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
         return
     if "mp4" not in paths:
         pytest.skip("RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce")
-    scores = _run_vbench(paths["mp4"], PROMPT, tuple(REF2VA_VBENCH_THRESHOLDS))
+    scores = run_vbench(paths["mp4"], PROMPT, tuple(REF2VA_VBENCH_THRESHOLDS))
     for dimension, value in scores.items():
         bar = REF2VA_VBENCH_THRESHOLDS.get(dimension)
         logger.info(f"QUALITY ref2va[{case}] VBench {dimension} = {value:.4f} (bar {bar})")
@@ -260,47 +257,19 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     return MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), task="ref2va")
 
 
-# The e2e case list, all admitted by the full-depth shape probe (am. 123). `padded` is the measured
+# The e2e case list, all admitted by the full-depth shape probe. `padded` is the measured
 # packed length each case runs at, asserted below so a case cannot silently drift
 # onto a different shape than the one that was probed.
 # Padded packed length per case, MEASURED end to end and asserted below so a case cannot drift
-# onto a shape the probe did not cover. `one_image` and `video_with_sound` match am. 114's
-# host-only prediction exactly; `mixed` is 89856 rather than the 90112 predicted there, because that
+# onto a shape the probe did not cover. `one_image` and `video_with_sound` match the
+# host-only prediction exactly; `mixed` is 89856 rather than the 90112 predicted, because that
 # estimate used a guessed presentation length and the real one tokenizes shorter. The prediction was
-# never a measurement -- am. 123 recorded `mixed` as an interpolation between two probed shapes.
+# never a measurement -- `mixed` was an interpolation between two probed shapes.
 CASES = {
     "one_image": 46080,
     "video_with_sound": 81664,
     "mixed": 89856,
 }
-
-
-def _references(case: str) -> list[MiniMaxH3Reference]:
-    """The reference set per e2e case.
-
-    ``one_image`` and ``mixed`` condition on a Mandelbrot fractal: for a shape-and-sanity gate the
-    useful property is a reference nothing in the prompt could produce. It is also the most
-    adversarial of the three and sits at the bottom of the quality table above -- 0.4826
-    imaging_quality is this case, not ref2va generally, which reaches 0.6575 on a photographic
-    reference. The discriminator uses real photographs instead (am. 128).
-    """
-    if case == "one_image":
-        return [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))]
-    if case == "video_with_sound":
-        return [reference_from_video_file(_reference_video())]
-    if case == "mixed":
-        # One of each, and in an order that is not the natural one: the image first,
-        # then a SILENT video, then a standalone audio reference. So the request
-        # exercises a video block with no soundtrack rows of its own next to an audio
-        # block with no video rows, which is where the per-modality row cursors of
-        # `split_condition_blocks` can disagree with the layout.
-        sounded = reference_from_video_file(_reference_video())
-        return [
-            MiniMaxH3Reference(image=create_fractal_image(1024, 1024)),
-            reference_from_video_file(_reference_video(), with_audio=False),
-            MiniMaxH3Reference(audio=sounded.audio, sample_rate=sounded.sample_rate),
-        ]
-    raise ValueError(case)
 
 
 @pytest.mark.timeout(9000)
@@ -316,7 +285,7 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     pipeline = _pipeline(mesh_device)
     output = pipeline(
         PROMPT,
-        references=_references(case),
+        references=ref2va_references(case),
         num_frames=NUM_FRAMES,
         height=HEIGHT,
         width=WIDTH,
@@ -328,7 +297,7 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
     # A drift here means the case is no longer the request that was probed, so the memory
-    # verdict of am. 123 no longer covers it.
+    # verdict of the shape probe no longer covers it.
     assert (
         pipeline.last_padded_len == CASES[case]
     ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {CASES[case]}"
@@ -346,8 +315,8 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     # Separate bars per axis. Vertical keeps t2va's 2.0 (measured 1.20-1.32). Horizontal is 3.0:
     # `video_with_sound` reads 2.29x there and it is scene content, not a seam -- the elevation
     # spans ~9 rows where a decoder seam occupies 1-2, and the frame's largest vertical gradient
-    # (16.06 at y=306) is not at a tile boundary at all (am. 130). The ratio is content-sensitive
-    # in both directions -- am. 87 records a false pass from the same property -- so it triggers
+    # (16.06 at y=306) is not at a tile boundary at all. The ratio is content-sensitive
+    # in both directions -- a false pass from the same property is on record -- so it triggers
     # an inspection of the frames rather than standing in for one.
     check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(), max_ratio=2.0)
     check_spatial_seams(frames, vertical_boundaries=(), horizontal_boundaries=(384,), max_ratio=3.0)
@@ -431,7 +400,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     )
 
     # Recorded, not asserted. No instrument is known to measure "resembles its own reference
-    # more than the other one" here (am. 128): CLIP image-image similarity separates the two
+    # more than the other one" here: CLIP image-image similarity separates the two
     # OUTPUTS rather than the two references -- measured, one output scored higher against
     # both references with the gap equal to within 0.0013 -- and mean-RGB distance splits,
     # correct for one output and wrong for the other by the same 0.011. Asserting a direction
