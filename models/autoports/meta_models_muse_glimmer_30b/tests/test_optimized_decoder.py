@@ -1736,16 +1736,9 @@ def test_full_context_prefill_and_decode(
     decoder = build_optimized_decoder(kind.layer_idx, state_dict, precision=policy, block_size=block_size)
     # The shipped BFP4 policy is measured here too, not only the structural BFP8 one: the
     # advertised 131072 context has to be validated at the precision the layer ships with.
-    # On synthetic weights BFP4 sits far below 0.995 by construction (see
-    # test_synthetic_weight_precision_discrepancy), so the absolute bar is policy-dependent -
-    # and an absolute bar is not the interesting question for BFP4 anyway. The question is
-    # whether BFP4 *degrades with length*, so the BFP4 run additionally measures the same
-    # policy at 1000 tokens and requires the 131072-token PCC to be within
-    # LENGTH_INDEPENDENCE_DELTA of it. That is the length-dependence check the absolute bar
-    # cannot make.
-    # Only the structural BFP8 policy gets an absolute bar here; the BFP4 metrics are
-    # floored at their own 1000-token measurement below (`short_floor`), which is a real
-    # number rather than 0.0 and is what gets stamped on each record.
+    # Only the BFP8 policy gets this absolute bar; the BFP4 metrics are floored at their own
+    # 1000-token measurement below (`short_floor`), which is a real number and is what gets
+    # stamped on each record.
     bar = PCC_BAR
 
     max_context = text_config.max_position_embeddings
