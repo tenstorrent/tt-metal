@@ -150,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
                 // reach the reader at compile time.
                 {"partial_h", mask_h},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols", "mask_h"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
@@ -253,8 +253,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             core,
             {{"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
              {"curr_col_in_batch", num_cols_read % Wt},
-             {"num_cols", num_cols_per_core},
-             {"mask_h", mask_h}});
+             {"num_cols", num_cols_per_core}});
 
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,

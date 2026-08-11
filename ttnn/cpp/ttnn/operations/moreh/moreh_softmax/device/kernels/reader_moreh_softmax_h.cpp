@@ -31,13 +31,19 @@ void kernel_main() {
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
 
-    // The MAX scaler is a full/partial pair so the max reduce can exclude the padding rows of the
-    // last H tile without staging a masked copy. mask_h is a runtime value; when H is tile-aligned,
-    // the host passes TILE_HEIGHT and tile 1 is identical to tile 0.
-    dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
-        dfb_max_scaler,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_COL>(mask_h);
+    // Emit a full/partial MAX-scaler pair only for ragged H. The compute kernel derives the same
+    // predicate from its compile-time mask_h argument and waits for the matching number of tiles.
+    if (mask_h < tt::constants::TILE_HEIGHT) {
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            dfb_max_scaler,
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_COL>(mask_h);
+    } else {
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            dfb_max_scaler,
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_COL>();
+    }
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 

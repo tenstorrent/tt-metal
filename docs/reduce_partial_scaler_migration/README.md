@@ -55,3 +55,4 @@ support), not a migration. Those eight are documented and deliberately left alon
 | 4 | `numeric.h` off direct `reduce_tile` | [step-4-numeric-h-analysis.md](step-4-numeric-h-analysis.md) — **blocked, no code change** |
 | 5 | remaining direct `reduce_tile` callers | [step-5-remaining-reduce-tile-callers.md](step-5-remaining-reduce-tile-callers.md) — **assessment only** |
 | 6 | perf comparison vs `main` | [step-6-perf-vs-main.md](step-6-perf-vs-main.md) |
+| 7 | Phase 1 cleanups: `softmax_w` perf fix, a hang in the shared `ttnn` general softmax, dead RT args, `topk_router_gpt` | [step-7-phase1-cleanups.md](step-7-phase1-cleanups.md) |

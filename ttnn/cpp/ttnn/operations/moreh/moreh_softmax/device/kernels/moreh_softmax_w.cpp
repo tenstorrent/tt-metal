@@ -39,11 +39,17 @@ void kernel_main() {
     // force-unrolling the per-Wt loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
     std::uint32_t N = get_arg(args::N);
     std::uint32_t Wt = get_arg(args::Wt);
+    constexpr std::uint32_t mask_w = get_arg(args::mask_w);
+    constexpr std::uint32_t TILE_W = 32;
+    constexpr bool do_partial_w = mask_w < TILE_W;
+    constexpr std::uint32_t num_max_scaler_tiles = do_partial_w ? 2 : 1;
+    constexpr auto max_partial_scaler = do_partial_w ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                     : compute_kernel_lib::ReducePartialScaler::none();
 
     dfb_mask_obj.wait_front(onetile);
     // max_scaler carries a full/partial pair; sum_scaler stays a single tile because the sum still
     // consumes exps that this kernel masks in place (see the exp loop below).
-    dfb_max_scaler_obj.wait_front(2);
+    dfb_max_scaler_obj.wait_front(num_max_scaler_tiles);
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
@@ -62,7 +68,7 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
             compute_kernel_lib::NoOp{},
-            compute_kernel_lib::ReducePartialScaler::last_tile_at(1));
+            max_partial_scaler);
 
         // compute x - max(x)
         dfb_x_m_max_obj.reserve_back(Wt);

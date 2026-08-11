@@ -14,8 +14,6 @@ void kernel_main() {
         get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
     uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
-    // args::mask_h is still supplied by the host but no longer read: the ragged last tile is
-    // handled by the partial scaler below rather than by a generated 0/1 mask tile.
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);

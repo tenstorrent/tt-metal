@@ -75,6 +75,15 @@ def main(out_path):
                 (f"softmax_small_w.{label}", lambda x=x: ttnn.operations.moreh.softmax(x, 3, strategy=S.SMALL_W))
             )
 
+        # ttnn.softmax general small path (Step 7b): shares the moreh forward kernels. rank 3 keeps it
+        # off the rank-4 attention factory, so dim=-1 lands on GeneralWSmall and dim=-2 on GeneralHSmall.
+        for label, shape in [("aligned_512", [16, 512, 512]), ("ragged_511", [16, 512, 511])]:
+            x = _mk(device, shape)
+            cases.append((f"ttnn_softmax_general_w_small.{label}", lambda x=x: ttnn.softmax(x, dim=-1)))
+        for label, shape in [("aligned_512", [16, 512, 512]), ("ragged_511", [16, 511, 512])]:
+            x = _mk(device, shape)
+            cases.append((f"ttnn_softmax_general_h_small.{label}", lambda x=x: ttnn.softmax(x, dim=-2)))
+
         # layernorm: Step 3 was a pure reader refactor, included as a no-change control.
         for label, w in [("aligned_4096", 4096), ("ragged_4095", 4095)]:
             x = _mk(device, [1, 4, 1024, w])
