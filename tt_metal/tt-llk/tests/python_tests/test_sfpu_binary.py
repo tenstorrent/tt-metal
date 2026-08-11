@@ -710,7 +710,9 @@ def test_sfpu_binary_atan2(formats, dest_acc, mathop):
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=input_output_formats(
+        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+    ),
     mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
@@ -718,13 +720,16 @@ def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=input_output_formats(
+        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+    ),
     mathop=[
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
