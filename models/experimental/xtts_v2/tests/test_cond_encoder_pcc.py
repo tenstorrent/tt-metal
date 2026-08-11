@@ -1,23 +1,27 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC test for the TTNN conditioning encoder (Block 1, first half) vs coqui golden.
-Feeds golden mel_in [1,80,T] and checks enc_out [1,1024,T]."""
-import os
+"""PCC test for the TTNN conditioning encoder (Block 1, first half) vs the CPU reference.
 
+Input: a deterministic synthetic voiced clip pushed through the coqui-transcribed mel
+front-end (frontend.conditioning_mels) -> mel_in [1,80,T]. Reference: reference/
+xtts_cond_ref.CondReference (validated PCC 1.0 vs coqui) -> enc_out [1,1024,T].
+Set XTTS_GOLDEN_DIR to cross-check against stored coqui-captured fixtures instead."""
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import cond_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_cond import TTNNConditioningEncoder, preprocess_encoder_parameters
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "..", "golden", "cond")
 TARGET_PCC = 0.999
 
 
 def run_encoder_pcc(device):
-    mel = torch.load(os.path.join(GOLDEN, "mel_in.pt"))  # [1,80,T]
-    enc_g = torch.load(os.path.join(GOLDEN, "enc_out.pt"))  # [1,1024,T]
+    ref = cond_reference()
+    mel = ref["mel_in"]  # [1,80,T]
+    enc_g = ref["enc_out"]  # [1,1024,T]
     T = mel.shape[2]
     S = ((T + 31) // 32) * 32  # 505 -> 512
     mel_f = mel.permute(0, 2, 1).contiguous()  # [1,T,80]

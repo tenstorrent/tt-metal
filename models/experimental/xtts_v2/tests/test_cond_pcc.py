@@ -1,14 +1,18 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for the full TTNN conditioning branch (Block 1) vs coqui golden:
-mel_in [1,80,T] -> conditioning encoder -> Perceiver -> gpt_cond_latent [1,32,1024]."""
-import os
+"""End-to-end PCC test for the full TTNN conditioning branch (Block 1) vs the CPU reference:
+mel_in [1,80,T] -> conditioning encoder -> Perceiver -> gpt_cond_latent [1,32,1024].
 
+Input: deterministic synthetic voiced clip -> frontend.conditioning_mels. Reference:
+reference/xtts_cond_ref.CondReference (validated PCC 1.0 vs coqui). Set XTTS_GOLDEN_DIR
+to cross-check against stored coqui-captured fixtures instead."""
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import cond_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_cond import (
     LATENTS,
     TTNNConditioningEncoder,
@@ -17,13 +21,13 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_cond import (
     preprocess_perceiver_parameters,
 )
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "..", "golden", "cond")
 TARGET_PCC = 0.999
 
 
 def run_cond_pcc(device):
-    mel = torch.load(os.path.join(GOLDEN, "mel_in.pt"))  # [1,80,T]
-    gold = torch.load(os.path.join(GOLDEN, "gpt_cond_latent.pt"))  # [1,32,1024]
+    ref = cond_reference()
+    mel = ref["mel_in"]  # [1,80,T]
+    gold = ref["gpt_cond_latent"]  # [1,32,1024]
     T = mel.shape[2]
     S = ((T + 31) // 32) * 32
     mel_f = torch.nn.functional.pad(mel.permute(0, 2, 1).contiguous(), (0, 0, 0, S - T))  # [1,S,80]

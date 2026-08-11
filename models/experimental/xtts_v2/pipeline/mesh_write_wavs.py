@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """Write the per-request waveforms produced by `phase_tt_mesh.py` out as .wav files.
@@ -8,7 +9,7 @@ device). This just decodes them to 24 kHz wavs and reports each one's duration, 
 run's audio can be listened to without loading coqui at all — only torch + soundfile are
 needed, so it runs in either venv.
 
-    python mesh_write_wavs.py --dir /home/acicovic/xtts_out --out /home/acicovic/xtts_out/wav
+    python mesh_write_wavs.py --dir /path/to/xtts_out --out /path/to/xtts_out/wav
 """
 
 import argparse

@@ -1,4 +1,6 @@
+<!-- SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # XTTS-v2 reference pipeline (TT-in-the-loop)
 
 End-to-end [Coqui XTTS-v2](https://github.com/coqui-ai/TTS) text-to-speech with the neural
@@ -14,8 +16,11 @@ The four neural blocks run on device:
 | **3** | GPT decoder (30 layers): one-shot parallel **prefill** + KV-cached **decode** | bf16 |
 | **4** | HiFi-GAN vocoder → waveform | fp32 |
 
-The CPU-only front-end stays in coqui's `TTS` package: text tokenizer, the mel/STFT
-front-ends that feed Blocks 1 & 2, and the host-side sampling glue for the decode loop.
+In this harness the CPU-only front-end stays in coqui's `TTS` package: text tokenizer, the
+mel/STFT front-ends that feed Blocks 1 & 2, and the host-side sampling glue for the decode
+loop. (The serving path no longer needs coqui: `../frontend.py` reimplements the front-end
+in pure torch inside tt-metal's python_env, validated bit-exact against phase-A captures —
+see `validate_frontend.py` and the top-level `../README.md`.)
 
 ## Why two Python environments
 

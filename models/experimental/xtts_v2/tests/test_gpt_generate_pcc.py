@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -12,38 +13,27 @@ same prompt). Two checks:
   2. Free-running: TTNN generates on its own samples; report how many leading codes match
      the reference (bf16 argmax flips can eventually diverge — informational).
 
-Requires generation goldens:
-    python models/experimental/xtts_v2/reference/xtts_gpt_ref.py
+The reference generation (seeded prompt from the checkpoint's embedding tables + greedy
+decode through HF GPT2 with checkpoint weights) is computed live in-process — no golden
+files needed. Set XTTS_GOLDEN_DIR to use stored fixtures instead (bit-identical).
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_gpt_generate_pcc.py
 """
 
-import os
-
-import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_gen_head
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_generate_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_generate import TTNNGPTGenerator
 
-GEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt", "generate")
 LATENT_PCC = 0.999
 
 
-def _load():
-    g = {
-        k: torch.load(os.path.join(GEN_DIR, f"{k}.pt"))
-        for k in ("prompt_embeds", "step_inputs", "ref_codes", "ref_logits", "ref_latents")
-    }
-    g["meta"] = torch.load(os.path.join(GEN_DIR, "meta.pt"))
-    return g
-
-
 def run_generate(device):
-    g = _load()
+    g = gpt_generate_reference()
     heads = load_gen_head()
     max_seq = ((g["prompt_embeds"].shape[1] + g["step_inputs"].shape[1] + 31) // 32) * 32
     gen = TTNNGPTGenerator(
@@ -51,8 +41,8 @@ def run_generate(device):
         preprocess_gpt_parameters(device, dtype=ttnn.bfloat16),
         heads,
         max_seq=max_seq,
-        start_token=g["meta"]["start_token"],
-        stop_token=g["meta"]["stop_token"],
+        start_token=g["start_token"],
+        stop_token=g["stop_token"],
     )
 
     # 1) Teacher-forced

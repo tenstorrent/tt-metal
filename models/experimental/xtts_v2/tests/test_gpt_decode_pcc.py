@@ -1,12 +1,15 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
 PCC test for the KV-cached decode loop of the TTNN XTTS-v2 GPT core (Block 3).
 
-Validation: feed the golden `inputs_embeds` one token at a time through the KV-cached
-decode step; the stacked per-step latents must match the parallel prefill golden
-`latents.pt` (causal attention => decode step t == prefill position t).
+Validation: feed the reference `inputs_embeds` one token at a time through the KV-cached
+decode step; the stacked per-step latents must match the CPU reference's parallel-prefill
+latents (causal attention => decode step t == prefill position t). The reference is
+computed live in-process (see tests/reference_helpers.py); set XTTS_GOLDEN_DIR to use
+stored fixtures instead.
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py
@@ -14,23 +17,20 @@ Run:
     python models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py
 """
 
-import os
-
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTDecoder
 
-GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 TARGET_PCC = 0.999  # native bf16 decode path
 
 
 def _load_golden():
-    inp = torch.load(os.path.join(GOLDEN_DIR, "inputs_embeds.pt"))
-    latents = torch.load(os.path.join(GOLDEN_DIR, "latents.pt"))
-    return inp, latents
+    ref = gpt_reference()
+    return ref["inputs_embeds"], ref["latents"]
 
 
 def run_decode_pcc(device, max_seq_request=None):

@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # XTTS-v2 reference pipeline: the neural blocks run on Tenstorrent (TT) — conditioning
 # encoder + Perceiver (Block 1), ResNet speaker encoder (Block 2), the full GPT decoder
 # with parallel prefill + KV-cached decode (Block 3), and the HiFi-GAN vocoder (Block 4).

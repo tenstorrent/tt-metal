@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 """Phase C (CPU): emit the final wav. Uses OUR TT HiFi-GAN output (Block 4) if phase B
 produced it (vocoder_wav_tt.pt) — then this phase only writes the file. Otherwise falls
 back to coqui's HiFi-GAN on the TT gpt_latents + d-vector."""
@@ -14,7 +17,7 @@ if not hasattr(_ptu, "isin_mps_friendly"):
 
 import soundfile as sf
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/home/acicovic/xtts_ref")  # coqui checkpoint dir
+CKPT = os.environ.get("XTTS_CKPT_DIR")  # coqui checkpoint dir (config.json, model.pth, vocab.json)
 
 
 def main():
@@ -22,6 +25,8 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if not CKPT:  # checked after argparse, not at import time, so --help works without the env
+        raise SystemExit("set XTTS_CKPT_DIR to the coqui XTTS-v2 checkpoint dir")
 
     # Prefer OUR TT HiFi-GAN waveform (Block 4 on device, produced in phase B).
     tt_wav = os.path.join(args.work, "vocoder_wav_tt.pt")

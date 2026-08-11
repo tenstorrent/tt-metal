@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -268,7 +269,6 @@ class TTNNSpeakerEncoder:
             inter[f"layer{li + 1}"] = x
 
         # x: NHWC [1, H=8, W=T'', C=256] -> [1, T'', 2048] feature = c*8 + m
-        C = NUM_FILTERS[3]
         xp = ttnn.permute(x, (0, 2, 3, 1))  # [1, W, C, H]
         x_tf = ttnn.reshape(xp, (1, W, FEAT))  # feature index = c*8 + m
         inter["reshape"] = x_tf

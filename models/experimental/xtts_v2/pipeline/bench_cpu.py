@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 """CPU per-component perf for the XTTS-v2 pipeline, timed on the SAME sub-networks that TT
 accelerates (so the numbers line up with bench_warm.py's TT blocks):
   Block1 = gpt.conditioning_encoder + gpt.conditioning_perceiver
@@ -19,7 +22,7 @@ import numpy as np
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/localdev/acicovic/xtts_ref")  # coqui checkpoint dir
+CKPT = os.environ.get("XTTS_CKPT_DIR")  # coqui checkpoint dir (config.json, model.pth, vocab.json)
 
 
 class Acc:
@@ -51,6 +54,8 @@ def main():
     ap.add_argument("--text", required=True)
     ap.add_argument("--lang", default="en")
     args = ap.parse_args()
+    if not CKPT:  # checked after argparse, not at import time, so --help works without the env
+        raise SystemExit("set XTTS_CKPT_DIR to the coqui XTTS-v2 checkpoint dir")
     torch.set_num_threads(os.cpu_count())
 
     cfg = XttsConfig()

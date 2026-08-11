@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 """Phase A (coqui venv, CPU): conditioning + tokenize + generate codes, capture the GPT
 inputs_embeds for the return_latent forward, and produce a full-CPU baseline wav.
 
@@ -29,7 +32,7 @@ import soundfile as sf
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/home/acicovic/xtts_ref")  # coqui checkpoint dir
+CKPT = os.environ.get("XTTS_CKPT_DIR")  # coqui checkpoint dir (config.json, model.pth, vocab.json)
 
 
 def load_model():
@@ -210,6 +213,8 @@ def main():
     ap.add_argument("--work-root", help="parent dir for per-request work dirs (with --texts-file)")
     ap.add_argument("--limit", type=int, default=0, help="with --texts-file: use only the first N texts")
     args = ap.parse_args()
+    if not CKPT:  # checked after argparse, not at import time, so --help works without the env
+        raise SystemExit("set XTTS_CKPT_DIR to the coqui XTTS-v2 checkpoint dir")
 
     if args.texts_file:
         assert args.work_root, "--texts-file needs --work-root"

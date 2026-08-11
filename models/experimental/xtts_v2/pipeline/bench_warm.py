@@ -1,4 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 """Warm per-block perf table for the XTTS-v2 TTNN pipeline. Each block is built once, run a
 few times to compile+cache kernels (program cache), then timed over N warm iterations.
 Inputs come from a real pipeline work dir. TT-only (the coqui CPU phases are excluded)."""
@@ -18,10 +21,8 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDec
 from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import TTNNHifiganGenerator, preprocess_hifigan_parameters
 
 # WORK is a pipeline work dir produced by run_pipeline.sh (holds the captured block inputs).
+# Checkpoint comes from resolve_ckpt's env conventions ($XTTS_CKPT or $XTTS_CKPT_DIR).
 WORK = os.environ.get("XTTS_WORK", "./xtts_pipeline_out/work")
-_ckpt_dir = os.environ.get("XTTS_CKPT_DIR")
-if _ckpt_dir:
-    os.environ.setdefault("XTTS_CKPT", os.path.join(_ckpt_dir, "model.pth"))
 
 
 def timeit(fn, n, warm=3):

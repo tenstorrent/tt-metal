@@ -1,37 +1,38 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
 PCC test for the one-shot parallel prefill (ttnn.fill_cache) of TTNNGPTTracedDecoder.
 
-Validation: prefill the first SPLIT positions of the golden `inputs_embeds` in one batched pass
-(filling the KV cache 0..SPLIT-1), then decode the remaining positions token-by-token from the
-traced step. Because attention is causal, the decode latents at positions SPLIT..S-1 must match the
-parallel-prefill golden `latents.pt` at those positions — which is only true if fill_cache seeded
-the cache correctly (i.e. equivalent to token-by-token prefill).
+Validation: prefill the first SPLIT positions of the reference `inputs_embeds` in one batched
+pass (filling the KV cache 0..SPLIT-1), then decode the remaining positions token-by-token from
+the traced step. Because attention is causal, the decode latents at positions SPLIT..S-1 must
+match the CPU reference's parallel-prefill latents at those positions — which is only true if
+fill_cache seeded the cache correctly (i.e. equivalent to token-by-token prefill). The reference
+is computed live in-process (see tests/reference_helpers.py); set XTTS_GOLDEN_DIR to use stored
+fixtures instead.
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_gpt_prefill_pcc.py
 """
-
-import os
 
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder
 
-GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 TARGET_PCC = 0.999
 TRACE_REGION = 50_000_000
 
 
 def run_prefill_pcc(device):
-    inputs_embeds = torch.load(os.path.join(GOLDEN_DIR, "inputs_embeds.pt"))
-    golden = torch.load(os.path.join(GOLDEN_DIR, "latents.pt"))
+    ref = gpt_reference()
+    inputs_embeds, golden = ref["inputs_embeds"], ref["latents"]
     S = inputs_embeds.shape[1]
     split = S // 2  # prefill the first half in one shot, decode the second half
 
