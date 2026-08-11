@@ -110,8 +110,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
 
-        # The divisor is the GLOBAL element count per (frame, group): the whole point is
-        # that a device normalises by more elements than it holds.
+        # The divisor is the GLOBAL element count per (frame, group), so a device normalises by
+        # more elements than it holds.
         self.height = height
         self.elements_per_group = (num_channels // self.num_groups) * height * spatial_factor * width
 
@@ -149,9 +149,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
     def forward(self, x_BTHWC: ttnn.Tensor, *, fuse_silu: bool = False) -> ttnn.Tensor:
         """``(1,T,H,W,C)`` ROW_MAJOR in and out.
 
-        ``fuse_silu`` folds the SiLU into the final broadcast add. That matters more than it
-        looks: the SiLU used to run on the ROW_MAJOR output, where a 285 MB unary costs
-        3.7 ms, and as a fused activation on an op that already runs it costs nothing.
+        ``fuse_silu`` folds the SiLU into the final broadcast add. Run separately on the ROW_MAJOR
+        output it is a 285 MB unary costing 3.7 ms; fused onto an op that already runs, it is free.
         """
         T, H, W, C = self.num_frames, self.local_height, self.width, self.num_channels
         B, xt, xh, xw, xc = x_BTHWC.shape
@@ -167,8 +166,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
             # the activation (x*x, x*gamma, +beta) instead of four. The cancellation this
             # form is known for is contained by doing the subtraction on the (T,1,1,G) stats
             # tensor in fp32 -- 32 scalars per frame, so the cast is free -- rather than on
-            # the activation. Gated by PCC, not assumed: see the class docstring's note on
-            # why the two-pass form was chosen originally.
+            # the activation. Gated by PCC, not assumed: see the class docstring on the
+            # two-pass form.
             sum_x = ttnn.typecast(self._group_sums(x), ttnn.float32)
             sum_xx = ttnn.typecast(self._group_sums(ttnn.multiply(x, x)), ttnn.float32)
             mean_g = ttnn.multiply(sum_x, scale)
@@ -205,7 +204,7 @@ def _gn_hw_sharded(
     in-tree solution to this problem, so the norms stay built at the **global** H/W while the
     convs are built at the local shard.
 
-    Minus that function's crop/re-pad branch, deliberately: it exists for mesh-factor
+    Minus that function's crop/re-pad branch: it exists for mesh-factor
     padding, and H3 never has any. Its spatial extents are dyadic (256/128/64/32/16), so at
     factor 2/4/8 every one of the eight norm sites divides its mesh factor exactly *and*
     every local ``H*W`` is a multiple of 32. The assertion below is what keeps that true --
@@ -553,11 +552,3 @@ class MiniMaxH3Encoder3d(Module):
         return self.conv_out(
             _norm_silu(self.norm_out, h, self.dtype, parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
         )
-
-
-def pad_pixel_channels(x_BTHWC: torch.Tensor, aligned: int = 32) -> torch.Tensor:
-    """Zero-pad the 3 pixel channels up to the tile-aligned count the conv expects."""
-    channels = x_BTHWC.shape[-1]
-    if channels >= aligned:
-        return x_BTHWC
-    return torch.nn.functional.pad(x_BTHWC, (0, aligned - channels))

@@ -103,7 +103,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             return t.reshape(-1, *trailing)
 
         if self.precomputed_adaln:
-            # Dropped on purpose; the host-built table replaces this projection.
+            # Dropped: the host-built table replaces this projection.
             state.pop("linear.weight", None)
             state.pop("linear.bias", None)
             return
@@ -172,10 +172,29 @@ class MiniMaxH3Transformer3DModel(Module):
     `sp_factor * TILE`, and `ttnn.mesh_partition` then fractures that global sequence across the SP
     axis.
 
-    The condition stream is the `fl2va` keyframe anchors and is absent for `t2va`, which passes
-    `condition_1BKC=None` and gets the three-stream `[text | audio | video]` assembly unchanged. Its
-    position between text and audio is not a choice: `packing.build_packed_sequence` puts the
+    The condition stream sits between text and audio, and that position is not a choice:
+    `packing.build_packed_sequence` and `packing_ref2va.build_ref2va_packed_sequence` both put the
     conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's order.
+
+    It is a **list of typed blocks**, `[(tensor, modality), ...]`, in packed order:
+
+    - `t2va` passes `None` and gets the three-stream `[text | audio | video]` assembly unchanged;
+    - `fl2va` passes one `("video")` block, its keyframe anchors;
+    - `ref2va` passes one block per reference *medium*, and the region is modality-interleaved --
+      `[(ref1 audio, "audio"), (ref1 video, "video"), (ref2 video, "video"), ...]` -- because a video
+      reference's soundtrack rows are packed immediately before its own video rows.
+
+    A list rather than one tensor because the two modalities need different projections: audio rows go
+    through `audio_proj_in` (32 wide) and video rows through `proj_in` (96 wide), so they cannot be
+    concatenated before projection at all. Projecting each block separately is bit-identical to
+    projecting a concatenation of same-modality blocks, because a per-row GEMM against a shared weight
+    is row-independent -- which is what lets the blocks be placed apart here, and what makes the
+    `fl2va` numbers unchanged by this generalization.
+
+    The property this preserves is the one that made `fl2va` safe: **one frame of reference for row
+    indices**. The block list is assembled by walking the reference list in packed order, which is the
+    same walk that produced `layout.position_ids`, `token_tags`, `video_indices`, `audio_indices` and
+    `adaln_index_ranges`. There is no second ordering to keep in step.
 
     Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`, `rope_sin`,
     `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence in that same
@@ -361,7 +380,7 @@ class MiniMaxH3Transformer3DModel(Module):
         video_1BVC: ttnn.Tensor,
         audio_1BAC: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
-        condition_1BKC: ttnn.Tensor | None = None,
+        condition_blocks: list[tuple[ttnn.Tensor, str]] | None = None,
         timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
@@ -371,11 +390,13 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
-            rows only --- fl2va's conditioning rows go in `condition_1BKC`, not prepended here.
-        audio_1BAC: [1, 1, A, audio_in_channels], replicated on SP and TP
+            rows only --- conditioning rows go in `condition_blocks`, not prepended here.
+        audio_1BAC: [1, 1, A, audio_in_channels], replicated on SP and TP. Again the target rows only.
         prompt_1BLP: [1, 1, L, text_dim], replicated on SP and TP
-        condition_1BKC: [1, 1, K, in_channels * prod(patch_size)] or None. fl2va's noise-augmented
-            keyframe anchor rows, in packed order, same width as `video_1BVC`. `None` for t2va.
+        condition_blocks: `[(tensor, modality), ...]` in **packed order**, or None for t2va. A
+            `"video"` block is [1, 1, k, in_channels * prod(patch_size)] and an `"audio"` block
+            [1, 1, k, audio_in_channels]; per-block row counts are arbitrary. fl2va passes one
+            `"video"` block; ref2va passes one per reference medium, interleaved.
         timestep: [1, 1, num_timesteps, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
@@ -387,13 +408,18 @@ class MiniMaxH3Transformer3DModel(Module):
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
 
-        `video_velocity` holds the **target rows only**, `V` of them, and deliberately not the
-        conditioning rows the reference's `video_indices` would also cover. The caller discards
-        conditioning-row velocity --- the loop re-imposes the anchors by only ever writing rows from
-        `num_condition_video_rows` on --- and the two blocks are not contiguous in the packed layout,
-        so returning both would cost a second slice plus a concat every step for a value nobody reads.
-        No detection power is lost: attention is full, so every target row attends to the conditioning
-        rows as keys and values and a wrong conditioning rope or AdaLN tag shows up in this output.
+        Both hold the **target rows only** --- `V` and `A` of them --- and not the
+        conditioning rows the reference's `video_indices` / `audio_indices` would also cover. The caller
+        discards conditioning-row velocity, because the loop re-imposes the anchors by only ever writing
+        rows from `num_condition_video_rows` / `num_condition_audio_rows` on. For ref2va the reference
+        blocks are not even contiguous with each other, so returning them would cost a slice per block
+        plus a concat every step for a value nobody reads.
+
+        No detection power is lost: attention is full, so every target row attends to every conditioning
+        row as a key and value, and a wrong conditioning rope, AdaLN tag or input projection shows up in
+        this output. That is also why the target rows stay a single contiguous slice regardless of how
+        many reference blocks precede them --- `audio_start = l_len + c_len` and
+        `video_start = audio_start + a_len` hold for any block list.
         """
         v_len = video_1BVC.shape[2]
         a_len = audio_1BAC.shape[2]
@@ -404,7 +430,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 f"cache={'given' if adaln_cache is not None else 'None'}, precomputed_adaln={self.precomputed_adaln}"
             )
 
-        c_len = 0 if condition_1BKC is None else condition_1BKC.shape[2]
+        condition_blocks = condition_blocks or []
+        for index, (block, modality) in enumerate(condition_blocks):
+            if modality not in ("video", "audio"):
+                raise ValueError(f"condition_blocks[{index}] has modality {modality!r}, not 'video' or 'audio'")
+        condition_lengths = [block.shape[2] for block, _ in condition_blocks]
+        c_len = sum(condition_lengths)
         seq_len = l_len + c_len + a_len + v_len
         tile = ttnn.TILE_SIZE
         # A tile-layout concat can only cut on a tile boundary, so it needs every modality's row
@@ -415,7 +446,11 @@ class MiniMaxH3Transformer3DModel(Module):
         # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
         # it is strictly cheaper, and keeping it means this change cannot move a shape that
         # already worked.
-        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile or c_len % tile)
+        # Every *block* is tested, not their sum: the concat cuts at each block boundary, so one
+        # unaligned block forces the ROW_MAJOR path even when the totals are aligned.
+        tile_aligned = not (
+            v_len % tile or a_len % tile or l_len % tile or any(length % tile for length in condition_lengths)
+        )
 
         # 1. Project each modality and refine the text stream, all still replicated on SP, then
         # assemble the full packed sequence in natural order.
@@ -423,12 +458,15 @@ class MiniMaxH3Transformer3DModel(Module):
         audio_embeds = self.audio_proj_in(audio_1BAC)
         text_embeds = self.token_refiner(self.context_embedder(prompt_1BLP))
         streams = [text_embeds]
-        if condition_1BKC is not None:
-            # Same weight as the target rows: conditioning rows are video rows that happen to be
-            # pinned, and the reference projects them with the same `proj_in`. A per-row GEMM against a
-            # shared weight is row-independent, so projecting the two blocks separately is bit-identical
-            # to projecting them concatenated -- which is what lets them be placed apart here.
-            streams.append(self.proj_in(condition_1BKC))
+        for block, modality in condition_blocks:
+            # Same weights as the target rows of that modality: a conditioning row is a
+            # row of its own modality that happens to be pinned, and the reference
+            # projects it with the very same `proj_in` / `audio_proj_in`. A per-row GEMM
+            # against a shared weight is row-independent, so projecting the blocks
+            # separately is bit-identical to projecting them concatenated -- which is
+            # what lets them be placed apart here, and what keeps fl2va's numbers
+            # unchanged now that its one block goes through this loop.
+            streams.append(self.audio_proj_in(block) if modality == "audio" else self.proj_in(block))
         streams += [audio_embeds, video_embeds]
 
         # 2. Zero-pad the tail up to a multiple of sp_factor * TILE, then fracture across SP.

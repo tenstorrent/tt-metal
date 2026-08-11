@@ -4,9 +4,9 @@
 
 """Project one profiled MiniMax-H3 transformer block out to a denoise step and a whole video.
 
-Reads the Tracy ops CSV produced by `test_transformer_block_perf_minimax_h3.py`, isolates the warm
+Reads the Tracy ops CSV produced by `test_performance_minimax_h3.py`, isolates the warm
 iteration between the `start` and `stop` signposts, and multiplies out. Not a test -- the filename
-deliberately does not start with `test_` so pytest leaves it alone.
+does not start with `test_`, so pytest leaves it alone.
 
     python project_block_perf.py 5s=path/to/ops_perf_results_A.csv 15s=.../B.csv
     python project_block_perf.py --drop Permute,Slice 15s=.../B.csv

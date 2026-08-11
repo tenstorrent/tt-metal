@@ -19,7 +19,7 @@ order they catch things:
 
 Per-component numerics are gated elsewhere and are not repeated here: the conditioner in
 `test_text_encoder_minimax_h3.py`, the DiT in `test_transformer_minimax_h3.py`, both VAEs in
-`test_vae_*` and `test_audio_vae_minimax_h3.py`, all at this same 768P/5s working point.
+`test_vae_*` and `test_audio_minimax_h3.py`, all at this same 768P/5s working point.
 
 Artifacts are written to a stable path so the output can be *looked at*. Every numeric gate below
 can pass on video that is visibly wrong, and the two failure modes whole-tensor statistics hide best
@@ -54,7 +54,7 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-# Deliberately dense: a moving camera, a reflective wet surface, several independent light sources at
+# Dense: a moving camera, a reflective wet surface, several independent light sources at
 # different colour temperatures, volumetric haze, and foreground/background motion at different depths.
 # Those are the things a video model is most likely to get wrong, and they are also what the artifact
 # rubric reads best -- banding shows in the haze gradients, seams show in the reflections, and flicker
@@ -286,10 +286,10 @@ def _decoded_frames(path: Path, count: int) -> np.ndarray:
 #   subject_consistency 0.9820   background_consistency 0.9831   motion_smoothness 0.9905
 #   dynamic_degree 1.0           imaging_quality 0.6896
 #
-# For reference, LTX's calibrated 1088p bars are 0.92 / 0.93 / 0.955 / 1.0 / 0.645 -- H3 clears every
-# one of them here, which is why copying them would have gated nothing.
+# For reference, LTX's calibrated 1088p bars are 0.92 / 0.93 / 0.955 / 1.0 / 0.645, which H3 clears on
+# every dimension, so those values would gate nothing here.
 #
-# The margins below are deliberately generous because this is a **single-sample** calibration: one
+# The margins below are generous because this is a **single-sample** calibration: one
 # prompt, one seed. They are set to catch a broken pipeline, not to certify quality. `dynamic_degree`
 # stays at 1.0 because over one video it is effectively binary -- either the clip has real motion or
 # it does not, and "it does not" is the frozen-video failure.
@@ -396,7 +396,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
         run_vbench = run_clip = False
     # A missing dependency must report SKIPPED, never a silent pass: a quality gate that no-ops
     # reads green, which is worse than not having it. VBench is checked as an *interpreter* rather
-    # than an import, because it deliberately does not live in this environment (see `_run_vbench`);
+    # than an import, because it does not live in this environment (see `_run_vbench`);
     # CLIP needs only `open_clip`, which is already here, and this test's own ffmpeg frames.
     if run_clip:
         pytest.importorskip("open_clip", reason="RUN_CLIP=1 but open_clip is not installed (set RUN_CLIP=0)")

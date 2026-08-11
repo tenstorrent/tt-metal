@@ -4,6 +4,10 @@
 
 """The device tile blend and unpatchify against their host originals, at the production geometry.
 
+Kept separate from ``test_vae_parallel_minimax_h3.py`` because these run ``FABRIC_1D_RING``
+while that file runs ``FABRIC_1D``, and ``fabric_config`` is a process-global one-shot: a second
+distinct value in one process raises ``TT_FATAL: Tried to override previous value of fabric config``.
+
 This is the piece that has to be right before any of it is worth doing. The reference blend is
 sequential and asymmetric; a separable reformulation was measured to move 11.1 % of pixels by up to
 4.66, so the device version mirrors the order rather than the algebra. These tests are what say it
@@ -170,7 +174,7 @@ def gathered_tile_order(mesh_rows: int, mesh_cols: int) -> list[int]:
     per-column groups. The result is dim 0 **transposed**: position `c * rows + r` holds shard
     `r * cols + c`.
 
-    Deriving the tile -> position map from this rather than assuming row-major is the whole point.
+    Deriving the tile -> position map from this rather than assuming row-major is the point.
     Getting it wrong puts tiles in the wrong place, which the seam gate catches as a spectacular
     failure rather than a subtle one -- but only if something reads the tiles back in the first place.
     """

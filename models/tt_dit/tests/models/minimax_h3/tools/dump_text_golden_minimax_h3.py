@@ -32,7 +32,7 @@ OUT = (
 TAP = 50  # MINIMAX_H3_TEXT_ENCODER_LAYER
 
 # The prompt the pipeline actually generates from, plus a long one at the ~512-token length the
-# 768P working point is costed at (`test_transformer_block_perf_minimax_h3.py::NUM_TEXT_TOKENS`).
+# 768P working point is costed at (`test_performance_minimax_h3.py::NUM_TEXT_TOKENS`).
 # Short prompts are not gated: a 50-layer causal stack accumulates over the context, so a 20-token
 # measurement does not stand in for a 500-token one.
 E2E_PROMPT = (

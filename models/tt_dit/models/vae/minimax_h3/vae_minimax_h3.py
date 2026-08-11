@@ -554,7 +554,7 @@ class MiniMaxH3Vae(Module):
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            # `ConcatMeshToTensor`, deliberately, **not** `fast_device_to_host`.
+            # `ConcatMeshToTensor`, **not** `fast_device_to_host`.
             #
             # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
             # `vae_ltx.py` and `vae_wan2_1.py` use, and it measured 39 % faster -- but it is a misuse
@@ -804,7 +804,22 @@ class MiniMaxH3Vae(Module):
         chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.
+
+        Runs with raised torch threads. Decode is host-bound -- device compute is ~10 % of the
+        stage and the rest is tile stitching, unpatchify and readback -- and a server worker
+        pins torch to one thread for the denoise loop's benefit. ``MINIMAX_H3_VAE_THREADS``
+        overrides; the previous limit is restored on the way out.
         """
+        threads = int(os.environ.get("MINIMAX_H3_VAE_THREADS", "8"))
+        previous_threads = torch.get_num_threads()
+        if threads > 0 and threads != previous_threads:
+            torch.set_num_threads(threads)
+        try:
+            return self._decode(z_BCTHW)
+        finally:
+            torch.set_num_threads(previous_threads)
+
+    def _decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config

@@ -4,7 +4,7 @@
 
 """MiniMax-H3 packed-sequence construction.
 
-Host-side and deliberately pure torch/numpy: every value here is part of the
+Host-side and pure torch/numpy: every value here is part of the
 checkpoint's numerical contract and is compared bit-exactly against the
 reference, so nothing in this module may be reassociated or moved to device.
 
