@@ -117,8 +117,8 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             for (auto block : generic::blocks(Wt, blk)) {
-                const auto block_shape =
-                    ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+                const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                             .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
                 if constexpr (welford_fp32_alias) {
                     dfb_x_welford_obj.reserve_back(block.full_block_size());
                 }
@@ -279,7 +279,8 @@ void kernel_main() {
                 dfb_xmm_id,
                 ckl::ReservePolicy::Upfront,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(total_buffer_size, /*block_size=*/blk));
+                ckl::DataFormatReconfig::Disabled)>(
+            ckl::IterationShape::tiles(total_buffer_size).block_size(/*block_size=*/blk));
         dfb_ex_obj.pop_front(1);
         dfb_xmm_obj.wait_front(total_buffer_size);
 
@@ -303,8 +304,8 @@ void kernel_main() {
         // Remainder of the layernorm operation
         dfb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
-            const auto block_shape =
-                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<

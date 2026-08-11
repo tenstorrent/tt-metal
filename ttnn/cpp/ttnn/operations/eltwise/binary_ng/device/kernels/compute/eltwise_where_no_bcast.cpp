@@ -43,7 +43,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_cond_id, dfb_tensor_id, dfb_out_id);
 
     ckl::eltwise_chain(
-        ckl::IterationShape::tiles(num_tiles, num_tiles_per_cycle),
+        ckl::IterationShape::tiles(num_tiles).block_size(num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for dfb_cond_id).
         ckl::CopyTile<
             ckl::input(

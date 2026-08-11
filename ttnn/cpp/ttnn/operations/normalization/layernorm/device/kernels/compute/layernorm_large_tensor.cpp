@@ -168,8 +168,8 @@ void kernel_main() {
         //              n
         const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, block_size)) {
-            const auto block_shape =
-                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);
 #ifdef RMSNORM
@@ -285,8 +285,8 @@ void kernel_main() {
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
         for (auto block : generic::blocks(Wt, block_size)) {
-            const auto block_shape =
-                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);

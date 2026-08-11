@@ -23,7 +23,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        IterationShape::tiles(n, blk),
+        IterationShape::tiles(n).block_size(blk),
         CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

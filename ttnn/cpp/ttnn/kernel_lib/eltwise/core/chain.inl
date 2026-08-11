@@ -26,29 +26,22 @@
 
 namespace compute_kernel_lib {
 
-constexpr IterationShape::IterationShape(uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) :
-    Ht(H), Wt(W), block_size(blk), tail_sync(tail_sync) {}
+constexpr IterationShape::IterationShape(uint32_t H, uint32_t W) :
+    Ht(H), Wt(W), block_size(1), tail_sync(BlockTailSync::ValidTiles) {}
 
-constexpr IterationShape::IterationShape(uint32_t n_tiles) :
-    Ht(1), Wt(n_tiles), block_size(1), tail_sync(BlockTailSync::ValidTiles) {}
+constexpr IterationShape::IterationShape(uint32_t n_tiles) : IterationShape(1, n_tiles) {}
 
-constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::tiles(
-    uint32_t n, uint32_t blk, BlockTailSync tail_sync) {
-    return {1, n, blk, tail_sync};
-}
+constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::tiles(uint32_t n) { return {1, n}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::grid(
-    uint32_t H, uint32_t W, uint32_t blk, BlockTailSync tail_sync) {
-    return {H, W, blk, tail_sync};
-}
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::grid(uint32_t H, uint32_t W) { return {H, W}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::of(uint32_t r, uint32_t c) { return {r, c}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::row(uint32_t c) { return {1, c, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::row(uint32_t c) { return {1, c}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::col(uint32_t r) { return {r, 1, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::col(uint32_t r) { return {r, 1}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::one_tile() { return {1, 1, 1}; }
+constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::one_tile() { return {1, 1}; }
 
 constexpr bool is_legal_input_policy(WaitPolicy wait, PopPolicy pop) noexcept {
     switch (wait) {

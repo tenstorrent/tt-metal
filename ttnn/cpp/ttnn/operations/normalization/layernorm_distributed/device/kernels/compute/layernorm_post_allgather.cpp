@@ -39,7 +39,7 @@ constexpr auto beta_input_dfb = normed_output_dfb;
 #endif
 
 ALWI void normalize_chunk(const uint32_t num_tiles) {
-    const auto shape = ckl::IterationShape::tiles(num_tiles, ckl::DEST_AUTO_LIMIT);
+    const auto shape = ckl::IterationShape::tiles(num_tiles).block_size(ckl::DEST_AUTO_LIMIT);
     constexpr auto gamma_beta_wait =
         Wt_file_scope == dfb_length_file_scope ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerBlockSize;
     constexpr auto gamma_beta_pop =

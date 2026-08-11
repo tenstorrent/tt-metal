@@ -100,7 +100,7 @@ void kernel_main() {
             dfb_in.wait_front(Wt);
 
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(half_Wt, /*block_size=*/half_Wt),
+                ckl::IterationShape::tiles(half_Wt).block_size(/*block_size=*/half_Wt),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(
@@ -132,17 +132,17 @@ void kernel_main() {
 
             mul_bcast_rows_init(rotated_in_interm_dfb_id, sin_dfb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{},
                 ckl::PackTile<sin_output>{});
 
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{},
                 ckl::PackTile<cos_output>{});
 
             ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
-                ckl::IterationShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
         }
 
         dfb_sin.pop_front(Wt);

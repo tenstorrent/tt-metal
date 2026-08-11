@@ -96,7 +96,7 @@ void kernel_main() {
                 ckl::input(dfb_inp_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::input(dfb_stats_reduced_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(dfb_intermediate_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                ckl::IterationShape::tiles(block_size, /*block_size=*/block_size));
+                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
 
             constexpr uint32_t norm_target_dfb_id = (do_gamma || do_beta) ? dfb_intermediate_id : dfb_out_id;
             DataflowBuffer(dfb_recip_sqrt_var_id).wait_front(1);
@@ -108,13 +108,13 @@ void kernel_main() {
                     ckl::OperandKind::Block),
                 ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(norm_target_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                ckl::IterationShape::tiles(block_size, /*block_size=*/block_size));
+                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
 
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_dfb_id = do_beta ? dfb_intermediate_id : dfb_out_id;
                 DataflowBuffer(dfb_gamma_id).wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(block_size, /*block_size=*/block_size),
+                    ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
@@ -138,7 +138,7 @@ void kernel_main() {
             if constexpr (do_beta) {
                 DataflowBuffer(dfb_beta_id).wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(block_size, /*block_size=*/block_size),
+                    ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Add,
                         ckl::input(

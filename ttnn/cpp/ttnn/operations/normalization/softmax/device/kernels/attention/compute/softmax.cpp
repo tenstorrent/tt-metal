@@ -41,7 +41,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
     ckl::eltwise_chain(
-        ckl::IterationShape::tiles(Wt, ndst),
+        ckl::IterationShape::tiles(Wt).block_size(ndst),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(
@@ -173,7 +173,7 @@ void kernel_main() {
                 dfb_in0_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(dfb_fused_scale_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(dfb_scale_mask_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt, ndst));
+            ckl::IterationShape::tiles(Wt).block_size(ndst));
 #ifndef CAUSAL_MASK
         if (wait_mask) {
             dfb_fused_attn_obj.wait_front(Wt);
@@ -182,7 +182,7 @@ void kernel_main() {
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(Wt, ndst),
+            ckl::IterationShape::tiles(Wt).block_size(ndst),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(
@@ -232,7 +232,7 @@ void kernel_main() {
         {
             if (Wt > 1) {
                 ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(Wt - 1, ndst),
+                    ckl::IterationShape::tiles(Wt - 1).block_size(ndst),
                     ckl::CopyTile<ckl::input(
                         dfb_in0_id,
                         ckl::WaitPolicy::PerBlockSize,
@@ -285,7 +285,7 @@ void kernel_main() {
                     dfb_exps_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(Wt, ndst));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(Wt).block_size(ndst));
 #endif
         }
 #endif  // MASK_PADDED_DATA
@@ -311,7 +311,7 @@ void kernel_main() {
             ckl::input(dfb_exps_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb_recipsumexps_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(dfb_out0_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt, ndst));
+            ckl::IterationShape::tiles(Wt).block_size(ndst));
 
         // Realign CBs before the next row when Wt does not fill them exactly.
         drain_dfb_pad(dfb_in0_id, in0_pad);

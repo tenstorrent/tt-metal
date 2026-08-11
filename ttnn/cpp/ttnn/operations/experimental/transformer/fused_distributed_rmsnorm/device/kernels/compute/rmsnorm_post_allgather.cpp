@@ -117,7 +117,7 @@ void kernel_main() {
                 ckl::input(input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::input(reduce_result_dfb_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(mul_rms_result_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                ckl::IterationShape::tiles(block_size, block_size));
+                ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             /**
              * Weight (gamma) fusion
@@ -126,7 +126,7 @@ void kernel_main() {
                 // cumulative wait
                 dfb_weight.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(block_size, /*block_size=*/block_size),
+                    ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
@@ -233,7 +233,7 @@ void kernel_main() {
                     ckl::input(
                         rotated_input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                     ckl::output(output_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                    ckl::IterationShape::tiles(block_size, block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size));
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_dfb_id, reduce_result_dfb_id);

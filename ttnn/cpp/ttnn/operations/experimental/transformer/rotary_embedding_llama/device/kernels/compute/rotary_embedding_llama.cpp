@@ -132,7 +132,7 @@ void kernel_main() {
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         bulk_block_input(rotated_in_interm_dfb),
@@ -142,7 +142,7 @@ void kernel_main() {
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
-                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
@@ -157,7 +157,7 @@ void kernel_main() {
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
                 ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
-                    ckl::IterationShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

@@ -265,7 +265,7 @@ void kernel_main() {
             const uint32_t synchronized_block_w = ((valid_block_w + subblock_w - 1) / subblock_w) * subblock_w;
             const uint32_t math_block_w = synchronized_block_w == block_w ? valid_block_w : block_w;
             const auto valid_group_shape =
-                ckl::IterationShape::grid(block_h, math_block_w, subblock_w, ckl::BlockTailSync::FullBlock);
+                ckl::IterationShape::grid(block_h, math_block_w).block_size(subblock_w, ckl::BlockTailSync::FullBlock);
 
             // mask input
             index_h_offset = index_b_offset + index_g_offset;

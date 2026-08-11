@@ -40,7 +40,7 @@ ALWI void calc_numeric_stable() {
         ckl::ReduceInputPolicy::NoWaitNoPop>(ckl::ReduceInputBlockShape::row(block_w));
 
     ckl::eltwise_chain(
-        ckl::IterationShape::tiles(block_w, subblock_w),
+        ckl::IterationShape::tiles(block_w).block_size(subblock_w),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
@@ -119,10 +119,10 @@ void kernel_main() {
             ckl::input(dfb_in0_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb_fused_scale_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
             ckl::output(dfb_scale_mask_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(block_w, subblock_w));
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w));
 
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(block_w, subblock_w),
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_scale_mask_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
@@ -161,7 +161,7 @@ void kernel_main() {
             dfb_exps_id>();
 #else
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(block_w, subblock_w),
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::CopyTile<
                 ckl::input(dfb_in0_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                 ckl::Dst::D0>{},
@@ -193,6 +193,6 @@ void kernel_main() {
             ckl::input(dfb_exps_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb_recipsumexps_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(dfb_out0_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(block_w, subblock_w));
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w));
     }
 }
