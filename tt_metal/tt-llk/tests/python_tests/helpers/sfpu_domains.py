@@ -20,6 +20,18 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
+from .sfpu_dispatch_constants import (
+    CLAMP_MAX,
+    CLAMP_MIN,
+    HARDSHRINK_LAMBDA,
+    RELU_MAX_THRESHOLD,
+    RELU_MIN_THRESHOLD,
+    SOFTPLUS_THRESHOLD,
+    SOFTSHRINK_LAMBDA,
+    THRESHOLD_T,
+    UNARY_COMP_THRESHOLD,
+    UNARY_MAX_MIN_VALUE,
+)
 from .stimuli_generator import DistributionKind, StimuliSpec
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1427,11 +1439,14 @@ def format_specials(fmt: DataFormat) -> Tuple[float, ...]:
 # thresholds, exact rounding ties. The registry's random domains are chosen to land
 # *near* several of these; this table is what lands *on* them.
 #
-# Every constant here is a dispatch constant shared with the golden, and the golden is
-# the authority. The attribute that owns each one is named in the comments, because the
-# coupling is invisible otherwise: change UnarySFPUGolden._UNARY_COMP_THRESHOLD and this
-# table starts probing a point that is no longer a threshold, which reads as full
-# coverage while testing nothing.
+# Every dispatch constant this table probes at is imported from
+# sfpu_dispatch_constants, which UnarySFPUGolden reads too — so there is one number, not
+# a copy per consumer. Restating them here was the drift bug the module exists to
+# prevent: change the golden's threshold and a table with its own copy keeps probing a
+# point that is no longer a threshold, which reads as full coverage while testing
+# nothing. Values still written literally below (hardsigmoid's [-3, 3], the rounding
+# ties, the integer knees) are properties of the mathematics rather than of a kernel's
+# dispatch, so there is nothing on the golden side for them to drift from.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Ops whose only interesting point is exactly zero, and where +0.0/-0.0 may differ.
@@ -1448,18 +1463,14 @@ _ZERO_EDGE_OPS = (
     # Relu is deliberately absent: its knee is at 0 like the rest, but relu is applied by
     # the packer (STACC_RELU) and is not a member of SfpuType, so no SFPU probe can reach
     # it. See _NON_SFPU_UNARY_OPS.
-    MathOperation.Lrelu,  # _lrelu negative_slope = 0.1
-    MathOperation.Prelu,  # _prelu _PRELU_SLOPE = 0.25
+    MathOperation.Lrelu,  # LRELU_NEGATIVE_SLOPE applies below 0
+    MathOperation.Prelu,  # PRELU_SLOPE applies below 0
     MathOperation.Elu,
     MathOperation.Celu,
     MathOperation.Selu,
     MathOperation.Xielu,  # _xielu switches alpha_p/alpha_n at 0
-    MathOperation.UnaryMax,  # _unary_max _UNARY_MAX_MIN_VALUE = 0.0
-    MathOperation.UnaryMin,  # _unary_min _UNARY_MAX_MIN_VALUE = 0.0
 )
 
-# Ops comparing against UnarySFPUGolden._UNARY_COMP_THRESHOLD = 0.5.
-_UNARY_COMPARISON_THRESHOLD = 0.5
 _COMPARISON_EDGE_OPS = (
     MathOperation.UnaryGt,
     MathOperation.UnaryLt,
@@ -1471,28 +1482,33 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
-    **{op: (_UNARY_COMPARISON_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
+    **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
     # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
     # member — see the note in llk_params.py — so listing both would be one key.)
     MathOperation.LogicalNot: (0.0, -0.0),
-    # Clamp bounds, fixed to the dispatch constants (_clamp / _hardtanh min_val, max_val).
-    MathOperation.Clamp: (-1.0, 1.0),
-    MathOperation.Hardtanh: (-1.0, 1.0),
-    # Shrinkage lambdas: _softshrink lambd = 0.5, _HARDSHRINK_LAMBDA = 0.5.
-    MathOperation.Softshrink: (-0.5, 0.5),
-    MathOperation.Hardshrink: (-0.5, 0.5),
+    # unary max/min compare x against UNARY_MAX_MIN_VALUE. Keyed on the constant rather
+    # than folded into _ZERO_EDGE_OPS: it happens to be 0.0 today, and if it moves the
+    # probe has to move with it.
+    MathOperation.UnaryMax: (UNARY_MAX_MIN_VALUE, -UNARY_MAX_MIN_VALUE),
+    MathOperation.UnaryMin: (UNARY_MAX_MIN_VALUE, -UNARY_MAX_MIN_VALUE),
+    # Clamp / hardtanh bounds.
+    MathOperation.Clamp: (CLAMP_MIN, CLAMP_MAX),
+    MathOperation.Hardtanh: (CLAMP_MIN, CLAMP_MAX),
+    # Shrinkage lambdas: below |lambda| the op returns 0.
+    MathOperation.Softshrink: (-SOFTSHRINK_LAMBDA, SOFTSHRINK_LAMBDA),
+    MathOperation.Hardshrink: (-HARDSHRINK_LAMBDA, HARDSHRINK_LAMBDA),
     # torch hardsigmoid is piecewise on [-3, 3].
     MathOperation.Hardsigmoid: (-3.0, 3.0),
     # hardmish(x) = x * clamp(0.5x + 1, 0, 1): the clamp saturates at x = -2 and x = 0.
     MathOperation.Hardmish: (-2.0, 0.0),
-    # _threshold t = 5 (below it the output jumps to v = 10).
-    MathOperation.Threshold: (5.0,),
-    # _relu_max threshold = 5, and relu's own knee at 0; _relu_min threshold = 5.
-    MathOperation.ReluMax: (0.0, 5.0),
-    MathOperation.ReluMin: (5.0,),
-    # softplus goes linear at _SOFTPLUS_THRESHOLD = 20 with _SOFTPLUS_BETA = 1.
-    MathOperation.Softplus: (20.0,),
+    # Below THRESHOLD_T the output jumps to THRESHOLD_V.
+    MathOperation.Threshold: (THRESHOLD_T,),
+    # relu_max clamps above at its threshold, and keeps relu's own knee at 0.
+    MathOperation.ReluMax: (0.0, RELU_MAX_THRESHOLD),
+    MathOperation.ReluMin: (RELU_MIN_THRESHOLD,),
+    # softplus goes linear at its threshold.
+    MathOperation.Softplus: (SOFTPLUS_THRESHOLD,),
     # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.
     MathOperation.Round: (-2.5, -1.5, -0.5, 0.5, 1.5, 2.5),
     # Integer knees. floor/ceil differ from trunc only on the negative side, and frac
