@@ -56,9 +56,4 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
 // The ordinary ring along `axis`, or std::nullopt when that dimension does not close. One domain over
 // every node in coordinate order, no chords, so both axes answer ring queries through one path.
 std::optional<ExpressRingTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis);
-
-// Human-readable dump of the stored decomposition plus the declared patterns it was built from and
-// the materialized edges it was checked against.
-std::string describe_express_rings(const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo);
-
 }  // namespace tt::tt_fabric

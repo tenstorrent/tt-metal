@@ -1011,8 +1011,16 @@ FORCE_INLINE bool admit_express_combo(
                        downstream_edm_interfaces, local_relay_interface);
     }
     if constexpr ((KEY >> 3) & 1) {
-        ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
-                       downstream_edm_interfaces, local_relay_interface);
+        if constexpr (DOWNSTREAM_EDM_SIZE >= 4) {
+            ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
+                           downstream_edm_interfaces, local_relay_interface);
+        } else {
+            // 3-wide VC0 (no express links in this fabric): slot 3 is the Z arm for cardinal-facing
+            // routers and has no downstream channel. A key selecting it means the host packed a Z
+            // action into a table for a mesh that has no Z edges.
+            ASSERT(false);
+            ok = false;
+        }
     }
     return ok;
 }
@@ -1057,13 +1065,20 @@ FORCE_INLINE void forward_express_combo(
             transaction_id);
     }
     if constexpr ((KEY >> 3) & 1) {
-        constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-            packet_start,
-            payload_size_bytes,
-            cached_routing_fields,
-            downstream_edm_interfaces[edm_index],
-            transaction_id);
+        if constexpr (DOWNSTREAM_EDM_SIZE >= 4) {
+            constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                packet_start,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interfaces[edm_index],
+                transaction_id);
+        } else {
+            // 3-wide VC0 (no express links in this fabric): slot 3 is the Z arm for cardinal-facing
+            // routers and has no downstream channel. A key selecting it means the host packed a Z
+            // action into a table for a mesh that has no Z edges.
+            ASSERT(false);
+        }
     }
 }
 
@@ -1867,7 +1882,8 @@ template <
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
     typename ReceiverChannelT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename SenderChannelFromReceiverCreditsT>
 #if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
 #endif
@@ -1879,7 +1895,7 @@ FORCE_INLINE
         ReceiverChannelT& remote_receiver_channel,
         bool& channel_connection_established,
         uint32_t sender_channel_free_slots_stream_id,
-        auto& sender_channel_from_receiver_credits,
+        SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
@@ -2029,7 +2045,8 @@ template <
     typename ReceiverChannelPointersT,
     typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
@@ -2037,7 +2054,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    auto& receiver_channel_response_credit_sender,
+    ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
@@ -2473,7 +2490,6 @@ template <
     typename DownstreamSenderVC0T,
     typename DownstreamSenderVC1T,
     typename LocalRelayInterfaceT,
-    size_t NUM_SENDER_CHANNELS,
     typename EthSenderChannels,
     typename EthReceiverChannels,
     typename RemoteEthReceiverChannels,
