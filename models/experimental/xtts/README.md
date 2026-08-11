@@ -62,7 +62,9 @@ is unvalidated here. There is no multi-speaker/dialogue format — one narrated 
 Most PCC tests run at `l1_small_size=32768`; the full pipeline (`test_tt_inference`,
 `test_tt_eval`) and the demo need `l1_small_size=65536`; the fully-traced pipeline test
 additionally reserves a `trace_region_size` of ~50 MB (`52428800` bytes) for its three chained
-traces. No other device has been tried — Wormhole and multi-chip Blackhole boards are untested,
+traces, and ~150 MB (`157286400` bytes) where those three are held LIVE at once instead of being
+released one at a time (`TtXttsTracedSession`, which the demo uses for chunked text so that every
+chunk replays one capture rather than recompiling the model). No other device has been tried — Wormhole and multi-chip Blackhole boards are untested,
 with no measured numbers and untuned L1/trace budgets.
 
 ## Architecture
