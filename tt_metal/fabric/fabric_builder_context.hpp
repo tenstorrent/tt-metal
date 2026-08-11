@@ -196,8 +196,10 @@ private:
     std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
 
     // The stream-register assignment, one per mesh (the credit plan follows express enablement,
-    // which is per mesh); computed lazily on first query.
-    mutable std::unordered_map<MeshId, StreamAssignment> stream_assignments_;
+    // which is per mesh). Filled for every local mesh during construction, then only read: the
+    // builders that query it run concurrently, one thread per device, so populating it on demand
+    // would race on this map.
+    std::unordered_map<MeshId, StreamAssignment> stream_assignments_;
 
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;

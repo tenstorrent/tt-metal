@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <set>
+#include <string>
+
 #include <tt_stl/reflection.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
 
@@ -365,6 +369,14 @@ void TestWorker::create_kernel(
     uint32_t local_args_address,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
+    // Test workers build 2D routes through the same producer API as any other kernel, so they need
+    // the same per-mesh ABI selector. Without it a worker on an express mesh writes a hop program
+    // into a header whose routers decode destination-indexed action maps, and nothing reports the
+    // mismatch: the packet is simply never acted on.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto mesh_id = this->test_device_ptr_->get_node_id().mesh_id;
+    const auto defines = control_plane.get_fabric_context().get_express_kernel_defines(control_plane, mesh_id);
+
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
@@ -373,6 +385,7 @@ void TestWorker::create_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = noc_id,
             .compile_args = ct_args,
+            .defines = defines,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
@@ -416,7 +429,16 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    if (config.hops.has_value() && !is_torus_2d_unicast) {
+    // A Z hop is exempt from the torus workaround above. That workaround exists because cardinal
+    // torus wrap confuses hop-count routing, but Z is a skip link: get_hops only reports {Z: 1}
+    // when the destination is genuinely one chord away, whereas the control plane's forwarding
+    // direction for that same chip is a cardinal one that routes the long way around. Deferring to
+    // the control plane here would send a single-hop chord flow out a cardinal port, collapsing it
+    // onto a direction the chip already uses for another destination.
+    const bool hops_are_single_z = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
+                                   config.hops->at(RoutingDirection::Z) > 0;
+
+    if (config.hops.has_value() && (!is_torus_2d_unicast || hops_are_single_z)) {
         // Use hops to determine direction (for static routing with explicit hops)
         // However, NeighborExchange topology does not support multi-hop.
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
@@ -435,7 +457,8 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
         config.link_id,
-        config.vc_id);
+        config.vc_id,
+        dst_node_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
 }
@@ -495,7 +518,9 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id);
+            config.link_id,
+            /*vc_id=*/0,
+            dst_node_id);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -639,7 +664,8 @@ ConnectionKey TestDevice::register_fabric_connection(
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
-    uint8_t vc_id) {
+    uint8_t vc_id,
+    std::optional<FabricNodeId> final_dst) {
     // Resolve link_idx -> physical eth chan and the first-hop neighbor on the other end.
     // The ConnectionKey dedups on (direction, link_idx, vc_id, eth_chan): all four are
     // mutually consistent, but eth_chan is what we conceptually identify the connection by.
@@ -647,11 +673,6 @@ ConnectionKey TestDevice::register_fabric_connection(
     // with different final dsts can legitimately share one physical connection (e.g. Z-link
     // sub-torus all-to-all). The first-hop neighbor is recorded on the Connection so that
     // downstream calls into the fabric API have a valid (dst, link_idx) pair.
-    //
-    // Validation is by direction only (no per-destination filter): for Z, multiple chans
-    // in one direction can land on different peer chips, and the same link_idx may
-    // legitimately serve many final dsts. Per-destination forwarding correctness is
-    // enforced by the fabric API at append-connection time.
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto candidate_eth_chans =
         cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
@@ -660,14 +681,38 @@ ConnectionKey TestDevice::register_fabric_connection(
         "No active fabric eth channels in direction {} from node {}",
         static_cast<int>(outgoing_direction),
         this->fabric_node_id_);
+
+    // On a skip-link mesh a single direction can fan out to several distinct peer chips: a Z
+    // chord is built by repurposing a cardinal port, so the channels reported for Z are the
+    // union across every chord leaving this chip. link_idx is only meaningful within the set
+    // of parallel links to one peer, so indexing the by-direction union directly makes two
+    // destinations on different chords resolve to the same channel. They then produce
+    // identical ConnectionKeys, dedup into one connection, and the second destination's
+    // traffic silently leaves over the first destination's chord.
+    std::vector<chan_id_t> chans_to_final_dst;
+    if (final_dst.has_value()) {
+        for (const auto chan : candidate_eth_chans) {
+            if (cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, chan).first == final_dst.value()) {
+                chans_to_final_dst.push_back(chan);
+            }
+        }
+    }
+    // Empty means the destination is not a direct neighbor through this direction, i.e. a
+    // multi-hop route. Every channel in the direction is then an equally valid first hop and
+    // the by-direction list is the right one to index.
+    const std::vector<chan_id_t>& eth_chans = chans_to_final_dst.empty() ? candidate_eth_chans : chans_to_final_dst;
+
     TT_FATAL(
-        link_idx < candidate_eth_chans.size(),
-        "On node {}, link_idx={} out of range for direction {} ({} eth chans available)",
+        link_idx < eth_chans.size(),
+        "On node {}, link_idx={} out of range for direction {}: {} of the {} eth chan(s) in "
+        "this direction are usable for this connection. A skip-link direction can offer fewer "
+        "parallel links to an individual peer than the test's num_links.",
         this->fabric_node_id_,
         link_idx,
         static_cast<int>(outgoing_direction),
+        eth_chans.size(),
         candidate_eth_chans.size());
-    const chan_id_t eth_chan = candidate_eth_chans[link_idx];
+    const chan_id_t eth_chan = eth_chans[link_idx];
 
     // Resolve the peer per eth_chan: this handles multi-Z (chans in one direction may land on
     // different neighbor meshes / chips) and NESW uniformly (where it returns the single

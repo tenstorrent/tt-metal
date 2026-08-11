@@ -68,10 +68,12 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
 
 const StreamAssignment& FabricBuilderContext::get_stream_assignment(MeshId mesh_id) const {
     const auto it = stream_assignments_.find(mesh_id);
-    if (it != stream_assignments_.end()) {
-        return it->second;
-    }
-    return stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id)).first->second;
+    TT_FATAL(
+        it != stream_assignments_.end(),
+        "No stream assignment for mesh M{}: the map is filled at construction for the meshes bound to this host, "
+        "and every caller asks about its own router's mesh",
+        *mesh_id);
+    return it->second;
 }
 
 void FabricBuilderContext::compute_max_channel_counts() {
@@ -189,6 +191,14 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
 
     tensix_config_ = nullptr;
+
+    // Derive each local mesh's stream assignment now that its inputs exist (the family maxima above
+    // and the router config just built). It is read during kernel creation, which runs one thread
+    // per device against this shared context, so it has to be in place before that starts.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+    }
 
     // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();

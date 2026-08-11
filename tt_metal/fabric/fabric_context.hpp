@@ -73,26 +73,22 @@ public:
     bool is_switch_mesh(MeshId mesh_id) const;
 
     // ============ Z Router Queries ============
-    // Check if a fabric node has an INTRA-mesh Z neighbor (sub-torus "skip link"): a RoutingDirection::Z
-    // edge within the same mesh. When true, the standard mesh router gains a 5th VC0 sender channel
-    // (channel 4 = intra-mesh Z).
-    bool has_intra_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+    // Do not add a raw "does this node/mesh have a Z edge" query here. Scanning connectivity for
+    // RoutingDirection::Z answers a weaker question than any of its callers actually ask:
+    //   - selecting the indexed ABI      -> ControlPlane::express_routing_enabled(mesh_id), which also
+    //                                       requires the ring decomposition to have validated, and is
+    //                                       what route generation keyed on when it packed the tables
+    //   - sizing the VC0 downstream fan  -> get_vc0_downstream_edm_count(is_2D, express_routing_enabled)
+    //   - intermesh / express edge role  -> classify_fabric_edge() and ZPortRole, per edge
 
-    // Fabric-wide check: true if ANY node in ANY mesh has an intra-mesh Z edge (sub-torus skip link).
-    // Used to size the fabric-wide max sender channel counts: a single intra-mesh Z router widens VC0
-    // from 4 -> 5, so the shared EDM config must reserve the 5th VC0 sender channel.
-    bool has_any_intra_mesh_z_router(const ControlPlane& control_plane) const;
-
-    // NOTE: the indexed ABI is NOT selected from raw Z-edge presence. Use
-    // ControlPlane::express_routing_enabled(mesh_id), which additionally requires that the ring
-    // decomposition validated -- it is what route generation keyed on, so it is the only gate that
-    // keeps the packed L1 table, the worker encode and the router decode in agreement.
-
-    // Check if a fabric node has an INTER-mesh Z neighbor (galaxy Z router bridging two meshes): a
-    // RoutingDirection::Z edge in inter-mesh connectivity. It stays false on a device whose only Z
-    // links are intra-mesh. Used to gate the inter-mesh-Z-specific builder behavior (VC1 4th sender
-    // channel + MESH_TO_Z) and to select the Z_ROUTER variant for a Z-direction router.
-    bool has_inter_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+    // Kernel defines that select the indexed destination-keyed 2D ABI for a worker kernel running on
+    // mesh_id, or empty when that mesh uses the legacy hop-program encode. EVERY builder that
+    // compiles a kernel which produces 2D routes must apply these: the ABI is chosen per kernel
+    // compile, so a kernel missing them writes hop programs while its chip's L1 holds indexed
+    // vectors, with no diagnostic. The shape is the GLOBAL physical shape the L1 vectors were
+    // packed with, matching the ControlPlane embed and the router's named args.
+    std::map<std::string, std::string> get_express_kernel_defines(
+        const ControlPlane& control_plane, MeshId mesh_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
@@ -176,8 +172,9 @@ private:
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
     uint32_t get_max_2d_hops_from_topology(const ControlPlane& control_plane) const;
+    uint32_t get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const;
     uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
-    uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const;
+    uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const;
     void compute_packet_specifications(const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch);
 
     // Header size helpers (use explicit template instantiation for type safety)

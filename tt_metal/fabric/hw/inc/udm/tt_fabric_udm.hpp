@@ -477,12 +477,18 @@ FORCE_INLINE uint32_t select_relay_to_mux_connection(uint16_t dst_chip_id) {
     if constexpr (Direction == eth_chan_directions::EAST || Direction == eth_chan_directions::WEST) {
         // For EW relays, check if ACK packet needs NS routing by querying routing info
         auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
         uint16_t my_chip_id = routing_table->my_device_id;
 
-        const auto& compressed_route = routing_info->paths[dst_chip_id];
-        uint8_t ns_hops = compressed_route.get_ns_hops();
-        if (ns_hops > 0) {
+#if defined(FABRIC_EXPRESS_ENABLED)
+        // On an express mesh the 2D union slot holds the indexed vectors, not per-destination hop
+        // counts. NS travel is exactly "destination row differs from ours" (dimension order runs
+        // NS first), which the coordinates give directly.
+        const bool needs_ns = (dst_chip_id / FABRIC_EXPRESS_MESH_X_SIZE) != routing_table->my_mesh_coord_y;
+#else
+        auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+        const bool needs_ns = routing_info->paths[dst_chip_id].get_ns_hops() > 0;
+#endif
+        if (needs_ns) {
             // is there another way to know whether it's north or south hops?
             if (dst_chip_id < my_chip_id) {
                 mux_idx = 1;

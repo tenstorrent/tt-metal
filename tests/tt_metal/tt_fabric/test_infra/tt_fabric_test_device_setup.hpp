@@ -422,13 +422,18 @@ private:
     // derived internally from (src, direction, link_idx) — the caller's final dst is not
     // part of the dedup key, so multiple traffic configs with different final dsts that
     // share the same physical link collapse to one ConnectionKey.
+    //
+    // final_dst narrows the candidate channels when a direction fans out to more than one
+    // peer chip (skip-link Z chords). Callers that know their destination should pass it;
+    // omitting it is only correct when the direction is known to have a single peer.
     ConnectionKey register_fabric_connection(
         tt::tt_metal::CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
         uint32_t link_idx,
-        uint8_t vc_id = 0);
+        uint8_t vc_id = 0,
+        std::optional<FabricNodeId> final_dst = std::nullopt);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
