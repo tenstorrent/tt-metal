@@ -274,12 +274,14 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                // Reconfig the packer to the value-output format before the value
-                                // untilize: the preceding index pack_tile leaves the packer in the
-                                // 32-bit index format, and pack_untilize_init alone does not fully
-                                // reset that state (#51215, item 2 - silent stride-2 corruption of
-                                // the bf16 value output).
-                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                // pack_untilize_init already calls llk_pack_reconfig_data_format
+                                // internally, so a pack_reconfig_data_format call here would be a
+                                // no-op.  What is actually needed — and what pack_untilize_init
+                                // does not provide — is a full-word PCK_DEST_RD_CTRL reset
+                                // (llk_pack_hw_configure) and a W-counter / dest-offset reset
+                                // (llk_pack_dest_init) to clear the state left by the preceding
+                                // index pack_tile.  There is no public API for just those two
+                                // things yet, so compute_kernel_hw_startup is used as a workaround.
                                 compute_kernel_hw_startup(
                                     input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
                                 // Untilize the 2 sorted tiles into TILE_H pair-rows,
