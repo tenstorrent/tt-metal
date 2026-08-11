@@ -60,9 +60,14 @@ echo "exit=$?"; tail -3 "$LOGDIR/regress.log"
 # --- Stage 2: the fused snake itself ---------------------------------------------------
 # Bar is rel_rmse ~1e-07 against the float64 golden. A hang here (rather than a wrong number) is the
 # mcast handshake being unpaired between sender and receiver.
+#
+# Do NOT set TT_CONV1D_SNAKE_PARAMS here. The harness owns that variable: it runs the plain conv
+# first to capture the prepared weight, and only then sets the var for the widened re-run. Exporting
+# it up front makes the *plain* conv fetch two tile-rows past the end of an un-widened weight matrix,
+# so the baseline comes back inf/nan and every comparison after it is meaningless.
 echo
 echo "=== [2/3] fused snake vs float64 golden (900s cap)"
-TT_CONV1D_SNAKE_PARAMS=1 timeout 900 python "$AP/snake_fused_verify.py" > "$LOGDIR/snake.log" 2>&1
+timeout 900 python "$AP/snake_fused_verify.py" > "$LOGDIR/snake.log" 2>&1
 echo "exit=$?"
 grep -E "prepared weight|widened weight|conv alone|fused snake|PASS|FAIL|differs from plain|FUSED RUN FAILED" \
     "$LOGDIR/snake.log" || tail -15 "$LOGDIR/snake.log"
