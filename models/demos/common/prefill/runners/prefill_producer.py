@@ -79,6 +79,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import random
 import struct
@@ -939,12 +940,27 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     return min_pcc
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict) -> bool:
+def _write_pcc_verdict(rank: int, ok: bool, min_pcc: float, checked: int, threshold: float) -> None:
+    """Persist this rank's PCC verdict to PREFILL_PCC_SUMMARY_DIR (opt-in). The verdict is logged to
+    stdout just before the shutdown sentinel, and mpirun drops its buffered output forwarding when the
+    runner tears down in response — so under a launcher the numbers never reach the captured log. A file
+    on shared storage is read back by the harness independently of that teardown."""
+    summary_dir = os.environ.get("PREFILL_PCC_SUMMARY_DIR")
+    if not summary_dir:
+        return
+    os.makedirs(summary_dir, exist_ok=True)
+    verdict = {"rank": rank, "ok": bool(ok), "min_pcc": min_pcc, "slots_checked": checked, "threshold": threshold}
+    with open(os.path.join(summary_dir, f"rank{rank}.json"), "w") as f:
+        json.dump(verdict, f)
+
+
+def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
     """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
     (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
+        _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
         return False
 
     min_pcc_overall = 1.0
@@ -961,6 +977,8 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
             failures.append((slot_id, real_len, pcc))
 
     print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}")
+    ok = bool(checked) and not failures
+    _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold)
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
         return False
@@ -1142,7 +1160,7 @@ def _run_validator(rank: int, world_size: int) -> None:
             # env + the shared trace dir), so the validator PCCs its host's layers against the same goldens.
             # Purely config-derived (no push/device state), so it's safe to resolve here on the read-back path.
             slot_traces, _slot_lengths, _pools = _resolve_slot_prompts(cfg)
-            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank)
         except Exception as e:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
@@ -1268,7 +1286,7 @@ def main() -> None:
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank)
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False

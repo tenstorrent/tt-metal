@@ -619,6 +619,9 @@
 
     MR_DIR=$(mktemp -d "${PIPELINE_DIR}/prefill_ci_mr.XXXXXX")
     export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
+    # Each producer rank drops its PCC verdict here before the shutdown sentinel; mpirun drops buffered
+    # stdout when the runner tears down, so this file is the only durable record of the measured PCC.
+    PCC_DIR="${MR_DIR}/kv_pcc_verdict"
 
     # The runner idles owning the 4-galaxy allocation until the producer's shutdown
     # sentinel; on any early exit (table-publish timeout, producer failure) it must be
@@ -681,6 +684,7 @@
         export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
         export PREFILL_MAX_SEQ_LEN=56320; \
         export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+        export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
         export PREFILL_PRODUCER_CHECK_PCC=1; \
         export PREFILL_SEND_SHUTDOWN=1; \
         export PREFILL_STANDALONE_CHUNKED_PCC=0.85; \
@@ -689,6 +693,14 @@
         exec python3 -m models.demos.common.prefill.runners.prefill_producer"
     PROD_RC=$?
     set -e
+
+    # Surface the durable per-rank PCC verdicts: the producer's stdout PCC lines are lost when mpirun
+    # tears its output forwarding down alongside the runner, so these files are the captured record.
+    echo "==================== KV PCC verdicts (PROD_RC=${PROD_RC}) ===================="
+    for f in "${PCC_DIR}"/rank*.json; do
+      [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
+      echo "$(basename "$f"): $(cat "$f")"
+    done
 
     # On success the producer already sent the shutdown sentinel; wait for the runner
     # to finish teardown so a hung shutdown surfaces here instead of being orphaned.
