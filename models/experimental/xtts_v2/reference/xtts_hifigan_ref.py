@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -41,7 +42,6 @@ def load_hifigan_state(ckpt_path=DEFAULT_CKPT):
     pref = "hifigan_decoder.waveform_decoder."
     raw = {k[len(pref) :]: v.float() for k, v in full.items() if k.startswith(pref)}
     out = {}
-    keys = set(raw)
     for k, v in raw.items():
         if "parametrizations.weight.original1" in k:  # weight_norm v
             base = k.replace(".parametrizations.weight.original1", "")
@@ -81,15 +81,23 @@ class HifiganReference:
             x = xt + x
         return x
 
-    def __call__(self, z, g):  # z [1,1024,L], g [1,512,1] -> [1,1,L*256]
+    def __call__(self, z, g, return_intermediates=False):  # z [1,1024,L], g [1,512,1] -> [1,1,L*256]
+        """return_intermediates=True also returns {conv_pre, ups0..3}: the per-stage
+        oracles at the same points capture_goldens.py records (conv_pre output and each
+        transpose-conv output, both PRE d-vector conditioning / MRF)."""
         w = self.w
+        inter = {}
         with torch.no_grad():
             o = F.conv1d(z, w["conv_pre.weight"], w["conv_pre.bias"], padding=3)
+            if return_intermediates:  # only pin the ~250 MB of stage activations when asked
+                inter["conv_pre"] = o
             o = o + F.conv1d(g, w["cond_layer.weight"], w["cond_layer.bias"])  # k1, broadcast over time
             for i in range(4):
                 k, s, p = UPS[i]
                 o = F.leaky_relu(o, LRELU)
                 o = F.conv_transpose1d(o, w[f"ups.{i}.weight"], w[f"ups.{i}.bias"], stride=s, padding=p)
+                if return_intermediates:
+                    inter[f"ups{i}"] = o
                 o = o + F.conv1d(g, w[f"conds.{i}.weight"], w[f"conds.{i}.bias"])
                 zsum = None
                 for j in range(3):
@@ -98,7 +106,10 @@ class HifiganReference:
                 o = zsum / 3
             o = F.leaky_relu(o)  # NB: coqui uses the DEFAULT slope 0.01 here (not LRELU_SLOPE 0.1)
             o = F.conv1d(o, w["conv_post.weight"], None, padding=3)  # bias=False
-            return torch.tanh(o)
+            wav = torch.tanh(o)
+            if return_intermediates:
+                return wav, inter
+            return wav
 
 
 def _pcc(a, b):

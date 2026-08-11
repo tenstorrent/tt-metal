@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -46,22 +47,34 @@ GPT_CONFIG = dict(
 )
 
 # Checkpoint resolution (mirrors tt-metal's HF_MODEL convention): an explicit path wins,
-# then $XTTS_CKPT (a local file), otherwise coqui/XTTS-v2's model.pth is pulled from the HF
-# hub (and cached by huggingface_hub). Resolved lazily at load time -- importing this module
-# never downloads. Override the repo id with $XTTS_HF_MODEL.
+# then $XTTS_CKPT (a local model.pth), then $XTTS_CKPT_DIR/model.pth (the pipeline scripts'
+# checkpoint-dir convention), otherwise coqui/XTTS-v2 is pulled from the HF hub (and cached
+# by huggingface_hub). Resolved lazily at load time -- importing this module never
+# downloads. Override the repo id with $XTTS_HF_MODEL.
 XTTS_HF_REPO = os.getenv("XTTS_HF_MODEL", "coqui/XTTS-v2")
 DEFAULT_CKPT = None  # sentinel: resolve_ckpt() selects the source at load time
 
 
 def resolve_ckpt(ckpt_path=None):
-    """Resolve the XTTS-v2 checkpoint path: explicit arg > $XTTS_CKPT > HF hub download."""
+    """Resolve the XTTS-v2 checkpoint path:
+    explicit arg > $XTTS_CKPT (model.pth file) > $XTTS_CKPT_DIR/model.pth > HF hub download.
+
+    Whatever the source, the returned path's directory also holds vocab.json (+ config.json):
+    consumers assume the coqui checkpoint-dir layout (XttsV2.__init__ loads the tokenizer's
+    vocab.json from next to model.pth), so the hub fallback fetches those sidecars into the
+    same snapshot dir — otherwise the 1.9 GB download succeeds and the tokenizer load crashes."""
     if ckpt_path:
         return ckpt_path
     env = os.getenv("XTTS_CKPT")
     if env:
         return env
+    env_dir = os.getenv("XTTS_CKPT_DIR")
+    if env_dir:
+        return os.path.join(env_dir, "model.pth")
     from huggingface_hub import hf_hub_download
 
+    for sidecar in ("vocab.json", "config.json"):
+        hf_hub_download(repo_id=XTTS_HF_REPO, filename=sidecar)
     return hf_hub_download(repo_id=XTTS_HF_REPO, filename="model.pth")
 
 
@@ -246,11 +259,12 @@ def build_prompt_embeds(heads, n_text=16, seed=0):
     return (heads["text_emb"][text_ids] + heads["text_pos"][:n_text]).unsqueeze(0).contiguous()
 
 
-def reference_generate(ckpt_path=DEFAULT_CKPT, n_text=16, max_new=24, seed=0):
+def reference_generate(ckpt_path=DEFAULT_CKPT, n_text=16, max_new=24, seed=0, model=None):
     """Greedy generate: prefill [prompt, START] then decode until STOP or max_new.
-    Returns the prompt, per-step input embeddings (teacher-forcing), codes, logits, latents."""
+    Returns the prompt, per-step input embeddings (teacher-forcing), codes, logits, latents.
+    Pass model=(gpt, final_norm) to reuse an already-built reference."""
     heads = load_gen_head(ckpt_path)
-    gpt, final_norm = build_reference(ckpt_path)
+    gpt, final_norm = model if model is not None else build_reference(ckpt_path)
     prompt = build_prompt_embeds(heads, n_text, seed)
     mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
     mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]

@@ -1,23 +1,25 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC test for the TTNN Perceiver resampler (tail of Block 1) vs coqui golden.
-Feeds the golden conditioning-encoder output (enc_out) and checks perc_out."""
-import os
-
+"""PCC test for the TTNN Perceiver resampler (tail of Block 1) vs the CPU reference.
+Feeds the reference conditioning-encoder output (enc_out, computed live from a
+deterministic synthetic clip by reference/xtts_cond_ref.CondReference) and checks
+perc_out. Set XTTS_GOLDEN_DIR to cross-check against stored coqui fixtures instead."""
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import cond_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_cond import TTNNPerceiver, preprocess_perceiver_parameters
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "..", "golden", "cond")
 TARGET_PCC = 0.999
 
 
 def run_perceiver_pcc(device):
-    enc = torch.load(os.path.join(GOLDEN, "enc_out.pt"))  # [1,1024,T]
-    perc_g = torch.load(os.path.join(GOLDEN, "perc_out.pt"))  # [1,32,1024]
+    ref = cond_reference()
+    enc = ref["enc_out"]  # [1,1024,T]
+    perc_g = ref["perc_out"]  # [1,32,1024]
     frames = enc.permute(0, 2, 1).contiguous()  # [1,T,1024]
     T = frames.shape[1]
     S_pad = ((T + 31) // 32) * 32  # 505 -> 512

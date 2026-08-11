@@ -1,37 +1,33 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for the TTNN HiFi-GAN generator (Block 4) vs the coqui golden wav.
+"""End-to-end PCC test for the TTNN HiFi-GAN generator (Block 4) vs the CPU reference wav.
 
 Block boundary: generator input z [1,1024,L] + d-vector g [1,512,1] -> waveform [1,1,L*256].
-The generator carries the 1D signal as NHWC [1,1,L,C]; goldens are fed as-is.
+The generator carries the 1D signal as NHWC [1,1,L,C].
 
-Per-stage oracles (golden/hifigan/dbg_*.pt), captured from the CPU reference which matches
-coqui at PCC 1.0 at every stage, are printed to localize any divergence.
+Input: z is seeded noise through the checkpoint's gpt.final_norm (the generator's real
+input is a final_norm output, so per-channel scale matches real data); g is a seeded
+unit-norm d-vector. Reference: reference/xtts_hifigan_ref (matches coqui at PCC 1.0 at
+every stage); its per-stage intermediates are printed to localize any divergence.
+Set XTTS_GOLDEN_DIR to cross-check against stored coqui-captured fixtures instead.
 """
-import os
-
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.tests.reference_helpers import hifigan_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
     TTNNHifiganGenerator,
     preprocess_hifigan_parameters,
 )
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "..", "golden", "hifigan")
 TARGET_PCC = 0.99
 
 # ttnn intermediate is NHWC [1,1,L,C]; reference dbg is [C,L] or [1,C,L].
-_DBG = {
-    "conv_pre": "dbg_conv_pre.pt",
-    "ups0": "dbg_ups0.pt",
-    "ups1": "dbg_ups1.pt",
-    "ups2": "dbg_ups2.pt",
-    "ups3": "dbg_ups3.pt",
-}
+_DBG = ("conv_pre", "ups0", "ups1", "ups2", "ups3")
 
 
 def _nhwc_to_ncl(t):  # host torch [1,1,L,C] -> [1,C,L]
@@ -39,11 +35,10 @@ def _nhwc_to_ncl(t):  # host torch [1,1,L,C] -> [1,C,L]
 
 
 def run_hifigan_pcc(device, verbose=True):
-    z = torch.load(os.path.join(GOLDEN, "z.pt"))  # [1024, L]
-    if z.dim() == 2:
-        z = z.unsqueeze(0)  # [1,1024,L]
-    g = torch.load(os.path.join(GOLDEN, "g.pt"))  # [1,512,1]
-    wav_gold = torch.load(os.path.join(GOLDEN, "wav.pt"))  # [1,1,L*256]
+    refs = hifigan_reference()
+    z = refs["z"]  # [1,1024,L]
+    g = refs["g"]  # [1,512,1]
+    wav_gold = refs["wav"]  # [1,1,L*256]
 
     params = preprocess_hifigan_parameters(device)
     model = TTNNHifiganGenerator(device, params)
@@ -58,8 +53,8 @@ def run_hifigan_pcc(device, verbose=True):
     wav_tt, inter = model(z_tt, g_tt, return_intermediates=True)
 
     if verbose:
-        for key, fname in _DBG.items():
-            ref = torch.load(os.path.join(GOLDEN, fname)).to(torch.float32)
+        for key in _DBG:
+            ref = refs["dbg"][key].to(torch.float32)
             if ref.dim() == 2:
                 ref = ref.unsqueeze(0)  # [1,C,L]
             got = _nhwc_to_ncl(inter[key])  # already host torch [1,1,L,C]
@@ -68,7 +63,7 @@ def run_hifigan_pcc(device, verbose=True):
 
     wav = ttnn.to_torch(wav_tt).to(torch.float32).reshape(1, 1, -1)
     passed, msg = comp_pcc(wav_gold, wav, pcc=TARGET_PCC)
-    print(f"waveform {tuple(wav.shape)} vs coqui golden {tuple(wav_gold.shape)}  pcc: {msg}")
+    print(f"waveform {tuple(wav.shape)} vs reference {tuple(wav_gold.shape)}  pcc: {msg}")
     return passed, msg
 
 

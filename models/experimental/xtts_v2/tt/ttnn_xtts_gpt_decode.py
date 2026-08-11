@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -245,7 +246,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         read and is overwritten as that request decodes. The real positions are unaffected because
         prefill attention is causal."""
         cfg = self.config
-        E, nh, dh = cfg.n_embd, cfg.n_head, cfg.head_dim
+        E, nh = cfg.n_embd, cfg.n_head
         P = prefix_emb.shape[1]
         x = ttnn.from_torch(
             prefix_emb.contiguous(),

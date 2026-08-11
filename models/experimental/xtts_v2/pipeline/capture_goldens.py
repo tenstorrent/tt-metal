@@ -1,13 +1,14 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """Re-capture the golden/ fixtures for Blocks 1, 2 and 4 from a real coqui XTTS-v2 run.
 
 Runs in the **coqui venv** (needs the `TTS` package), NOT the tt-metal python_env:
 
-    XTTS_CKPT_DIR=/home/acicovic/xtts_ref \
-      /home/acicovic/xtts_cpu_venv/bin/python capture_goldens.py \
-        --ref /home/acicovic/xtts_ref/ref.pt --sr 24000 --text "..."
+    XTTS_CKPT_DIR=/path/to/xtts_ref \
+      /path/to/coqui_venv/bin/python capture_goldens.py \
+        --ref /path/to/ref.pt --sr 24000 --text "..."
 
 Why this exists: the `golden/**/*.pt` fixtures the PCC tests load are gitignored and were
 never committed, so a fresh checkout has none. Block 3's goldens are synthetic and can be
@@ -48,7 +49,7 @@ import torchaudio
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 
-CKPT = os.environ.get("XTTS_CKPT_DIR", "/home/acicovic/xtts_ref")
+CKPT = os.environ.get("XTTS_CKPT_DIR")  # coqui checkpoint dir (config.json, model.pth, vocab.json)
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "golden")
 
 
@@ -86,6 +87,8 @@ def main():
     ap.add_argument("--lang", default="en")
     ap.add_argument("--out", default=GOLDEN)
     args = ap.parse_args()
+    if not CKPT:  # checked after argparse, not at import time, so --help works without the env
+        raise SystemExit("set XTTS_CKPT_DIR to the coqui XTTS-v2 checkpoint dir")
 
     for sub in ("cond", "speaker", "hifigan"):
         os.makedirs(os.path.join(args.out, sub), exist_ok=True)

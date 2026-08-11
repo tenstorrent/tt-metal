@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """Phase B on a MESH (python_env, TT): data-parallel XTTS-v2, one request per chip.
@@ -34,7 +35,7 @@ still issued (one lockstep trace) but its position is frozen and its output disc
 
 Usage (tt-metal python_env):
 
-    XTTS_CKPT=/home/acicovic/xtts_ref/model.pth python phase_tt_mesh.py \
+    XTTS_CKPT=/path/to/xtts_ref/model.pth python phase_tt_mesh.py \
         --work ./out/reqs/r0 --replicas 32 --flavor spmd --same-seed
 
 `--work` may be given once (that request is replicated onto every chip — the mesh correctness

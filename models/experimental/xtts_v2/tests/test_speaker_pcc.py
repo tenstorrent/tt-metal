@@ -1,28 +1,28 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for the TTNN ResNet speaker encoder (Block 2) vs the coqui golden.
+"""End-to-end PCC test for the TTNN ResNet speaker encoder (Block 2) vs the CPU reference.
 
 Block boundary: log-mel `logmel` [1,64,T] (mel front-end on CPU) -> d-vector [1,512,1].
 
-Reference intermediates are computed from the golden logmel via the CPU core (no torchaudio),
-which itself matches coqui at PCC 1.0, so this test needs only the golden logmel +
-speaker_embedding tensors.
+Input: a deterministic synthetic voiced clip pushed through frontend.speaker_logmel.
+Reference (final gate + intermediates): reference/xtts_speaker_ref core, which matches
+coqui at PCC 1.0 stage-by-stage. Set XTTS_GOLDEN_DIR to cross-check the final d-vector
+against a stored coqui-captured fixture instead.
 """
-import os
-
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.reference.xtts_speaker_ref import SpeakerReference
+from models.experimental.xtts_v2.tests.reference_helpers import speaker_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_speaker import (
     TTNNSpeakerEncoder,
     preprocess_speaker_parameters,
 )
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "..", "golden", "speaker")
 TARGET_PCC = 0.99
 
 # how to bring each ttnn intermediate into the reference's layout for PCC
@@ -53,8 +53,9 @@ def _to_ref_layout(t, mode):
 
 
 def run_speaker_pcc(device, verbose=True):
-    logmel = torch.load(os.path.join(GOLDEN, "logmel.pt"))  # [1,64,T]
-    emb_gold = torch.load(os.path.join(GOLDEN, "speaker_embedding.pt"))  # [1,512,1]
+    refs = speaker_reference()
+    logmel = refs["logmel"]  # [1,64,T]
+    emb_gold = refs["speaker_embedding"]  # [1,512,1]
 
     ref = SpeakerReference()
     _, ref_inter = ref.core(logmel, l2_norm=True, return_intermediates=True)
@@ -76,7 +77,7 @@ def run_speaker_pcc(device, verbose=True):
 
     emb = ttnn.to_torch(emb_tt).to(torch.float32).reshape(1, 512, 1)
     passed, msg = comp_pcc(emb_gold, emb, pcc=TARGET_PCC)
-    print(f"speaker_embedding {tuple(emb.shape)} vs coqui golden {tuple(emb_gold.shape)}  pcc: {msg}")
+    print(f"speaker_embedding {tuple(emb.shape)} vs reference {tuple(emb_gold.shape)}  pcc: {msg}")
     return passed, msg
 
 
