@@ -32,7 +32,6 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_buffer.hpp>  // the role split's DRAM staging rings
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
@@ -271,6 +270,10 @@ bool role_split() {
 // Per-filler DRAM ring size, in MiB. The whole reason to stage in DRAM is that this number is not capped by
 // the TLB window budget the way the 12 MiB host FIFO is, so make it large enough that a host hiccup cannot
 // reach the producers: 64 MiB is ~6,300 frames, roughly 115 busy sweeps of slack against the host FIFO's 21.
+//
+// This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_program_count above), so it is
+// read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
+// 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
 uint32_t role_ring_mb() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_MB");
@@ -348,6 +351,25 @@ uint32_t nstage_cap(uint32_t computed) {
 }
 
 }  // namespace
+
+// Declared in the header, so it lives OUTSIDE the anonymous namespace above (external linkage) while still
+// seeing role_split()/role_ring_mb() from it.
+//
+// The HAL sizes its per-bank DRAM PROFILER region as
+// `per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL` (5 * 20 = 100 on Blackhole and
+// Wormhole), and per_risc_bytes is `48 * program_support_count`, so the count yielding R bytes per bank is
+// R / 4800: 14,000 -> 672,000 B/risc -> ~64.1 MiB per bank, the sizing measured in FINDINGS §N+39.
+//
+// Deliberately a COUNT and not a byte target: those multipliers live in the arch HALs and are not visible
+// here. If an arch differs, the region simply comes out a different size and the ring adapts to whatever the
+// HAL actually reserved (frames = region_bytes / slot_bytes). Nothing downstream assumes it got 64 MiB.
+uint32_t perf_debug_dram_region_program_count() {
+    if (!role_split()) {
+        return 0;
+    }
+    const uint64_t want_bytes = static_cast<uint64_t>(role_ring_mb()) * 1024ull * 1024ull;
+    return static_cast<uint32_t>((want_bytes + 4799) / 4800);
+}
 
 // Per-read page cap, overridable at runtime for tuning: TT_METAL_PERF_DEBUG_MAX_PAGES (0 = uncapped, take
 // whatever the FIFO holds). The compiled default came from the synthetic benchmark; on high-volume real models
@@ -1021,72 +1043,89 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         sizeof(uint32_t);
     const uint32_t slot_bytes_all = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes_all;
 
-    // ---- allocate the DRAM staging rings ----
+    // ---- REUSE the old profiler's DRAM region; do NOT allocate a second buffer ----
     //
-    // ONE interleaved DRAM buffer with page_size == ring_bytes, so page i is a single contiguous ring owned
-    // entirely by bank i and there is no de-interleaving anywhere -- and, structurally, exactly one producer
-    // per ring. Sized as a whole multiple of the 165-page frame so a FRAME never straddles the wrap (a RUN of
-    // frames still can, and stage_run splits it). Pages below max(ring bank) are allocated but unused; that
-    // is the price of keeping ring traffic off the drainers' own DRAM channels.
+    // The HAL reserves a PROFILER region at the same bank-relative offset in EVERY DRAM bank (just past the
+    // barrier word, with DRAM_UNRESERVED starting above it). That region belongs to the push-to-DRAM profiler
+    // backend, which is never the active one when we are: the streaming backend keeps markers in an L1 ring and
+    // never writes DRAM. So it is dead space, and staging frames there costs nothing extra.
+    //
+    // What this replaces: an interleaved MeshBuffer with page_size == ring_bytes. That reservation was
+    // LOCK-STEP -- the allocator holds the same offset in every bank -- so a 64 MiB ring cost 447 MiB to
+    // address 127 MiB, on top of the ~32 MiB HAL region we were leaving idle. Reusing the region makes the
+    // ring's size and the region's size ONE knob (perf_debug_dram_region_program_count), and the ring becomes
+    // available in every bank at a single address rather than only in banks we allocated pages for.
+    //
+    // Frames are still whole: capacity truncates to a multiple of the 165-page frame, so a FRAME never
+    // straddles the wrap (a RUN of frames still can, and stage_run splits it).
     if (rsplit) {
         try {
-            ctx.dram_frames = static_cast<uint32_t>(
-                (static_cast<uint64_t>(role_ring_mb()) * 1024ull * 1024ull) / slot_bytes_all);
-            if (ctx.dram_frames < 64) {
-                ctx.dram_frames = 64;
-            }
+            const auto& hal = MetalContext::instance().hal();
+            const uint32_t region_bytes = hal.get_dev_size(HalDramMemAddrType::PROFILER);
+            const uint32_t region_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
+            ctx.dram_frames = region_bytes / slot_bytes_all;
+            TT_FATAL(
+                ctx.dram_frames >= 64,
+                "perf-debug role split: the DRAM profiler region holds {} frames ({} B / {} B per frame), need at "
+                "least 64. Raise TT_METAL_PERF_DEBUG_ROLE_RING_MB (it sizes this region) or "
+                "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT.",
+                ctx.dram_frames,
+                region_bytes,
+                slot_bytes_all);
             const uint32_t ring_bytes = ctx.dram_frames * slot_bytes_all;
+
             // TWO DIFFERENT BANK SPACES, and mixing them up would silently mis-address every frame.
-            // A DRISC's own placement is indexed by DRAM VIEW (soc.get_num_dram_views(), 8 here) because
-            // that is what pick_unused_dram_logical_core takes. A ring's bank is an ALLOCATOR bank id,
-            // because that is what page->bank round-robin uses on the host and what the kernel's
-            // get_noc_addr_from_bank_id indexes (NUM_DRAM_BANKS=7 in the JIT defines). They are not the
-            // same count, so validate the ring banks against the allocator -- otherwise a ring bank of 7
-            // would wrap to bank 0 on the host while the kernel indexed dram_bank_to_noc_xy out of bounds.
+            // A DRISC's own placement is indexed by DRAM VIEW (soc.get_num_dram_views()) because that is what
+            // pick_unused_dram_logical_core takes. A ring's bank is an ALLOCATOR bank id, because that is what
+            // the kernel's get_noc_addr_from_bank_id indexes (NUM_DRAM_BANKS=7 in the JIT defines). They are
+            // not the same count, so validate the ring banks against the allocator.
             const uint32_t alloc_banks = ctx.device->allocator()->get_num_banks(BufferType::DRAM);
-            uint32_t npages = 0;
             for (uint32_t f = 0; f < kNFillers; f++) {
                 TT_FATAL(
                     ringbank[f] < alloc_banks,
                     "perf-debug role split: ring bank {} does not exist (the allocator has {} DRAM banks)",
                     ringbank[f],
                     alloc_banks);
-                npages = std::max(npages, ringbank[f] + 1u);
             }
-            TT_FATAL(
-                npages <= alloc_banks,
-                "perf-debug role split: ring banks must fit one page per bank ({} pages > {} banks)",
-                npages,
-                alloc_banks);
-            distributed::DeviceLocalBufferConfig dram_config{
-                .page_size = ring_bytes,  // one whole ring per page -> page d lands on bank d
-                .buffer_type = BufferType::DRAM};
-            distributed::ReplicatedBufferConfig cfg{.size = static_cast<uint64_t>(npages) * ring_bytes};
-            ctx.dram_ring = distributed::MeshBuffer::create(cfg, dram_config, mesh_device.get());
-            ctx.dram_addr = static_cast<uint32_t>(ctx.dram_ring->address());
-            // Report what the ALLOCATOR RESERVES, not what we address. The DRAM allocator is lock-step: it
-            // reserves the same offset in every bank, so an interleaved buffer with page_size == ring_bytes
-            // costs `ring_bytes * num_banks` no matter how few pages we actually use. Printing
-            // `npages * ring_bytes` understated the real cost ~4x (191 MiB for a 448 MiB reservation) and
-            // anyone budgeting DRAM from that line was off by 257 MiB. See FINDINGS §N+39.
-            const uint64_t reserved_bytes = static_cast<uint64_t>(ring_bytes) * alloc_banks;
-            const uint64_t addressed_bytes = static_cast<uint64_t>(ring_bytes) * kNFillers;
+
+            // The HAL address is CHANNEL-relative, but the kernel reaches the ring through
+            // get_noc_addr_from_bank_id, which adds bank_to_dram_offset[bank] on its own. Subtract the host's
+            // view of that offset so the kernel's addition lands back on the HAL address. One compile arg is
+            // shared by both fillers, so require the banks to agree rather than silently using bank 0's offset.
+            const int32_t bank_off0 = ctx.device->allocator()->get_bank_offset(BufferType::DRAM, ringbank[0]);
+            for (uint32_t f = 1; f < kNFillers; f++) {
+                const int32_t off = ctx.device->allocator()->get_bank_offset(BufferType::DRAM, ringbank[f]);
+                TT_FATAL(
+                    off == bank_off0,
+                    "perf-debug role split: ring banks {} and {} have different DRAM bank offsets ({} vs {}); the "
+                    "shared bank-relative ring address would mis-address one of them",
+                    ringbank[0],
+                    ringbank[f],
+                    bank_off0,
+                    off);
+            }
+            ctx.dram_addr = static_cast<uint32_t>(static_cast<int64_t>(region_addr) - bank_off0);
+
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] role split: {} DRAM rings of {} frames ({:.1f} MiB each) at bank-relative "
-                "0x{:x}, banks [{}, {}]; {} MiB of DRAM RESERVED ({:.1f} MiB per bank x {} banks, lock-step), of "
-                "which {} MiB is addressed and {} MiB is lock-step waste",
+                "[perf-debug profiler] role split: {} DRAM rings of {} frames ({:.1f} MiB each) REUSING the "
+                "profiler DRAM region at channel-relative 0x{:x} (bank-relative 0x{:x}, bank offset {}), on banks "
+                "[{}, {}] of {}; the region reserves {:.1f} MiB per bank in EVERY bank = {} MiB total, of which "
+                "{} MiB carries a ring -- the other {} MiB is region in banks no filler uses (a ring could be "
+                "placed there for free)",
                 kNFillers,
                 ctx.dram_frames,
                 ring_bytes / (1024.0 * 1024.0),
+                region_addr,
                 ctx.dram_addr,
+                bank_off0,
                 ringbank[0],
                 ringbank[kNFillers - 1],
-                reserved_bytes / (1024 * 1024),
-                ring_bytes / (1024.0 * 1024.0),
                 alloc_banks,
-                addressed_bytes / (1024 * 1024),
-                (reserved_bytes - addressed_bytes) / (1024 * 1024));
+                region_bytes / (1024.0 * 1024.0),
+                (static_cast<uint64_t>(region_bytes) * alloc_banks) / (1024 * 1024),
+                (static_cast<uint64_t>(region_bytes) * kNFillers) / (1024 * 1024),
+                (static_cast<uint64_t>(region_bytes) * (alloc_banks - kNFillers)) / (1024 * 1024));
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,

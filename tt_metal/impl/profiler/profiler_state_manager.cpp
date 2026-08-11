@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
+#include "tools/profiler/perf_debug_profiler.hpp"  // perf_debug_dram_region_program_count
 #include "math.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
@@ -23,6 +24,14 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
     std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
     const bool do_profiler_sum = rtoptions.get_profiler_sum();
     const bool debug_dump_enabled = rtoptions.get_experimental_noc_debug_dump_enabled();
+
+    if (!profiler_program_support_count.has_value() && perf_debug_dram_region_program_count() != 0) {
+        // The perf-debug role split stages its DRAM frame rings INSIDE the profiler's DRAM region rather than
+        // allocating a second buffer (see perf_debug_profiler.cpp), so when it is enabled the region has to be
+        // ring-sized, not marker-sized. It asks for the program-support count that gets it there; an explicit
+        // TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT still wins.
+        profiler_program_support_count = perf_debug_dram_region_program_count();
+    }
 
     if (!profiler_program_support_count.has_value()) {
         profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;

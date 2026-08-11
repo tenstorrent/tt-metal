@@ -51,6 +51,12 @@ namespace profiler {
 struct SpscDecodeState;
 }  // namespace profiler
 
+// Program-support count the perf-debug role split needs so the HAL's per-bank DRAM PROFILER region comes out
+// big enough to host one frame ring, or 0 when the split is off. Called from
+// get_profiler_dram_bank_size_per_risc_bytes() -- the role split reuses that region instead of allocating a
+// second DRAM buffer, so the region's size and the ring's size are the same knob. See FINDINGS §N+39.
+uint32_t perf_debug_dram_region_program_count();
+
 // Decoded device record handed writer -> reader. Layout mirrors the standalone drain harness's Rec exactly (ts first
 // packs it to 24 B instead of 32 padded), so both paths move the same bytes per record.
 struct PerfDebugRec {
@@ -225,7 +231,8 @@ private:
         uint32_t dram_bank[kMaxDrisc] = {};       // ring bank, per filler/mover pair
         uint32_t dram_addr = 0;                   // bank-relative base of every ring (same in each bank)
         uint32_t dram_frames = 0;                 // ring capacity in whole frames
-        std::shared_ptr<distributed::MeshBuffer> dram_ring;  // owns the rings for the profiler's lifetime
+        // No buffer handle: the rings live in the HAL's per-bank DRAM PROFILER region, which is reserved for
+        // the profiler's whole lifetime by construction. Nothing to own, nothing to free.
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;
