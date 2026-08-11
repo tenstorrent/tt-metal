@@ -8,8 +8,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.0436703751111054,
-      "tokens_per_second": 958.156927558228,
+      "wall_clock_ms_per_iter": 1.0447047811794619,
+      "tokens_per_second": 957.2082161536673,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -103,6 +103,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -119,8 +120,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.0750019998037412,
-      "tokens_per_second": 930.2308276473589,
+      "wall_clock_ms_per_iter": 1.0749867506092414,
+      "tokens_per_second": 930.24402341076,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -214,6 +215,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -230,8 +232,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.2775136251548247,
-      "tokens_per_second": 25048.656523034617,
+      "wall_clock_ms_per_iter": 1.2778532186530356,
+      "tokens_per_second": 25041.999764050117,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -325,6 +327,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -341,8 +344,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.2850359162257519,
-      "tokens_per_second": 24902.02771451434,
+      "wall_clock_ms_per_iter": 1.284916499571409,
+      "tokens_per_second": 24904.34204142742,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -436,6 +439,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -452,8 +456,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.0625198437992367,
-      "tokens_per_second": 941.1588930182373,
+      "wall_clock_ms_per_iter": 1.0634174063852697,
+      "tokens_per_second": 940.3645210201742,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -547,6 +551,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -563,8 +568,8 @@
       "batch": 1,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.102564583561616,
-      "tokens_per_second": 906.9763485143868,
+      "wall_clock_ms_per_iter": 1.1035764170325517,
+      "tokens_per_second": 906.1447712782209,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -658,6 +663,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -674,8 +680,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 32,
-      "wall_clock_ms_per_iter": 1.1617060004027735,
-      "tokens_per_second": 27545.69571725146,
+      "wall_clock_ms_per_iter": 1.1601786250139412,
+      "tokens_per_second": 27581.95963110032,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -769,6 +775,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -785,8 +792,8 @@
       "batch": 32,
       "context": 4096,
       "iterations": 12,
-      "wall_clock_ms_per_iter": 1.1937343333556782,
-      "tokens_per_second": 26806.634529850173,
+      "wall_clock_ms_per_iter": 1.1929127491991192,
+      "tokens_per_second": 26825.09682412541,
       "signposts": [
         "PERF_DECODE",
         "PERF_DECODE_END"
@@ -880,6 +887,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -896,8 +904,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 24.585567999747582,
-      "tokens_per_second": 166601.8047678237,
+      "wall_clock_ms_per_iter": 24.533004200202413,
+      "tokens_per_second": 166958.76161657387,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -991,6 +999,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1007,8 +1016,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 24.404247000347823,
-      "tokens_per_second": 167839.63872934174,
+      "wall_clock_ms_per_iter": 24.39830180082936,
+      "tokens_per_second": 167880.53666344789,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1102,6 +1111,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1118,8 +1128,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 52.437713398830965,
-      "tokens_per_second": 156223.4405168138,
+      "wall_clock_ms_per_iter": 52.654665597947314,
+      "tokens_per_second": 155579.755506402,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1213,6 +1223,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1229,8 +1240,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 51.85603520076256,
-      "tokens_per_second": 157975.82611714082,
+      "wall_clock_ms_per_iter": 51.78354379895609,
+      "tokens_per_second": 158196.97531332614,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1324,6 +1335,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1340,8 +1352,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.215442999615334,
-      "tokens_per_second": 162440.13639032576,
+      "wall_clock_ms_per_iter": 25.2027543989243,
+      "tokens_per_second": 162521.91864294108,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1435,6 +1447,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1451,8 +1464,8 @@
       "seq_len": 4096,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 25.12669980060309,
-      "tokens_per_second": 163013.84712295912,
+      "wall_clock_ms_per_iter": 25.181119600893,
+      "tokens_per_second": 162661.55218351545,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1546,6 +1559,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1562,8 +1576,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 53.78454859892372,
-      "tokens_per_second": 152311.40194349294,
+      "wall_clock_ms_per_iter": 53.43560180044733,
+      "tokens_per_second": 153306.03051113052,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1657,6 +1671,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,
@@ -1673,8 +1688,8 @@
       "seq_len": 8192,
       "batch": 1,
       "iterations": 5,
-      "wall_clock_ms_per_iter": 53.795118801645,
-      "tokens_per_second": 152281.4742766122,
+      "wall_clock_ms_per_iter": 53.891600397764705,
+      "tokens_per_second": 152008.84626799438,
       "signposts": [
         "PERF_PREFILL",
         "PERF_PREFILL_END"
@@ -1768,6 +1783,7 @@
           "matmul_cutoff": 512,
           "in0_block_w_cap": 26,
           "out_subblock_max": 8,
+          "out_subblock_h": 1,
           "weight_memory": "dram_sharded",
           "chunk_size": 8192,
           "sdpa_q_chunk": 256,

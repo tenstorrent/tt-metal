@@ -8,7 +8,8 @@
   "notes": [
     "Decode candidates are comparable across sections: the decode path never uses the 2D prefill matmul, so the prefill program-config fix did not change any decode number.",
     "Prefill candidates are only from after the DRAM-sharded-weight grid_x fix; earlier prefill timings were collected on a configuration that silently returned NaN (see scripts/repro_prefill_matmul_grid_x9.py) and are excluded rather than published.",
-    "Repeat spread of the selected configuration across the sweep sections is 1.0616-1.0651 ms (+-0.17%), so differences below ~0.4% are inside the harness noise floor and are reported as ties rather than as measurements."
+    "Six repeats of the shipped configuration in one process measured 1.0632/1.0792/1.0776/1.0775/1.0806/1.0764 ms - 1.6% peak-to-peak, first repeat consistently fastest. Sweep position therefore biases a single measurement by more than a 1-2% effect, so differences below ~1.7% are ties unless they were re-measured paired (see the 'Paired re-measurements' section).",
+    "Every candidate measured after the second stage review is PCC-gated in the same loop (PCC_SEQ in scripts/sweep_optimized_decoder.py). Earlier rows are wall-clock only; the shipped configuration is independently PCC-gated by the test suite."
   ],
   "sections": [
     {
@@ -92,9 +93,9 @@
         },
         {
           "label": "1D multicast (MatmulMultiCoreReuseMultiCast1DProgramConfig), 16 cores 8x2, mcast_in0, DRAM-interleaved weights",
-          "decode_ms": 1.2311,
+          "decode_ms": 1.2282,
           "kept": false,
-          "note": "16% slower. 16 cores is the maximum legal rectangle for every role at once: num_cores must divide both the tiled K and the tiled N, and gcd(208,144)=gcd(208,128)=16 while 26/52/104 have no rectangle inside 11x10"
+          "note": "15% slower. Re-measured with the output-subblock cap raised from 4 to 8 tiles (decode runs fp32_dest_acc_en=False, so 8 is legal) and PCC-gated: 0.9665 prefill / 0.9596 decode on synthetic, matching every other BFP4 candidate. 16 cores is the maximum legal rectangle for every role at once: num_cores must divide both the tiled K and the tiled N, gcd(208,144)=gcd(208,128)=16, and 26/52/104 have no rectangle inside 11x10"
         },
         {
           "label": "1D multicast, 16 cores 4x4",
@@ -166,7 +167,7 @@
           "label": "8x2 (16 cores, 416-wide shards)",
           "decode_ms": 1.0798,
           "kept": true,
-          "note": "selected; 4x4 is the same core count and within noise"
+          "note": "selected; measured in the geometry sweep while decode_mlp_cores was still 26, so its absolute value is not comparable to the shipped-config rows"
         },
         {
           "label": "4x4 (16 cores)",
@@ -488,6 +489,136 @@
           "decode_ms": 1.063,
           "kept": true,
           "note": "tie (shipped 1.0640); kept because it removes the padding work from the per-token TilizeWithValPadding at batch 1"
+        }
+      ]
+    },
+    {
+      "title": "Paired re-measurements (A/B/A/B, to cancel the within-process drift)",
+      "rows": [
+        {
+          "label": "SwiGLU working cores 52, pair A",
+          "decode_ms": 1.0638,
+          "kept": true,
+          "note": ""
+        },
+        {
+          "label": "SwiGLU working cores 26, pair A",
+          "decode_ms": 1.0886,
+          "kept": false,
+          "note": "+1.42%"
+        },
+        {
+          "label": "SwiGLU working cores 52, pair B",
+          "decode_ms": 1.0811,
+          "kept": true,
+          "note": ""
+        },
+        {
+          "label": "SwiGLU working cores 26, pair B",
+          "decode_ms": 1.0953,
+          "kept": false,
+          "note": "+1.31%"
+        },
+        {
+          "label": "SwiGLU working cores 52, pair C",
+          "decode_ms": 1.078,
+          "kept": true,
+          "note": ""
+        },
+        {
+          "label": "SwiGLU working cores 26, pair C",
+          "decode_ms": 1.0951,
+          "kept": false,
+          "note": "+1.59%; consistent across all three pairs, so 52 is a real effect not drift"
+        },
+        {
+          "label": "prefill in0_block_w cap 26, pair A",
+          "prefill_ms": 53.334,
+          "decode_ms": 1.0809,
+          "kept": true,
+          "note": ""
+        },
+        {
+          "label": "prefill in0_block_w cap 8, pair A",
+          "prefill_ms": 54.36,
+          "decode_ms": 1.0783,
+          "kept": false,
+          "note": "+1.92%"
+        },
+        {
+          "label": "prefill in0_block_w cap 26, pair B",
+          "prefill_ms": 53.385,
+          "decode_ms": 1.0799,
+          "kept": true,
+          "note": ""
+        },
+        {
+          "label": "prefill in0_block_w cap 8, pair B",
+          "prefill_ms": 54.294,
+          "decode_ms": 1.0791,
+          "kept": false,
+          "note": "+1.70%; consistent, so cap 26 is a real effect"
+        }
+      ]
+    },
+    {
+      "title": "Second-review follow-ups (all PCC-gated at seq 1000)",
+      "rows": [
+        {
+          "label": "prefill out_subblock_h=1 (shipped)",
+          "decode_ms": 1.0683,
+          "prefill_ms": 52.86,
+          "kept": true,
+          "note": "PCC 0.966524/0.959654"
+        },
+        {
+          "label": "prefill out_subblock_h=2",
+          "decode_ms": 1.0753,
+          "prefill_ms": 53.14,
+          "kept": false,
+          "note": "same PCC; inside the noise floor either way"
+        },
+        {
+          "label": "prefill out_subblock_h=4",
+          "decode_ms": 1.0771,
+          "prefill_ms": 53.34,
+          "kept": false,
+          "note": "same PCC"
+        },
+        {
+          "label": "HiFi2 on the SwiGLU gate/up projections only",
+          "decode_ms": 1.4812,
+          "prefill_ms": 53.02,
+          "kept": false,
+          "note": "per-group fidelity probe: +39%"
+        },
+        {
+          "label": "HiFi2 on the SwiGLU down projection only",
+          "decode_ms": 1.2755,
+          "prefill_ms": 52.99,
+          "kept": false,
+          "note": "per-group fidelity probe: +20%"
+        },
+        {
+          "label": "HiFi2 on the prefill attention projections only",
+          "decode_ms": 1.0805,
+          "prefill_ms": 56.87,
+          "kept": false,
+          "note": "prefill per-group fidelity probe: +7.6% prefill"
+        },
+        {
+          "label": "HiFi2 on the prefill SwiGLU projections only",
+          "decode_ms": 1.0845,
+          "prefill_ms": 71.58,
+          "kept": false,
+          "note": "prefill per-group fidelity probe: +35% prefill"
+        },
+        {
+          "label": "HiFi2 on all prefill matmuls",
+          "decode_ms": 1.0842,
+          "prefill_ms": 74.86,
+          "kept": false,
+          "note": "+42% prefill"
         }
       ]
     }

@@ -447,12 +447,14 @@ def _executed_geometry_table() -> list[str]:
             for row in csv.DictReader(handle):
                 code = (row.get("OP CODE") or "").strip()
                 attrs = row.get("ATTRIBUTES", "") or ""
+                # Tracy nests the whole config in one string:
+                # 'program_config': 'SDPAProgramConfig(...;q_chunk_size=256;k_chunk_size=256;...)'
                 if code == "SDPAOperation":
-                    match = re.search(r"'q_chunk_size': '(\d+)'.*?'k_chunk_size': '(\d+)'", attrs)
+                    match = re.search(r"q_chunk_size=(\d+)[;,)].*?k_chunk_size=(\d+)[;,)]", attrs)
                     if match:
                         prefill_pairs[(int(match.group(1)), int(match.group(2)))] += 1
                 elif code == "SdpaDecodeDeviceOperation":
-                    match = re.search(r"'k_chunk_size': '(\d+)'", attrs)
+                    match = re.search(r"k_chunk_size=(\d+)[;,)]", attrs)
                     if match:
                         decode_k[int(match.group(1))] += 1
                     cores = (row.get("CORE COUNT") or "").strip()
@@ -460,6 +462,8 @@ def _executed_geometry_table() -> list[str]:
                         decode_cores[cores] += 1
         name = f"{path.parent.name}/{path.name.split('_ops.csv')[0]}"
         expected = (module.PREFILL_SDPA_Q_CHUNK, module.PREFILL_SDPA_K_CHUNK)
+        if not prefill_pairs and "prefill" in name:
+            PROBLEMS.append(f"{name}: no prefill SDPA program config could be parsed from ATTRIBUTES")
         for pair in prefill_pairs:
             if pair != expected:
                 PROBLEMS.append(f"{name}: prefill SDPA ran q/k={pair}, expected {expected}")

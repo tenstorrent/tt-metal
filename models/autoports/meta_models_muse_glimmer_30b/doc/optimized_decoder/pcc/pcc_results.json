@@ -1,5 +1,5 @@
 {
-  "current_code_sha256": "7103cd2884e90123",
+  "current_code_sha256": "0c001f8b379c2783",
   "records": [
     {
       "test": "test_batched_multichunk_prefill_shared_pool[full_nope]",
@@ -9,9 +9,9 @@
       "seq_len": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[full_nope]",
@@ -21,9 +21,9 @@
       "seq_len": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[full_nope]",
@@ -34,9 +34,9 @@
       "kind": "full_nope",
       "block_size": 128,
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[full_nope]",
@@ -47,9 +47,9 @@
       "kind": "full_nope",
       "block_size": 128,
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[sliding_rope]",
@@ -59,9 +59,9 @@
       "seq_len": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[sliding_rope]",
@@ -71,9 +71,9 @@
       "seq_len": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[sliding_rope]",
@@ -84,9 +84,9 @@
       "kind": "sliding_rope",
       "block_size": 128,
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_multichunk_prefill_shared_pool[sliding_rope]",
@@ -97,9 +97,9 @@
       "kind": "sliding_rope",
       "block_size": 128,
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[32-full_nope]",
@@ -109,9 +109,9 @@
       "batch": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[32-full_nope]",
@@ -121,9 +121,9 @@
       "batch": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[32-sliding_rope]",
@@ -133,9 +133,9 @@
       "batch": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[32-sliding_rope]",
@@ -145,9 +145,9 @@
       "batch": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[4-full_nope]",
@@ -157,9 +157,9 @@
       "batch": 4,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[4-full_nope]",
@@ -169,9 +169,9 @@
       "batch": 4,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[4-sliding_rope]",
@@ -181,9 +181,9 @@
       "batch": 4,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_batched_prefill_and_decode[4-sliding_rope]",
@@ -193,9 +193,9 @@
       "batch": 4,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_continued_prefill_contract[full_nope]",
@@ -206,137 +206,291 @@
       "start_pos": 1024,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[full_nope]",
-      "metric": "decode_max_position",
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "decode_max_position_bfp4_all",
+      "pcc": 0.9639832014151068,
+      "threshold": 0.995,
+      "position": 131071,
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "prefill_k_cache_len131071_bfp4_all",
+      "pcc": 0.9934849348557068,
+      "threshold": 0.0,
+      "seq_len": 131071,
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "coverage": "first 8192 positions",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "prefill_k_cache_len131072_bfp4_all",
+      "pcc": 0.9934849348557068,
+      "threshold": 0.0,
+      "seq_len": 131072,
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "coverage": "first 8192 positions",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "prefill_len1000_bfp4_all_length_reference",
+      "pcc": 0.9613680685365058,
+      "threshold": 0.0,
+      "seq_len": 1000,
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "coverage": "full; the length-independence reference for the 131072 run",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "prefill_len131071_bfp4_all",
+      "pcc": 0.9497818386859166,
+      "threshold": 0.0,
+      "seq_len": 131071,
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "coverage": "24575/131071 positions in 3 blocks",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp4_all]",
+      "metric": "prefill_len131072_bfp4_all",
+      "pcc": 0.94963972102756,
+      "threshold": 0.0,
+      "seq_len": 131072,
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "coverage": "24576/131072 positions in 3 blocks",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi]",
+      "metric": "decode_max_position_bfp8_all_lofi",
       "pcc": 0.9985199745525064,
       "threshold": 0.995,
       "position": 131071,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[full_nope]",
-      "metric": "prefill_k_cache_len131071",
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi]",
+      "metric": "prefill_k_cache_len131071_bfp8_all_lofi",
       "pcc": 0.9997099461315644,
       "threshold": 0.995,
       "seq_len": 131071,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
       "coverage": "first 8192 positions",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[full_nope]",
-      "metric": "prefill_k_cache_len131072",
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi]",
+      "metric": "prefill_k_cache_len131072_bfp8_all_lofi",
       "pcc": 0.9997099461315644,
       "threshold": 0.995,
       "seq_len": 131072,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
       "coverage": "first 8192 positions",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[full_nope]",
-      "metric": "prefill_len131071",
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi]",
+      "metric": "prefill_len131071_bfp8_all_lofi",
       "pcc": 0.9975761253624054,
       "threshold": 0.995,
       "seq_len": 131071,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
       "coverage": "24575/131071 positions in 3 blocks",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[full_nope]",
-      "metric": "prefill_len131072",
+      "test": "test_full_context_prefill_and_decode[full_nope-bfp8_all_lofi]",
+      "metric": "prefill_len131072_bfp8_all_lofi",
       "pcc": 0.9975653552906123,
       "threshold": 0.995,
       "seq_len": 131072,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
       "coverage": "24576/131072 positions in 3 blocks",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[sliding_rope]",
-      "metric": "decode_max_position",
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "decode_max_position_bfp4_all",
+      "pcc": 0.9650069565228195,
+      "threshold": 0.995,
+      "position": 131071,
+      "kind": "sliding_rope",
+      "policy": "bfp8_all_lofi",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "prefill_k_cache_len131071_bfp4_all",
+      "pcc": 0.9934668940501185,
+      "threshold": 0.0,
+      "seq_len": 131071,
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "coverage": "first 8192 positions",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "prefill_k_cache_len131072_bfp4_all",
+      "pcc": 0.9934668940501185,
+      "threshold": 0.0,
+      "seq_len": 131072,
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "coverage": "first 8192 positions",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "prefill_len1000_bfp4_all_length_reference",
+      "pcc": 0.9664921851374322,
+      "threshold": 0.0,
+      "seq_len": 1000,
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "coverage": "full; the length-independence reference for the 131072 run",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "prefill_len131071_bfp4_all",
+      "pcc": 0.9623964961530506,
+      "threshold": 0.0,
+      "seq_len": 131071,
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "coverage": "24575/131071 positions in 3 blocks",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp4_all]",
+      "metric": "prefill_len131072_bfp4_all",
+      "pcc": 0.9623662145939107,
+      "threshold": 0.0,
+      "seq_len": 131072,
+      "kind": "sliding_rope",
+      "policy": "bfp4_all",
+      "coverage": "24576/131072 positions in 3 blocks",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
+    },
+    {
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi]",
+      "metric": "decode_max_position_bfp8_all_lofi",
       "pcc": 0.9985089580240212,
       "threshold": 0.995,
       "position": 131071,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[sliding_rope]",
-      "metric": "prefill_k_cache_len131071",
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi]",
+      "metric": "prefill_k_cache_len131071_bfp8_all_lofi",
       "pcc": 0.9996962849257157,
       "threshold": 0.995,
       "seq_len": 131071,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
       "coverage": "first 8192 positions",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[sliding_rope]",
-      "metric": "prefill_k_cache_len131072",
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi]",
+      "metric": "prefill_k_cache_len131072_bfp8_all_lofi",
       "pcc": 0.9996962849257157,
       "threshold": 0.995,
       "seq_len": 131072,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
       "coverage": "first 8192 positions",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[sliding_rope]",
-      "metric": "prefill_len131071",
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi]",
+      "metric": "prefill_len131071_bfp8_all_lofi",
       "pcc": 0.9983097140197295,
       "threshold": 0.995,
       "seq_len": 131071,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
       "coverage": "24575/131071 positions in 3 blocks",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
-      "test": "test_full_context_prefill_and_decode[sliding_rope]",
-      "metric": "prefill_len131072",
+      "test": "test_full_context_prefill_and_decode[sliding_rope-bfp8_all_lofi]",
+      "metric": "prefill_len131072_bfp8_all_lofi",
       "pcc": 0.9983027036062552,
       "threshold": 0.995,
       "seq_len": 131072,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
       "coverage": "24576/131072 positions in 3 blocks",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:34:17+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_page_block_sizes[128-full_nope]",
@@ -346,9 +500,9 @@
       "block_size": 128,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[128-full_nope]",
@@ -358,9 +512,9 @@
       "block_size": 128,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[128-sliding_rope]",
@@ -370,9 +524,9 @@
       "block_size": 128,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[128-sliding_rope]",
@@ -382,9 +536,9 @@
       "block_size": 128,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[32-full_nope]",
@@ -394,9 +548,9 @@
       "block_size": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[32-full_nope]",
@@ -406,9 +560,9 @@
       "block_size": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[32-sliding_rope]",
@@ -418,9 +572,9 @@
       "block_size": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[32-sliding_rope]",
@@ -430,9 +584,9 @@
       "block_size": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[64-full_nope]",
@@ -442,9 +596,9 @@
       "block_size": 64,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[64-full_nope]",
@@ -454,9 +608,9 @@
       "block_size": 64,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[64-sliding_rope]",
@@ -466,9 +620,9 @@
       "block_size": 64,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_page_block_sizes[64-sliding_rope]",
@@ -478,9 +632,9 @@
       "block_size": 64,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-full_nope]",
@@ -491,9 +645,9 @@
       "position": 100,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-full_nope]",
@@ -504,9 +658,9 @@
       "position": 101,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-full_nope]",
@@ -516,9 +670,9 @@
       "seq_len": 100,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-full_nope]",
@@ -528,9 +682,9 @@
       "seq_len": 100,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-full_nope]",
@@ -540,9 +694,9 @@
       "seq_len": 100,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-sliding_rope]",
@@ -553,9 +707,9 @@
       "position": 100,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-sliding_rope]",
@@ -566,9 +720,9 @@
       "position": 101,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-sliding_rope]",
@@ -578,9 +732,9 @@
       "seq_len": 100,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-sliding_rope]",
@@ -590,9 +744,9 @@
       "seq_len": 100,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[100-sliding_rope]",
@@ -602,9 +756,9 @@
       "seq_len": 100,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-full_nope]",
@@ -615,9 +769,9 @@
       "position": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-full_nope]",
@@ -628,9 +782,9 @@
       "position": 1001,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-full_nope]",
@@ -640,9 +794,9 @@
       "seq_len": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-full_nope]",
@@ -652,9 +806,9 @@
       "seq_len": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-full_nope]",
@@ -664,9 +818,9 @@
       "seq_len": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-sliding_rope]",
@@ -677,9 +831,9 @@
       "position": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-sliding_rope]",
@@ -690,9 +844,9 @@
       "position": 1001,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-sliding_rope]",
@@ -702,9 +856,9 @@
       "seq_len": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-sliding_rope]",
@@ -714,9 +868,9 @@
       "seq_len": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[1000-sliding_rope]",
@@ -726,9 +880,9 @@
       "seq_len": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-full_nope]",
@@ -739,9 +893,9 @@
       "position": 12345,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-full_nope]",
@@ -752,9 +906,9 @@
       "position": 12346,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-full_nope]",
@@ -764,9 +918,9 @@
       "seq_len": 12345,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-full_nope]",
@@ -776,9 +930,9 @@
       "seq_len": 12345,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-full_nope]",
@@ -788,9 +942,9 @@
       "seq_len": 12345,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-sliding_rope]",
@@ -801,9 +955,9 @@
       "position": 12345,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-sliding_rope]",
@@ -814,9 +968,9 @@
       "position": 12346,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-sliding_rope]",
@@ -826,9 +980,9 @@
       "seq_len": 12345,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-sliding_rope]",
@@ -838,9 +992,9 @@
       "seq_len": 12345,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[12345-sliding_rope]",
@@ -850,9 +1004,9 @@
       "seq_len": 12345,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-full_nope]",
@@ -863,9 +1017,9 @@
       "position": 2048,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-full_nope]",
@@ -876,9 +1030,9 @@
       "position": 2049,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-full_nope]",
@@ -888,9 +1042,9 @@
       "seq_len": 2048,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-full_nope]",
@@ -900,9 +1054,9 @@
       "seq_len": 2048,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-full_nope]",
@@ -912,9 +1066,9 @@
       "seq_len": 2048,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-sliding_rope]",
@@ -925,9 +1079,9 @@
       "position": 2048,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-sliding_rope]",
@@ -938,9 +1092,9 @@
       "position": 2049,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-sliding_rope]",
@@ -950,9 +1104,9 @@
       "seq_len": 2048,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-sliding_rope]",
@@ -962,9 +1116,9 @@
       "seq_len": 2048,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2048-sliding_rope]",
@@ -974,9 +1128,9 @@
       "seq_len": 2048,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-full_nope]",
@@ -987,9 +1141,9 @@
       "position": 2080,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-full_nope]",
@@ -1000,9 +1154,9 @@
       "position": 2081,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-full_nope]",
@@ -1012,9 +1166,9 @@
       "seq_len": 2080,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-full_nope]",
@@ -1024,9 +1178,9 @@
       "seq_len": 2080,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-full_nope]",
@@ -1036,9 +1190,9 @@
       "seq_len": 2080,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-sliding_rope]",
@@ -1049,9 +1203,9 @@
       "position": 2080,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-sliding_rope]",
@@ -1062,9 +1216,9 @@
       "position": 2081,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-sliding_rope]",
@@ -1074,9 +1228,9 @@
       "seq_len": 2080,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-sliding_rope]",
@@ -1086,9 +1240,9 @@
       "seq_len": 2080,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[2080-sliding_rope]",
@@ -1098,9 +1252,9 @@
       "seq_len": 2080,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-full_nope]",
@@ -1111,9 +1265,9 @@
       "position": 3000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-full_nope]",
@@ -1124,9 +1278,9 @@
       "position": 3001,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-full_nope]",
@@ -1136,9 +1290,9 @@
       "seq_len": 3000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-full_nope]",
@@ -1148,9 +1302,9 @@
       "seq_len": 3000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-full_nope]",
@@ -1160,9 +1314,9 @@
       "seq_len": 3000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-sliding_rope]",
@@ -1173,9 +1327,9 @@
       "position": 3000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-sliding_rope]",
@@ -1186,9 +1340,9 @@
       "position": 3001,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-sliding_rope]",
@@ -1198,9 +1352,9 @@
       "seq_len": 3000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-sliding_rope]",
@@ -1210,9 +1364,9 @@
       "seq_len": 3000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[3000-sliding_rope]",
@@ -1222,9 +1376,9 @@
       "seq_len": 3000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-full_nope]",
@@ -1235,9 +1389,9 @@
       "position": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-full_nope]",
@@ -1248,9 +1402,9 @@
       "position": 33,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-full_nope]",
@@ -1260,9 +1414,9 @@
       "seq_len": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-full_nope]",
@@ -1272,9 +1426,9 @@
       "seq_len": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-full_nope]",
@@ -1284,9 +1438,9 @@
       "seq_len": 32,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-sliding_rope]",
@@ -1297,9 +1451,9 @@
       "position": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-sliding_rope]",
@@ -1310,9 +1464,9 @@
       "position": 33,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-sliding_rope]",
@@ -1322,9 +1476,9 @@
       "seq_len": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-sliding_rope]",
@@ -1334,9 +1488,9 @@
       "seq_len": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[32-sliding_rope]",
@@ -1346,9 +1500,9 @@
       "seq_len": 32,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-full_nope]",
@@ -1359,9 +1513,9 @@
       "position": 8192,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-full_nope]",
@@ -1372,9 +1526,9 @@
       "position": 8193,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-full_nope]",
@@ -1384,9 +1538,9 @@
       "seq_len": 8192,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-full_nope]",
@@ -1396,9 +1550,9 @@
       "seq_len": 8192,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-full_nope]",
@@ -1408,9 +1562,9 @@
       "seq_len": 8192,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-sliding_rope]",
@@ -1421,9 +1575,9 @@
       "position": 8192,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-sliding_rope]",
@@ -1434,9 +1588,9 @@
       "position": 8193,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-sliding_rope]",
@@ -1446,9 +1600,9 @@
       "seq_len": 8192,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-sliding_rope]",
@@ -1458,9 +1612,9 @@
       "seq_len": 8192,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8192-sliding_rope]",
@@ -1470,9 +1624,9 @@
       "seq_len": 8192,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-full_nope]",
@@ -1483,9 +1637,9 @@
       "position": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-full_nope]",
@@ -1496,9 +1650,9 @@
       "position": 8257,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-full_nope]",
@@ -1508,9 +1662,9 @@
       "seq_len": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-full_nope]",
@@ -1520,9 +1674,9 @@
       "seq_len": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-full_nope]",
@@ -1532,9 +1686,9 @@
       "seq_len": 8256,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-sliding_rope]",
@@ -1545,9 +1699,9 @@
       "position": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-sliding_rope]",
@@ -1558,9 +1712,9 @@
       "position": 8257,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-sliding_rope]",
@@ -1570,9 +1724,9 @@
       "seq_len": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-sliding_rope]",
@@ -1582,9 +1736,9 @@
       "seq_len": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_paged_prefill_decode_pcc[8256-sliding_rope]",
@@ -1594,9 +1748,9 @@
       "seq_len": 8256,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1606,9 +1760,9 @@
       "position": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1618,9 +1772,9 @@
       "position": 3111,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1630,9 +1784,9 @@
       "position": 2049,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1642,9 +1796,9 @@
       "position": 37,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1654,9 +1808,9 @@
       "seq_len": 37,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1666,9 +1820,9 @@
       "seq_len": 1000,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1678,9 +1832,9 @@
       "seq_len": 2049,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[full_nope]",
@@ -1690,9 +1844,9 @@
       "seq_len": 3111,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1702,9 +1856,9 @@
       "position": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1714,9 +1868,9 @@
       "position": 3111,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1726,9 +1880,9 @@
       "position": 2049,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1738,9 +1892,9 @@
       "position": 37,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1750,9 +1904,9 @@
       "seq_len": 37,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1762,9 +1916,9 @@
       "seq_len": 1000,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1774,9 +1928,9 @@
       "seq_len": 2049,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_ragged_slots_and_current_positions[sliding_rope]",
@@ -1786,9 +1940,9 @@
       "seq_len": 3111,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1799,9 +1953,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1812,9 +1966,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1825,9 +1979,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1838,9 +1992,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1851,9 +2005,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1864,9 +2018,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1877,9 +2031,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[full_nope]",
@@ -1890,9 +2044,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1903,9 +2057,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1916,9 +2070,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1929,9 +2083,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1942,9 +2096,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1955,9 +2109,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1968,9 +2122,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1981,9 +2135,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_batched[sliding_rope]",
@@ -1994,9 +2148,91 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp4_all]",
+      "metric": "length_drift_1000_to_12345_bfp4_all",
+      "pcc": 0.999796479722376,
+      "threshold": 0.995,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp4_all",
+      "coverage": "1.0 minus the PCC drift, so a higher value is better",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp4_all]",
+      "metric": "prefill_real_weights_last_block_len1000_bfp4_all",
+      "pcc": 0.9988749660616376,
+      "threshold": 0.995,
+      "seq_len": 1000,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp4_all",
+      "coverage": "query block [0, 992)",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp4_all]",
+      "metric": "prefill_real_weights_last_block_len12345_bfp4_all",
+      "pcc": 0.9986714457840136,
+      "threshold": 0.995,
+      "seq_len": 12345,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp4_all",
+      "coverage": "query block [8192, 12345)",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp8_attn_bfp4_mlp]",
+      "metric": "length_drift_1000_to_12345_bfp8_attn_bfp4_mlp",
+      "pcc": 0.999932550073023,
+      "threshold": 0.995,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "coverage": "1.0 minus the PCC drift, so a higher value is better",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp8_attn_bfp4_mlp]",
+      "metric": "prefill_real_weights_last_block_len1000_bfp8_attn_bfp4_mlp",
+      "pcc": 0.9992162844624055,
+      "threshold": 0.995,
+      "seq_len": 1000,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "coverage": "query block [0, 992)",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
+    },
+    {
+      "test": "test_real_weights_length_independence[bfp8_attn_bfp4_mlp]",
+      "metric": "prefill_real_weights_last_block_len12345_bfp8_attn_bfp4_mlp",
+      "pcc": 0.9991488345354285,
+      "threshold": 0.995,
+      "seq_len": 12345,
+      "kind": "full_nope",
+      "weights": "real",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "coverage": "query block [8192, 12345)",
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[full_nope]",
@@ -2007,9 +2243,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[full_nope]",
@@ -2020,9 +2256,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[full_nope]",
@@ -2033,9 +2269,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[full_nope]",
@@ -2046,9 +2282,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[full_nope]",
@@ -2059,9 +2295,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[sliding_rope]",
@@ -2072,9 +2308,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[sliding_rope]",
@@ -2085,9 +2321,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[sliding_rope]",
@@ -2098,9 +2334,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[sliding_rope]",
@@ -2111,9 +2347,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_non_aligned_and_traced[sliding_rope]",
@@ -2124,9 +2360,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[full_nope]",
@@ -2137,9 +2373,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[full_nope]",
@@ -2150,9 +2386,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[full_nope]",
@@ -2163,9 +2399,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[sliding_rope]",
@@ -2176,9 +2412,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[sliding_rope]",
@@ -2189,9 +2425,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_real_weights_prefill_decode[sliding_rope]",
@@ -2202,9 +2438,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2214,9 +2450,9 @@
       "position": 1,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2226,9 +2462,9 @@
       "position": 31,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2238,9 +2474,9 @@
       "position": 7,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2250,9 +2486,9 @@
       "seq_len": 1,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2262,9 +2498,9 @@
       "seq_len": 31,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[full_nope]",
@@ -2274,9 +2510,9 @@
       "seq_len": 7,
       "kind": "full_nope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2286,9 +2522,9 @@
       "position": 1,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2298,9 +2534,9 @@
       "position": 31,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2310,9 +2546,9 @@
       "position": 7,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2322,9 +2558,9 @@
       "seq_len": 1,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2334,9 +2570,9 @@
       "seq_len": 31,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_short_prefill_lengths[sliding_rope]",
@@ -2346,9 +2582,9 @@
       "seq_len": 7,
       "kind": "sliding_rope",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2359,9 +2595,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2372,9 +2608,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2385,9 +2621,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2398,9 +2634,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2411,9 +2647,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2424,9 +2660,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2437,9 +2673,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2450,9 +2686,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2463,9 +2699,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2476,9 +2712,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2489,9 +2725,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2502,9 +2738,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2515,9 +2751,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2528,9 +2764,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2541,9 +2777,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2554,9 +2790,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2567,9 +2803,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2580,9 +2816,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2593,9 +2829,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2606,9 +2842,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2619,9 +2855,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2632,9 +2868,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2645,9 +2881,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2658,9 +2894,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2671,9 +2907,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2684,9 +2920,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[full_nope]",
@@ -2697,9 +2933,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2710,9 +2946,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2723,9 +2959,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2736,9 +2972,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2749,9 +2985,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2762,9 +2998,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2775,9 +3011,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2788,9 +3024,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2801,9 +3037,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2814,9 +3050,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2827,9 +3063,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2840,9 +3076,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2853,9 +3089,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2866,9 +3102,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2879,9 +3115,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2892,9 +3128,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2905,9 +3141,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2918,9 +3154,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2931,9 +3167,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2944,9 +3180,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2957,9 +3193,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2970,9 +3206,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2983,9 +3219,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -2996,9 +3232,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -3009,9 +3245,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -3022,9 +3258,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -3035,9 +3271,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_stress_repeated_prefill_decode[sliding_rope]",
@@ -3048,9 +3284,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3062,9 +3298,9 @@
       "weights": "synthetic",
       "policy": "bfp4_all",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3076,9 +3312,9 @@
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3090,9 +3326,9 @@
       "weights": "synthetic",
       "policy": "bfp8_attn_bfp4_mlp",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3104,9 +3340,9 @@
       "weights": "synthetic",
       "policy": "bfp4_all",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3118,9 +3354,9 @@
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[full_nope]",
@@ -3132,9 +3368,9 @@
       "weights": "synthetic",
       "policy": "bfp8_attn_bfp4_mlp",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3146,9 +3382,9 @@
       "weights": "synthetic",
       "policy": "bfp4_all",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3160,9 +3396,9 @@
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3174,9 +3410,9 @@
       "weights": "synthetic",
       "policy": "bfp8_attn_bfp4_mlp",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3188,9 +3424,9 @@
       "weights": "synthetic",
       "policy": "bfp4_all",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3202,9 +3438,9 @@
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_synthetic_weight_precision_discrepancy[sliding_rope]",
@@ -3216,9 +3452,9 @@
       "weights": "synthetic",
       "policy": "bfp8_attn_bfp4_mlp",
       "diagnostic": true,
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:23:41+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T14:48:13+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-full_nope]",
@@ -3229,9 +3465,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-full_nope]",
@@ -3242,9 +3478,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-full_nope]",
@@ -3255,9 +3491,9 @@
       "kind": "full_nope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-sliding_rope]",
@@ -3268,9 +3504,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-sliding_rope]",
@@ -3281,9 +3517,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[real-sliding_rope]",
@@ -3294,9 +3530,9 @@
       "kind": "sliding_rope",
       "weights": "real",
       "policy": "bfp4_all",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-full_nope]",
@@ -3307,9 +3543,9 @@
       "kind": "full_nope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-full_nope]",
@@ -3320,9 +3556,9 @@
       "kind": "full_nope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-full_nope]",
@@ -3333,9 +3569,9 @@
       "kind": "full_nope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-sliding_rope]",
@@ -3346,9 +3582,9 @@
       "kind": "sliding_rope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-sliding_rope]",
@@ -3359,9 +3595,9 @@
       "kind": "sliding_rope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     },
     {
       "test": "test_traced_decode_pcc[synthetic-sliding_rope]",
@@ -3372,9 +3608,9 @@
       "kind": "sliding_rope",
       "weights": "synthetic",
       "policy": "bfp8_all_lofi",
-      "code_sha256": "7103cd2884e90123",
-      "git_head": "48dd8e2caa729666ea72584d29807c4fc4f7c2f8",
-      "recorded_at": "2026-08-11T13:41:16+00:00"
+      "code_sha256": "0c001f8b379c2783",
+      "git_head": "15de3f57f31eba0253206b9147db5a7a24808098",
+      "recorded_at": "2026-08-11T15:07:44+00:00"
     }
   ]
 }

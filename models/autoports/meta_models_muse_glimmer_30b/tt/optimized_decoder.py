@@ -103,6 +103,10 @@ PREFILL_MATMUL_GRID = (11, 8)
 # attention rows regress sharply (52 and 104 both measured 62.2 ms).
 PREFILL_IN0_BLOCK_W_CAP = 26
 PREFILL_OUT_SUBBLOCK_MAX = 8
+# Output subblock height for the prefill 2D matmuls. `out_subblock_h * out_subblock_w` must
+# fit the destination register file (8 tiles without FP32 accumulation), so h>1 trades width
+# for height; swept in scripts/sweep_optimized_decoder.py.
+PREFILL_OUT_SUBBLOCK_H = 1
 
 
 # ---------------------------------------------------------------- precision policy
@@ -219,6 +223,34 @@ POLICIES: dict[str, PrecisionPolicy] = {
         mlp_fidelity=ttnn.MathFidelity.HiFi2,
         mlp_down_fidelity=ttnn.MathFidelity.HiFi2,
     ),
+    "bfp4_all_hifi2_gateup": _policy(
+        "bfp4_all_hifi2_gateup",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        mlp_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
+    "bfp4_all_hifi2_down": _policy(
+        "bfp4_all_hifi2_down",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        mlp_down_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
+    "bfp4_all_prefill_hifi2_attn": _policy(
+        "bfp4_all_prefill_hifi2_attn",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        prefill_attn_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
+    "bfp4_all_prefill_hifi2_mlp": _policy(
+        "bfp4_all_prefill_hifi2_mlp",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        prefill_mlp_fidelity=ttnn.MathFidelity.HiFi2,
+        prefill_mlp_down_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
+    "bfp4_all_prefill_hifi2": _policy(
+        "bfp4_all_prefill_hifi2",
+        attn_weight_dtype=ttnn.bfloat4_b,
+        prefill_attn_fidelity=ttnn.MathFidelity.HiFi2,
+        prefill_mlp_fidelity=ttnn.MathFidelity.HiFi2,
+        prefill_mlp_down_fidelity=ttnn.MathFidelity.HiFi2,
+    ),
 }
 
 DEFAULT_POLICY = "bfp4_all"
@@ -289,6 +321,7 @@ class OptimizedDecoder(LightweightModule):
         prefill_matmul_grid: tuple[int, int] = PREFILL_MATMUL_GRID,
         prefill_in0_block_w_cap: int = PREFILL_IN0_BLOCK_W_CAP,
         prefill_out_subblock_max: int = PREFILL_OUT_SUBBLOCK_MAX,
+        prefill_out_subblock_h: int = PREFILL_OUT_SUBBLOCK_H,
         pack_qkv_gate: bool = False,
         pack_mlp_gate_up: bool = False,
         decode_packer_l1_acc: bool = True,
@@ -364,6 +397,7 @@ class OptimizedDecoder(LightweightModule):
         self.prefill_matmul_grid = prefill_matmul_grid
         self.prefill_in0_block_w_cap = prefill_in0_block_w_cap
         self.prefill_out_subblock_max = prefill_out_subblock_max
+        self.prefill_out_subblock_h = prefill_out_subblock_h
         self.weight_memory = weight_memory
         self.decode_sdpa_output_l1 = decode_sdpa_output_l1
         self.decode_rope_pad_to_tile = decode_rope_pad_to_tile
@@ -543,7 +577,7 @@ class OptimizedDecoder(LightweightModule):
             compute_with_storage_grid_size=self.decode_residual_grid,
             in0_block_w=block_w,
             out_subblock_h=1,
-            out_subblock_w=_out_subblock_w(per_core_n, 1, 4),
+            out_subblock_w=_out_subblock_w(per_core_n, 1, 8),
             per_core_M=per_core_m,
             per_core_N=per_core_n,
             fuse_batch=True,
@@ -724,6 +758,7 @@ class OptimizedDecoder(LightweightModule):
         prefill_matmul_grid: tuple[int, int] = PREFILL_MATMUL_GRID,
         prefill_in0_block_w_cap: int = PREFILL_IN0_BLOCK_W_CAP,
         prefill_out_subblock_max: int = PREFILL_OUT_SUBBLOCK_MAX,
+        prefill_out_subblock_h: int = PREFILL_OUT_SUBBLOCK_H,
         weight_memory: str | None = None,
         pack_qkv_gate: bool = False,
         pack_mlp_gate_up: bool = False,
@@ -925,6 +960,7 @@ class OptimizedDecoder(LightweightModule):
             prefill_matmul_grid=prefill_matmul_grid,
             prefill_in0_block_w_cap=prefill_in0_block_w_cap,
             prefill_out_subblock_max=prefill_out_subblock_max,
+            prefill_out_subblock_h=prefill_out_subblock_h,
             pack_qkv_gate=pack_qkv_gate,
             pack_mlp_gate_up=pack_mlp_gate_up,
             decode_packer_l1_acc=decode_packer_l1_acc,
@@ -1121,7 +1157,11 @@ class OptimizedDecoder(LightweightModule):
         block_rows, padded_rows, grid_x, grid_y, per_core_m, per_core_n, in0_block_w = self._prefill_fold(
             rows=rows, k_tiles=k // TILE, n_tiles=n // TILE, weight_dtype=weight_dtype
         )
-        out_subblock_h = 1
+        # out_subblock_h is capped by per_core_M as well as by the register file: a taller
+        # subblock than the per-core output block does not exist.
+        out_subblock_h = min(self.prefill_out_subblock_h, per_core_m)
+        while out_subblock_h > 1 and per_core_m % out_subblock_h:
+            out_subblock_h -= 1
         out_subblock_w = _out_subblock_w(per_core_n, out_subblock_h, self.prefill_out_subblock_max)
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
@@ -2076,6 +2116,7 @@ class OptimizedDecoder(LightweightModule):
                 "matmul_cutoff": self.prefill_matmul_cutoff,
                 "in0_block_w_cap": self.prefill_in0_block_w_cap,
                 "out_subblock_max": self.prefill_out_subblock_max,
+                "out_subblock_h": self.prefill_out_subblock_h,
                 "weight_memory": self.weight_memory,
                 "chunk_size": self.prefill_chunk_size,
                 "sdpa_q_chunk": self.prefill_sdpa_q_chunk,

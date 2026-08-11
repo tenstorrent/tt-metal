@@ -1,0 +1,202 @@
+{
+  "records": [
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9988692228609197
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.998857383934905
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 12345,
+      "query_block": [
+        8192,
+        12345
+      ],
+      "last_block_prefill_pcc": 0.9986714457840136
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9999226111953646
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.9999200778623752
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 12345,
+      "query_block": [
+        8192,
+        12345
+      ],
+      "last_block_prefill_pcc": 0.999800086629613
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9992520273182128
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.999257757655595
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 12345,
+      "query_block": [
+        8192,
+        12345
+      ],
+      "last_block_prefill_pcc": 0.9991488345354285
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9576436140687401
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.9555280094432186
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all",
+      "seq_len": 32768,
+      "query_block": [
+        24576,
+        32768
+      ],
+      "last_block_prefill_pcc": 0.949780294260763
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9981373393485223
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.9979492856915718
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_all_lofi",
+      "seq_len": 32768,
+      "query_block": [
+        24576,
+        32768
+      ],
+      "last_block_prefill_pcc": 0.9976046153342972
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 1000,
+      "query_block": [
+        896,
+        1000
+      ],
+      "last_block_prefill_pcc": 0.9914845973865618
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 8192,
+      "query_block": [
+        0,
+        8192
+      ],
+      "last_block_prefill_pcc": 0.9913102495855982
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp8_attn_bfp4_mlp",
+      "seq_len": 32768,
+      "query_block": [
+        24576,
+        32768
+      ],
+      "last_block_prefill_pcc": 0.9909649385423576
+    }
+  ]
+}

@@ -18,13 +18,13 @@ One decoder layer, one Blackhole p300c chip, warmed, unprofiled wall clock:
 
 | measurement | functional (stage 01) | optimized | speedup |
 |---|---|---|---|
-| warmed prefill, 4096 tokens, sliding_rope | 58.79 ms | **25.22 ms** | 2.33x |
-| warmed prefill, 4096 tokens, full_nope | 59.12 ms | **24.59 ms** | 2.40x |
-| warmed prefill, 8192 tokens, sliding_rope | 97.65 ms | **53.78 ms** | 1.82x |
-| warmed prefill, 8192 tokens, full_nope | 97.55 ms | **52.44 ms** | 1.86x |
+| warmed prefill, 4096 tokens, sliding_rope | 58.79 ms | **25.20 ms** | 2.33x |
+| warmed prefill, 4096 tokens, full_nope | 59.12 ms | **24.53 ms** | 2.41x |
+| warmed prefill, 8192 tokens, sliding_rope | 97.65 ms | **53.44 ms** | 1.83x |
+| warmed prefill, 8192 tokens, full_nope | 97.55 ms | **52.65 ms** | 1.85x |
 | traced warmed decode, batch 1, context 4096, sliding_rope | 3.242 ms | **1.063 ms** | 3.05x |
-| traced warmed decode, batch 1, context 4096, full_nope | 3.223 ms | **1.044 ms** | 3.09x |
-| traced warmed decode, batch 32, context 4096, sliding_rope | 3.398 ms (9.4 k tok/s) | **1.162 ms (27.5 k tok/s)** | 2.92x |
+| traced warmed decode, batch 1, context 4096, full_nope | 3.223 ms | **1.045 ms** | 3.08x |
+| traced warmed decode, batch 32, context 4096, sliding_rope | 3.398 ms (9.4 k tok/s) | **1.160 ms (27.6 k tok/s)** | 2.93x |
 | traced warmed decode, batch 32, context 4096, full_nope | 3.565 ms (9.0 k tok/s) | **1.278 ms (25.0 k tok/s)** | 2.79x |
 
 Both stages measured with the same harness on the same device; the table in
@@ -51,7 +51,11 @@ Five things, in descending order of measured effect. The candidate table in
    post-norms, both residual adds, the attention-gate multiply and every projection, with
    sharded `LayerNormShardedMultiCoreProgramConfig` norms. The functional stage's four
    hidden-size RMSNorms ran on **one core at 138 µs each** — 552 µs of a 3.24 ms decode
-   step. They now run on 16 cores at ~9 µs each: 37 µs total.
+   step. They now run on 16 cores at ~9 µs each: 37 µs total. The two weight-less QK
+   RMSNorms over `head_dim` are *not* sharded — they run on 1 core at ~4 µs each, 8 µs of
+   the 45 µs total norm time, because they consume the height-sharded per-(user, head)
+   layout `nlp_create_qkv_heads_decode` produces and `ttnn.rms_norm` has no sharded program
+   config for it. Named in *Limitations*.
 4. **Explicit 2D prefill program configs** over a large Blackhole grid, with the sequence
    folded into 512-row blocks so the per-core output block fits L1. The functional stage's
    prefill matmuls were all marked `SLOW` with `in0_block_w=1` and ran at 37-50% of the
@@ -157,12 +161,26 @@ The suite is built so this cannot be waved through:
 * `test_synthetic_weight_precision_discrepancy` records the gap itself, for every policy,
   into the PCC artifact. Nothing is marked xfail.
 
-Every candidate latency in this stage comes from one harness
-(`scripts/sweep_optimized_decoder.py`), and the selected configuration's repeat spread
-across the sweep sections is 1.0616-1.0651 ms (+-0.17%). Differences below ~0.4% are inside
-that noise floor and are reported as ties, not as measurements — which is how the packed
-QKV+gate result (1.0651 vs 1.0636 ms), the KV-cache dtype result and the SDPA-output
-memory-config result are read.
+Every candidate latency comes from one harness (`scripts/sweep_optimized_decoder.py`), which
+also PCC-gates each candidate in the same loop — a wall-clock sweep without a correctness
+gate is what nearly shipped a NaN-producing prefill config (see *TTNN findings*). Six repeats
+of the shipped configuration in one process measured 1.0632, 1.0792, 1.0776, 1.0775, 1.0806,
+1.0764 ms: **1.6% peak-to-peak**, with the first repeat consistently fastest, i.e. there is a
+within-process warm-up drift larger than several of the differences the table reports. So a
+single measurement cannot separate a 1-2% effect from drift, and the two selections that fall
+in that band were re-measured **paired** (A/B/A/B) instead:
+
+| paired comparison | pairs | effect |
+|---|---|---|
+| SwiGLU working cores 52 vs 26 (decode) | 1.0638/1.0886, 1.0811/1.0953, 1.0780/1.0951 | 26 slower by 1.42%, 1.31%, 1.59% — **consistent, 52 kept** |
+| prefill `in0_block_w` cap 26 vs 8 | 53.334/54.360, 53.385/54.294 | cap 8 slower by 1.92%, 1.70% — **consistent, 26 kept** |
+
+Differences below ~1.7% that were *not* re-measured paired are reported as ties, not wins:
+the packed QKV+gate result (1.0651 vs 1.0636), the KV-cache dtype result, the SDPA-output
+memory-config result, the RoPE-pad result, the `wo`/`mlp_down` `in0_block_w` neighbours and
+the prefill `out_subblock_h` result. The differences that decided the stage — dtype and
+fidelity policy, matmul family, the small-core SwiGLU geometries, `in0_block_w` at 1-2,
+`packer_l1_acc`, prefill `grid_y` and prefill fold cutoff — are all 12-150%, far outside it.
 
 The conservative alternative is one constructor argument away:
 `precision="bfp8_attn_bfp4_mlp"` keeps BFP8 attention weights and costs 3.3% of decode
@@ -210,10 +228,10 @@ all. Resharding in and out costs two ~425 KB L1→L1 moves and unlocks the famil
 
 | workload | roofline | device | end-to-end | device/roofline | host term |
 |---|---|---|---|---|---|
-| decode b1 ctx 4096 sliding_rope | 0.536 ms (DRAM) | 1.050 ms | 1.063 ms | 1.96x | 0.013 ms (1.2%) |
-| decode b1 ctx 4096 full_nope | 0.536 ms (DRAM) | 1.034 ms | 1.044 ms | 1.93x | 0.010 ms (0.9%) |
-| prefill 8192 sliding_rope | 13.035 ms (110-core LoFi) | 49.714 ms | 53.785 ms | 3.81x | 4.070 ms (7.6%) |
-| prefill 8192 full_nope | 13.035 ms (110-core LoFi) | 47.706 ms | 52.438 ms | 3.66x | 4.732 ms (9.0%) |
+| decode b1 ctx 4096 sliding_rope | 0.536 ms (DRAM) | 1.050 ms | 1.063 ms | 1.96x | 0.014 ms (1.3%) |
+| decode b1 ctx 4096 full_nope | 0.536 ms (DRAM) | 1.034 ms | 1.045 ms | 1.93x | 0.010 ms (1.0%) |
+| prefill 8192 sliding_rope | 13.035 ms (110-core LoFi) | 49.909 ms | 53.436 ms | 3.83x | 3.527 ms (6.6%) |
+| prefill 8192 full_nope | 13.035 ms (110-core LoFi) | 47.697 ms | 52.655 ms | 3.66x | 4.957 ms (9.4%) |
 
 Generated into [`perf/accounting.json`](perf/accounting.json) by
 [`../../scripts/render_optimized_accounting.py`](../../scripts/render_optimized_accounting.py)
@@ -252,9 +270,15 @@ Named limitations, in the order they bound the result:
   material host term. There is nothing left to remove there.
 * **Prefill matmuls run on 64 of 110 cores.** `grid_x` is pinned to the 8 DRAM banks
   because a 2D multicast matmul with DRAM width-sharded weights returns NaN for any other
-  width (below), and `grid_y` above 8 measured 48% slower. Against the reachable 64-core
-  LoFi peak the prefill matmul roofline is 22.4 ms and the measured matmul time is 33.4 ms
-  (67% of it); the 13.0 ms figure in the table is the unreachable 110-core roofline.
+  width (below), and `grid_y` above 8 measured 48% slower. The reachable 64-core LoFi
+  roofline is 22.4 ms against a measured matmul
+  time of 32.59 ms sliding /
+  31.75 ms full
+  (69% /
+  71% of it);
+  both are generated into `perf/accounting.json` as `roofline_64_core_ms` and
+  `matmul_device_ms`. The 13.0 ms figure in the table above is the unreachable 110-core
+  roofline.
 * **Prefill end-to-end is 8-9% above device time**, down from ~20% in the functional stage.
   What remains is per-chunk host dispatch. Prefill is not traced because the chunk count
   depends on the prompt length.
@@ -273,7 +297,8 @@ dtype, fidelity, `in0_block_w` and output subblock) measure
 ```
 
 Seven of the ten sit at 8936-8948 µs; three are 9577, 9773 and 10034 and carry the `SLOW`
-marker. It is ~1.5% of that window, and it is *sporadic* rather than strictly positional —
+marker. The excess over the stable 8936-8948 baseline is 1.03% of the window, and it is
+*sporadic* rather than strictly positional —
 two of the five iterations are symmetric.
 
 Controls, all from the committed artifacts: the same op is stable in all ten rows at 4096
@@ -325,7 +350,7 @@ heads together otherwise.
 
 ## Tests
 
-101 tests, all passing ([`logs/full_suite.log`](logs/full_suite.log)):
+105 tests, all passing ([`logs/full_suite.log`](logs/full_suite.log)):
 
 ```bash
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_optimized_decoder.py -q
@@ -365,40 +390,70 @@ unchanged from the functional stage. It came from the `ttnn.embedding` ->
 be ROW_MAJOR for the gather and TILE for the rotary kernel and a 1-row gather has 31 rows to
 pad. `decode_rope_pad_to_tile` (on by default) gathers a whole tile row of positions
 instead, and the op disappears from the report: the RoPE metadata path is now
-Embeddings 5.2 µs + Transpose 8.3 µs + Slice 3.2 µs per token against the previous
-Embeddings + Tilize + Transpose 17.7 µs, i.e. the same total with the tilize gone. It never
+Embeddings 5.2 + Transpose 8.3 + Slice 3.2 + Pad 1.0 = 17.7 µs per token against the previous
+Embeddings + Tilize + Transpose = 17.8 µs, i.e. the same total with the tilize gone. It never
 appeared at batch 32, where 32 users fill the tile row.
 
-One `Typecast` pair remains in prefill (2 per chunk, 31 µs of a 51 ms window, 0.06%): the
+One `Typecast` pair remains in prefill (2 per chunk, 29.8 µs of a 49.7 ms window, 0.06%): the
 BF16 K/V fill tensors cast to the BFP8 cache dtype, which `paged_fill_cache` requires.
 
 The other layout ops in the measured decode path are the four
 `Reshard`s at the SwiGLU working-shard boundary and the `InterleavedToSharded` /
 `ShardedToInterleaved` pairs the head-creation and RoPE helpers require at their API
-boundaries; all are named in the op-family table with their cost. The one `Slice` in the
-decode window is the head-concat batch trim, not a fallback.
+boundaries; all are named in the op-family table with their cost. A `sliding_rope` decode
+window carries three `Slice` ops and one `Pad` per token — the head-concat batch trim plus
+three from the tile-padded RoPE gather; a `full_nope` window carries one `Slice` and no `Pad`,
+because a NoPE layer has no gather at all. None is a fallback.
 
 ## Watcher
 
-`TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1` over 54 of
-the 101 tests, both layer kinds, including the real-weight and stress tests: **54 passed,
+`TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1` over 56 of
+the 105 tests, both layer kinds, including the real-weight and stress tests: **56 passed,
 zero watcher-detected errors**, minimum stack headroom 1312 bytes free. See
 [`watcher/WATCHER_SUMMARY.md`](watcher/WATCHER_SUMMARY.md). Watcher and profiler runs are
 kept separate, as `$tt-device-usage` requires.
 
 ## Capability and context contract
 
-No reduction, and the full 131072-token contract is measured on **this** path rather than
-inherited: `test_full_context_prefill_and_decode` prefills 131072 and 131071 tokens and
-decodes at position 131071 on both layer kinds (prefill PCC 0.9982-0.9984, K-cache 0.9998,
-decode 0.9986-0.9990). The reference is driven with a query-block filter that keeps the
-first, a middle and the last block of each prompt — the shorter lengths keep full
-every-position coverage in `test_paged_prefill_decode_pcc` — and each PCC record carries
-its exact coverage string. [`../context_contract.json`](../context_contract.json) is updated for the
-BFP8 KV cache, which **halves** the cache footprint: 512 B per token per layer instead of
-1024 B, i.e. 64 MiB instead of 128 MiB at the full 131072-token context for batch 1, and
-2 GiB instead of 4 GiB at batch 32. `current_supported_context` stays at the full
-HF-advertised 131072. Batch is still capped at 55 users by the decode SDPA's
+No reduction, and the full 131072-token contract is measured on **this** path at **both**
+the structural BFP8 policy and the shipped BFP4 one, rather than inherited from stage 01:
+`test_full_context_prefill_and_decode` prefills 131072 and 131071 tokens and decodes at
+position 131071, on both layer kinds. At `bfp8_all_lofi` it clears the full 0.995 bar
+(prefill 0.99757-0.99831, K-cache 0.99970, decode 0.99851). At the shipped `bfp4_all` it
+measures 0.9496-0.9624 on *synthetic* weights, which is the same synthetic-BFP4 artifact as
+everywhere else and is asserted as a length-*shape* check rather than an absolute bar — see
+below. The reference is driven with a query-block filter that keeps the first, a middle and
+the last block of each prompt (24576 of 131072 positions in 3 blocks); the shorter lengths
+keep full every-position coverage in `test_paged_prefill_decode_pcc`, and each PCC record
+carries its exact coverage string.
+
+**Does BFP4 lose accuracy as the context grows?** It is the one question a per-layer PCC bar
+cannot answer, because a `full_attention` layer attends over the whole paged prefix, so error
+in the cached K/V compounds with the number of keys in the softmax while a sliding layer never
+sees more than its 2048-token window. Measured, last query block of a `full_nope` prefill
+([`pcc/length_dependence.json`](pcc/length_dependence.json)):
+
+| weights | policy | 1000 | 8192 | 32768 / 12345 | drift |
+|---|---|---|---|---|---|
+| synthetic | `bfp8_all_lofi` | 0.99814 | 0.99795 | 0.99760 | -0.0005 |
+| synthetic | `bfp8_attn_bfp4_mlp` | 0.99148 | 0.99131 | 0.99096 | -0.0005 |
+| synthetic | **`bfp4_all`** | 0.95764 | 0.95553 | 0.94978 | -0.0079 |
+| real | `bfp8_all_lofi` | 0.99992 | 0.99992 | 0.99980 | -0.0001 |
+| real | `bfp8_attn_bfp4_mlp` | 0.99925 | 0.99926 | 0.99915 | -0.0001 |
+| real | **`bfp4_all`** | 0.99887 | 0.99886 | 0.99867 | -0.0002 |
+
+(synthetic to 32768, real to 12345 — the largest real-weight length whose host reference is
+affordable.)
+
+So the effect is real on synthetic weights, it is caused by BFP4 **attention** weights
+specifically — `bfp8_attn_bfp4_mlp` is flat, and it differs from `bfp4_all` only there — and
+on **real** weights it is 40x smaller and 25x inside the bar. `test_real_weights_length_independence`
+gates it: both lengths at 0.995 absolute and the long length within 0.005 of the short one,
+for the shipped policy and for the conservative alternative. This is the same real-versus-
+synthetic discipline the precision policy itself was selected under, applied to the one axis
+a fixed-length PCC test cannot see.
+
+Batch is still capped at 55 users by the decode SDPA's
 one-core-per-(user, KV head) requirement on the 110-core grid; 32 is tested.
 
 ## `$optimize` checklist
@@ -418,14 +473,14 @@ layer); and the mesh is `(1, 1)`, so no collective appears in any committed repo
 | Operation-topology audit recorded | `work_log.md` §1 — current op sequence with µs, candidate replacements, dtype constraints, action, evidence |
 | Multi-device topology candidate families | *n/a*, `(1, 1)` mesh; stage 03 owns it |
 | Lower-movement residual candidates measured without an old-contract restore | *n/a*, no collectives |
-| Best-candidate comparison against the strongest baseline | `perf/candidates.json` — 11 sections, 68 measured candidates, against the stage-01 baseline and each other |
+| Best-candidate comparison against the strongest baseline | `perf/candidates.json` — 13 sections, against the stage-01 baseline and each other; candidates measured after the second review are PCC-gated in the same loop, and the two selections inside the 1.6% drift band were re-measured paired |
 | Final default reproduced the selected candidate | `perf/perf_summary.json` unprofiled rows are the headline numbers, measured on the shipped defaults |
 | Dtype/fidelity policy verified in the measured rows, not the policy object | the dominant-matmul table in `evidence_tables.md`, machine-checked by `render_optimized_evidence.py` (non-zero exit on mismatch) |
 | SDPA and other optimized composite ops used | `scaled_dot_product_attention`, `chunked_scaled_dot_product_attention`, `paged_scaled_dot_product_attention_decode`, `paged_fill_cache`, `paged_update_cache`, `nlp_create_qkv_heads*`, `nlp_concat_heads*`, `rotary_embedding_hf` |
 | Fused/packed same-input projections measured, kept only if they win | Q/K/V packed; QKV+gate and SwiGLU gate/up packing both built and measured, both lose or tie — `perf/candidates.json` §"Same-input projection packing" |
 | Explicit `memory_config`, `program_config`, `compute_kernel_config` on the important ops | `config_summary()`, recorded into every `perf_summary.json` record |
-| Per-role program-config sweep for the dominant matmuls (core grid, `in0_block_w`, subblocks, memory configs, compute kernel) | `perf/candidates.json` §"in0_block_w per matmul role", §"SwiGLU working-shard core count", §"Decode residual shard grid", §"Prefill 2D matmul geometry", §"Review follow-ups" |
-| Decode compute fidelity swept as a performance knob per dominant projection group | `work_log.md` §3 (whole-policy LoFi vs HiFi2) and §6.7 (per group at BFP4: +12% attention, +58% SwiGLU) |
+| Per-role program-config sweep for the dominant matmuls (core grid, `in0_block_w`, output subblock h and w, memory configs, compute kernel) | `perf/candidates.json` §"in0_block_w per matmul role", §"SwiGLU working-shard core count", §"Decode residual shard grid", §"Prefill 2D matmul geometry", §"Review follow-ups", §"Second-review follow-ups" (`out_subblock_h` 1/2/4), §"Paired re-measurements" |
+| Compute fidelity swept as a performance knob per dominant projection group, in both phases | `work_log.md` §3 (whole policy) and §6.7 (per group at BFP4: attention +12%, SwiGLU gate/up +39%, SwiGLU down +20%, prefill attention +7.6%, prefill SwiGLU +35%) |
 | Attention weight dtype/fidelity swept separately from MLP | `pcc/policy_sweep.json` and `perf/candidates.json` §"Precision / fidelity policy" — `bfp8_attn_bfp4_*` isolate the two groups |
 | BFP4/LoFi MLP trial before lower-priority prefill advice | `work_log.md` §3, done first; prefill program-config work is §5 |
 | Shard specs and core grids divide the tensor dimensions cleanly | `work_log.md` §2 and §4 — every grid is derived from `gcd` of the tiled dimensions, and an illegal one is an explicit `ValueError` |
@@ -433,11 +488,11 @@ layer); and the mesh is `(1, 1)`, so no collective appears in any committed repo
 | Collective topology minimized / fused matmul-CCL / persistent CCL buffers | *n/a*, no collectives |
 | MoE routed active-expert path with `ttnn.sparse_matmul` | *n/a*, dense SwiGLU |
 | LM head, sampling, logits movement, token feedback | *n/a*, model-level; the softcap and `output_multiplier` are applied by `MuseGlimmerForConditionalGeneration.forward`, not by the decoder layer |
-| Reduced-precision experiments on real weights and real activations | `pcc/policy_sweep.json` — six policies x two weight sources x two layer kinds |
+| Reduced-precision experiments on real weights and real activations | `pcc/policy_sweep.json` — six policies x two weight sources x two layer kinds; plus `pcc/length_dependence.json` for the context-length axis |
 | Performance accounting reconciled (roofline, device, end-to-end from the same run) | `perf/accounting.json`, generated by `render_optimized_accounting.py` |
 | Batch capability preserved | batch 1 is the optimized target; batch 4 and 32 correctness at BFP8, batch 4 at the shipped BFP4 policy on real weights |
 | Functional checks still pass against the optimized path | 101 tests, `logs/full_suite.log` |
-| PCC at the functional bar for every layer kind | `pcc/pcc_results.json` (267 records, 259 gating, min gating 0.99697), min in `evidence_tables.md` |
+| PCC at the functional bar for every layer kind | `pcc/pcc_results.json` (285 records), min in `evidence_tables.md` |
 | Paged KV cache and warmed trace replay still correct | `test_paged_prefill_decode_pcc`, `test_page_block_sizes`, `test_traced_decode_pcc`, `test_ragged_slots_and_current_positions` |
 | Runtime fallback audit clean | *Runtime fallback audit* above, with the two on-device layout conversions named and costed |
 | Stress / repeated-run coverage | `test_stress_repeated_prefill_decode` — three cycles of prefill + 8 decode steps on real weights, outputs bit-identical across cycles |
@@ -459,6 +514,16 @@ layer); and the mesh is `(1, 1)`, so no collective appears in any committed repo
   dispatch.
 * **Continued prefill on sliding layers** is still unavailable — the same op-contract
   blocker as stage 01, unchanged by this stage.
+* **The two QK RMSNorms are the one unsharded norm pair**, 1 core and ~4 µs each (8 µs of the
+  45 µs total norm time, 0.8% of the decode step). They consume the height-sharded
+  per-(user, head) layout `nlp_create_qkv_heads_decode` produces, and `ttnn.rms_norm` has no
+  sharded program config for that layout, so the layer converts to L1 interleaved and back at
+  that boundary. Fixing it needs either a sharded norm that accepts a height-sharded
+  head-major tensor or a fused QK-norm in the head-creation op.
+* **Real-weight coverage at the shipped BFP4 policy is batch 1 and batch 4, block size 64.**
+  Batch 32 and block sizes 32/128 are covered at `bfp8_all_lofi` (the structural policy, same
+  code path) rather than at BFP4. Those paths are precision-independent — they change page-table
+  addressing and shard grids, not arithmetic — but the combination is not measured at BFP4.
 * **`$datatype-sweep` still owns the final accuracy/performance frontier.** This stage
   swept six named policies and selected on real-weight PCC plus traced decode latency; it
   did not explore the full Pareto front, per-layer exceptions, or activation dtype below

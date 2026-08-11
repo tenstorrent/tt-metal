@@ -165,6 +165,195 @@
     },
     {
       "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.HiFi2",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_gateup",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_down",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2",
+      "seq_len": 512,
+      "prefill_pcc": 0.9682434733680765,
+      "decode_pcc": 0.9690567448924554,
+      "k_cache_pcc": 0.9935261923084876,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
       "kind": "full_nope",
       "policy": "bf16_baseline",
       "seq_len": 512,
@@ -321,6 +510,195 @@
         "attn_prefill": "MathFidelity.LoFi",
         "mlp_prefill": "MathFidelity.LoFi",
         "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.HiFi2",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_gateup",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_down",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "synthetic",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2",
+      "seq_len": 512,
+      "prefill_pcc": 0.9634887503662644,
+      "decode_pcc": 0.9600985336549053,
+      "k_cache_pcc": 0.9935330383420172,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
         "norm": "MathFidelity.HiFi4",
         "sdpa": "MathFidelity.HiFi4"
       }
@@ -489,6 +867,195 @@
     },
     {
       "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.HiFi2",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_gateup",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_hifi2_down",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "sliding_rope",
+      "policy": "bfp4_all_prefill_hifi2",
+      "seq_len": 512,
+      "prefill_pcc": 0.9984696413948332,
+      "decode_pcc": 0.9969738450523878,
+      "k_cache_pcc": 0.9994302546328371,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
       "kind": "full_nope",
       "policy": "bf16_baseline",
       "seq_len": 512,
@@ -645,6 +1212,195 @@
         "attn_prefill": "MathFidelity.LoFi",
         "mlp_prefill": "MathFidelity.LoFi",
         "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.HiFi2",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_gateup",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.HiFi2",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_hifi2_down",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.HiFi2",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2_attn",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.LoFi",
+        "mlp_down_prefill": "MathFidelity.LoFi",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2_mlp",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.LoFi",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
+        "norm": "MathFidelity.HiFi4",
+        "sdpa": "MathFidelity.HiFi4"
+      }
+    },
+    {
+      "weights": "real",
+      "kind": "full_nope",
+      "policy": "bfp4_all_prefill_hifi2",
+      "seq_len": 512,
+      "prefill_pcc": 0.9988714725633652,
+      "decode_pcc": 0.9984431550131884,
+      "k_cache_pcc": 0.9984789594015733,
+      "dtypes": {
+        "activation": "DataType.BFLOAT16",
+        "attn_weights": "DataType.BFLOAT4_B",
+        "mlp_gate_up_weights": "DataType.BFLOAT4_B",
+        "mlp_down_weights": "DataType.BFLOAT4_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "norm_weights": "DataType.BFLOAT16"
+      },
+      "fidelity": {
+        "attn_decode": "MathFidelity.LoFi",
+        "mlp_decode": "MathFidelity.LoFi",
+        "mlp_down_decode": "MathFidelity.LoFi",
+        "attn_prefill": "MathFidelity.HiFi2",
+        "mlp_prefill": "MathFidelity.HiFi2",
+        "mlp_down_prefill": "MathFidelity.HiFi2",
         "norm": "MathFidelity.HiFi4",
         "sdpa": "MathFidelity.HiFi4"
       }

@@ -62,19 +62,23 @@ NAMED_LIMITATIONS = [
     "host term and there is nothing left to remove there.",
     "Prefill matmuls run on 64 of 110 cores. grid_x is pinned to the 8 DRAM banks because a 2D "
     "multicast matmul with DRAM width-sharded weights returns NaN for any other width "
-    "(scripts/repro_prefill_matmul_grid_x9.py), and grid_y above 8 measured 48% slower. Against the "
-    "reachable 64-core LoFi peak the prefill matmul roofline is ~22 ms; the roofline_ms below is "
-    "the unreachable 110-core figure.",
+    "(scripts/repro_prefill_matmul_grid_x9.py), and grid_y above 8 measured 48% slower. The "
+    "reachable 64-core roofline and the measured matmul time are in the prefill workload rows as "
+    "roofline_64_core_ms and matmul_device_ms; the top-level roofline_ms is the unreachable "
+    "110-core figure.",
     "Prefill end-to-end is 4-9% above device time, down from ~20% in the functional stage. What "
     "remains is per-chunk host dispatch; prefill is not traced because the chunk count depends on "
     "the prompt length.",
     "Non-matmul prefill time is ~34% of the window: SDPA ~13%, elementwise ~9%, norms ~9%. Prefill "
     "activations are DRAM interleaved by design, so the norms are not sharded.",
-    "In sliding_rope prefill at 8192 tokens the second of the two identical SwiGLU projections is "
-    "7-13% slower than the first and degrades across the measured iterations, while the pair is "
-    "symmetric at 4096 and on the full-attention path. Read as DRAM-allocator fragmentation after "
-    "the non-chunked windowed SDPA's 8192-token Q/K/V; both candidate mitigations lose. It is "
-    "inside the reported numbers, not excluded from them. See README.md 'Anomalies'.",
+    "In sliding_rope prefill at 8192 tokens one of the two identical SwiGLU projections is "
+    "sporadically 7-12% slower: seven of the ten committed rows sit at 8936-8948 us and three at "
+    "9577-10034, and two of the five iterations are symmetric, so it is intermittent rather than "
+    "positional or monotonic. The pair is stable in all ten rows at 4096 and in all ten on the "
+    "full-attention path. Read as DRAM allocator/refresh state after the non-chunked windowed "
+    "SDPA's 8192-token Q/K/V, immediately before two 327 MB back-to-back allocations; both "
+    "candidate mitigations lose. The excess is 1.03% of the window and is inside the reported "
+    "numbers, not excluded from them. See README.md 'Anomalies'.",
 ]
 
 
@@ -103,12 +107,20 @@ def main() -> int:
     dram_bw, lofi_per_core = _arch_spec()
     records = _iterations()
     device_ms = {}
+    matmul_ms = {}
     for path in sorted(DOC.glob("tracy/*/*_perf_report.csv")):
         rows = list(csv.DictReader(path.open(newline="")))
         total = sum(float(r["Device Time"]) for r in rows if (r.get("Device Time") or "").strip())
+        matmul = sum(
+            float(r["Device Time"])
+            for r in rows
+            if (r.get("OP Code") or "").startswith("Matmul") and (r.get("Device Time") or "").strip()
+        )
         match = re.match(r"(prefill|decode)_(\d+)_perf_report\.csv", path.name)
         key = (match.group(1), path.parent.name, match.group(2))
-        device_ms[key] = total / records[key + (True,)]["iterations"] / 1000.0
+        iters = records[key + (True,)]["iterations"]
+        device_ms[key] = total / iters / 1000.0
+        matmul_ms[key] = matmul / iters / 1000.0
 
     decode_bytes = WEIGHT_ELEMENTS * BFP4_BYTES_PER_ELEMENT + KV_ELEMENTS * BFP8_BYTES_PER_ELEMENT
     workloads = []
@@ -133,6 +145,10 @@ def main() -> int:
                 "roofline_ms": flops / (lofi_per_core * 110) * 1e3,
                 "device_ms": device_ms[("prefill", kind, "8192")],
                 "e2e_ms": records[("prefill", kind, "8192", False)]["wall_clock_ms_per_iter"],
+                # The matmuls are pinned to 64 of the 110 cores (see named_limitations), so
+                # this is the roofline they can actually reach, against their measured time.
+                "matmul_device_ms": matmul_ms[("prefill", kind, "8192")],
+                "roofline_64_core_ms": flops / (lofi_per_core * 64) * 1e3,
             }
         )
 

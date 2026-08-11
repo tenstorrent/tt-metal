@@ -117,10 +117,17 @@ Compute-kernel flags were swept separately from dtype: `packer_l1_acc=False` cos
 Reading `matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp` changed the model
 of this op materially, and the numbers follow from it:
 
-* the **worker set is one core per DRAM bank** (12 on this p300c, per
-  `get_optimal_dram_bank_to_reader_assignment`), *not* the program config's core count;
-* `per_core_N_compute = ceil(N_tiles / num_dram_banks)` — the program config's
-  `per_core_N` only sets the output *storage* shard;
+* the op picks its **own worker set** — 12 cores on this p300c, from
+  `get_optimal_dram_bank_to_reader_assignment` — and that is *not* the program config's core
+  count, nor the DRAM bank count. The factory happens to name its local variable
+  `num_dram_banks` (`num_dram_banks = all_worker_cores_ordered.size()`), which is where the
+  two got conflated: the bank count is 8 (`mesh_device.dram_grid_size().x`, the grid the
+  weights are width-sharded over and the value `_prefill_grid_x` must match), the reader
+  worker count is 12, and the profiler's `Cores` column reports the latter;
+* `per_core_N_compute = ceil(N_tiles / workers)` — the program config's `per_core_N` only
+  sets the output *storage* shard. The layer's L1 model deliberately uses 8 rather than 12
+  as the divisor, which over-estimates `per_core_N_compute` and therefore the weight
+  circular buffer, so the `in0_block_w` it accepts is always legal and never optimistic;
 * the weight circular buffer is **triple** buffered:
   `3 * per_core_N_compute * in0_block_w * dram_aligned_tile_bytes`.
 
@@ -355,14 +362,87 @@ The review noted that `PrecisionPolicy` carries `attn_fidelity`, `mlp_fidelity` 
 Fidelity is a knob independent of dtype, so it is now isolated per projection group at the
 shipped BFP4 weights (`bfp4_all_hifi2_attn`, `bfp4_all_hifi2_mlp`):
 
-| candidate | traced decode ms |
-|---|---|
-| **LoFi everywhere (shipped)** | **1.0632** |
-| HiFi2 on the attention projections | 1.1950 (+12%) |
-| HiFi2 on the SwiGLU projections | 1.6752 (+58%) |
+| candidate | traced decode ms | warmed prefill 8192 ms |
+|---|---|---|
+| **LoFi everywhere (shipped)** | **1.0632** | **52.86** |
+| HiFi2 on the attention projections | 1.1950 (+12%) | — |
+| HiFi2 on the SwiGLU gate/up projections only | 1.4812 (+39%) | 53.02 |
+| HiFi2 on the SwiGLU down projection only | 1.2755 (+20%) | 52.99 |
+| HiFi2 on both SwiGLU projections | 1.6752 (+58%) | — |
+| HiFi2 on the prefill attention projections only | — | 56.87 (+7.6%) |
+| HiFi2 on the prefill SwiGLU projections only | — | 71.58 (+35%) |
+| HiFi2 on all prefill matmuls | — | 74.86 (+42%) |
 
-LoFi is the right pairing for BFP4 in both groups by a wide margin, which is what the
+Every group is isolated, in both phases: gate/up separately from down (the second review
+noted the first pass moved them together), and each prefill group separately from the
+aggregate. LoFi is the right pairing for BFP4 everywhere by a wide margin, which is what the
 expected pairing predicted but had not been measured for this model.
+
+### 6.8 The re-stamped 131072 evidence, and a length-dependence finding
+
+The second review found the re-stamped context evidence measured at `bfp8_all_lofi`, not the
+shipped `bfp4_all`, with quoted PCC ranges that appear nowhere in the artifact. Both are
+fixed: `test_full_context_prefill_and_decode` is now parameterised over both policies (four
+cases, all passing), every quoted number is regenerated from `pcc/pcc_results.json`, and the
+contract records which policy each row came from.
+
+Running it at BFP4 surfaced something the first pass had not looked for. On **synthetic**
+weights the `full_nope` prefill PCC drifts with length — 0.9576 / 0.9555 / 0.9498 at 1000 /
+8192 / 32768 tokens for the last query block. That is the one failure mode a fixed-length PCC
+bar cannot see: a `full_attention` layer attends over the whole paged prefix, so error in the
+cached K/V compounds with the number of keys in the softmax, while a sliding layer never sees
+past its 2048-token window.
+
+`scripts/probe_length_dependence.py` isolates it
+([`pcc/length_dependence.json`](pcc/length_dependence.json)). Two findings:
+
+1. it is **BFP4 attention weights**, not the MLP: `bfp8_attn_bfp4_mlp` — which differs from
+   `bfp4_all` only there — is flat at 0.99149 / 0.99131 / 0.99097 over the same lengths;
+2. it **does not happen on real weights**: `bfp4_all` measures 0.99887 / 0.99886 / 0.99867 at
+   1000 / 8192 / 12345, a drift of 0.0002 against 0.0079 on synthetic, and 25x inside the bar.
+
+So the shipped policy stands, and the OPT-012 discipline that selected it now also covers the
+length axis. `test_real_weights_length_independence` gates it for both the shipped and the
+conservative policy: both lengths at 0.995 absolute, and the long length within 0.005 of the
+short one. The synthetic long-context assertion is a length-*shape* check against its own
+1000-token measurement rather than an absolute floor, because an absolute floor on synthetic
+BFP4 would be arbitrary.
+
+### 6.9 The declared noise floor was wrong, and two selections rested on it
+
+The claimed +-0.17% spread was contradicted by rows in the same file. Six repeats of the
+shipped configuration in one process measure 1.0632 / 1.0792 / 1.0776 / 1.0775 / 1.0806 /
+1.0764 ms — **1.6% peak-to-peak**, with the first repeat consistently fastest, i.e. a
+within-process warm-up drift larger than several reported differences. Sweep position
+therefore biases a single measurement by more than a 1-2% effect.
+
+The two selections inside that band were re-measured **paired** (A/B/A/B), which cancels the
+drift:
+
+| paired comparison | pairs | effect |
+|---|---|---|
+| SwiGLU working cores 52 vs 26 | 1.0638/1.0886, 1.0811/1.0953, 1.0780/1.0951 | 26 slower by 1.42%, 1.31%, 1.59% — consistent |
+| prefill `in0_block_w` cap 26 vs 8 | 53.334/54.360, 53.385/54.294 | cap 8 slower by 1.92%, 1.70% — consistent |
+
+Both selections hold. Everything else under ~1.7% is now reported as a tie rather than a win,
+and the README lists which results those are.
+
+### 6.10 `out_subblock_h` was hard-coded, and the stated blocker was wrong
+
+`out_subblock_h = 1` for every prefill matmul, never swept, and the README explained the
+output projection's `SLOW` marker with a claim about `out_subblock_w` divisors that only holds
+at `h = 1`. `prefill_out_subblock_h` is now a knob and was swept at the shipped policy:
+`h=1` 52.86 ms, `h=2` 53.14 ms, `h=4` 53.34 ms at 8192 tokens. `h=1` stays — the choice was
+right, the recorded reason was not, and the difference is inside the noise floor either way.
+
+### 6.11 The rejected 1D matmul candidate was handicapped
+
+`_mcast1d_pc` capped its output subblock at 4 tiles even though decode runs with
+`fp32_dest_acc_en=False`, where 8 is available. Raised to 8 and re-measured: 1.2282 ms
+against 1.2311 ms before, still 15% behind the DRAM-sharded 1.0644. The candidate is also now
+PCC-gated by the sweep harness (0.9665 prefill / 0.9596 decode on synthetic, matching every
+other BFP4 candidate), so the rejection rests on a candidate that was computing the right
+answer.
 
 Also from the review, smaller: the shadowed duplicate `_prefill_in0_block_w` definition was
 removed (the two copies differed in their no-fit return value, which `_prefill_fold`
@@ -370,14 +450,15 @@ depends on); a stale comment naming the wrong default policy was fixed; the deco
 output memory config gained an L1 candidate (a tie, kept because it is the rule-consistent
 choice); a real-weight batch-4 test was added
 (`test_real_weights_batched`), since OPT-012 lists larger batch among the conditions a
-synthetic-only precision failure must be re-checked under; and the candidate table now
-states the +-0.17% repeat spread of the selected configuration, so the sub-0.4% results are
-labelled ties rather than measurements.
+synthetic-only precision failure must be re-checked under; the sweep harness gained a
+``PCC_SEQ`` correctness gate so no future candidate table is wall-clock-only; the QK RMSNorms
+are named as the one unsharded norm pair with their 8 µs cost; and the `Slice`/`Pad` ops the
+new RoPE gather introduced are accounted for in the data-movement audit.
 
 ## 7. Evidence collected
 
-* **Correctness**: 97 tests, all passing, both layer kinds
-  ([`logs/full_suite.log`](logs/full_suite.log), 241 PCC records in
+* **Correctness**: 105 tests, all passing, both layer kinds
+  ([`logs/full_suite.log`](logs/full_suite.log), PCC records in
   [`pcc/pcc_results.json`](pcc/pcc_results.json)). Every record carries a code fingerprint
   over the optimized layer, the functional layer, the host reference and the test files;
   `render_optimized_evidence.py` fails if any record is stale.
@@ -389,9 +470,13 @@ labelled ties rather than measurements.
 * **Precision sweep**: [`pcc/policy_sweep.json`](pcc/policy_sweep.json) — every named policy
   on synthetic *and* real weights, both layer kinds, with the dtype/fidelity each one
   actually resolved to.
+* **Length-dependence probe**: [`pcc/length_dependence.json`](pcc/length_dependence.json) —
+  last-query-block prefill PCC per policy at 1000/8192/32768 synthetic and 1000/8192/12345
+  real, which is what established that BFP4's synthetic length drift does not exist on real
+  weights (see §6.8).
 * **Accounting**: [`perf/accounting.json`](perf/accounting.json) — roofline, device time and
   end-to-end from the same runs, with named limitations.
-* **Watcher**: 52 tests under `TT_METAL_WATCHER=10`, zero findings
+* **Watcher**: 54 tests under `TT_METAL_WATCHER=10`, zero findings
   ([`watcher/WATCHER_SUMMARY.md`](watcher/WATCHER_SUMMARY.md)).
 * **Stress**: `test_stress_repeated_prefill_decode` — three cycles of prefill + 8 decode
   steps on real weights, PCC asserted every cycle and outputs asserted bit-identical
