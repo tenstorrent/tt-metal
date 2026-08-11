@@ -181,8 +181,19 @@ class TtLoRAWeightsManager:
                 if network_alphas:
                     network_alphas = _strip_text_model_segment(network_alphas, prefix)
 
+        # low_cpu_mem_usage=True mirrors the stock loader: peft materialises the
+        # adapter layers on the meta device instead of randomly initialising them
+        # first, so this path consumes no global RNG. Without it, hundreds of init
+        # draws shift every torch.rand() that follows, which moves the randomly
+        # generated inputs of downstream PCC tests off the stream their thresholds
+        # were tuned on.
         pipeline.load_lora_into_unet(
-            state_dict, network_alphas, pipeline.unet, adapter_name=adapter_name, _pipeline=pipeline
+            state_dict,
+            network_alphas,
+            pipeline.unet,
+            adapter_name=adapter_name,
+            _pipeline=pipeline,
+            low_cpu_mem_usage=True,
         )
         pipeline.load_lora_into_text_encoder(
             state_dict,
@@ -191,6 +202,7 @@ class TtLoRAWeightsManager:
             prefix="text_encoder",
             adapter_name=adapter_name,
             _pipeline=pipeline,
+            low_cpu_mem_usage=True,
         )
         pipeline.load_lora_into_text_encoder(
             state_dict,
@@ -199,6 +211,7 @@ class TtLoRAWeightsManager:
             prefix="text_encoder_2",
             adapter_name=adapter_name,
             _pipeline=pipeline,
+            low_cpu_mem_usage=True,
         )
 
     def load_lora_weights(self, lora_path):
