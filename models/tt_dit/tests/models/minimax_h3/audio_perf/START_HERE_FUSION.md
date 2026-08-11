@@ -65,6 +65,27 @@ replicate rule.
   path -- that check is a known hard-failure source (tt-metal #35207) and this sidesteps it.
 * Built and regression-tested: **17/17, `conv1d=8.082e-08 mac=8.082e-08`**, bit-identical.
 
+## Current blocker: the mcast receivers never get the parameters
+
+The snake now reaches the compute kernel on all four accumulate paths, and the op **hangs**.
+
+`compute_defines` reach every core, so every core waits on `SNAKE_PARAMS`. But the fetch was added to
+`reader_writer_tiled_out_1d_mcast_sender_...`, and under HEIGHT_SHARDED only one core runs that; the
+rest run `..._mcast_receiver_...` and never fill the CB. Every receiver blocks on `wait_front(2)`.
+
+The receiver **has no `s_weight` TensorAccessor** -- it only receives weights over mcast -- so it
+cannot simply read the two tiles itself. Two ways out:
+
+1. **Mcast the parameters** from the sender, mirroring the weights handshake that already exists
+   (semaphores are already set up for weights on both sides). Kernel-only, and correct by
+   construction since the parameters are identical on every core. **Preferred.**
+2. Give the receiver a weight `TensorAccessor` and address so each core reads its own copy. Needs a
+   new runtime arg from the program factory, so a host change and a rebuild.
+
+Take option 1. Fill the CB on the sender as now, then mcast that CB region to the receiver grid and
+have receivers wait on the semaphore before their own `push_back(2)` -- the weights path in the same
+two kernels is the template to copy.
+
 ## Next three steps to make the snake fusion live
 
 1. Fill the CB once in the weights reader, **outside** the block loop.
