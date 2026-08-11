@@ -1715,7 +1715,7 @@
   model: tinyllama_1_1b_ddp32_shakespeare
   skus:
     bh_galaxy:
-      timeout: 70
+      timeout: 35
       tier: 3
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -1727,7 +1727,7 @@
   model: llama_8b_tp8_ddp4_shakespeare
   skus:
     bh_galaxy:
-      timeout: 25
+      timeout: 20
       tier: 3
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -1739,7 +1739,7 @@
   model: qwen3_1_7b_ddp32_shakespeare
   skus:
     bh_galaxy:
-      timeout: 25
+      timeout: 15
       tier: 3
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -1751,7 +1751,7 @@
   model: tiny_deepseek_v3_ddp32_char_shakespeare
   skus:
     bh_galaxy:
-      timeout: 95
+      timeout: 90
       tier: 3
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -1763,7 +1763,7 @@
   model: llama_70b_tp8_fsdp4_shakespeare
   skus:
     bh_galaxy:
-      timeout: 85
+      timeout: 90
       tier: 3
   owner_id: U07K00A281X # Kevin Wu
   team: train
