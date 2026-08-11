@@ -47,6 +47,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -56,6 +57,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace {
+constexpr uint32_t cb_zero_tile = 4;
 constexpr uint32_t cb_stat_partial = 7;
 constexpr uint32_t cb_stat_gather = 8;
 constexpr uint32_t cb_rstd_send = 10;
@@ -174,6 +176,23 @@ void kernel_main() {
     Noc noc;
     Semaphore<> gather_sem(SEM_GATHER);
 
+    // ---- prepare_constants (cb_zero_tile), ROOT ONLY ------------------------
+    // The identity B operand of the combine's Add accumulation (BinaryFpu needs two
+    // CB inputs), read by the ROOT's compute kernel and by nobody else. It lives
+    // here rather than in the reader for one measured reason: the fill is a
+    // 4096-byte scalar store loop costing ~2.4 us, and in the reader it sat AHEAD
+    // of the input block on the critical path of every core. This BRISC is idle
+    // until the first partial is ready (~6 us on the root at the decode geometry),
+    // so the fill is free here and lands long before the combine chain waits on it.
+    if (is_root) {
+        cb_reserve_back(cb_zero_tile, 1);
+        volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_zero_tile));
+        for (uint32_t i = 0, n = get_tile_size(cb_zero_tile) / 4; i < n; ++i) {
+            zp[i] = 0;
+        }
+        cb_push_back(cb_zero_tile, 1);
+    }
+
     const uint32_t stat_tile_bytes = get_tile_size(cb_stat_gather);
     // cb_stat_gather holds exactly block_row_tiles * W_GROUP_SIZE pages and the
     // root pushes/pops that many per block, so its write pointer is back at the
@@ -198,6 +217,7 @@ void kernel_main() {
     // CB the interleaved leg never chunks.
     uint32_t sticks_done = 0;
     auto store_block = [&](uint32_t b, uint32_t rows_t) {
+        DeviceZoneScopedN("wr_store");
         if constexpr (IS_RM_OUT) {
             constexpr uint32_t out_chunk_bytes = (get_tile_size(cb_output_rm) / TILE_HW_DIM) * CB_CHUNK_TILES;
             // ROW_MAJOR output, resident shard or DRAM. untilize emits the
@@ -271,7 +291,11 @@ void kernel_main() {
     // cb_rstd, or dropping the pre-handshake) must add explicit back-pressure on
     // cb_stat_gather.
     auto gather_partials = [&](uint32_t b, uint32_t rows_t) {
-        cb_wait_front(cb_stat_partial, rows_t);
+        {
+            DeviceZoneScopedN("wr_wait_partial");
+            cb_wait_front(cb_stat_partial, rows_t);
+        }
+        DeviceZoneScopedN("wr_gather");
         const uint32_t src = get_read_ptr(cb_stat_partial);
         for (uint32_t r = 0; r < rows_t; ++r) {
             const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
@@ -299,6 +323,7 @@ void kernel_main() {
         if (is_root) {
             cb_reserve_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
             if constexpr (W_GROUP_SIZE > 1) {
+                DeviceZoneScopedN("wr_gather_wait");
                 gather_sem.wait_min((b + 1) * (W_GROUP_SIZE - 1));
             }
             cb_push_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
@@ -315,7 +340,11 @@ void kernel_main() {
             gather_partials(b, rows_t);
             cb_reserve_back(cb_rstd, rows_t);
             const uint32_t rstd_dst = get_write_ptr(cb_rstd);
-            cb_wait_front(cb_rstd_send, rows_t);
+            {
+                DeviceZoneScopedN("wr_wait_rstd_send");
+                cb_wait_front(cb_rstd_send, rows_t);
+            }
+            DeviceZoneScopedN("wr_send");
             // src != dst selects INCLUDE_SRC loopback, so the root lands its own
             // copy in cb_rstd through the same path as every other member.
             sender.send(get_read_ptr(cb_rstd_send), rstd_dst, rows_t * stat_tile_bytes);
@@ -329,7 +358,10 @@ void kernel_main() {
             const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
             gather_partials(b, rows_t);
             cb_reserve_back(cb_rstd, rows_t);
-            receiver.receive();
+            {
+                DeviceZoneScopedN("wr_receive");
+                receiver.receive();
+            }
             cb_push_back(cb_rstd, rows_t);
             store_block(b, rows_t);
         }

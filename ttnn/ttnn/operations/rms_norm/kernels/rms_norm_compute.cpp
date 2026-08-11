@@ -78,6 +78,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -189,84 +190,93 @@ void kernel_main() {
         // The whole block stays resident: waited here, read again by every apply
         // chunk, popped exactly once at the end of the block.
         const uint32_t in_block_pages = rows_t * (IS_RM_IN ? (NUM_CHUNKS * CB_CHUNK_TILES) : CB_W_TILES);
-        cb_wait_front(cb_input_tiles, in_block_pages);
+        {
+            DeviceZoneScopedN("cp_wait_in");
+            cb_wait_front(cb_input_tiles, in_block_pages);
+        }
 
         // ---------------- sumsq_block + mask_tail_block ----------------
-        cb_reserve_back(cb_stat_sq, rows_t * nc);
-        for (uint32_t k = 0; k < bulk_cols; ++k) {
-            const uint32_t chunk_base = k * CB_CHUNK_TILES;
-            const uint32_t cols = (c_full - chunk_base < CB_CHUNK_TILES) ? (c_full - chunk_base) : CB_CHUNK_TILES;
-            const ckl::StridedTileRange src = in_ref(chunk_base, rows_t);
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows_t, cols),
-                ckl::BinaryFpu<
-                    ckl::input(
-                        cb_input_tiles,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
+        {
+            DeviceZoneScopedN("cp_sumsq");
+            cb_reserve_back(cb_stat_sq, rows_t * nc);
+            for (uint32_t k = 0; k < bulk_cols; ++k) {
+                const uint32_t chunk_base = k * CB_CHUNK_TILES;
+                const uint32_t cols = (c_full - chunk_base < CB_CHUNK_TILES) ? (c_full - chunk_base) : CB_CHUNK_TILES;
+                const ckl::StridedTileRange src = in_ref(chunk_base, rows_t);
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, cols),
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            cb_input_tiles,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Strided),
+                        ckl::input(
+                            cb_input_tiles,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Strided),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::Dst::D0,
+                        ckl::DestAccumulation::PerRow>{src, src},
+                    ckl::PackTile<ckl::output(
+                        cb_stat_sq,
+                        ckl::ReservePolicy::None,
+                        ckl::PushPolicy::None,
                         ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Strided),
-                    ckl::input(
-                        cb_input_tiles,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
+                        ckl::PackRelu::Disabled,
+                        ckl::L1Accumulation::Disabled,
+                        ckl::DestAccumulation::PerRow,
+                        ckl::TileOffset::Strided)>{ckl::StridedTileRange{k, nc}});
+            }
+            if (has_tail) {
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows_t, 1),
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            cb_input_tiles,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Strided),
+                        ckl::input(cb_wmask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Row,
+                        ckl::Dst::D0,
+                        ckl::DestAccumulation::Disabled>{in_ref(core_w - 1, rows_t)},
+                    ckl::Square<>{},
+                    ckl::PackTile<ckl::output(
+                        cb_stat_sq,
+                        ckl::ReservePolicy::None,
+                        ckl::PushPolicy::None,
                         ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Strided),
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::None,
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::PerRow>{src, src},
-                ckl::PackTile<ckl::output(
-                    cb_stat_sq,
-                    ckl::ReservePolicy::None,
-                    ckl::PushPolicy::None,
-                    ckl::DataFormatReconfig::Enabled,
-                    ckl::PackRelu::Disabled,
-                    ckl::L1Accumulation::Disabled,
-                    ckl::DestAccumulation::PerRow,
-                    ckl::TileOffset::Strided)>{ckl::StridedTileRange{k, nc}});
+                        ckl::PackRelu::Disabled,
+                        ckl::L1Accumulation::Disabled,
+                        ckl::DestAccumulation::Disabled,
+                        ckl::TileOffset::Strided)>{ckl::StridedTileRange{tail_col, nc}});
+            }
+            cb_push_back(cb_stat_sq, rows_t * nc);
         }
-        if (has_tail) {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows_t, 1),
-                ckl::BinaryFpu<
-                    ckl::input(
-                        cb_input_tiles,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
-                        ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Strided),
-                    ckl::input(cb_wmask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::Row,
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::Disabled>{in_ref(core_w - 1, rows_t)},
-                ckl::Square<>{},
-                ckl::PackTile<ckl::output(
-                    cb_stat_sq,
-                    ckl::ReservePolicy::None,
-                    ckl::PushPolicy::None,
-                    ckl::DataFormatReconfig::Enabled,
-                    ckl::PackRelu::Disabled,
-                    ckl::L1Accumulation::Disabled,
-                    ckl::DestAccumulation::Disabled,
-                    ckl::TileOffset::Strided)>{ckl::StridedTileRange{tail_col, nc}});
-        }
-        cb_push_back(cb_stat_sq, rows_t * nc);
 
         // ---------------- reduce_stat_block ----------------
         // Scaler is a plain 1.0: the hidden padding was already zeroed above, so
         // no partial scaler is needed here.
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            cb_stat_sq,
-            cb_scaler,
-            cb_stat_partial,
-            ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::of(rows_t, nc, 1));
+        {
+            DeviceZoneScopedN("cp_reduce");
+            ckl::reduce<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_stat_sq,
+                cb_scaler,
+                cb_stat_partial,
+                ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::of(rows_t, nc, 1));
+        }
 
         // ---------------- combine_stat_block (root side) ----------------
         // The writer has gathered the group's W_GROUP_SIZE partials into
@@ -274,6 +284,7 @@ void kernel_main() {
         // more DEST accumulation over grid(rows_t, G); cb_zero_tile is the
         // identity B operand (BinaryFpu needs two CB inputs).
         if (is_root) {
+            DeviceZoneScopedN("cp_combine");
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(rows_t, W_GROUP_SIZE),
                 ckl::BinaryFpu<
@@ -309,7 +320,11 @@ void kernel_main() {
         // every group member, root included via INCLUDE_SRC loopback). It and the
         // resident input block serve EVERY chunk, so both are caller-managed here:
         // waited once, popped once, after the last chunk.
-        cb_wait_front(cb_rstd, rows_t);
+        {
+            DeviceZoneScopedN("cp_wait_rstd");
+            cb_wait_front(cb_rstd, rows_t);
+        }
+        DeviceZoneScopedN("cp_apply");
         if constexpr (OUT_STRIDED) {
             cb_reserve_back(cb_output_tiles, rows_t * CB_W_TILES);
         }

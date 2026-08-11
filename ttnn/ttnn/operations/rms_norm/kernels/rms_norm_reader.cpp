@@ -73,6 +73,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 constexpr uint32_t cb_input_rm = 0;
@@ -254,8 +255,11 @@ void kernel_main() {
     // Pool-type-aware overload: SUM/REDUCE_ROW fills the matmul-path scaler
     // layout. The masking of the ragged hidden tile is done numerically by the
     // compute kernel, so the scaler here is a plain 1.0.
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    {
+        DeviceZoneScopedN("rd_const");
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    }
 
     if constexpr (HAS_ANY_TAIL) {
         if (core_partial_w != 0) {
@@ -268,16 +272,14 @@ void kernel_main() {
         }
     }
 
-    {
-        cb_reserve_back(cb_zero_tile, 1);
-        const uint32_t zero_addr = get_write_ptr(cb_zero_tile);
-        const uint32_t words = get_tile_size(cb_zero_tile) / 4;
-        volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_addr);
-        for (uint32_t i = 0; i < words; ++i) {
-            zp[i] = 0;
-        }
-        cb_push_back(cb_zero_tile, 1);
-    }
+    // cb_zero_tile is NOT filled here. MEASURED (zone timeline, (1,1,32,7168)
+    // interleaved decode, blackhole_p150b): a whole-tile scalar fill of the fp32
+    // zero tile costs 2363 ns and sat on the reader's critical path AHEAD of the
+    // input block, delaying every downstream stage by that much on all 22 cores —
+    // for a buffer only the ROOT ever reads (it is the identity B operand of the
+    // combine's Add accumulation). It moved to the ROOT's writer, whose BRISC is
+    // idle for ~6 us waiting for the first partial. Producer is still exactly one
+    // kernel per CB, just a different one.
 
     // ---------------- load_gamma_slice -----------------------------------
     // One CHUNK of this core's gamma slice. Unchunked (NUM_CHUNKS == 1) this is
@@ -346,9 +348,14 @@ void kernel_main() {
         }
     };
 
-    if constexpr (HAS_GAMMA && !CHUNKED) {
-        load_gamma_chunk(0);
-    }
+    // NOTE: gamma is deliberately NOT loaded here. It is first CONSUMED by the
+    // apply pass of block 0, which cannot start until the cross-core combine has
+    // returned `rstd` — several microseconds after the input block is needed. The
+    // input block, by contrast, gates every downstream stage, so it is read FIRST
+    // and gamma is loaded immediately behind it (below), inside the block loop's
+    // first iteration. MEASURED (zone timeline, (1,1,32,7168) interleaved decode):
+    // gamma ahead of the block cost 1447 ns of pure critical path; behind it, the
+    // read is fully hidden under the combine round. Still exactly once per kernel.
 
     // ---------------- load_block (per block) -----------------------------
     // The hidden axis is walked in NUM_CHUNKS chunks of CB_CHUNK_TILES; at
@@ -359,6 +366,7 @@ void kernel_main() {
     [[maybe_unused]] const auto acc_tiles = TensorAccessor(src_args, src_addr, get_tile_size(cb_input_tiles));
     uint32_t sticks_done = 0;
     for (uint32_t b = 0; b < num_blocks; ++b) {
+        DeviceZoneScopedN("rd_block");
         const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
 
         if constexpr (IS_RM_IN) {
@@ -425,6 +433,15 @@ void kernel_main() {
         if constexpr (HAS_GAMMA && CHUNKED) {
             for (uint32_t k = 0; k < NUM_CHUNKS; ++k) {
                 load_gamma_chunk(k);
+            }
+        } else if constexpr (HAS_GAMMA) {
+            // Unchunked: the whole slice, once per kernel, immediately BEHIND the
+            // first block read (see the note above `load_gamma_chunk`). The reader
+            // cannot deadlock here: it only ever waits on cb_input_tiles space, and
+            // the next such wait is block b+1's, strictly after this push.
+            if (b == 0) {
+                DeviceZoneScopedN("rd_gamma");
+                load_gamma_chunk(0);
             }
         }
     }
