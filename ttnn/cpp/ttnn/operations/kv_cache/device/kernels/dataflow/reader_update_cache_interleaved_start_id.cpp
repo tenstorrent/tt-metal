@@ -20,15 +20,17 @@ void kernel_main() {
     const uint32_t cache_start_id = get_arg_val<uint32_t>(8);
     const uint32_t input_start_id = get_arg_val<uint32_t>(9);
     const uint32_t batch_start_id = get_arg_val<uint32_t>(10);
-    const uint32_t tiles_per_head = get_arg_val<uint32_t>(11);
-    const uint32_t u_count_full = get_arg_val<uint32_t>(12);
-    const uint32_t u_count_last = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t granularity = get_compile_time_arg_val(2);
     constexpr auto cache_args = TensorAccessorArgs<3>();
     constexpr auto input_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
+
+    // Input batch is round_up(B, 32); last tile may be short when B % 32 != 0.
+    const uint32_t tiles_per_head = (B + 31) / 32;
+    const uint32_t u_count_full = (B < 32 ? B : 32) / granularity;
+    const uint32_t u_count_last = (B - (tiles_per_head - 1) * 32) / granularity;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -63,7 +65,6 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_input.push_back(Wt);
 #endif
-        // Host-computed: last tile in a head may be short when Bcache % 32 != 0.
         const uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
         const uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? u_count_last : u_count_full;
         for (uint32_t u = 0; u < u_count; ++u) {

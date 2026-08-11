@@ -20,12 +20,14 @@ void kernel_main() {
     constexpr uint32_t num_batched_heads = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t granularity = get_compile_time_arg_val(8);
+    constexpr uint32_t B = get_compile_time_arg_val(9);
 
-    // Host-computed: last tile in a head may use u_count_last when Bcache % 32 != 0.
     const uint32_t batch_start_id = get_arg_val<uint32_t>(0);
-    const uint32_t tiles_per_head = get_arg_val<uint32_t>(1);
-    const uint32_t u_count_full = get_arg_val<uint32_t>(2);
-    const uint32_t u_count_last = get_arg_val<uint32_t>(3);
+
+    // Input batch is round_up(B, 32); last tile may be short when B % 32 != 0.
+    constexpr uint32_t tiles_per_head = (B + 31) / 32;
+    constexpr uint32_t u_count_full = (B < 32 ? B : 32) / granularity;
+    constexpr uint32_t u_count_last = (B - (tiles_per_head - 1) * 32) / granularity;
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
