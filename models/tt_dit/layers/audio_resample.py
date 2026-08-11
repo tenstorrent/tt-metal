@@ -24,14 +24,19 @@ import ttnn
 from ..parallel.config import ParallelFactor
 from ..parallel.manager import CCLManager
 from .audio_ops import (
+    SnakeBeta,
     _make_kaiser_sinc_kernel_1d,
     _replicate_pad_t,
     _t_neighbor_pad,
     _zero_pad_t,
     _zero_stuff_t,
     depthwise_tap_filter,
+    depthwise_tap_filter_snake,
+    fuse_snake_into_conv_enabled,
 )
 from .module import Module
+
+SNAKE_CONV_MAX_CHANNELS = 32
 
 
 def fuse_band_enabled() -> bool:
@@ -379,6 +384,34 @@ class Activation1d(Module):
             and (low.parallel_config is None or low.parallel_config.factor <= 1)
         )
 
+    def _snake_conv_params(self):
+        """``(alpha, inv_beta)`` as CPU vectors if the snake can ride the phase conv, else None.
+
+        Only SnakeBeta qualifies: the kernel computes `v + inv_beta * sin(alpha*v)^2` literally, and
+        plain `Snake` is a different expression. `beta` already carries the `+eps` that
+        `SnakeBeta._prepare_torch_state` folded in, so the reciprocal here needs no epsilon of its own.
+        """
+        if not fuse_snake_into_conv_enabled() or not isinstance(self.act, SnakeBeta):
+            return None
+        if self.act.parallel_config is not None and getattr(self.act.parallel_config, "factor", 1) > 1:
+            return None
+        # One tile of channel width only. The reader fetches the two parameter tiles at column offset
+        # 0 and the compute kernel reads CB tiles 0 and 1 whatever output column it is on, so at C=64
+        # (two tiles wide) columns 32-63 get channel 0-31's parameters -- measured rel_rmse 2.6e-01
+        # against the unfused band, while every C<=32 shape is exact. Lifting this needs the block's
+        # column offset in the reader and a column index in the compute kernel; until then the gate
+        # keeps the fused path on the tail stages, which is where the decode's time is anyway (a row
+        # costs ~4.2 ns almost regardless of width, so the long-T narrow-C bands dominate).
+        if self.channels > SNAKE_CONV_MAX_CHANNELS:
+            return None
+        cached = getattr(self, "_snake_conv_ab", None)
+        if cached is None:
+            alpha = ttnn.to_torch(self.act.alpha.data).float().reshape(-1)
+            beta = ttnn.to_torch(self.act.beta.data).float().reshape(-1)
+            cached = (alpha, 1.0 / beta)
+            self._snake_conv_ab = cached
+        return cached
+
     def _forward_fused(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``up2 -> act -> down2`` computed on half-length phase signals.
 
@@ -408,10 +441,8 @@ class Activation1d(Module):
         fir = lambda src, taps: depthwise_tap_filter(
             src, taps, 1, mesh_device=up.mesh_device, dtype=up.dtype, cache=up._conv1d_cache
         )
-        ph0, ph1 = fir(x_pad, sub0), fir(x_pad, sub1)
-        ttnn.deallocate(x_pad)
 
-        # --- pointwise activation, per phase ---
+        # --- upsample phase + pointwise activation, in one op per phase where possible ---
         #
         # Stacking the phases along C to halve the activation count was tried and reverted: it did not
         # get faster, and it moved s6 (C=8) from 8.6e-08 to 4.8e-04, so `channel_repeat` combined with
@@ -420,7 +451,25 @@ class Activation1d(Module):
             v = self.act(v)
             return v if v.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
 
-        s0, s1 = activate(ph0), activate(ph1)
+        if self._snake_conv_params() is not None:
+            # The snake rides the phase conv's own output, so `activate` never runs and neither does
+            # the tilize/untilize around it: two ops per band become none.
+            alpha, inv_beta = self._snake_conv_params()
+            sfir = lambda taps, tag: depthwise_tap_filter_snake(
+                x_pad,
+                taps,
+                alpha=alpha,
+                inv_beta=inv_beta,
+                mesh_device=up.mesh_device,
+                dtype=up.dtype,
+                cache=up._conv1d_cache,
+                cache_tag=tag,
+            )
+            s0, s1 = sfir(sub0, "sub0"), sfir(sub1, "sub1")
+        else:
+            ph0, ph1 = fir(x_pad, sub0), fir(x_pad, sub1)
+            s0, s1 = activate(ph0), activate(ph1)
+        ttnn.deallocate(x_pad)
         M = int(s0.shape[1])
 
         # --- even/odd samples of the replicate-padded interleaved signal ---
