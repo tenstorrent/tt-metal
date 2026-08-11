@@ -75,8 +75,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          # Include pytest (+ pytest-timeout) so test entries can run pytest in the
-          # worker venv, which is otherwise runtime-only.
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
           unpack-build-on-nfs: "true"
 
