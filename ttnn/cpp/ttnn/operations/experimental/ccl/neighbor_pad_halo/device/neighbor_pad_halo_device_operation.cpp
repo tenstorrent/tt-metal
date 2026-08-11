@@ -51,6 +51,43 @@ void NpHaloDeviceOperation::validate_on_program_cache_miss(
         "NpHalo: halo_buffer dtype ({}) must match input dtype ({}).",
         halo_buffer.dtype(),
         input_tensor.dtype());
+
+    const auto& padded_shape = input_tensor.padded_shape();
+    constexpr uint32_t np_dim = 2;  // BTHWC
+    uint32_t outer_dim_size = 1;
+    for (size_t d = 0; d < np_dim; d++) {
+        outer_dim_size *= padded_shape[d];
+    }
+    uint32_t w_dev = 1;
+    for (size_t d = np_dim + 1; d < padded_shape.size() - 1; d++) {
+        w_dev *= padded_shape[d];
+    }
+    uint32_t h_dev = padded_shape[np_dim];
+    if (args.input_pad_h > 0 || args.input_pad_w > 0) {
+        w_dev -= 2 * args.input_pad_w;
+        h_dev -= 2 * args.input_pad_h;
+    }
+    const uint64_t h_total = h_dev + (2 * static_cast<uint64_t>(args.np_padding_h));
+    const uint64_t required_pages = static_cast<uint64_t>(outer_dim_size) *
+                                    ((2 * static_cast<uint64_t>(args.np_padding_h) * w_dev) +
+                                     (static_cast<uint64_t>(args.np_pad2_left + args.np_pad2_right) * h_total));
+    TT_FATAL(
+        halo_buffer.buffer()->num_pages() >= required_pages,
+        "NpHalo: halo_buffer holds {} pages but the [Htop|Hbot|Wleft|Wright] sections need {} (outer={}, H_dev={}, "
+        "W_dev={}, pH={}, pad2_left={}, pad2_right={}).",
+        halo_buffer.buffer()->num_pages(),
+        required_pages,
+        outer_dim_size,
+        h_dev,
+        w_dev,
+        args.np_padding_h,
+        args.np_pad2_left,
+        args.np_pad2_right);
+    TT_FATAL(
+        halo_buffer.buffer()->aligned_page_size() == input_tensor.buffer()->aligned_page_size(),
+        "NpHalo: halo_buffer page size ({} B) must match the input's ({} B); the exchange moves whole sticks.",
+        halo_buffer.buffer()->aligned_page_size(),
+        input_tensor.buffer()->aligned_page_size());
 }
 
 TensorSpec NpHaloDeviceOperation::compute_output_specs(

@@ -214,6 +214,67 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         "Number of C_in blocks ({}) must be <= the number of cores ({})",
         C_in_blocks,
         total_cores);
+
+    if (tensor_args.halo_buffer.has_value()) {
+        TT_FATAL(args.padding_mode == "zeros", "Halo mode requires padding_mode \"zeros\". got {}", args.padding_mode);
+        // Halo reads exist only on the shard-gather path. The direct reader (no spatial reuse, or
+        // any dilation) zero-pads boundaries with no halo branch, so it would drop the halo.
+        const bool has_spatial_reuse = args.kernel_size[0] > 1 || args.kernel_size[1] > 1 || args.kernel_size[2] > 1;
+        const bool has_no_dilation = args.dilation[0] == 1 && args.dilation[1] == 1 && args.dilation[2] == 1;
+        TT_FATAL(
+            has_spatial_reuse && has_no_dilation,
+            "Halo mode requires a kernel with spatial reuse and no dilation. got kernel_size=({}, {}, {}), "
+            "dilation=({}, {}, {})",
+            args.kernel_size[0],
+            args.kernel_size[1],
+            args.kernel_size[2],
+            args.dilation[0],
+            args.dilation[1],
+            args.dilation[2]);
+        const uint64_t outer = static_cast<uint64_t>(input_shape[0]) * static_cast<uint64_t>(input_shape[1]);
+        const uint64_t h_total = H_in + (2 * static_cast<uint64_t>(args.padding[1]));
+        const uint64_t required_pages =
+            2 * outer *
+            ((static_cast<uint64_t>(args.padding[1]) * W_in) + (static_cast<uint64_t>(args.padding[2]) * h_total));
+        const auto& halo_tensor = tensor_args.halo_buffer.value();
+        TT_FATAL(
+            halo_tensor.dtype() == input_tensor_a.dtype(),
+            "Halo buffer dtype must match the input dtype. got {} vs {}",
+            halo_tensor.dtype(),
+            input_tensor_a.dtype());
+        TT_FATAL(halo_tensor.layout() == Layout::ROW_MAJOR, "Halo buffer must be row-major.");
+        TT_FATAL(
+            halo_tensor.buffer()->num_pages() >= required_pages,
+            "Halo buffer holds {} pages but the [Htop|Hbot|Wleft|Wright] sections need {} (N*T_in={}, H_in={}, "
+            "W_in={}, pad_h={}, pad_w={})",
+            halo_tensor.buffer()->num_pages(),
+            required_pages,
+            outer,
+            H_in,
+            W_in,
+            args.padding[1],
+            args.padding[2]);
+        TT_FATAL(
+            halo_tensor.buffer()->aligned_page_size() == input_tensor_a.buffer()->aligned_page_size(),
+            "Halo buffer page size ({} B) must match the input's ({} B); the reader fetches halo sticks with the "
+            "input's row size",
+            halo_tensor.buffer()->aligned_page_size(),
+            input_tensor_a.buffer()->aligned_page_size());
+    }
+
+    if (tensor_args.pad_offset_tensor.has_value()) {
+        // The reader blind-reads [h_start, w_start] out of page 0 to evaluate the logical-pad mask.
+        const auto& offset_tensor = tensor_args.pad_offset_tensor.value();
+        TT_FATAL(
+            offset_tensor.dtype() == DataType::UINT32,
+            "Pad offset tensor must be uint32. got {}",
+            offset_tensor.dtype());
+        TT_FATAL(
+            offset_tensor.buffer()->aligned_page_size() >= 2 * sizeof(uint32_t),
+            "Pad offset tensor page 0 must hold [h_start, w_start] ({} B); got a {} B page",
+            2 * sizeof(uint32_t),
+            offset_tensor.buffer()->aligned_page_size());
+    }
 }
 
 tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
