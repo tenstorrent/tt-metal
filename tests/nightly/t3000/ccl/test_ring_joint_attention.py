@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import math
 from itertools import product
 
 import ttnn
@@ -461,7 +462,7 @@ PERF_Q_CHUNK_SIZES = [128, 256]
 PERF_K_CHUNK_SIZES = [256, 512]
 
 
-from tests.nightly.sdpa_perf_utils import post_process_ops_log, compute_flat_work_distribution, compute_math_utilization
+from tests.nightly.sdpa_perf_utils import post_process_ops_log, compute_cores_used, compute_math_utilization
 
 
 # --- Sweep perf impl: runs one config with skip_check for profiling ---
@@ -561,12 +562,7 @@ def test_ring_joint_sdpa_create_perf_table(model_id):
             # Subtract CCL column cores to get SDPA-only count.
             effective_cores = measured_core_count - measured_core_count % WH_T3K_GRID_COLS
             sdpa_cores = effective_cores - WH_T3K_CCL_COLUMN * (effective_cores // WH_T3K_GRID_COLS)
-            # Flat (b, h, q)-chunk distribution — cores_used, q_per_core, and iters_per_core
-            # all come from the same model so the table stays internally consistent
-            work = compute_flat_work_distribution(
-                base_seq_len, q_chunk_size, k_chunk_size, sdpa_cores, heads_per_device, ring_size
-            )
-            cores_used = work["cores_used"]
+            cores_used = compute_cores_used(base_seq_len, q_chunk_size, sdpa_cores, heads_per_device, ring_size)
             cores_idle = sdpa_cores - cores_used
             utilization = compute_math_utilization(
                 local_seq_len,
@@ -578,7 +574,11 @@ def test_ring_joint_sdpa_create_perf_table(model_id):
                 arch="wormhole_b0",
             )
 
-            iters_per_core = work["iters_per_core"]
+            q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
+            max_q_parallel = sdpa_cores // int(heads_per_device) if heads_per_device > 0 else 1
+            q_per_core = math.ceil(q_num_chunks / max_q_parallel) if max_q_parallel > 0 else q_num_chunks
+            k_num_chunks = math.ceil(base_seq_len / k_chunk_size)
+            iters_per_core = q_per_core * k_num_chunks
 
             perf_results.append(
                 {

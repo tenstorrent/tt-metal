@@ -189,22 +189,16 @@ INPUT_IDS = [
 ]
 
 # 320 / 384 added so the MiniMax-H3 sweep covers the (q=320, k=384) the ring op actually runs, plus
-# neighbours on both sides. Local-only: at 14 heads / head_dim 128 the statically allocated circular
-# buffers overflow Blackhole's 1.57 MB L1 from (q=320, k=512) up (see test_ring_joint_sdpa.py), so
-# the expanded grid is reserved for the CI-skipped sweep/perf-table tests.
-SWEEP_Q_CHUNK_SIZES = [224, 256, 288, 320, 384]
-SWEEP_K_CHUNK_SIZES = [128, 256, 384, 512]
-
-# CI-safe matrix for the accuracy / determinism tests that run on nightly.
-Q_CHUNK_SIZES = [224, 256, 288]
-K_CHUNK_SIZES = [128, 256, 512]
+# neighbours on both sides.
+Q_CHUNK_SIZES = [224, 256, 288, 320, 384]
+K_CHUNK_SIZES = [128, 256, 384, 512]
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", SWEEP_Q_CHUNK_SIZES, ids=[f"q{s}" for s in SWEEP_Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", SWEEP_K_CHUNK_SIZES, ids=[f"k{s}" for s in SWEEP_K_CHUNK_SIZES])
+@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
+@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
 @pytest.mark.parametrize(
     "b, nh, s, d",
     INPUT_SHAPES,
@@ -307,7 +301,7 @@ def test_sdpa_create_perf_table(b, nh, s, d):
     subdir = "ttnn_sdpa_performance"
     perf_results = []
 
-    for q_chunk_size, k_chunk_size in product(SWEEP_Q_CHUNK_SIZES, SWEEP_K_CHUNK_SIZES):
+    for q_chunk_size, k_chunk_size in product(Q_CHUNK_SIZES, K_CHUNK_SIZES):
         float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
         cols = ["ATTRIBUTES"]
 
