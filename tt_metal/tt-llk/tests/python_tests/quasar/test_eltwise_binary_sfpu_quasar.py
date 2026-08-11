@@ -864,6 +864,7 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             TYPECAST_FORMATS(),
+            FILL_CONSTANT(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),

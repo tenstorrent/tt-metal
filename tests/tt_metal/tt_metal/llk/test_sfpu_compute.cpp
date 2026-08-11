@@ -1618,7 +1618,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
         .approx_mode = false,
-        .unpack_to_dest_fp32 = is_int_op};  // Int32 reaches Dest via unpack-to-dest (matches typecast Int32 path)
+        .unpack_to_dest = is_int_op,
+        .en_32bit_dest = is_int_op};  // Int32 reaches Dest via unpack-to-dest with a 32-bit destination
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
         EXPECT_TRUE(run_sfpu_all_same_buffer(device, test_config));
