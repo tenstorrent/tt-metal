@@ -130,40 +130,6 @@ def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
     return packed, dequant
 
 
-class _CompressedMMStimuli(StimuliConfig):
-    """StimuliConfig that writes pre-packed in1 bytes and the meta buffer verbatim.
-
-    in1 is BFP-compressed, so its L1 image is produced by pack_bfp_tile rather than by the harness's
-    float path; buffer_A (dense in0 faces) and buffer_Res stay on the normal path.
-    """
-
-    def __init__(
-        self, in0_faces, in0_format, packed_b, meta_bytes, kt_dim, ct_dim, res_format
-    ):
-        super().__init__(
-            buffer_A=in0_faces,
-            stimuli_A_format=in0_format,
-            tile_count_A=kt_dim,
-            buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder, see write()
-            stimuli_B_format=DataFormat.Bfp8_b,
-            tile_count_B=kt_dim * ct_dim,
-            buffer_C=torch.zeros(1, dtype=torch.int32),  # placeholder, see write()
-            stimuli_C_format=DataFormat.UInt32,
-            tile_count_C=(len(meta_bytes) + 4095) // 4096,
-            stimuli_res_format=res_format,
-            tile_count_res=ct_dim,
-        )
-        self.packed_b = packed_b
-        self.meta_bytes = meta_bytes
-
-    def write(self, location: str = "0,0"):
-        from helpers.device_io import write_to_device
-
-        super().write(location)
-        write_to_device(location, self.buf_b_addr, self.packed_b)
-        write_to_device(location, self.buf_c_addr, self.meta_bytes)
-
-
 # The full sweep is 3 BFP formats x the 40-point (ct_dim, kt_dim, in0_rows) grid == 120 hardware cases, over the
 # repo's 100-combination cap for non-nightly parametrizations (.github/instructions/python.instructions.md), and this
 # is the only one of the three matmul advance tests that multiplies the grid by a format axis. So the merge-gate test
@@ -238,7 +204,7 @@ def _run_compressed_custom_mm(
         in0, in1_dequant, formats, in0_dimensions, in1_dimensions
     )
 
-    in0_faces = pack_in0_faces(in0, kt_dim, torch_format)
+    in0_faces = pack_in0_faces(in0, kt_dim, in0_format)
     meta_bytes = np.array(_encode_meta(code, ct_dim, kt_dim), dtype=np.uint32).tobytes()
 
     configuration = TestConfig(
@@ -252,14 +218,23 @@ def _run_compressed_custom_mm(
             CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
             IN_FACE_DIMS(in0_face_r_dim=in0_rows),
         ],
-        variant_stimuli=_CompressedMMStimuli(
-            in0_faces,
-            in0_format,
-            packed_b,
-            meta_bytes,
-            kt_dim,
-            ct_dim,
-            formats.output_format,
+        # All three inputs are pre-packed L1 images, so they go to L1 verbatim: in0 is the dense
+        # partial-face run, in1 the BFP-compressed stream, buffer_C the meta words. The tile counts
+        # and formats below are only what reserves each operand's L1 region -- in1 is declared
+        # Bfp8_b (the widest BFP tile, 1088 B) so the reservation covers the stream whichever
+        # format this variant packs it in, exactly as compressed_utils.CompressedStimuliConfig does.
+        variant_stimuli=StimuliConfig(
+            buffer_A=in0_faces,
+            stimuli_A_format=in0_format,
+            tile_count_A=kt_dim,
+            buffer_B=packed_b,
+            stimuli_B_format=DataFormat.Bfp8_b,
+            tile_count_B=kt_dim * ct_dim,
+            buffer_C=meta_bytes,
+            stimuli_C_format=DataFormat.UInt32,
+            tile_count_C=(len(meta_bytes) + 4095) // 4096,
+            stimuli_res_format=formats.output_format,
+            tile_count_res=output_tile_cnt,
         ),
         dest_acc=DestAccumulation.No,
         boot_mode=boot_mode,
