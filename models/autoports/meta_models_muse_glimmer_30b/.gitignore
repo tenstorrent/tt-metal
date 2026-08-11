@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+
+# The repo-root .gitignore excludes *.log and *.csv globally; the functional
+# decoder's evidence (test/profiler/watcher logs and tt-perf-report CSVs) is a
+# required stage artifact and must be committed.
+!doc/**/*.log
+!doc/**/*.csv

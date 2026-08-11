@@ -1,0 +1,98 @@
+2026-08-11 14:01:20.022 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+collecting ... collected 73 items / 69 deselected / 4 selected
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-sliding] 2026-08-11 14:01:21.558 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-11 14:01:21.558 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-11 14:01:21.558 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-11 14:01:21.558 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-11 14:01:21.570 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-11 14:01:21.570 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-11 14:01:21.648 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-11 14:01:21.648 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-11 14:01:21.648 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-11 14:01:21.648 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-11 14:01:21.649 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-11 14:01:21.823 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-11 14:01:21.939 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-11 14:01:21.939 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-11 14:01:21.939 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-11 14:01:21.939 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-11 14:01:21.939 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-11 14:01:21.979 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-full] PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-sliding] PASSED
+models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-full] PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.70s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-sliding]
+2.62s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-full]
+1.27s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-sliding]
+0.52s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-sliding]
+0.50s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-full]
+0.32s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-sliding]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-full]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-full]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[3000-full]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-sliding]
+PASSED models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_no_host_fallback_in_forward[12345-full]
+================= 4 passed, 69 deselected, 3 warnings in 9.44s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 4 instances!
+ - leaked instance 0x7471190f0278 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7470c5909348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7470c5f51578 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7471190f0098 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "get_num_devices"
+ - leaked function "remove_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_view"
+ - leaked function "logical_volume"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-11 14:01:31.800 | info     |    BuildKernels | JIT cache stats: 380/380 hits (100.0%) [380 cached, 173 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-11 14:01:31.800 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-11 14:01:31.814 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-11 14:01:31.814 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-11 14:01:32.238 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-11 14:01:32.238 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-11 14:01:32.238 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

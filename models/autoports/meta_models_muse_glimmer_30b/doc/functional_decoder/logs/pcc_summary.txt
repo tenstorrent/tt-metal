@@ -1,0 +1,194 @@
+prefill[sliding] seq_len=1: 0.9992395674841626
+prefill[full] seq_len=1: 0.9996341906482897
+prefill[sliding] seq_len=100: 0.9990878686813208
+prefill[full] seq_len=100: 0.9990087377825667
+prefill[sliding] seq_len=128: 0.999062734457299
+prefill[full] seq_len=128: 0.9989592759616893
+prefill[sliding] seq_len=2048: 0.998589430728133
+prefill[full] seq_len=2048: 0.9984434935315099
+prefill[sliding] seq_len=2049: 0.9985988769745389
+prefill[full] seq_len=2049: 0.9984640359569715
+prefill[sliding] seq_len=4097: 0.9985138112535066
+prefill[full] seq_len=4097: 0.9983391857179199
+prefill[sliding] seq_len=8192: 0.9984900030248833
+prefill[full] seq_len=8192: 0.9982772446887811
+prefill[sliding] seq_len=8193: 0.9984896718294907
+prefill[full] seq_len=8193: 0.9982784234912577
+prefill[sliding] seq_len=12345: 0.9984810498497454
+prefill[full] seq_len=12345: 0.998230050771467
+prefill[sliding] vs FP32 HF reference seq_len=2049: 0.9986234889492107
+decode[sliding] vs FP32 HF reference pos=2049: 0.9976463061860004
+prefill[full] vs FP32 HF reference seq_len=2049: 0.9984871400968173
+decode[full] vs FP32 HF reference pos=2049: 0.9985150523263101
+prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9985141176424294
+prefill[sliding] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9985121489236811
+prefill[full] seq_len==max_seq_len==chunk==4096 attempt=0: 0.9983283710991667
+prefill[full] seq_len==max_seq_len==chunk==4096 attempt=1: 0.9983308361400747
+continuation prefill[sliding] 4096+3000: 0.9984940044352174
+decode after continuation prefill[sliding] pos=7096: 0.9986455526342077
+continuation prefill[full] 4096+3000: 0.9982869767096085
+decode after continuation prefill[full] pos=7096: 0.9983749511589121
+continuation prefill[sliding] 1024+1024: 0.9986006650807994
+decode after continuation prefill[sliding] pos=2048: 0.9987026806671973
+continuation prefill[full] 1024+1024: 0.9984541342351128
+decode after continuation prefill[full] pos=2048: 0.9986688439209762
+continuation prefill[sliding] 64+100: 0.9991096497016291
+decode after continuation prefill[sliding] pos=164: 0.9990135181094499
+continuation prefill[full] 64+100: 0.9989997200378538
+decode after continuation prefill[full] pos=164: 0.9991501284415341
+decode[sliding] prompt=100 pos=100: 0.9989559913220021
+decode[sliding] prompt=100 pos=101: 0.9992388123484465
+decode[sliding] prompt=100 pos=102: 0.999071488968718
+decode[sliding] prompt=100 pos=103: 0.9992232609769277
+decode[full] prompt=100 pos=100: 0.9983887532361182
+decode[full] prompt=100 pos=101: 0.9989216298573211
+decode[full] prompt=100 pos=102: 0.9988309909803903
+decode[full] prompt=100 pos=103: 0.9983995977747159
+decode[sliding] prompt=2048 pos=2048: 0.9986331736776967
+decode[sliding] prompt=2048 pos=2049: 0.9981529199760527
+decode[sliding] prompt=2048 pos=2050: 0.9986560673630014
+decode[sliding] prompt=2048 pos=2051: 0.9983639047459063
+decode[full] prompt=2048 pos=2048: 0.9981308861441375
+decode[full] prompt=2048 pos=2049: 0.9976188902901599
+decode[full] prompt=2048 pos=2050: 0.9985516366545962
+decode[full] prompt=2048 pos=2051: 0.9979140312313929
+decode[sliding] prompt=3000 pos=3000: 0.9985582835999192
+decode[sliding] prompt=3000 pos=3001: 0.9982965866455252
+decode[sliding] prompt=3000 pos=3002: 0.9987566008714128
+decode[sliding] prompt=3000 pos=3003: 0.9984509817644709
+decode[full] prompt=3000 pos=3000: 0.9979968542631275
+decode[full] prompt=3000 pos=3001: 0.9986734742206068
+decode[full] prompt=3000 pos=3002: 0.9983035333460725
+decode[full] prompt=3000 pos=3003: 0.9983573957982511
+prefill[sliding] batch=4 user=0 seq_len=2000: 0.9986011821773847
+prefill[sliding] batch=4 user=1 seq_len=2037: 0.9986005514575629
+prefill[sliding] batch=4 user=2 seq_len=2074: 0.9985846520701657
+prefill[sliding] batch=4 user=3 seq_len=2111: 0.9985918650475811
+decode[sliding] batch=4 ragged positions: 0.9982575885649904
+prefill[full] batch=4 user=0 seq_len=2000: 0.9984495461947848
+prefill[full] batch=4 user=1 seq_len=2037: 0.9984582001396624
+prefill[full] batch=4 user=2 seq_len=2074: 0.9984369889840266
+prefill[full] batch=4 user=3 seq_len=2111: 0.9984542348754558
+decode[full] batch=4 ragged positions: 0.9982338827585544
+prefill[sliding] batch=13 user=0 seq_len=2000: 0.9986011821773847
+prefill[sliding] batch=13 user=1 seq_len=2037: 0.9986005514575629
+prefill[sliding] batch=13 user=2 seq_len=2074: 0.9985846520701657
+prefill[sliding] batch=13 user=3 seq_len=2111: 0.9985918650475811
+prefill[sliding] batch=13 user=4 seq_len=2148: 0.9985925147610922
+prefill[sliding] batch=13 user=5 seq_len=2185: 0.9985893875331165
+prefill[sliding] batch=13 user=6 seq_len=2222: 0.9985472636587159
+prefill[sliding] batch=13 user=7 seq_len=2259: 0.9985537404725106
+prefill[sliding] batch=13 user=8 seq_len=2296: 0.998540925958306
+prefill[sliding] batch=13 user=9 seq_len=2333: 0.998536274436903
+prefill[sliding] batch=13 user=10 seq_len=2370: 0.9985441426328879
+prefill[sliding] batch=13 user=11 seq_len=2407: 0.998550436389233
+prefill[sliding] batch=13 user=12 seq_len=2444: 0.9985475654270347
+decode[sliding] batch=13 ragged positions: 0.9984233221470087
+prefill[full] batch=13 user=0 seq_len=2000: 0.9984495461947848
+prefill[full] batch=13 user=1 seq_len=2037: 0.9984582001396624
+prefill[full] batch=13 user=2 seq_len=2074: 0.9984369889840266
+prefill[full] batch=13 user=3 seq_len=2111: 0.9984542348754558
+prefill[full] batch=13 user=4 seq_len=2148: 0.9984505453512585
+prefill[full] batch=13 user=5 seq_len=2185: 0.9984369990201588
+prefill[full] batch=13 user=6 seq_len=2222: 0.998386118792329
+prefill[full] batch=13 user=7 seq_len=2259: 0.9983999249392919
+prefill[full] batch=13 user=8 seq_len=2296: 0.9983870275955605
+prefill[full] batch=13 user=9 seq_len=2333: 0.998389187511157
+prefill[full] batch=13 user=10 seq_len=2370: 0.9983822413672773
+prefill[full] batch=13 user=11 seq_len=2407: 0.9983808534895433
+prefill[full] batch=13 user=12 seq_len=2444: 0.9983861166567287
+decode[full] batch=13 ragged positions: 0.9981764919119914
+prefill[sliding] batch=32 user=0 seq_len=2000: 0.9986011821773847
+prefill[sliding] batch=32 user=1 seq_len=2037: 0.9986005514575629
+prefill[sliding] batch=32 user=2 seq_len=2074: 0.9985846520701657
+prefill[sliding] batch=32 user=3 seq_len=2111: 0.9985918650475811
+prefill[sliding] batch=32 user=4 seq_len=2148: 0.9985925147610922
+prefill[sliding] batch=32 user=5 seq_len=2185: 0.9985893875331165
+prefill[sliding] batch=32 user=6 seq_len=2222: 0.9985472636587159
+prefill[sliding] batch=32 user=7 seq_len=2259: 0.9985537404725106
+prefill[sliding] batch=32 user=8 seq_len=2296: 0.998540925958306
+prefill[sliding] batch=32 user=9 seq_len=2333: 0.998536274436903
+prefill[sliding] batch=32 user=10 seq_len=2370: 0.9985441426328879
+prefill[sliding] batch=32 user=11 seq_len=2407: 0.998550436389233
+prefill[sliding] batch=32 user=12 seq_len=2444: 0.9985475654270347
+prefill[sliding] batch=32 user=13 seq_len=2481: 0.9985405700552409
+prefill[sliding] batch=32 user=14 seq_len=2518: 0.9985307857181216
+prefill[sliding] batch=32 user=15 seq_len=2555: 0.9985489340923721
+prefill[sliding] batch=32 user=16 seq_len=2592: 0.9985485742947713
+prefill[sliding] batch=32 user=17 seq_len=2629: 0.9985362830247085
+prefill[sliding] batch=32 user=18 seq_len=2666: 0.9985480881761412
+prefill[sliding] batch=32 user=19 seq_len=2703: 0.9985356503435926
+prefill[sliding] batch=32 user=20 seq_len=2740: 0.9985334469529649
+prefill[sliding] batch=32 user=21 seq_len=2777: 0.9985346126634488
+prefill[sliding] batch=32 user=22 seq_len=2814: 0.998535370021939
+prefill[sliding] batch=32 user=23 seq_len=2851: 0.9985369496986297
+prefill[sliding] batch=32 user=24 seq_len=2888: 0.998529461653692
+prefill[sliding] batch=32 user=25 seq_len=2925: 0.9985282548651375
+prefill[sliding] batch=32 user=26 seq_len=2962: 0.9985306489012568
+prefill[sliding] batch=32 user=27 seq_len=2999: 0.9985319837256822
+prefill[sliding] batch=32 user=28 seq_len=3036: 0.9985212936154677
+prefill[sliding] batch=32 user=29 seq_len=3073: 0.9985304272779795
+prefill[sliding] batch=32 user=30 seq_len=3110: 0.9985377562591593
+prefill[sliding] batch=32 user=31 seq_len=3147: 0.9985352439489547
+decode[sliding] batch=32 ragged positions: 0.9984183091189731
+prefill[full] batch=32 user=0 seq_len=2000: 0.9984495461947848
+prefill[full] batch=32 user=1 seq_len=2037: 0.9984582001396624
+prefill[full] batch=32 user=2 seq_len=2074: 0.9984369889840266
+prefill[full] batch=32 user=3 seq_len=2111: 0.9984542348754558
+prefill[full] batch=32 user=4 seq_len=2148: 0.9984505453512585
+prefill[full] batch=32 user=5 seq_len=2185: 0.9984369990201588
+prefill[full] batch=32 user=6 seq_len=2222: 0.998386118792329
+prefill[full] batch=32 user=7 seq_len=2259: 0.9983999249392919
+prefill[full] batch=32 user=8 seq_len=2296: 0.9983870275955605
+prefill[full] batch=32 user=9 seq_len=2333: 0.998389187511157
+prefill[full] batch=32 user=10 seq_len=2370: 0.9983822413672773
+prefill[full] batch=32 user=11 seq_len=2407: 0.9983808534895433
+prefill[full] batch=32 user=12 seq_len=2444: 0.9983861166567287
+prefill[full] batch=32 user=13 seq_len=2481: 0.9983747349597277
+prefill[full] batch=32 user=14 seq_len=2518: 0.9983790148532474
+prefill[full] batch=32 user=15 seq_len=2555: 0.9983537706615402
+prefill[full] batch=32 user=16 seq_len=2592: 0.9983713819666615
+prefill[full] batch=32 user=17 seq_len=2629: 0.9983795987225901
+prefill[full] batch=32 user=18 seq_len=2666: 0.998382019740576
+prefill[full] batch=32 user=19 seq_len=2703: 0.998367431900886
+prefill[full] batch=32 user=20 seq_len=2740: 0.9983697693153959
+prefill[full] batch=32 user=21 seq_len=2777: 0.9983660674928234
+prefill[full] batch=32 user=22 seq_len=2814: 0.9983613742215586
+prefill[full] batch=32 user=23 seq_len=2851: 0.9983796045816062
+prefill[full] batch=32 user=24 seq_len=2888: 0.9983643570784871
+prefill[full] batch=32 user=25 seq_len=2925: 0.9983576560986658
+prefill[full] batch=32 user=26 seq_len=2962: 0.9983585032849703
+prefill[full] batch=32 user=27 seq_len=2999: 0.9983620111236053
+prefill[full] batch=32 user=28 seq_len=3036: 0.998366268030884
+prefill[full] batch=32 user=29 seq_len=3073: 0.9983708546065
+prefill[full] batch=32 user=30 seq_len=3110: 0.9983535369968443
+prefill[full] batch=32 user=31 seq_len=3147: 0.9983670713008335
+decode[full] batch=32 ragged positions: 0.998157855355077
+decode SDPA sliding-window control cur_pos=2047 (window=2048): 0.99959939464969
+decode SDPA sliding-window control cur_pos=2048 (window=2048): 0.9995902103197287
+decode SDPA sliding-window control cur_pos=2049 (window=2048): 0.999593756408443
+decode SDPA sliding-window control cur_pos=5000 (window=2048): 0.999673108133357
+multi-chunk prefill[sliding] user_id=2 seq_len=12345: 0.9984832899801521
+decode[sliding] user_id=2 pos=12345: 0.9984092636956847
+multi-chunk prefill[full] user_id=2 seq_len=12345: 0.9982262282131013
+decode[full] user_id=2 pos=12345: 0.9977772768428012
+prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows): 0.99849010157586
+prefill[sliding] full-context seq_len=131072 (last 32 rows): 0.998515093856193
+prefill[full] full-context seq_len=131072 (interior @65536 32 rows): 0.9977745720146429
+prefill[full] full-context seq_len=131072 (last 32 rows): 0.9977751807874163
+prefill[sliding] full-context seq_len=130073 (last 32 rows): 0.9985193433477456
+prefill[full] full-context seq_len=130073 (last 32 rows): 0.997765169157925
+decode[sliding] full-context pos=131071: 0.9984428107009777
+decode[full] full-context pos=131071: 0.9979620573392713
+real-weights prefill[sliding] seq_len=2049: 0.9981543868621212
+real-weights decode[sliding] pos=2049: 0.9992234912133197
+real-weights prefill[full] seq_len=2049: 0.9980724075830052
+real-weights decode[full] pos=2049: 0.9974220479936909
+traced decode[sliding] pos=2048: 0.9976806242748424
+traced decode[full] pos=2048: 0.9983510534433722
+traced decode replay[sliding] pos=1024: 0.9983419142491227
+traced decode replay[sliding] pos=1025: 0.9984110790452639
+traced decode replay[sliding] pos=1026: 0.9986719168535795
+traced decode replay[full] pos=1024: 0.9980223712575532
+traced decode replay[full] pos=1025: 0.9987334291072704
+traced decode replay[full] pos=1026: 0.9983481878182155

@@ -1,0 +1,266 @@
+{
+  "model_id": "meta-models/Muse-Glimmer-30B",
+  "note": "Per-tensor statistics measured from the real bf16 checkpoint (snapshot f84ecc3a0ea984a4c04542a84269e3d065350a6e). Used to generate deterministic synthetic weights so CI does not need the 56 GB download.",
+  "layers": {
+    "0": {
+      "input_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.3398023843765259,
+        "std": 0.3412225544452667,
+        "min": -1.0,
+        "max": 3.5
+      },
+      "post_attention_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -0.3321862518787384,
+        "std": 0.21101588010787964,
+        "min": -0.578125,
+        "max": 3.34375
+      },
+      "pre_feedforward_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.16966918110847473,
+        "std": 0.25121384859085083,
+        "min": -0.99609375,
+        "max": 2.859375
+      },
+      "post_feedforward_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -0.23851005733013153,
+        "std": 0.1160932183265686,
+        "min": -0.734375,
+        "max": 0.953125
+      },
+      "self_attn.q_proj.weight": {
+        "shape": [
+          4096,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -7.909026180641376e-07,
+        "std": 0.0061291661113500595,
+        "min": -0.11083984375,
+        "max": 0.10986328125
+      },
+      "self_attn.k_proj.weight": {
+        "shape": [
+          256,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 2.395198180238367e-06,
+        "std": 0.006128991022706032,
+        "min": -0.06884765625,
+        "max": 0.04736328125
+      },
+      "self_attn.v_proj.weight": {
+        "shape": [
+          256,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.8317674605204957e-06,
+        "std": 0.0061292885802686214,
+        "min": -0.04150390625,
+        "max": 0.04345703125
+      },
+      "self_attn.o_proj.weight": {
+        "shape": [
+          6656,
+          4096
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -1.3366026223593508e-06,
+        "std": 0.006129262503236532,
+        "min": -0.25390625,
+        "max": 0.251953125
+      },
+      "self_attn.gate_proj.weight": {
+        "shape": [
+          4096,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.7429596229922026e-06,
+        "std": 0.006129160523414612,
+        "min": -0.0576171875,
+        "max": 0.0712890625
+      },
+      "mlp.gate_proj.weight": {
+        "shape": [
+          19968,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 9.478974902776827e-07,
+        "std": 0.006129267625510693,
+        "min": -0.10009765625,
+        "max": 0.1083984375
+      },
+      "mlp.up_proj.weight": {
+        "shape": [
+          19968,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.1436351314841886e-06,
+        "std": 0.0061291721649467945,
+        "min": -0.087890625,
+        "max": 0.166015625
+      },
+      "mlp.down_proj.weight": {
+        "shape": [
+          6656,
+          19968
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 6.400466077138844e-07,
+        "std": 0.006129125598818064,
+        "min": -0.453125,
+        "max": 0.4453125
+      }
+    },
+    "3": {
+      "input_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.4456337094306946,
+        "std": 0.1160418912768364,
+        "min": -0.7109375,
+        "max": 1.6484375
+      },
+      "post_attention_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -0.26373887062072754,
+        "std": 0.07124785333871841,
+        "min": -0.62109375,
+        "max": 0.50390625
+      },
+      "pre_feedforward_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.353990763425827,
+        "std": 0.1448037475347519,
+        "min": -0.62890625,
+        "max": 0.85546875
+      },
+      "post_feedforward_layernorm.weight": {
+        "shape": [
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -0.07728565484285355,
+        "std": 0.05311179906129837,
+        "min": -0.73828125,
+        "max": 1.5703125
+      },
+      "self_attn.q_proj.weight": {
+        "shape": [
+          4096,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 3.1287495403375942e-06,
+        "std": 0.006129136774688959,
+        "min": -0.07861328125,
+        "max": 0.1162109375
+      },
+      "self_attn.k_proj.weight": {
+        "shape": [
+          256,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.631996494528721e-06,
+        "std": 0.006129115354269743,
+        "min": -0.05615234375,
+        "max": 0.06591796875
+      },
+      "self_attn.v_proj.weight": {
+        "shape": [
+          256,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -3.0611295187554788e-06,
+        "std": 0.006129049696028233,
+        "min": -0.038818359375,
+        "max": 0.0400390625
+      },
+      "self_attn.o_proj.weight": {
+        "shape": [
+          6656,
+          4096
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.576562567606743e-06,
+        "std": 0.006129175890237093,
+        "min": -0.302734375,
+        "max": 0.2392578125
+      },
+      "self_attn.gate_proj.weight": {
+        "shape": [
+          4096,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -1.8469221686245874e-05,
+        "std": 0.006129227578639984,
+        "min": -0.0849609375,
+        "max": 0.0810546875
+      },
+      "mlp.gate_proj.weight": {
+        "shape": [
+          19968,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -8.682895469291907e-08,
+        "std": 0.006129180081188679,
+        "min": -0.12255859375,
+        "max": 0.095703125
+      },
+      "mlp.up_proj.weight": {
+        "shape": [
+          19968,
+          6656
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -6.601764539482247e-07,
+        "std": 0.006129196844995022,
+        "min": -0.16015625,
+        "max": 0.1630859375
+      },
+      "mlp.down_proj.weight": {
+        "shape": [
+          6656,
+          19968
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.3754244321262377e-07,
+        "std": 0.006129157729446888,
+        "min": -0.314453125,
+        "max": 0.30078125
+      }
+    }
+  }
+}
