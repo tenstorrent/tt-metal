@@ -20,6 +20,13 @@ three models and what it means.
 `harness_scope: "one … decoder layer, traced decode replay, batch N, measured end to end on host"`. Decode is the
 unit of work, so decode is where a knob has to act to be measurable.
 
+⚠ **Sharpened by the qwen audit — see [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) §8a.** Decode-only gating is
+**not** the defect. qwen's shipped knob is decode-only too and is **bit-identical on both layer kinds** with a real
+−1.0 %, because it shards the **MLP**, whose output never outlives the step. The precise condition is:
+**a decode-only knob is unsafe iff its output flows into the KV cache write.** That rule classifies all seven
+audited knobs correctly and is a static question, answerable before any measurement. Read link 2 below with that
+correction in mind.
+
 **2. So every agent wrote a knob that only takes effect in decode** — four models, four different spellings of the
 same thing:
 
@@ -76,9 +83,9 @@ construction.
 | north-mini `nofuse-noadvise` | `decode_topk_cores=110` | **no** — within-step | — | 3.27 × 10⁻³ | −171 | not affected |
 | gemma-4-26B `fuse-noadvise` | concat→projection boundary | no | 32 | — | −986 | not affected |
 | phi-3.5 `-onA` | rope/L1 chain | yes (rope → K) | 127 | 4.99 × 10⁻³ | −1,254 | pattern present in **both** versions |
-| qwen3.6 `nofuse-noadvise` | — | — | — | — | −1,130 | not audited |
+| qwen3.6 `nofuse-noadvise` | `advisor_plan=mlp_product_only` | **no — MLP, within-step** | b32 both kinds | — | −1,130 | ✅ **audited: bit-identical PCC both kinds, clean** |
 
-**−3,227 µs of v3's −6,769 — 48 % — is shipped on the affected pattern**, and the single largest piece of it
+**−3,227 µs of v3's −6,769 — 48 % — is shipped on knobs that touch a K/V producer** (qwen's −1,130 is now audited and clean, north-mini's −1,400 is measured safe), and the single largest piece of it
 (**−1,400 µs, north-mini `-onA`**) was gated by an oracle that cannot detect the defect at all, passing by
 **9.8 × 10⁻⁴** against a mechanism that cost gemma **5.2 × 10⁻³**.
 

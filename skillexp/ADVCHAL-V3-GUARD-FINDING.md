@@ -380,3 +380,83 @@ which is the [`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) provenance
 
 Against v3's shipped −6,769 and its 8,408 µs shortfall to v2, **two known-good changes recover 78 % of the gap**,
 and neither is a search or judgement improvement — both are defects in code v3's own cells wrote.
+
+
+---
+
+# 8. Four more tests from the open register
+
+## 8a. qwen3.6 — the counter-example that fixes the rule
+
+The one shipped win nobody had audited (**−1,130 µs, 17 % of v3's output**). It ships
+`advisor_plan="mlp_product_only"`, a 109-core width-sharded MLP intermediate — and the knob sits inside
+**`_mlp_decode`**, so it is **decode-only, exactly like the others.** Yet:
+
+| kind | incumbent PCC | candidate PCC |
+|---|---:|---:|
+| `linear_attention` | 0.9981887732142846 | **0.9981887732142846** |
+| `full_attention` | 0.9980950192619897 | **0.9980950192619897** |
+
+**Bit-identical on both kinds, with a real −1.0 % (−1,130 µs).** Engaged — the timing moved.
+
+**So decode-only gating is not the defect, and [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)'s framing needs
+sharpening.** The MLP's output goes into the residual for that token and is never persisted. The precise condition:
+
+> **A decode-only knob is unsafe iff its output flows into the KV cache write.** Otherwise the phases cannot
+> disagree about anything that outlives the step.
+
+That rule classifies **every** cell correctly: gemma site 1 (`input_ln` → QKV) unsafe *and it broke*; gemma sites
+2–8 (post-attn, MLP, router, post-ff) safe *and measured harmless*; north-mini `decode_norm_cores` (→ QKV) unsafe
+by the rule; phi `input_norm_cores` (→ QKV) and phi's rope (→ K) unsafe by the rule; **qwen `mlp_product_only`
+safe by the rule and measured bit-identical**; north-mini `decode_topk_cores` (routing, within-step) safe. It is a
+one-line static question — *does this op's output reach the cache?* — and it is checkable before any measurement.
+
+## 8b. `ladder_88`: no evidence it ever ran
+
+The cell's `README` claims *"2/4/8/11/22/44/**88** were fresh processes"* and `build_evidence.py` writes
+`legal_ladder: [1,2,4,8,11,22,44,88]`, while `measurements/` holds only 2/4/8/11/22/44. Searched **every commit on
+the run and cell branches**: **zero `ladder_88` files at any point in history.** So the rung was not written and
+later pruned — there is no artefact of it anywhere. Combined with the later measurement that 88 in v3's tree scores
+**0.9943717 (fail)**, the README's claim is both unbacked and would have been consequential if true.
+
+## 8c. Why `full_attention` is 740× less sensitive — the boundary is *inside* the set
+
+Dumped its router output too. It is **not** that the perturbation is smaller:
+
+| | `sliding_attention` | `full_attention` |
+|---|---|---|
+| logit gap, 8th vs 9th | 0.015625 | **0.015625 — the same** |
+| max \|Δlogit\| | 0.046875 | **0.035156 — also exceeds the gap (2.25×)** |
+| experts, interleaved | 47, 53, 124, 61, 122, 121, **104**, 50 | 36, 111, 112, 19, 115, 125, **9, 14** |
+| experts, sharded | 47, 53, 124, 61, 122, 50, 121, **123** | 36, 111, 112, 19, 115, 125, **14, 9** |
+| what changed | **membership — 104 out, 123 in** | **order only — 9 and 14 swapped** |
+
+**Both kinds cross a boundary. On `full` the crossing permutes two experts that are *both already selected*, and
+`scatter` places each weight at its own expert index, so the output is unchanged.** On `sliding` the crossing is at
+the **8th/9th cut**, so the set changes and a different function runs.
+
+**The 740× is therefore not a property of the kind — it is which pair of adjacent logits happens to sit at the
+selection cut.** Which means `full_attention`'s shipped −1,198 µs passes by luck of input, not by structural
+margin: a different token could put the crossing at the edge and produce the same 5 × 10⁻³. That strengthens the
+case that a whole-layer PCC on this model has a discontinuous floor and cannot gate a placement change.
+
+## 8d. phi's defect isolated — a coupled pair, and it cannot be split
+
+Bisected from the working v2 port:
+
+| variant | PCC | |
+|---|---:|:--|
+| v2 port, as v2 | **0.9989930042363637** | ✅ |
+| v2 port **+ `value → L1_INTERLEAVED`** (v3's extra line) | **0.9989930042363637** | ✅ — harmless on its own |
+| v2 port but **cos/sin + arithmetic in `L1_MEMORY_CONFIG`**, value left sharded | **`TT_FATAL` — does not run** | — |
+| v3 as shipped (both together) | 0.9849538521359096 | ❌ |
+
+**The two elements are inseparable**: interleaved arithmetic *requires* the value conversion to run at all, and the
+value conversion alone is harmless. So the causal difference is a **design choice**, not a typo:
+
+> **v3 does the RoPE multiply/add in an L1-*interleaved* layout; v2 does it in the query's own 32-way height
+> shard, resharding `cos`/`sin` and `rotated` to match.** The sharded form is bit-identical to the incumbent and
+> 5.2 % faster; the interleaved form costs 1.4 × 10⁻² of PCC.
+
+And it explains why every single-line patch was a no-op: each was applied *inside* v3's interleaved structure,
+and the structure is the cause. The remedy stays a replacement — **−1,285 µs, PCC 0.9989930.**
