@@ -68,14 +68,30 @@ def matmul_acc_atol(golden, kt_dim):
     return max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt_dim * mean_active)
 
 
-def pack_in0_faces(in0, kt_dim, torch_format):
-    """Layout 1: in0 [in0_rows, kt_dim*32] -> kt_dim*2 dense (in0_rows x FACE_C_DIM) faces, row-major."""
-    return torch.cat(
+def pack_in0_faces(in0, kt_dim, stimuli_format):
+    """Layout 1: in0 [in0_rows, kt_dim*32] -> kt_dim*2 dense (in0_rows x FACE_C_DIM) faces, row-major.
+
+    Returns the packed L1 image (bytes), not a tensor, because this operand has no tile
+    geometry StimuliConfig can stride by: an in0 k-tile is 64 * in0_rows bytes, while
+    `StimuliConfig.write_matrix` walks the host buffer at MAX_TILE_ELEMENTS per tile and packs
+    num_faces * face_r_dim * FACE_C_DIM datums out of each stride. A bytes buffer is written to
+    L1 verbatim (`StimuliConfig._write_prepacked`), which is byte-for-byte what the
+    silicon-validated `compressed_utils.run_compressed` emits for its own in0.
+    """
+    from .llk_params import format_dict
+    from .stimuli_config import StimuliConfig
+
+    pack_function = StimuliConfig.get_packer(stimuli_format)
+    if pack_function is None:
+        raise ValueError(f"Unsupported in0 format: {stimuli_format.name}")
+
+    faces = torch.cat(
         [
             in0[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM].reshape(-1)
             for i in range(kt_dim * 2)
         ]
-    ).to(torch_format)
+    ).to(format_dict[stimuli_format])
+    return bytes(pack_function(faces))
 
 
 def _to_dest_face(block, torch_format):

@@ -419,6 +419,26 @@ class StimuliConfig:
         return packers.get(data_format)
 
     @staticmethod
+    def _write_prepacked(buffer, base_address: int, location: str) -> bool:
+        """Write an operand the test already packed into its exact L1 image.
+
+        Returns True when it took the write, False when ``buffer`` is a tensor and the
+        normal per-tile packing applies.
+
+        Both write_matrix variants below derive an operand's L1 layout from a tile
+        geometry, and some operands do not have one: the custom_mm family's in0 is a
+        dense run of partial faces (an in0 k-tile is 64 * in0_rows bytes, not a padded
+        32x32 tile), and a BFP-compressed in1 is a stream whose per-tile size follows
+        that tile's format code. Those tests hand over bytes instead of a tensor, and
+        the bytes go to L1 verbatim -- the same thing the silicon-validated
+        compressed_utils.CompressedStimuliConfig does by overriding write() wholesale.
+        """
+        if not isinstance(buffer, (bytes, bytearray, memoryview)):
+            return False
+        write_to_device(location, base_address, bytes(buffer))
+        return True
+
+    @staticmethod
     def write_matrix(
         buffer,
         tile_count: int,
@@ -437,6 +457,9 @@ class StimuliConfig:
         - Always strides through buffer at MAX_TILE_ELEMENTS (1024) intervals
         - Packs either full tiles (1024 elements) or partial tiles (num_faces * face_r_dim * 16)
         """
+        if StimuliConfig._write_prepacked(buffer, base_address, location):
+            return
+
         addresses = []
         packed_data_list = []
 
@@ -501,6 +524,9 @@ class StimuliConfig:
         - Strides through buffer based on actual tile_dimensions (tile_r * tile_c)
         - Always writes all elements for the given tile dimensions
         """
+        if StimuliConfig._write_prepacked(buffer, base_address, location):
+            return
+
         addresses = []
         packed_data_list = []
 
