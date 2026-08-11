@@ -79,20 +79,29 @@ void kernel_main() {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(1);
                 eltwise_chain(
-                    IterationShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeCallerPack{});
+                    IterationShape::grid(num_outputs, n).block_size(block_size),
+                    WholeShapeAccumulate{},
+                    WholeShapeCallerPack{});
                 output_buffer.push_back(1);
             } else {
                 eltwise_chain(
-                    IterationShape::grid(num_outputs, n, block_size), WholeShapeAccumulate{}, WholeShapeManagedPack{});
+                    IterationShape::grid(num_outputs, n).block_size(block_size),
+                    WholeShapeAccumulate{},
+                    WholeShapeManagedPack{});
             }
         } else {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(num_outputs);
-                eltwise_chain(IterationShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowCallerPack{});
+                eltwise_chain(
+                    IterationShape::grid(num_outputs, n).block_size(block_size),
+                    PerRowAccumulate{},
+                    PerRowCallerPack{});
                 output_buffer.push_back(num_outputs);
             } else {
                 eltwise_chain(
-                    IterationShape::grid(num_outputs, n, block_size), PerRowAccumulate{}, PerRowManagedPack{});
+                    IterationShape::grid(num_outputs, n).block_size(block_size),
+                    PerRowAccumulate{},
+                    PerRowManagedPack{});
             }
         }
     } else {

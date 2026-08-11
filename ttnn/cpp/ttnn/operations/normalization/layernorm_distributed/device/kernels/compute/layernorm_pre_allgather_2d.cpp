@@ -38,7 +38,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt, blk);
+    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef FUSE_PRE_ADD

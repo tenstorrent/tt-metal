@@ -379,7 +379,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
 #ifndef TILIZE_IN
@@ -460,7 +460,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -488,7 +488,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -510,7 +510,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -664,7 +664,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -692,7 +692,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -726,7 +726,7 @@ void kernel_main() {
                         ckl::ReservePolicy::Upfront,
                         ckl::PushPolicy::AtEnd,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(out_block_h_actual, block_w, subblock_w));
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
                         dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);

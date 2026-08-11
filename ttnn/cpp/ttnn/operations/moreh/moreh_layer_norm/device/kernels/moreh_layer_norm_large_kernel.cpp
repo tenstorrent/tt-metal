@@ -221,7 +221,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     kDataFormatReconfig),
                 ckl::output(dfb_xmm_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(block_size, block_size));
+                ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             /*
              * mask xmm
@@ -274,7 +274,7 @@ void kernel_main() {
                     ckl::OperandKind::Block,
                     kDataFormatReconfig),
                 ckl::output(dfb_xmm2_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(block_size, block_size));
+                ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             /*
              * Sum[(x-E[x])^2]
@@ -356,7 +356,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     kDataFormatReconfig),
                 ckl::output(dfb_reuse_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                ckl::IterationShape::tiles(block_size, block_size));
+                ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             /*
              * (x - E[x]) * 1.0/sqrt(Var[x] + eps)
@@ -381,7 +381,7 @@ void kernel_main() {
                     dfb_gamma_beta_or_out_id,
                     ckl::ReservePolicy::Upfront,
                     ckl::PushPolicy::AtEnd,
-                    kDataFormatReconfig)>(ckl::IterationShape::tiles(block_size, block_size));
+                    kDataFormatReconfig)>(ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             if constexpr (gamma_has_value) {
                 constexpr auto dfb_outg_id = beta_has_value ? dfb_gamma_beta_id : dfb_out_id;
@@ -403,7 +403,7 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_outg_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                    ckl::IterationShape::tiles(block_size, block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size));
             }
 
             if constexpr (beta_has_value) {
@@ -425,7 +425,7 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                    ckl::IterationShape::tiles(block_size, block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size));
             }
         }  // num_inner loop
         dfb_recip_std_obj.pop_front(onetile);

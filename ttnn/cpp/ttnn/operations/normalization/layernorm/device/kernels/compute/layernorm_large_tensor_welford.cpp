@@ -95,7 +95,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     for (auto block : generic::blocks(Wt, blk)) {
         const auto block_shape =
-            ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            ckl::IterationShape::tiles(block.size()).block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
         // Keep pre-add in a separate DFB to avoid the transpose_dest aliasing issue.
         ckl::add<
             ckl::input(dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
@@ -490,8 +490,8 @@ void kernel_main() {
         DataflowBuffer dfb_x_welford_obj_eltwise(dfb_x_welford_id);
 
         for (auto block : generic::blocks(Wt, blk)) {
-            const auto block_shape =
-                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks

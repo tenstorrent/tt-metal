@@ -24,7 +24,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_out_id);
 
     ckl::eltwise_chain(
-        ckl::IterationShape::tiles(num_tiles, num_tiles_per_cycle),
+        ckl::IterationShape::tiles(num_tiles).block_size(num_tiles_per_cycle),
         ckl::CopyTile<
             ckl::input(
                 dfb_in0_id,

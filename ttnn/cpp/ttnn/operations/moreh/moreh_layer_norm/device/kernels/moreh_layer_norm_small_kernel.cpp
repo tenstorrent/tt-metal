@@ -346,7 +346,7 @@ void kernel_main() {
         constexpr auto dfb_gamma_beta_or_out_id = (gamma_has_value || beta_has_value) ? dfb_gamma_beta_id : dfb_out_id;
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             ckl::eltwise_chain(
-                ckl::IterationShape::tiles(block_size, block_size),
+                ckl::IterationShape::tiles(block_size).block_size(block_size),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(
@@ -388,7 +388,7 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_outg_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                    ckl::IterationShape::tiles(block_size, block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size));
             }  // if (gamma_has_value)
 
             if constexpr (beta_has_value) {
@@ -410,7 +410,7 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
-                    ckl::IterationShape::tiles(block_size, block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size));
             }  // if (beta_has_value)
         }  // num_inner loop
         dfb_recip_std_obj.pop_front(onetile);

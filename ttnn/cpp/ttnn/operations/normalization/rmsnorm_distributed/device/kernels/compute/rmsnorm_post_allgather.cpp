@@ -93,7 +93,7 @@ void kernel_main() {
             ckl::input(dfb_norm_x_input_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(normed_output_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(Wt, /*block_size=*/blk));
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
         if constexpr (do_gamma) {
             ckl::mul<
@@ -105,7 +105,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Block),
                 ckl::output(dfb_times_gamma_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                ckl::IterationShape::tiles(Wt, /*block_size=*/blk));
+                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
             if constexpr (do_beta) {
                 ckl::add<
@@ -121,7 +121,7 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::OperandKind::Block),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                    ckl::IterationShape::tiles(Wt, /*block_size=*/blk));
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
             }
         }
     }

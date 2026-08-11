@@ -54,7 +54,7 @@ void kernel_main() {
     } else if constexpr (life == 1) {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
-            IterationShape::tiles(n, blk),
+            IterationShape::tiles(n).block_size(blk),
             CopyTile<input(cb_x, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_x, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});

@@ -138,7 +138,7 @@ void kernel_main() {
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
     // Math follows the valid width; Chunked lifecycles still exchange a fixed-size tail block.
-    constexpr auto row_shape = ckl::IterationShape::tiles(Wt, block_size, ckl::BlockTailSync::FullBlock);
+    constexpr auto row_shape = ckl::IterationShape::tiles(Wt).block_size(block_size, ckl::BlockTailSync::FullBlock);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
@@ -231,8 +231,8 @@ void kernel_main() {
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         for (auto block : generic::blocks(Wt, block_size)) {
-            const auto block_shape =
-                ckl::IterationShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<

@@ -114,15 +114,15 @@ struct TypedIterationShape;
 /// tiles independently of this iteration space. Ht=1 expresses the 1D case (no row axis, plain
 /// linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but remain well-defined.
 ///
-/// Factories cover the common construction paths:
-///   - `IterationShape::tiles(n)`           — 1D, block_size = 1
-///   - `IterationShape::tiles(n, blk)`      — 1D + block
-///   - `IterationShape::tiles(n, blk, BlockTailSync::FullBlock)`
-///                                       — 1D fixed-size physical blocks
-///   - `IterationShape::grid(H, W)`         — 2D, block_size = 1
-///   - `IterationShape::grid(H, W, blk)`    — 2D + block
-///   - `IterationShape::grid(H, W, blk, BlockTailSync::FullBlock)`
-///                                       — 2D row-blocked fixed-size physical blocks
+/// Factories establish the iteration extent. Blocking is configured fluently when needed:
+///   - `IterationShape::tiles(n)` — 1D, block_size = 1
+///   - `IterationShape::tiles(n).block_size(blk)` — 1D + block
+///   - `IterationShape::tiles(n).block_size(blk, BlockTailSync::FullBlock)`
+///                                                   — 1D fixed-size physical blocks
+///   - `IterationShape::grid(H, W)` — 2D, block_size = 1
+///   - `IterationShape::grid(H, W).block_size(blk)` — 2D + block
+///   - `IterationShape::grid(H, W).block_size(blk, BlockTailSync::FullBlock)`
+///                                                   — 2D row-blocked fixed-size physical blocks
 ///
 /// Construction from a tile count is `explicit`: a bare number is NOT accepted as a
 /// shape — call sites must spell the iteration shape out as `IterationShape::tiles(n)`
@@ -136,17 +136,14 @@ struct IterationShape {
     uint32_t block_size;
     BlockTailSync tail_sync;
 
-    constexpr IterationShape(
-        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
+    constexpr IterationShape(uint32_t H, uint32_t W);
 
     // Explicit: bare numbers are forbidden at call sites. Use IterationShape::tiles(n) or
     // IterationShape::one_tile() so the iteration shape is always written out.
     explicit constexpr IterationShape(uint32_t n_tiles);
 
-    static constexpr TypedIterationShape<IterationShapeKind::Tiles> tiles(
-        uint32_t n, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
-    static constexpr TypedIterationShape<IterationShapeKind::Grid> grid(
-        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
+    static constexpr TypedIterationShape<IterationShapeKind::Tiles> tiles(uint32_t n);
+    static constexpr TypedIterationShape<IterationShapeKind::Grid> grid(uint32_t H, uint32_t W);
 
     static constexpr TypedIterationShape<IterationShapeKind::Grid> of(uint32_t r, uint32_t c);
     static constexpr TypedIterationShape<IterationShapeKind::Grid> row(uint32_t c);
@@ -162,9 +159,15 @@ template <IterationShapeKind Kind>
 struct TypedIterationShape : IterationShape {
     static constexpr IterationShapeKind kind = Kind;
 
-    constexpr TypedIterationShape(
-        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles) :
-        IterationShape(H, W, blk, tail_sync) {}
+    constexpr TypedIterationShape(uint32_t H, uint32_t W) : IterationShape(H, W) {}
+
+    constexpr TypedIterationShape block_size(
+        uint32_t value, BlockTailSync tail_sync = BlockTailSync::ValidTiles) const {
+        auto shape = *this;
+        shape.IterationShape::block_size = value;
+        shape.tail_sync = tail_sync;
+        return shape;
+    }
 };
 
 /// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
@@ -431,12 +434,12 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 // Op-struct template-param enums (Approx / Legacy) live in op_params.hpp — they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
-/// Block size. Carried by `IterationShape` (the `blk` arg of `IterationShape::tiles(n, blk)` /
-/// `grid(H, W, blk)`), passed as the shape to `eltwise_chain(shape, ...)`. Each full outer iter
-/// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
-/// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape. A partial final
-/// iter always executes only its valid remainder. `BlockTailSync` selects whether `PerBlockSize`
-/// lifecycles synchronize that valid remainder or the full `block_size`.
+/// Block size. Configured with `IterationShape::tiles(n).block_size(blk)` or
+/// `grid(H, W).block_size(blk)`, then passed as the shape to `eltwise_chain(shape, ...)`.
+/// Each full outer iter processes `block_size` tiles across `block_size` DEST lanes (lane j at
+/// slot dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape. A partial
+/// final iter always executes only its valid remainder. `BlockTailSync` selects whether
+/// `PerBlockSize` lifecycles synchronize that valid remainder or the full `block_size`.
 ///
 /// For numeric shapes, the chain clamps `block_size` at runtime so
 /// `block_size * chain_lane_width` always fits DEST (`DEST_AUTO_LIMIT`): an oversized value can't

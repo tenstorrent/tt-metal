@@ -98,7 +98,7 @@ void kernel_main() {
                 ckl::PopPolicy::None,
                 ckl::OperandKind::Block),
             ckl::output(sin_interm_dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

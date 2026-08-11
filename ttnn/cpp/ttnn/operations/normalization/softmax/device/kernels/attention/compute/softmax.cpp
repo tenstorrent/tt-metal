@@ -41,7 +41,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
     ckl::eltwise_chain(
-        ckl::IterationShape::tiles(Wt, ndst),
+        ckl::IterationShape::tiles(Wt).block_size(ndst),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
@@ -136,7 +136,7 @@ void kernel_main() {
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(Wt, ndst),
+            ckl::IterationShape::tiles(Wt).block_size(ndst),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(
@@ -261,7 +261,7 @@ void kernel_main() {
             ckl::input(dfb_exps_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(dfb_recipsumexps_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(dfb_out0_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt, ndst));
+            ckl::IterationShape::tiles(Wt).block_size(ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the DFBs are left balanced.
