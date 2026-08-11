@@ -179,9 +179,11 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-# Build the DFlash drafter context-KV cache during this prefill (opt-in, default OFF). The runner reads only
-# PREFILL_DFLASH; the runtime resolves the drafter checkpoint itself.
-DFLASH_ENABLED = os.environ.get("PREFILL_DFLASH", "0") == "1"
+# Build the DFlash drafter context-KV cache during this prefill. There is no dedicated on/off env: dflash
+# runs when the selected model declares the capability (ADAPTER.supports_dflash) AND a drafter checkpoint is
+# provided (DFLASH_HF_MODEL, resolved by the runtime). This keeps a non-dflash model from ever building a
+# Kimi drafter, and makes the checkpoint's presence the switch (DFLASH_HF_MODEL= empty forces it off).
+DFLASH_ENABLED = ADAPTER.supports_dflash and bool(os.environ.get("DFLASH_HF_MODEL"))
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -820,7 +822,11 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
-        ("PREFILL_DFLASH", str(DFLASH_ENABLED)),
+        (
+            "DFLASH_ENABLED",
+            f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
+            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+        ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),

@@ -231,7 +231,7 @@ class TtPrefillRuntime:
         the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
         path = os.environ.get("DFLASH_HF_MODEL")
         assert path, (
-            "PREFILL_DFLASH=1 requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
+            "DFlash drafter build requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
             "(a dir with config.json + model.safetensors)"
         )
         dcfg = DFlashDrafterConfig.from_pretrained(path)
