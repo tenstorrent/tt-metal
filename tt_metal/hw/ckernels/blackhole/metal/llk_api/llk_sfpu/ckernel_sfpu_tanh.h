@@ -94,20 +94,19 @@ constexpr float TANH_POLY_C1 = 0.999004364013671875f;
 constexpr float TANH_POLY_C2 = 3.0897438526153564453125e-2f;
 constexpr float TANH_POLY_C3 = -0.4890659749507904052734375f;
 
-// The same three as vectors, for scalar callers with LRegs to spare. calculate_tanh has none left
-// (its pairs need six)
-struct TanhPolyConsts {
-    sfpi::vFloat c1 = TANH_POLY_C1;
-    sfpi::vFloat c2 = TANH_POLY_C2;
-    sfpi::vFloat c3 = TANH_POLY_C3;
-};
-
-sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x, const TanhPolyConsts& k) {
+sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::abs(x);  // set positive
 
     sfpi::vFloat result = PolynomialEvaluator::eval(
-        val, 0.0f, k.c1, k.c2, k.c3, sfpi::vConstFloatPrgm2, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm0);
+        val,
+        0.0f,
+        TANH_POLY_C1,
+        TANH_POLY_C2,
+        TANH_POLY_C3,
+        sfpi::vConstFloatPrgm2,
+        sfpi::vConstFloatPrgm1,
+        sfpi::vConstFloatPrgm0);
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
@@ -117,8 +116,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x, const TanhPolyCo
 
     return result;
 }
-
-sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) { return _sfpu_tanh_polynomial_(x, TanhPolyConsts()); }
 
 // Two datums through the polynomial in lockstep, so each fills the other's SFPMAD stall slots.
 // Only WH stalls; BH comes out even either way, so both arches run this shape. Only c1 can be
@@ -172,7 +169,9 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg2] = l2;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::dst_reg[0] = _sfpu_tanh_fp32_accurate_(sfpi::dst_reg[0]);
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = _sfpu_tanh_fp32_accurate_(val);
+            sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
     } else {
@@ -180,7 +179,7 @@ inline void calculate_tanh() {
 
         // Walk dst_reg rather than index by d: a uniform body is what the replay buffer records
         // once, and a runtime index makes sfpi build each SFPLOAD/SFPSTORE in scalar registers.
-#pragma GCC unroll 8
+#pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat r0, r1;
             _sfpu_tanh_polynomial_x2_(r0, r1, sfpi::dst_reg[0], sfpi::dst_reg[1], c1);
