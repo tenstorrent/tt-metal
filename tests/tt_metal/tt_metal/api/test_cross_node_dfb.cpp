@@ -589,7 +589,7 @@ static uint32_t run_1toN_program(
 
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -601,7 +601,7 @@ static uint32_t run_1toN_program(
         CoreRangeSet single = CoreRangeSet(CoreRange(recvs[ri]));
         tt::tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
             single,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -742,7 +742,7 @@ static uint32_t run_relay_program(
 
     const KernelHandle sender_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_relay_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_relay_sender.cpp",
         sender_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -750,7 +750,7 @@ static uint32_t run_relay_program(
             .compile_args = {remote_dfb_id, entry_size, total_entries, batch_size}});
     const KernelHandle receiver_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_relay_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_relay_receiver.cpp",
         receiver_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -758,7 +758,7 @@ static uint32_t run_relay_program(
             .compile_args = {remote_dfb_id, total_entries, batch_size}});
     const KernelHandle trisc_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_relay_trisc.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_relay_trisc.cpp",
         receiver_cores,
         ComputeConfig{.compile_args = {relay_device_slot, total_entries, batch_size, trisc_delay_iterations}});
 
@@ -986,7 +986,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_MultipleSenders_MtoN) {
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -996,7 +996,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_MultipleSenders_MtoN) {
         CoreRangeSet single = CoreRangeSet(CoreRange(recvs[ri]));
         tt::tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
             single,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1060,7 +1060,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
             cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, entries_per_program, 1);
         tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
             sender_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1074,7 +1074,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
                     0u}});
         tt::tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
             receiver_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1164,7 +1164,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 1);
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1172,7 +1172,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
             .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
     tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
         receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1231,7 +1231,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 4);
     tt::tt_metal::KernelHandle send_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1243,7 +1243,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
         CoreRangeSet single = CoreRangeSet(CoreRange(recvs[ri]));
         tt::tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
             single,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1300,7 +1300,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 1);
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1309,7 +1309,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
             .compile_args = {remote_dfb_id, entry_size, num_entries, 2u, data_pattern, 0u}});
     tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
         receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1432,7 +1432,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, 1);
     tt::tt_metal::KernelHandle sender_k = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_sender.cpp",
         sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1440,7 +1440,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
             .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
     tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/api/kernels/cross_node_dfb_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
         receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
