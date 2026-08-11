@@ -5,6 +5,10 @@ ported to the Metal 2.0 API. This file is the procedure; the fix recipe your inv
 content. Read this file first, then open the fix recipe when [Step 2](#step-2--survey-every-site)
 sends you there.
 
+**If your invoker named more than one fix, you are running a batch.** Read [If you are running a
+batch](#if-you-are-running-a-batch) before you begin Step 0 — it sets the output contract for the
+whole run. Still one op, and still one fix at a time.
+
 If you are new to this codebase, the next section is your orientation. If you have just finished
 porting this op, skip it.
 
@@ -51,8 +55,6 @@ and you are not expected to have read it.
 
 ## What a post-port pass is
 
-One targeted improvement, applied to one op, on top of a working Metal 2.0 port.
-
 Most of these fixes are purely expressive: the op behaves identically before and after — same
 numerics, same performance, same observable side effects — and what changes is how the code says
 what it already does. A few do change behaviour deliberately. **Each fix recipe states its own
@@ -69,8 +71,8 @@ The fix recipes are filed under two directories, and the split is not about how 
   miss a site.
 - **`semantic/`** — the change alters something about how the program *runs*, even where the numerics
   come out identical: what work the device actually does, when it is dispatched, what the compiler is
-  now free to assume. These do not change behaviour deliberately — preserving it is still the whole
-  point — but whether it *is* preserved rests on reasoning your tests cannot fully police.
+  now free to assume. Most still preserve behaviour, and where one does not its recipe says so — but
+  whether it *is* preserved rests on reasoning your tests cannot fully police.
 
 What that changes for you is where the burden sits. A style pass is bounded by its recipe. A semantic
 pass is bounded by its recipe **and** by the judgement of the person who launched it, who is closer
@@ -99,9 +101,8 @@ of them is not.
 - **Stopped on a site** — the transformation didn't cover something you found.
 
 The deliverable is not a diff. It is an accurate verdict about this op, and *"needs nothing"* and
-*"needs a decision I wasn't given"* are both accurate verdicts. A pass that stops for cause and
-says clearly why has produced exactly what it was called for, and the person reading your report
-would far rather have it than a diff that papered over the reason.
+*"needs a decision I wasn't given"* are both accurate verdicts — your reader would far rather have
+either than a diff that papered over the reason.
 
 There is one real failure mode, and it is the opposite of stopping: **a change that should not have
 been made.** A transformation forced onto a site that didn't fit it. A workaround invented so the
@@ -110,10 +111,10 @@ around. Every one of these comes from treating *"produced a diff"* as the object
 costs far more to find later than the stop would have cost now, because it arrives disguised as
 success.
 
-**One fix per pass.** Your invoker names exactly one. While applying it you will notice other
-things worth changing — another fix's target, a stale comment, a helper that could be simpler.
-Note them in your report; do not do them. A diff containing two fixes cannot be reviewed as
-either one, and the before/after check below stops meaning anything.
+**One fix per pass.** While applying it you will notice other things worth changing — another fix's
+target, a stale comment, a helper that could be simpler. Note them in your report; do not do them. A
+diff containing two fixes cannot be reviewed as either one, and the before/after check below stops
+meaning anything.
 
 **Trust the check, don't replace it with planning.** The op is green when you start, the change is
 small, and you can be green again minutes later. That before/after measurement is your safety net,
@@ -156,6 +157,10 @@ asked.
 Run builds and tests **in the background and read the log file**, rather than letting output stream
 into your context — a failed compile in this repo prints the full clang invocation, hundreds of
 include flags per error. You want the failures, not the command lines.
+
+**Run both from the repository root.** From anywhere else, tests fail with *"Root Directory is not
+set"* — dozens or hundreds of them at once, which reads like broken code rather than a wrong working
+directory, and costs an investigation before anyone thinks to check `pwd`.
 
 Every sentinel must pass. **If the baseline is not green, stop and report.** Do not proceed, and do
 not investigate the failure. An op that is already broken is not a valid input to this procedure: a
@@ -214,11 +219,9 @@ Three scope limits hold throughout, whatever the fix recipe says:
   comment your change made untrue* is part of your change. If you cannot answer the test with a
   plain yes, the answer is no, and it goes in the report instead.
 
-  **Report each such repair on its own line**, never folded into the site list. A reviewer can
-  confirm the transformation mechanically and cannot confirm prose, so these are the lines that
-  most need their attention. Naming them one by one is also the check on this permission: if you
-  find yourself writing a justification you would not want read back to you, that repair was
-  cleanup wearing a better hat.
+  **Report each such repair on its own line**, per [Step 5](#step-5--report). Naming them one by one
+  is also the check on this permission: if you find yourself writing a justification you would not
+  want read back to you, that repair was cleanup wearing a better hat.
 
 **`ttnn/cpp/ttnn/operations/experimental/quasar/` is not evidence of anything.** Nothing from that
 directory may enter your work: do not cite it, copy a construct or a name from it, or offer it as
@@ -244,15 +247,15 @@ cases you meant.
 
 **On a regression: revert, then report. Do not patch forward.** Every fix leaves the behaviour your
 sentinels exercise unchanged — that is what makes them a valid check — so a newly failing test
-means the transformation was misapplied, not that it needs an adjustment. Patching forward is how a three-line pass becomes a diff nobody can review,
-and it usually buries the evidence of what actually went wrong. Revert to the baseline and report
-the site and the failure; that report is worth more than a rescued diff.
+means the transformation was misapplied, not that it needs an adjustment. Patching forward is how a
+three-line pass becomes a diff nobody can review, and it usually buries the evidence of what actually
+went wrong. Revert to the baseline and report the site and the failure; that report is worth more
+than a rescued diff.
 
 ## Step 5 — Report
 
-A post-port pass produces **no committed document.** These passes are small and numerous, and a file
-per fix per op would litter the tree faster than anyone would read it. Report to your invoker, in
-the session, in this shape:
+A single pass produces **no committed document** — your invoker is right there, and a file per fix per
+op would litter the tree faster than anyone would read it. Report in the session, in this shape:
 
 - **Outcome** — `APPLIED` (with the site count), `NO SITES FOUND`, or `STOPPED` (with why).
 - **Sites** — `file:line` for each, one line each.
@@ -268,8 +271,9 @@ the session, in this shape:
   only channel this pass has — nothing else you produce carries an observation out of the diff.
   Write it for someone who will act on it, because someone will.
 
-Leave the change uncommitted unless your invoker asks otherwise — committing clears the
-working-tree diff from a reviewer's editor before they have seen it.
+Leave the change uncommitted — committing clears the working-tree diff from a reviewer's editor
+before they have seen it. **Both defaults flip in a batch:** every pass is committed and the report
+goes to a file, in the shape above. See [If you are running a batch](#if-you-are-running-a-batch).
 
 ---
 
@@ -302,20 +306,73 @@ accommodate the site. Either one produces a diff whose reviewer cannot tell what
 
 *Skip this section if you were called for a single fix.*
 
-Several fixes can be run over one op back-to-back, or one fix over several ops — by one agent in
-sequence, or by a subagent per pass. The procedure above is the unit of work in every case, run
-once per (fix, op) pair. Three things to hold:
+A batch is **several fixes over one op**, run back-to-back. The procedure above is the unit of work,
+run once per fix.
+
+**Still one op.** If your invoker named several, run the one named first and report that the others
+need their own runs. Each pass reads this op's factory and kernels closely, and a second op does not
+add work so much as degrade every pass after the first.
+
+**A batch is style passes only**, unless your invoker explicitly says otherwise. A semantic pass is
+bounded partly by its launcher's judgement (see [Style passes and semantic
+passes](#style-passes-and-semantic-passes)), and a batch is precisely the shape where that person is
+not there to be asked. So if the set you were handed includes a recipe from `semantic/`, run the
+style ones, leave that one untouched, and say so in your report — it wants a run of its own with
+someone at the keyboard. This restricts *batching*, not the recipes: any single pass, style or
+semantic, is perfectly fine run on its own.
+
+**Assume nobody is watching.** A batch gets launched and left, so nothing you say in the session is
+guaranteed to be read. That is why it reports to a file — see [What a batch
+produces](#what-a-batch-produces).
+
+**Start from a clean working tree, with the op's port already committed.** Reverting one pass without
+disturbing anything else is only well-defined if nothing uncommitted was sitting underneath. If the
+tree is dirty when you arrive, stop and report it rather than guessing whose work it is.
+
+Then, for the run itself:
 
 - **Each pass keeps its own baseline → apply → verify cycle.** Don't batch the applications and
   verify once at the end. If three fixes go in and one test goes red, a single verification tells
   you nothing about which one did it — and you have lost precisely the attribution that makes these
   passes cheap. Pass *N*'s baseline is simply pass *N−1*'s verified end state, so this costs one
   build per pass, not two.
-- **Keep each pass separately revertible** — a commit per pass is the simplest way. When pass 4
-  regresses, you revert pass 4, not the day's work.
+- **Commit each applied pass on its own**, as soon as that pass's own sentinels are green. This is
+  what keeps it separately revertible: when pass 4 regresses, you revert pass 4, not the day's work.
+  Give the commit the fix's name and the [Step 5](#step-5--report) headline, so `git log` carries the
+  outcome and the sites:
+
+  ```
+  metal2(post-port): <fix name> on <op>
+
+  Outcome:  APPLIED (<n> sites)
+  Sites:    <file:line, one per line>
+  ```
+
+  A pass that found no sites, or that stopped, has nothing to commit; it is recorded in the report
+  instead.
 - **Some fixes have a required order**, and the fix recipes say so where it applies. Honour it. If
   two fixes touch the same construct and neither recipe states an order, run them in separate
   passes and report the interaction rather than choosing one yourself.
+- **A regression reverts that pass, not the run.** Do what [Step 4](#step-4--re-verify) says — revert
+  to the pass's baseline, record the site and the failure, don't patch forward — and then carry on to
+  the next fix.
 
-A pass that stops (see above) does not stop the batch. Record it and carry on to the next one — a
-stop is a result, and the remaining fixes are independent of it.
+A pass that stops for cause, per [When the fix doesn't fit](#when-the-fix-doesnt-fit), does not stop
+the batch either. Record it and carry on to the next one — a stop is a result, and the remaining
+fixes are independent of it.
+
+### What a batch produces
+
+**One `METAL2_POSTPORT_REPORT.md` in the op directory**, carrying a section per pass in the
+[Step 5](#step-5--report) shape — for **every** pass, including the ones that found no sites and the
+ones that stopped. Where a fix recipe asks you to raise a feature request, put it in verbatim, under
+its own heading, so it can be lifted out and filed without being rewritten. Commit the file once, at
+the end of the run.
+
+This file replaces the in-session report, and it is not a formality: unattended, it is the only route
+by which anything you noticed reaches the op's owners or the people maintaining these recipes. An
+observation left in the session dies there.
+
+Then close with a short summary to your invoker: one line per pass, plus anything you think they need
+to read before they look at the diffs. They have the commits and the report; what they want from you
+is the shape of the run.
