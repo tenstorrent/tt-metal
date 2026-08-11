@@ -43,7 +43,7 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(2);  // sticks for this core
 
     const auto s_out = TensorAccessor(dst_args, dst_addr);
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
     experimental::CB cb_scratch(cb_id_scratch);
 
@@ -86,7 +86,7 @@ void kernel_main() {
 
         // Write packed output stick to DRAM
         noc.async_write(
-            experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_scratch),
+            use<experimental::CB::AddrSelector::WRITE_PTR>(cb_scratch),
             s_out,
             stick_nbytes_out,
             {},

@@ -40,7 +40,7 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(2);  // number of output sticks for this core
 
     const auto s_in = TensorAccessor(src_args, src_addr);
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
 
     constexpr uint32_t r2 = r * r;
