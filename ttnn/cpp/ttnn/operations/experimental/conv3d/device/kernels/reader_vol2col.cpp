@@ -8,10 +8,9 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
-// Logical-pad masking (opt-in, independent of halo mode)
+// Logical-pad masking (opt-in, independent of halo mode): this device's spatial origin. Runtime
+// because it comes from the pad_offset tensor; the logical extents are compile-time template args.
 namespace {
-uint32_t g_mask_logical_h = 0;
-uint32_t g_mask_logical_w = 0;
 uint32_t g_mask_h_start = 0;
 uint32_t g_mask_w_start = 0;
 }  // namespace
@@ -343,6 +342,9 @@ template <
     uint32_t halo_hbot_base,
     uint32_t halo_wleft_base,
     uint32_t halo_wright_base,
+    bool mask_mode,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
     typename Reader,
     typename HaloReader>
 void gather_rows_to_shard(
@@ -414,13 +416,16 @@ void gather_rows_to_shard(
                 if constexpr (check_padding) {
                     // Universal logical-pad mask
                     bool logical_masked = false;
-                    if (g_mask_logical_h != 0 &&
-                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
-                        logical_masked = true;
-                    } else if (g_mask_logical_w != 0 &&
-                               static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >=
-                                   g_mask_logical_w) {
-                        logical_masked = true;
+                    if constexpr (mask_mode) {
+                        if constexpr (logical_h_mask != 0) {
+                            logical_masked =
+                                static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= logical_h_mask;
+                        }
+                        if constexpr (logical_w_mask != 0) {
+                            logical_masked =
+                                logical_masked ||
+                                static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= logical_w_mask;
+                        }
                     }
                     if (logical_masked) {
                         zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
@@ -506,13 +511,16 @@ void gather_rows_to_shard(
                 } else {
                     // Fast path: no conv-padding checks
                     bool logical_masked = false;
-                    if (g_mask_logical_h != 0 &&
-                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
-                        logical_masked = true;
-                    } else if (
-                        g_mask_logical_w != 0 &&
-                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= g_mask_logical_w) {
-                        logical_masked = true;
+                    if constexpr (mask_mode) {
+                        if constexpr (logical_h_mask != 0) {
+                            logical_masked =
+                                static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= logical_h_mask;
+                        }
+                        if constexpr (logical_w_mask != 0) {
+                            logical_masked =
+                                logical_masked ||
+                                static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= logical_w_mask;
+                        }
                     }
                     if (logical_masked) {
                         zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
@@ -688,6 +696,9 @@ template <
     uint32_t halo_hbot_base,
     uint32_t halo_wleft_base,
     uint32_t halo_wright_base,
+    bool mask_mode,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
     typename Reader,
     typename HaloReader>
 void gather_rows_to_shard_selected(
@@ -768,7 +779,10 @@ void gather_rows_to_shard_selected(
             halo_htop_base,
             halo_hbot_base,
             halo_wleft_base,
-            halo_wright_base>(
+            halo_wright_base,
+            mask_mode,
+            logical_h_mask,
+            logical_w_mask>(
             noc,
             in_reader,
             halo_reader,
@@ -872,8 +886,6 @@ void kernel_main() {
     constexpr auto halo_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     const auto halo_reader = TensorAccessor(halo_args, halo_addr);
     // Reset mask globals every invocation
-    g_mask_logical_h = 0;
-    g_mask_logical_w = 0;
     g_mask_h_start = 0;
     g_mask_w_start = 0;
     // Per-device [h_start, w_start] offset accessor follows the halo accessor
@@ -890,8 +902,6 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* off_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1);
         g_mask_h_start = off_p[0];
         g_mask_w_start = off_p[1];
-        g_mask_logical_h = logical_h_mask;
-        g_mask_logical_w = logical_w_mask;
     }
 
     // Compact halo section bases (pages), layout [H-top | H-bot | W-left | W-right]
@@ -1032,7 +1042,10 @@ void kernel_main() {
                                         halo_htop_base,
                                         halo_hbot_base,
                                         halo_wleft_base,
-                                        halo_wright_base>(
+                                        halo_wright_base,
+                                        mask_mode,
+                                        logical_h_mask,
+                                        logical_w_mask>(
                                         noc,
                                         in_reader,
                                         halo_reader,
@@ -1088,7 +1101,10 @@ void kernel_main() {
                                                 halo_htop_base,
                                                 halo_hbot_base,
                                                 halo_wleft_base,
-                                                halo_wright_base>(
+                                                halo_wright_base,
+                                                mask_mode,
+                                                logical_h_mask,
+                                                logical_w_mask>(
                                                 noc,
                                                 in_reader,
                                                 halo_reader,
