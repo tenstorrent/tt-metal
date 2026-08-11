@@ -65,6 +65,8 @@ A Metal 2.0 port is done in three steps:
  2. Port the op to Metal 2.0 (basic port)
  3. Post-port style fixups
 
+(More involved, semantic fixup recipe can be applied after the main port is complete.)
+
 The porting recipes are available on the branch `akertesz/op-porting-recipe`, in the directory `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/`. The recipes are designed to be AI-facing, not human-friendly. These recipes are **not** checked into main (nor will they be). This is by design; it facilitates rapid iteration on the recipes, and it keeps the recipes internal (not customer-facing).
 
 ### Audit step
@@ -152,11 +154,35 @@ The basic Metal 2.0 porting recipe was designed to be as minimal as possible, bo
 
 This phase of the port applies the style changes stepwise, each as a separate commit.
 
-#### Audit launch AI prompt
+Multiple style fixups are planned, but currently available is:
+ - Convert sync-free DFBs to `Scratchpad` or `LocalTensorAccessor`
+
+**Use a fresh Claude** (Opus 1M with Max effort) session for post-port style fixups to maximize available context window. Do not attempt to re-use the same Claude who performed the main port.
+
+#### Post-port style fixups AI prompt
 
 ```
-(Not yet available; coming soon!)
+You are running the post-port style-fixup phase on one TTNN operation in this checkout.
+
+Procedure:  docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/pass_procedure.md
+            Read this first, in full. It is the procedure; the recipes below are the content.
+
+Passes:     1. docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/style/sync_free_dfbs.md
+
+Op:         ttnn/cpp/ttnn/operations/<family>/<op>
+Sentinels:  <the tests that must pass before and after — the same set for every pass>
 ```
+
+You must supply the "sentinel tests" that Claude will run to confirm that each style port was successful.
+
+If a style port fails, Claude will revert the change, note the issue in the `METAL2_POSTPORT_REPORT.md`, and carry on to the next style port recipe.
+
+#### Check the diffs and post-port report
+
+After a successful style port, be sure to skim the post-port report. Claude will sometimes tell you things that you really need to know! As with the other reports, you'll probably want to delete it before merging to main.
+
+Each style port is separately applied as an atomic commit. You should inspect each of these diffs to ensure that the changes made are as you expect.
+
 
 ### Post-port testing
 
@@ -165,3 +191,26 @@ After a successful Metal 2.0 port, you are responsible for comprehensively testi
 The porter-Claude will already have run the tests you recommended as part of the port.
 
 If you find an unexpected change in op behavior post-port, please contact Audrey Kertesz.
+
+## (Optional) Post-Port Semantic Changes
+
+After a successful Metal 2.0 port, you can optionally run additional incremental recipes to make beneficial changes to your op. Unlike the "style fixup" recipes from the previous step, these recipes make _semantic_ changes to the code. They require much more careful review than syntax and style changes.
+
+Multiple post-port semantic recipes are planned. Only the following are currently available:
+ - Convert non-sync-free DM self-loop DFBs to Scratchpad (simple cases only - not comprehensive!)
+ - Add Gen2 hardware configs
+
+ Unlike the style port recipes above, these are invoked one at a time. Use your judgement when evaluating the output of a semantic port. A passing sentinel test does not _guarantee_ the safety of the change.
+
+Use a fresh Claude Opus (Max effort) session for these ports. Use the following prompt to launch a post-port semantic recipe:
+
+ ```
+You are running ONE post-port semantic pass on one TTNN operation in this checkout. Work independently — but I am reachable, so a stop that only needs a decision from me should be a question instead.
+
+Procedure:   docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/pass_procedure.md
+             Read this first, in full. It is the procedure; the recipe below is the content.
+
+Fix recipe:  docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/semantic/<recipe>.md
+Op:          ttnn/cpp/ttnn/operations/<family>/<op>
+Sentinels:   <the tests that must pass before and after>
+```
