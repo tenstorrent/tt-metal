@@ -51,11 +51,11 @@ namespace profiler {
 struct SpscDecodeState;
 }  // namespace profiler
 
-// Program-support count the perf-debug role split needs so the HAL's per-bank DRAM PROFILER region comes out
-// big enough to host one frame ring, or 0 when the split is off. Called from
-// get_profiler_dram_bank_size_per_risc_bytes() -- the role split reuses that region instead of allocating a
-// second DRAM buffer, so the region's size and the ring's size are the same knob. See FINDINGS §N+39.
-uint32_t perf_debug_dram_region_program_count();
+// Per-risc byte figure the perf-debug role split needs the HAL to size its per-bank DRAM PROFILER region from,
+// or 0 when the split is off. Called from get_profiler_dram_bank_size_for_hal_allocation() ONLY -- that path
+// feeds the HAL region and nothing else. The role split reuses that region instead of allocating a second DRAM
+// buffer, so the region's size and the ring's size are one knob. See FINDINGS §N+39.
+uint32_t perf_debug_dram_region_bytes_per_risc();
 
 // Decoded device record handed writer -> reader. Layout mirrors the standalone drain harness's Rec exactly (ts first
 // packs it to 24 B instead of 32 padded), so both paths move the same bytes per record.
