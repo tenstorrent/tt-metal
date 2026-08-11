@@ -139,10 +139,17 @@ void kernel_main() {
     constexpr uint32_t kRingNoForward = 0xFFFFFFFFu;  // src_slot sentinel: this step forwards nothing
     // Multicast publish (MCAST_RING): my bank ring as maximal contiguous runs of cores, in translated coords.
     // Translated coords are not dense, so one rectangle would also cover non-ring cores; see the host.
-    [[maybe_unused]] constexpr uint32_t kMcNRuns = 36;
-    [[maybe_unused]] constexpr uint32_t kMcRunBase = 37;
-    [[maybe_unused]] constexpr uint32_t kMcRunStride = 5;
-    [[maybe_unused]] uint32_t fidx = 20u + 2u * G;    // optional args start after the schedule
+    [[maybe_unused]] constexpr uint32_t kMcNRuns = kRingFwdBase + 2u * 8u;  // G == 8, as the host asserts
+    [[maybe_unused]] constexpr uint32_t kMcRunBase = kMcNRuns + 1u;
+    [[maybe_unused]] constexpr uint32_t kMcRunStride = 5u;
+    [[maybe_unused]] constexpr uint32_t kMcMaxRuns = 8u;
+    // Optional args (bias / ternary / output chunks / reduce-scatter) start after the ring schedule AND the
+    // multicast block, which is pushed unconditionally -- zeroed when multicast is off -- so this base does
+    // not depend on the mode. It must equal the host's kRsArgCount; deriving both from the same run-block
+    // constants is what keeps them from drifting. They did drift once: this read 20+2*G while the host pushed
+    // the multicast block too, so every fusion / output-split / rscatter path took the multicast args as its
+    // addresses and hung.
+    [[maybe_unused]] uint32_t fidx = kMcRunBase + kMcMaxRuns * kMcRunStride;
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;
     const uint32_t bias_addr = get_arg_val<uint32_t>(fidx++);
