@@ -149,3 +149,143 @@ def test_bcast(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output, output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing
+
+
+# With the batch in the C dim (a = [1, C, H, W], C > 1) and input_b's padded_shape[0] == C, the op
+# routes to the non-optimised BcastShardedHProgramFactory. Pre-fix that factory passed B = N*C to
+# compute while the reader only produces Ht*Wt tiles, so it deadlocked. Existing coverage only puts
+# the batch in N ([N, 1, H, W]), so N*C == 1 there and the bug is never exercised.
+@pytest.mark.parametrize(
+    "batch, height_per_batch, width, num_cores",
+    (
+        (2, 64, 256, 8),
+        (2, 1024, 1280, 40),
+    ),
+)
+@pytest.mark.parametrize(
+    "op",
+    [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL],
+)
+def test_bcast_h_width_sharded_batched_channel(device, batch, height_per_batch, width, num_cores, op):
+    torch.manual_seed(0)
+
+    # input_a: [1, batch, H, W] -> flattened 2D height = batch * H (batch folded into C).
+    a_shape = [1, batch, height_per_batch, width]
+    a_torch = torch.rand(a_shape, dtype=torch.bfloat16)
+
+    # input_b: one broadcast row per batch. b.padded_shape[0] == batch (!= a.padded_shape[0] == 1),
+    # which forces the non-optimised sharded-H factory.
+    b_torch = torch.rand([batch, 1, 1, width], dtype=torch.bfloat16)
+
+    if op == ttnn.BcastOpMath.ADD:
+        torch_ref_output = a_torch + b_torch.reshape(1, batch, 1, width)
+    else:
+        torch_ref_output = a_torch * b_torch.reshape(1, batch, 1, width)
+
+    input_tensor = ttnn.from_torch(
+        a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    shard_height = batch * height_per_batch
+    shard_width = width // num_cores
+    core_grid = get_shard_grid_from_num_cores(num_cores, device)
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(shard_height, shard_width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    tt_weight = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        tt_input,
+        tt_weight,
+        op,
+        ttnn.BcastOpDim.H,
+        memory_config=ttnn.get_memory_config(tt_input),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg
+
+
+# Same non-optimised BcastShardedHProgramFactory path as the width-sharded case above, but for
+# BLOCK_SHARDED input (batch folded into C, distributed across grid rows). Pre-fix B = N*C was passed
+# for block sharding too, so this deadlocked identically.
+@pytest.mark.parametrize(
+    "batch, height_per_batch, width, shard_grid",
+    ((2, 128, 1280, (8, 5)),),
+)
+@pytest.mark.parametrize(
+    "op",
+    [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL],
+)
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_bcast_h_block_sharded_batched_channel(device, batch, height_per_batch, width, shard_grid, op, orientation):
+    torch.manual_seed(0)
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        if shard_grid[1] == 8 and orientation == ttnn.ShardOrientation.COL_MAJOR:
+            shard_grid = (shard_grid[0], 4)
+        if shard_grid[0] == 8 and orientation == ttnn.ShardOrientation.ROW_MAJOR:
+            shard_grid = (4, shard_grid[1])
+
+    # input_a: [1, batch, H, W] -> flattened 2D height = batch * H (batch folded into C).
+    a_shape = [1, batch, height_per_batch, width]
+    a_torch = torch.rand(a_shape, dtype=torch.bfloat16)
+
+    # input_b: one broadcast row per batch; b.padded_shape[0] == batch forces the non-optimised factory.
+    b_torch = torch.rand([batch, 1, 1, width], dtype=torch.bfloat16)
+
+    if op == ttnn.BcastOpMath.ADD:
+        torch_ref_output = a_torch + b_torch.reshape(1, batch, 1, width)
+    else:
+        torch_ref_output = a_torch * b_torch.reshape(1, batch, 1, width)
+
+    input_tensor = ttnn.from_torch(
+        a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_2d_height = input_tensor.padded_shape[0] * input_tensor.padded_shape[1] * input_tensor.padded_shape[2]
+    input_2d_width = input_tensor.padded_shape[3]
+    input_2d_height_padded = _nearest_y(input_2d_height, shard_grid[0] * 32)
+    shard_height = math.ceil(input_2d_height_padded / shard_grid[0])
+    shard_width = math.ceil(input_2d_width / shard_grid[1])
+    core_grid = (
+        ttnn.CoreGrid(y=shard_grid[0], x=shard_grid[1])
+        if orientation == ttnn.ShardOrientation.ROW_MAJOR
+        else ttnn.CoreGrid(y=shard_grid[1], x=shard_grid[0])
+    )
+    in_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(
+            (shard_height, shard_width)
+            if orientation == ttnn.ShardOrientation.ROW_MAJOR
+            else (shard_width, shard_height)
+        ),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
+
+    tt_weight = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        tt_input,
+        tt_weight,
+        op,
+        ttnn.BcastOpDim.H,
+        memory_config=ttnn.get_memory_config(tt_input),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg
