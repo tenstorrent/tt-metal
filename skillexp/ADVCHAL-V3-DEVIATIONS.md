@@ -147,10 +147,22 @@ All three are **one mistake made three times**: a rule applied to a population i
 | B1 | C5c: agreement must match the memory space | every advised/shipped pair | none — the profile has no output space. 14 of 15 rows false |
 | B2 | the legal ladder | every cliff candidate | only advice that is a **shard** over the tile axis. `topk` got `[1]` while shipping on 110 |
 | B3 | a measurement faster than `final_ms` must ship or explain | every measurement vs **one global** `final_ms` | per layer kind — 12 false positives on nmFN alone |
+| B4 | comparing v3's result against v2's | headline **percentages** | the same **layer kind**. On gemma-4-26B `-onA` I read −11.91 % against v2's −12.98 % and wrote *"reproduces v2"* — while v3 got **+0.00 % on the 25-layer sliding kind v2 won** and −12.10 % on the 5-layer minority kind. At model scope: **20 %, not 100 %** |
 
 B1 was caught by step 0 before hardware. B2 was caught by the shakedown. **B3 I introduced *as the fix* for the
 shakedown's defect, and it carries the same mistake** — I scoped *which* measurements to consider by kind and
 then compared them all against a single number.
+
+**B4 is the same shape as B1–B3, applied to my own reporting rather than to the code**, and it is the one that
+reached a published table: a comparison rule (percentage vs percentage) applied across a population where it
+does not hold (different layer kinds). It also produced the friendliest possible wrong answer — *"reproduces
+v2"* — on a cell that had in fact missed v2's win by 5×. Corrected in
+[`RESULTS`](ADVCHAL-V3-RESULTS.md) §1a; **only `µs/model` is kind-weighted and comparable.**
+
+The corrected corpus picture: on the four cells where v2's control and layer counts are both recorded, v3
+delivers **−2,731 µs against v2's −10,480 — 26 %** — plus **−2,701 µs** from three cells v2 scored at zero. So
+v3 is **a more trustworthy 6.8 ms, not a larger one**, and that sentence should have been the headline from the
+start.
 
 **The thought-process error, and it is the sharpest thing in this document:** I specified every rule by **what
 it should catch** and never by **what it would wrongly catch**. Clause 2 was specified as "don't ship something
