@@ -294,7 +294,7 @@ python models/experimental/vibevoice/demo/demo.py
 # 4-speaker demo, cap the AR loop at 32 frames, verbose stage/timing logs
 python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --debug
 
-# Full long-form render (the CI workload, ~60-75 min of device time)
+# Full long-form render (the CI workload, ~25 min of device time)
 python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --trace
 ```
 
@@ -330,8 +330,7 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --tra
 positions self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried —
 then replays it per frame — roughly a **10×** speedup on the AR loop over eager decode — and opens
 the device with a ~1.4 GB trace region + 2 command queues. (For absolute tok/s see
-[Performance](#performance); that table is stale and understates current throughput — see the
-caution there.)
+[Performance](#performance).)
 
 | Flag | Env var | Scope | Notes |
 |------|---------|-------|-------|
@@ -568,19 +567,38 @@ at long ISL; see the `test_prefill.py` docstrings).
 **Decode tok/s** is steady fused-frame *replay* only (`decode_mode=steady_trace`) — capture /
 first-time compile frames are excluded.
 
-| ISL | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E | AR toks |
-|----:|-------------:|---------:|-------------:|-------:|----:|--------:|
-| 32 | 5.7 | 5.634 | 24.75 | 40 | 10s | 64 |
-| 64 | 11.3 | 5.656 | 24.71 | 40 | 14s | 128 |
-| 128 | 22.6 | 5.677 | 24.74 | 40 | 21s | 256 |
-| 256 | 44.5 | 5.759 | 24.70 | 40 | 54s | 512 |
-| 512 | 88.4 | 5.795 | 24.62 | 41 | 11s | 66 (EOS early) |
-| 1024 | 169.5 | 6.043 | 24.57 | 41 | 118s | 2048 |
-| 2048 | 320.0 | 6.400 | 24.39 | 41 | 192s | 4096 |
-| 4096 | 554.6 | 7.386 | 24.13 | 41 | 358s | 7795 (EOS before 2×) |
-| 8192 | 830.7 | 9.862 | 23.70 | 42 | 739s | 15122 (EOS before 2×) |
-| 16384 | 854.8 | 19.167 | 22.94 | 44 | 1623s | 32768 |
-| 23038 | 758.9 | 30.359 | 22.46 | 45 | 2295s | 42498 (EOS before 2×) |
+Measured 2026-08-11 at commit `5a965b7`.
+
+| ISL | Prefill (s) | Prefill tok/s | TTFT (s) | Decode tok/s | ms/tok | E2E (s) | Audio (s) | RTF | ×RT | RTF decode | AR toks | Steady frames |
+|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|
+| 32 | 4.163 | 7.7 | 4.163 | 36.15 | 27.66 | 7.26 | 8.53 | 0.8505 | 1.18 | 0.2075 | 64 | 63 |
+| 64 | 4.177 | 15.3 | 4.177 | 36.05 | 27.74 | 9.59 | 17.07 | 0.5621 | 1.78 | 0.2081 | 128 | 124 |
+| 128 | 4.136 | 30.9 | 4.136 | 35.98 | 27.79 | 13.11 | 34.13 | 0.3841 | 2.60 | 0.2085 | 256 | 252 |
+| 256 | 4.170 | 61.4 | 4.170 | 35.92 | 27.84 | 10.02 | 18.53 | 0.5404 | 1.85 | 0.2088 | 139 (EOS early) | 133 |
+| 512 | 4.292 | 119.3 | 4.292 | 35.93 | 27.84 | 56.70 | 136.53 | 0.4153 | 2.41 | 0.2088 | 1024 | 873 |
+| 1024 | 4.413 | 232.0 | 4.413 | 35.75 | 27.97 | 54.65 | 214.13 | 0.2552 | 3.92 | 0.2098 | 1606 (EOS before 2×) | 1582 |
+| 2048 | 4.689 | 436.8 | 4.689 | 35.41 | 28.24 | 123.07 | 496.67 | 0.2478 | 4.04 | 0.2118 | 3725 (EOS before 2×) | 3647 |
+| 4096 | 5.278 | 776.1 | 5.278 | 34.68 | 28.84 | 255.91 | 1092.27 | 0.2343 | **4.27** | 0.2163 | 8192 | 8113 |
+| 8192 | 6.626 | 1236.3 | 6.626 | 33.74 | 29.64 | 490.82 | 2037.47 | 0.2409 | 4.15 | 0.2223 | 15281 (EOS before 2×) | 15107 |
+| 16384 | 13.345 | 1227.7 | 13.345 | 32.21 | 31.05 | 1075.45 | 4230.40 | 0.2542 | 3.93 | 0.2329 | 31728 (EOS before 2×) | 31284 |
+| 23038 (full) | 20.465 | 1125.7 | 20.465 | 31.22 | 32.03 | 1480.59 | 5477.73 | 0.2703 | 3.70 | 0.2402 | 41083 (EOS before 2×) | 40291 |
+
+**Full prompt:** 41083 AR tokens → **91.3 min of audio in 24.7 min of device time (3.70× real time)**.
+
+Steady decode degrades 27.66 → 32.03 ms/tok across the 720× ISL range (+15.8%) — the KV-growth cost,
+near-linear in context. Prefill throughput peaks around 8k (1236 tok/s) and eases to 1126 at the full
+prompt. Best end-to-end RTF is at ISL=4096 (4.27× RT): below that the fixed ~4.1 s prefill dominates
+short renders, above it the growing per-token cost outweighs better prefill amortization.
+
+> **How these rows were collected.** ISLs 32–8192 came from one sweep process; 16384 and 23038 were
+> re-run individually (`VV_ISL_SWEEP=16384` / `23038`) after that process was killed by an
+> intermittent host-side `SIGBUS` at ISL=16384. The test warms up per ISL, so the rows are
+> comparable, but this was not a single continuous pass and the sweep's JSON artifact holds only the
+> last isolated row. The `SIGBUS` is environmental, not a model or code fault: it reproduced ~2 runs
+> in 3 at the largest KV allocation (~2.9 GB) with no kernel error, no OOM and no Python traceback,
+> and ISL=16384 passed on both sides of the commit under test with identical generation (31728 AR
+> tokens, 4230.40 s audio). Root cause is not yet established — capture a core/gdb backtrace to
+> settle it. Re-running the affected ISL succeeds.
 
 ### Performance tests (Tracy)
 
@@ -746,12 +764,13 @@ entry); actual concurrency depends on the P150b runner-pool size.
 | e2e WER | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=256`) | TT-vs-reference WER ≤ 0.05 | 25 min |
 | speaker similarity | `pytest tests/pcc/test_e2e_sim.py` | SIM target floor 0.5 / margin 0.05 | 25 min |
 
-> **Timeout budget caveat.** The `models → demo → bh_p150b_civ2` pipeline has a **130-minute** total
-> budget (`.github/time_budget.yaml`), enforced as the *sum* of the per-job timeouts at matrix-load
-> time. The three jobs are split to fit exactly (80 + 25 + 25 = 130), so the long-form
-> `4p_climate_100min` render gets only **80 min**. A full render is ~60–75 min of device time, so
-> under load / measurement variance **the demo job may hit its 80-min timeout**. If it does, either
-> raise the demo budget (ping `#tt-metal-infra`) and bump the demo timeout, or cap the render
+> **Timeout budget.** The `models → demo → bh_p150b_civ2` pipeline has a **130-minute** total budget
+> (`.github/time_budget.yaml`), enforced as the *sum* of the per-job timeouts at matrix-load time.
+> The three jobs are split to fit exactly (80 + 25 + 25 = 130), so the long-form
+> `4p_climate_100min` render gets **80 min**. A full render measures ~25 min of device time
+> (2026-08-11, commit `5a965b7` — see the [ISL sweep](#end-to-end-isl-sweep-4p_climate_100min-blackhole-p150)
+> full-prompt row), so the demo job has comfortable headroom. If a future regression makes it tight,
+> either raise the demo budget (ping `#tt-metal-infra`) and bump the demo timeout, or cap the render
 > (`--max_new_tokens` / `--isl`).
 
 Weights + demo text/voices auto-download and cache under `HF_HOME`; WER/SIM additionally pull
