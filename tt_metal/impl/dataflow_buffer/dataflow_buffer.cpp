@@ -1472,7 +1472,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     }
 
     if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "DFB {} size override applied: entry_size={} num_entries={} prod_threshold={} prod_per_tc={} "
             "cons_threshold={} cons_per_tc={}",
@@ -1687,7 +1687,7 @@ uint32_t finalize_dfbs(
         dfb_size = std::max(dfb_size, kg_dfb_size);
     }
 
-    log_info(
+    log_debug(
         tt::LogMetal,
         "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {}",
         base_offset,
@@ -2074,7 +2074,7 @@ void ProgramImpl::finalize_single_dfb_config(
             // Contiguous within this Neo's exact reserved block (see reserve_packer_ranges).
             const uint8_t pair_index = remapper_index_allocator_.allocate_for_packer(core, tensix_id);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "Intra-tensix DFB {}: Neo{} Tensix-only TC (tensix_id={}, tc_id={}) aliased to shadow tc_id={} "
                 "via remapper pair {}",
@@ -2434,7 +2434,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 producer_txn_ids,
                 num_producer_tcs,
                 config.pap);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
@@ -2458,7 +2458,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 consumer_txn_ids,
                 num_consumer_tcs,
                 config.cap);
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,

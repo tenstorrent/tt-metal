@@ -5,8 +5,9 @@
 /*
  * Driver for Metal's llk_sfpu/ckernel_sfpu_sdpa.h.
  *
- * Those bodies have no LLK API of their own. Each consumer declares its own wrapper.
- * This test declares the same one ttnn's SDPA uses.
+ * Those bodies have no LLK API of their own, so each consumer declares its own wrapper. This test
+ * declares one too, dispatching each body at VectorMode::C the way a consumer does, with a minimal
+ * init sufficient to exercise it.
  *
  * Every body runs ITERATIONS_HALF_FACE = 4 iterations at a dst_reg stride of 2, on faces 0 and 2
  * under VectorMode::C. That writes columns {0,2,4,6,8,10,12,14} of all 32 rows and leaves the rest
@@ -50,6 +51,10 @@ constexpr bool SDPA_OP_IS_EXP = (SDPA_OP == OP_EXP_ACCURATE || SDPA_OP == OP_EXP
 // Only the correction body works on more than one tile.
 constexpr std::uint32_t NUM_DST_TILES = (SDPA_OP == OP_CORRECTION) ? 5 : 1;
 
+static_assert(
+    NUM_DST_TILES <= ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>(),
+    "this configuration needs more Dest tiles than the dest_sync / dest_acc pair can hold");
+
 // The dispatch always targets the base tile. The correction body reaches its other four regions
 // by fixed dst_reg offsets from there.
 constexpr std::uint32_t SDPA_DST_INDEX = 0;
@@ -90,9 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
-// ckernel_sfpu_sdpa.h needs these. ALWI normally comes from the Compute API
-// (api/compute/common_globals.h), which cannot be included here because it pulls in metal's
-// generated chlkc_list.h.
+// ckernel_sfpu_sdpa.h needs these.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 static constexpr bool APPROX         = APPROX_MODE;
 #ifndef ALWI
@@ -126,19 +129,21 @@ inline void sdpa_op(const std::uint32_t dst_index)
 {
     if constexpr (SDPA_OP == OP_RECIP_LEGACY)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<true>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<true /* legacy_compat */>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_RECIP_ITER)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<false>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column<false /* legacy_compat */>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_EXP_ACCURATE)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_exponential_first_column<true, EXP_SCALE_BF16>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_exponential_first_column<true /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_EXP_POLY)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_exponential_first_column<false, EXP_SCALE_BF16>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_exponential_first_column<false /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_SOFTPLUS)
     {

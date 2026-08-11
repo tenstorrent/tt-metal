@@ -6,7 +6,8 @@
  * Driver for Metal's llk_sfpu/ckernel_sfpu_sdpa_fw.h.
  *
  * Like the bodies in the neighbouring ckernel_sfpu_sdpa.h, these have no LLK API of their own.
- * The consumer declares its own wrapper and dispatches the body at VectorMode::C.
+ * The consumer declares its own wrapper and dispatches the body at VectorMode::C. This test
+ * declares one too, with a minimal init sufficient to exercise the bodies.
  *
  * The header holds two:
  *
@@ -86,7 +87,7 @@ inline void sdpa_fw_op_init()
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
     {
-        sfpu::recip_init<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en, false /* legacy_compat */>();
+        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, false /* legacy_compat */>();
     }
     else
     {
