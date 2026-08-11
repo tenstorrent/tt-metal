@@ -39,9 +39,14 @@ skus:
 
   wh_galaxy_merge_gate:
     runs_on:
-      - arch-wormhole_b0
-      - pipeline-functional
-      - topology-6u
+      # TEST-ONLY (SYS-4772) -- DO NOT MERGE.
+      # Reduced to this single label. With arch-wormhole_b0 / pipeline-functional /
+      # topology-6u also required, the galaxy job sat queued 70+ min unassigned (run
+      # 31479975449), so at least one of those three is no longer advertised by the
+      # dedicated merge-gate boards. This label alone still identifies them, and it is
+      # also the string models-smoke-tests-impl.yaml looks for
+      # (contains(join(runs_on, ','), 'dedicated-merge-gate')) to pick the raw GHCR
+      # image instead of the harbor-prefixed one the galaxy lab cannot resolve.
       - in-service-dedicated-merge-gate
 
   wh_galaxy_perf:
