@@ -157,6 +157,7 @@ CPMAddPackage(
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
     VERSION 1.13.0
+    EXCLUDE_FROM_ALL YES
     OPTIONS
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
