@@ -3,9 +3,6 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
-#     Exabox multihost SKUs use dedicated labels (exabox-multihost-ci-sc1 / -sc1-hp /
-#     -sc4 / -sc16). Workers are provisioned by the multihost-ci runner hook from the
-#     job's container.image — there is no ttop allocation block on these SKUs.
 #   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
 #     merge_group. Logical test-list SKUs should set this instead of listing prio
 #     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
@@ -179,20 +176,23 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1:
     runs_on:
       - exabox-multihost-ci-sc1
 
-  # Like bh_sc1, but routes to the high-power single-galaxy multihost-ci pool
-  # (exabox-multihost-ci-sc1-hp / nodes labelled exabox.tenstorrent.com/power=14kw).
+  # Like bh_sc1, but high-power pool (exabox.tenstorrent.com/power=14kw).
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1_high_power:
     runs_on:
       - exabox-multihost-ci-sc1-hp
 
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4:
     runs_on:
       - exabox-multihost-ci-sc4
 
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
       - exabox-multihost-ci-sc16
