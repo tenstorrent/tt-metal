@@ -566,5 +566,8 @@ that contains them.
 ## 10. Commit SHAs
 
 * `48dd8e2caa7` — optimized decoder, tests, sweep/collect/repro scripts, docs and evidence.
-* `df5c3988f12` — the seven stage-review items in §6, their measurements, and the
+* `df5c3988f12` — the first review's seven items (§6.1-§6.7), their measurements, and the
   regenerated artifacts.
+* `78b6a7c0f4b` — the second review's items (§6.8-§6.11), including the length-dependence
+  probe and its real-weight control, the paired re-measurements, and the regenerated
+  artifacts.
