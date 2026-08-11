@@ -160,12 +160,61 @@ v3 measured had the mismatch baked in.
 — drop site 1, keep the decode-only guard — is worth **−5,260 µs** and needs **no change to the prefill path at
 all**, only a policy field.
 
+## 5. ⚠ The carrier is the KV cache — and v2's guard only fixes it at the oracle's own prefill length
+
+The mechanism above says **site 1's output is the only one that outlives the step**, via the cached K/V. That
+predicts the mismatch cost should depend on how much cached history the decode step attends over. Swept the
+oracle's prefill length (`seq_len`, otherwise hardcoded to 32):
+
+| prefill seq | interleaved | 88c decode-only | 88c **both** *(v2's guard)* | 88c decode-only **`drop_index=1`** |
+|---:|---:|---:|---:|---:|
+| 4 | 0.9992558364256461 | 0.9991617114442755 | 0.9991991629585012 | — |
+| 8 | 0.9991848566633527 | 0.9990645601269287 | 0.9991853489542124 | **0.9991015554868861** |
+| **32** | 0.9996280142258483 | **0.9943716809625597** | **0.9996293363224806** | **0.9996226684246500** |
+| 64 | 0.9937787693607536 | 0.9939853731224421 | **0.9939853731224421 — identical** | 0.9938753149590233 |
+
+**Two findings, and the second overturns action 1 as I first wrote it.**
+
+**(a) The mismatch cost grows steeply with prefill length** — 9.4 × 10⁻⁵ at seq 4, 1.2 × 10⁻⁴ at seq 8, and
+**5.3 × 10⁻³ at seq 32.** A 4× length change for a 44× cost change, so it is not proportional to the number of
+cached entries; it behaves like a threshold. *(My prediction was the opposite — that a shorter prefill would be
+worse, since the newly-appended inconsistent entry holds a larger share of the attention. Wrong.
+→ [`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 18.)* The direction that did hold is consistent with the
+**query** also coming from site 1: with more cached history, more attention mass sits on (Q, K) pairs computed by
+different arithmetic paths.
+
+**(b) v2's guard stops firing once prefill exceeds one tile row.** Its condition is `x.shape[-2] > TILE_SIZE →
+skip`, so at seq 64 it does **not** shard prefill — and `phase=both` returns **exactly** the decode-only number,
+`0.9939853731224421`, to sixteen digits. **v2's configuration is phase-consistent only for prefill ≤ 32 tokens,
+which is precisely the length its oracle tests.** At any production prefill length it silently becomes the
+mismatched configuration this file is about.
+
+So **v2's passing 0.9996293 does not generalise** — not because the oracle was faked (it was not, see
+[`REMEASURE`](ADVCHAL-V3-REMEASURE.md)), but because the oracle's single test point is the one length at which the
+guard fires.
+
+**`drop_index=1` is the fix that generalises.** It tracks the interleaved baseline at every length tested —
+within 8.3 × 10⁻⁵ at seq 8, **5.3 × 10⁻⁶ at seq 32**, 9.0 × 10⁻⁵ at seq 64 — because it leaves site 1 interleaved
+in decode, matching a prefill that is interleaved at *any* length. It needs no prefill change and no guard change,
+only a policy field.
+
+⚠ **The seq 64+ rows are not evidence about the model.** The interleaved baseline itself reads 0.9937788 at
+seq 64 — below the 0.995 bar — and 0.5466 at seq 256. The oracle hardcodes `seq_len = 32` and its cache capacity,
+page table and mask construction are all built around that, so longer lengths leave the regime the test supports.
+Those rows are used here **only** for the code-path fact that `phase=both` collapses onto `phase=decode`, which is
+independent of whether the model is in a supported regime. **Whether the model is genuinely correct at production
+prefill lengths is untested by this oracle at all, and that is its own finding.**
+
 ## Revised actions
 
-1. **Ship 88 cores with a phase-consistent guard** (`x.shape[-2] <= TILE_SIZE`, v2's condition). Measured:
-   **−12.27 %/layer, PCC 0.9996293 — above the incumbent.** Worth −5,627 µs/model.
-2. **Or, if the prefill path must not change: 88 cores, decode-only, `drop_index=1`.** −11.47 %/layer, PCC
-   0.9996227, −5,260 µs/model, one policy field.
+1. **Ship 88 cores with `drop_index=1`, decode-only.** Measured **−11.47 %/layer, PCC 0.9996227, −5,260 µs/model**,
+   and it is the only configuration that holds at every prefill length tested. One policy field, no guard change,
+   no prefill change.
+2. ~~Ship 88 cores with a phase-consistent guard (v2's condition)~~ — **withdrawn.** It measures better at seq 32
+   (−12.27 %, PCC 0.9996293) but **only fires when prefill ≤ 32 rows**, so it does not fix production. A guard that
+   shards prefill at *all* lengths is a larger, untested change.
+2b. **Extend the oracle to more than one prefill length.** Every conclusion in this file that needed correcting
+   needed it because `seq_len` was pinned at 32 — including v2's original result and my first fix.
 3. **Audit `full_attention`'s shipped config for the same latent mismatch.** It passes by a 7 × 10⁻⁶ margin that is
    accidental, not designed.
 4. **The ladder must include the advised grid.** 88 was the advised value and the only passing rung, on both fixes.

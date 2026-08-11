@@ -414,3 +414,28 @@ grid, and at 88 cores it converts a **pass** into a **fail**.
 
 **So v2's win is real and correctness-established, and v3 lost it to two independent defects of its own:** 88 was
 missing from its ladder, *and* its decode-only guard would have failed 88 even if the rung had been there.
+
+## ERROR 18 — the oracle's one fixed test point was the confound, twice in one session
+
+Recommended "ship 88 cores with a phase-consistent guard (v2's condition)" on the strength of a measurement at the
+oracle's prefill length, **32**. Sweeping the length showed **v2's guard only fires when prefill ≤ 32 rows** — at
+seq 64 `phase=both` returns the decode-only number to sixteen digits. So the recommended fix does not fix
+production, and **v2's original passing result does not generalise either**, for the same reason.
+
+Also predicted, from the mechanism, that a *shorter* prefill would make the mismatch *worse* (the newly-appended
+inconsistent entry holds a larger share of the attention). The opposite: 9.4 × 10⁻⁵ at seq 4 versus
+**5.3 × 10⁻³ at seq 32**.
+
+**This is ERROR 15 again, on the same variable class.** There I concluded from 79 configurations that all held the
+input *shape* fixed at the decode case. Here I concluded from four configurations that all held the prefill
+*length* fixed at 32. Both times the held-fixed variable was the one that mattered, and both times the fixed value
+came from **the harness I was measuring with** rather than from anything about the question.
+
+> **A test fixture's constants are not neutral.** `seq_len = 32`, `layer_idx = 0`, `batch = 1`, one input shape —
+> each is a choice someone made for a different purpose, and each becomes an unstated premise of every conclusion
+> drawn through it. Before generalising: **which constants of the harness did my conclusion inherit, and which of
+> them does the real system vary?** Sweeping the one that mattered cost eight minutes, twice.
+
+And the corollary that would have caught both: **when a configuration passes by a margin that looks lucky, vary
+the harness before believing it.** v2's 88-core config passes at exactly the prefill length where its guard fires.
+That coincidence was visible in the guard's source the whole time.
