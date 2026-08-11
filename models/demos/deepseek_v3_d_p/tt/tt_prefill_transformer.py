@@ -139,6 +139,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        full_mesh_ring: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -228,6 +229,7 @@ class TtPrefillTransformer(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                full_mesh_ring=full_mesh_ring,
             )
             self.layers.append(layer)
 

@@ -78,6 +78,10 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
+    # Experimental MLA/DSA adoption: keep model boundaries SPxTP, but redistribute the target
+    # ring operation's sequence shards over the complete 2D mesh. Off by default until accuracy,
+    # memory, and performance qualification is complete.
+    full_mesh_ring: bool = False
 
     @property
     def sp_factor(self) -> int:

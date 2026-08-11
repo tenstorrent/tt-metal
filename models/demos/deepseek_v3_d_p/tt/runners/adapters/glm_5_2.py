@@ -85,6 +85,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
+            full_mesh=False,  # sparse_sdpa remains SP-axis sharded
         )
         num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
         index_cache = init_kvpe_cache(
@@ -96,6 +97,7 @@ class GLM52Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=num_index_layers,
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
+            full_mesh=params.full_mesh_ring,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 

@@ -63,15 +63,23 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     cached program per layer is reused across users and chunks.
                 num_layers (int): Total layers folded into the cache batch dim. Structural —
                     fixed for the lifetime of the workload.
-                cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
+                cluster_axis (Optional[int]): Cluster axis along which the cache is sharded (0 or 1).
+                    Explicit None means that sequence shards span the complete 2D mesh in canonical
+                    row-major coordinate order.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
         )doc",
         // Scalar form (original signature preserved).
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
-                &update_padded_kv_cache),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -81,8 +89,14 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("cluster_axis")),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const Tensor&, uint32_t, uint32_t, uint32_t>(
-                &update_padded_kv_cache),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                uint32_t,
+                uint32_t,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),

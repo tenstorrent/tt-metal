@@ -75,6 +75,9 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
+    # Explicit experimental opt-in. Dense MLA uses a full-mesh ring_mla cache/layout; sparse DSA
+    # keeps the primary sparse-SDPA cache on SP and moves only the indexer ring/cache to full mesh.
+    full_mesh_ring: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -118,6 +121,14 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        if config.full_mesh_ring:
+            mesh_rows, mesh_cols = config.mesh_shape
+            assert mesh_rows > 1 and mesh_cols > 1, "full_mesh_ring requires a 2D mesh with both dimensions > 1"
+            assert mesh_rows * mesh_cols <= 32, "full_mesh_ring currently supports at most 32 devices"
+            assert (mesh_rows % 2 == 0) or (mesh_cols % 2 == 0), "full_mesh_ring requires an even mesh dimension"
+            assert (
+                config.chunk_size % (ttnn.TILE_SIZE * mesh_rows * mesh_cols) == 0
+            ), "full_mesh_ring chunk_size must be divisible by TILE_SIZE * mesh_size"
 
         self.model_built = False
         self.compiled = False
@@ -152,7 +163,8 @@ class TtPrefillRuntime:
             f"num_layers={self.config.num_layers}, first_layer_idx={self.config.first_layer_idx}, "
             f"is_first_rank={self.config.is_first_rank}, is_last_rank={self.config.is_last_rank}, "
             f"max_seq_len={self.config.max_seq_len}, mesh_shape={self.config.mesh_shape}, "
-            f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}"
+            f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}, "
+            f"full_mesh_ring={self.config.full_mesh_ring}"
         )
         model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
@@ -205,6 +217,7 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            full_mesh_ring=self.config.full_mesh_ring,
         )
         self.model_built = True
 
@@ -448,6 +461,11 @@ class TtPrefillRuntime:
         assert (
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+        if self.config.full_mesh_ring:
+            assert actual_start % self.config.chunk_size == 0, (
+                "full_mesh_ring currently requires fixed, chunk-aligned scheduling; "
+                f"got actual_start={actual_start}, chunk_size={self.config.chunk_size}"
+            )
 
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
@@ -611,6 +629,11 @@ class TtPrefillRuntime:
         only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
+        assert not self.config.full_mesh_ring, (
+            "KV migration tables do not yet encode full-mesh row-major cache ownership; disable "
+            "PREFILL_FULL_MESH_RING for migration qualification"
+        )
+
         # PP path migrates the primary (KVPE) cache only; the sparse/DSA index cache isn't wired
         # through the cross-stage merge yet (port it into _build_and_serialize_merged_kv_chunk_table
         # to add it) — fail loudly rather than silently drop it.
@@ -638,10 +661,11 @@ class TtPrefillRuntime:
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
         """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor
-        ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica), in the raw on-device (block-cyclic) layout —
-        not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
-        ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
-        read-back."""
+        ``[num_layers, 1, seq_cache, kvpe]``. Axis mode selects one TP replica; dense full-mesh mode
+        composes every canonical row-major sequence shard. The result remains in the raw on-device
+        (block-cyclic) layout, not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is
+        REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes
+        the DRAM core on host read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
@@ -657,11 +681,15 @@ class TtPrefillRuntime:
             [(slot + 1) * num_layers, s[1], s[2], s[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_sequence_cache_mesh_composer
+
+        primary_full_mesh = self.config.full_mesh_ring and not self.model._has_indexer
         physical = ttnn.to_torch(
-            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        )[
-            :, :1
-        ]  # one TP replica: [num_layers, 1, seq_cache, packed_row]
+            sl,
+            mesh_composer=create_sequence_cache_mesh_composer(
+                mesh_device, self.config.sp_axis, full_mesh=primary_full_mesh
+            ),
+        )
         ttnn.deallocate(sl)
         block = kvpe.unpack_host(physical).to(torch.float32)  # [num_layers, 1, seq_cache, kvpe_logical]
         return [block]
