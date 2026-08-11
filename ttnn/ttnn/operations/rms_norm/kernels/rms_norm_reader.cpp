@@ -192,8 +192,9 @@ void kernel_main() {
     const uint32_t in_slice_bytes = get_arg_val<uint32_t>(11);
     const uint32_t in_byte_offset = get_arg_val<uint32_t>(12);
     [[maybe_unused]] const uint32_t gamma_slice_bytes = get_arg_val<uint32_t>(13);
-    [[maybe_unused]] const uint32_t gamma_byte_offset = get_arg_val<uint32_t>(14);
-    [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(15);
+    [[maybe_unused]] const uint32_t gamma_read_offset = get_arg_val<uint32_t>(14);
+    [[maybe_unused]] const uint32_t gamma_lead_bytes = get_arg_val<uint32_t>(15);
+    [[maybe_unused]] const uint32_t shard_row_bytes = get_arg_val<uint32_t>(16);
 
     // A mcast-box FILLER core: inside a reduction group's broadcast rectangle (a
     // shard grid is not always a rectangle) but owning no shard, so it carries no
@@ -237,7 +238,32 @@ void kernel_main() {
             // One stick; compute tilizes it into the row-0-valid tile form that
             // TILE gamma already has.
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr);
-            read_slice_rows<cb_gamma_rm, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_byte_offset);
+            if (gamma_lead_bytes == 0) {
+                read_slice_rows<cb_gamma_rm, CB_W_TILES>(gamma_acc, 1, gamma_slice_bytes, 0, gamma_read_offset);
+            } else {
+                // This core's gamma slice does NOT start on a DRAM-aligned boundary
+                // (a ROW_MAJOR WIDTH/BLOCK shard's width granule is the L1
+                // alignment, so a slice can start mid-tile). A DRAM read TRUNCATES
+                // its source address to the DRAM alignment — silently returning a
+                // neighbouring slice — so fetch the aligned span into scratch past
+                // the gamma row, then re-fetch it L1 -> L1 at the exact offset: an
+                // L1 source only needs the 16-byte L1 alignment, which every slice
+                // offset has (the RM width granule IS that alignment).
+                constexpr uint32_t block_row_bytes = (get_tile_size(cb_gamma_rm) / TILE_HW_DIM) * CB_W_TILES;
+                cb_reserve_back(cb_gamma_rm, CB_W_TILES);
+                const uint32_t row = get_write_ptr(cb_gamma_rm);
+                // Scratch lives in tile-rows 1.. of the same CB block, which tilize
+                // does copy into the gamma tile's rows 1..31 — harmless, because
+                // gamma_block consumes row 0 only (BroadcastDim::Row).
+                const uint32_t scratch = row + block_row_bytes;
+                noc_async_read(
+                    gamma_acc.get_noc_addr(0, gamma_read_offset), scratch, gamma_lead_bytes + gamma_slice_bytes);
+                noc_async_read_barrier();
+                noc_async_read(::get_noc_addr(scratch + gamma_lead_bytes), row, gamma_slice_bytes);
+                zero_l1_bytes(row + gamma_slice_bytes, block_row_bytes - gamma_slice_bytes);
+                noc_async_read_barrier();
+                cb_push_back(cb_gamma_rm, CB_W_TILES);
+            }
         } else {
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);

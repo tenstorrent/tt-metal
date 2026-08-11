@@ -78,3 +78,9 @@
 {"source":"tt-probe","pid":3821626,"started_at_ms":1786482060596,"wait_ms":178,"run_ms":47490,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":3825135,"started_at_ms":1786483010351,"wait_ms":176,"run_ms":51373,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":3826032,"started_at_ms":1786483121486,"wait_ms":416,"run_ms":49625,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3827735,"started_at_ms":1786483211766,"wait_ms":156,"run_ms":56911,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3829210,"started_at_ms":1786483369649,"wait_ms":173,"run_ms":49548,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3829783,"started_at_ms":1786483429475,"wait_ms":125,"run_ms":47470,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3830759,"started_at_ms":1786483667017,"wait_ms":181,"run_ms":68306,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3833383,"started_at_ms":1786483944886,"wait_ms":157,"run_ms":62801,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3835282,"started_at_ms":1786484099557,"wait_ms":185,"run_ms":65503,"test_path":"rms_norm","exit_code":0}

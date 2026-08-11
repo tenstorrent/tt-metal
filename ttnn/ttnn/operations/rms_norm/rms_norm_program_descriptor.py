@@ -79,7 +79,7 @@ SEM_MCAST_CONSUMED = 2  # mcast consumer-ready counter (mcast_pipe)
 READER_ACCESSOR_CT_BASE = 7  # rms_norm_reader.cpp: TensorAccessorArgs<7>
 WRITER_MCAST_CT_BASE = 6  # rms_norm_writer.cpp: MCAST_CT_BASE
 WRITER_MCAST_RT_BASE = 16  # rms_norm_writer.cpp: MCAST_RT_BASE
-_READER_NUM_ARGS = 16  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..15)
+_READER_NUM_ARGS = 17  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..16)
 _COMPUTE_NUM_ARGS = 6  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..5)
 
 # --------------------------------------------------------------------------
@@ -123,6 +123,19 @@ MAX_W_GROUP_SIZE = 32
 # is shortened. Follow-up: re-measure after any change that lowers the DRAM
 # floor, and pair it with input_cb_depth 3-4 as op_design.md's lamp P1 suggests.
 MIN_PIPELINE_BLOCKS = 1
+
+# Buffer-depth ladder, tried in order by the residency solve. Depth buys overlap,
+# so it is spent FIRST and given up LAST: step 0 is the knobs above (the only step
+# any interleaved geometry ever needs, so the default path is byte-identical), and
+# the later steps exist for a resident shard, which leaves far less CB budget —
+# a HEIGHT-sharded core holds the tensor's WHOLE hidden slice (`C =
+# tensor_w_tiles`, not a chosen split), and on the ROW_MAJOR legs that slice is
+# staged twice more through cb_input_rm / cb_output_rm.
+_DEPTH_LADDER = (
+    (INPUT_CB_DEPTH, RM_CB_DEPTH),
+    (INPUT_CB_DEPTH, 1),
+    (1, 1),
+)
 
 TILE_HW = 32
 FP32_TILE_BYTES = 4096
@@ -175,6 +188,20 @@ def _elem_bytes(tensor):
     can never take.
     """
     return 0 if tensor.dtype in _BLOCK_FLOAT_DTYPES else tensor.element_size()
+
+
+def _dram_alignment():
+    """DRAM address alignment in bytes, from the hal (64 on Blackhole).
+
+    A NoC read whose DRAM source address is not aligned to this TRUNCATES the low
+    address bits — silently returning a neighbouring slice, with no assert. See the
+    gamma leg in the reader: a ROW_MAJOR shard's width granule is the L1 alignment,
+    so a core's gamma slice can start at a DRAM offset this does not divide.
+    """
+    try:
+        return int(ttnn._ttnn.device.get_dram_alignment())
+    except Exception:  # pragma: no cover - defensive
+        return 64
 
 
 def _l1_cb_budget():
@@ -233,7 +260,18 @@ class _Geometry:
             self.is_rm_gamma = False
 
 
-def _cb_specs(geo, C, G, R, is_rm_out, has_tail, input_cb_depth=INPUT_CB_DEPTH, pin_in=False, pin_out=False):
+def _cb_specs(
+    geo,
+    C,
+    G,
+    R,
+    is_rm_out,
+    has_tail,
+    input_cb_depth=INPUT_CB_DEPTH,
+    rm_cb_depth=RM_CB_DEPTH,
+    pin_in=False,
+    pin_out=False,
+):
     """THE statement of this op's CB inventory — `(index, num_pages, page_size, format)`.
 
     Both the L1 residency solve (`_cb_bytes`) and the descriptor's CB list are
@@ -280,9 +318,9 @@ def _cb_specs(geo, C, G, R, is_rm_out, has_tail, input_cb_depth=INPUT_CB_DEPTH, 
     if has_tail:
         specs.append((CB_WMASK, 1, BF16_TILE_BYTES, ttnn.bfloat16))
     if geo.is_rm_in:
-        specs.append((CB_INPUT_RM, RM_CB_DEPTH * C, T_in, in_dtype))
+        specs.append((CB_INPUT_RM, rm_cb_depth * C, T_in, in_dtype))
     if is_rm_out:
-        specs.append((CB_OUTPUT_RM, RM_CB_DEPTH * C, T_in, in_dtype))
+        specs.append((CB_OUTPUT_RM, rm_cb_depth * C, T_in, in_dtype))
     if geo.has_gamma:
         specs.append((CB_GAMMA_TILES, C, geo.gamma_tile_bytes, geo.gamma_dtype))
         specs.append((CB_NORMED, R * C, T_in, in_dtype))
@@ -291,7 +329,7 @@ def _cb_specs(geo, C, G, R, is_rm_out, has_tail, input_cb_depth=INPUT_CB_DEPTH, 
     return specs
 
 
-def _cb_bytes(geo, C, G, is_rm_out, has_tail, pin_in=False, pin_out=False):
+def _cb_bytes(geo, C, G, is_rm_out, has_tail, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False):
     """`(fixed_bytes, per_row_bytes)` of the per-core CB footprint at `(C, G)`.
 
     DERIVED from `_cb_specs` — never restated — by differencing the inventory at
@@ -310,12 +348,16 @@ def _cb_bytes(geo, C, G, is_rm_out, has_tail, pin_in=False, pin_out=False):
     return at_1 - per_row_bytes, per_row_bytes
 
 
-def _max_block_row_tiles(geo, C, G, core_row_tiles, is_rm_out, has_tail, budget, pin_in=False, pin_out=False):
+def _max_block_row_tiles(
+    geo, C, G, core_row_tiles, is_rm_out, has_tail, budget, depths=_DEPTH_LADDER[0], pin_in=False, pin_out=False
+):
     """Closed-form L1 residency solve (a single expression, not a search).
 
     Returns 0 when even R == 1 does not fit.
     """
-    fixed_bytes, per_row_bytes = _cb_bytes(geo, C, G, is_rm_out, has_tail, pin_in=pin_in, pin_out=pin_out)
+    fixed_bytes, per_row_bytes = _cb_bytes(
+        geo, C, G, is_rm_out, has_tail, depths=depths, pin_in=pin_in, pin_out=pin_out
+    )
     if fixed_bytes + per_row_bytes > budget:
         return 0
     cap = min(core_row_tiles, max(1, MAX_GATHER_TILES // G))
@@ -685,6 +727,7 @@ def create_program_descriptor(
 
         has_tail_global = 1 if geo.partial_w != 0 else 0
         max_row_count = rows_per_group + (1 if rows_extra else 0)
+        depths = _DEPTH_LADDER[0]
 
         groups = []
         for gi in range(active_row_groups):
@@ -747,13 +790,31 @@ def create_program_descriptor(
                 )
         has_tail_global = 1 if any(m["w_elems"] % TILE_HW for g in groups for m in g["members"]) else 0
         max_row_count = max(g["row_count"] for g in groups)
-        R = _max_block_row_tiles(
-            geo, C, G, max_row_count, is_rm_out, has_tail_global, budget, pin_in=pin_in, pin_out=pin_out
-        )
+        # The shard spec pins G and C, so `R` and the BUFFER DEPTHS are the only
+        # residency knobs left. Walk the depth ladder: full depth first, and give up
+        # overlap only when the working set does not otherwise fit at all.
+        R, depths = 0, _DEPTH_LADDER[-1]
+        for candidate_depths in _DEPTH_LADDER:
+            R = _max_block_row_tiles(
+                geo,
+                C,
+                G,
+                max_row_count,
+                is_rm_out,
+                has_tail_global,
+                budget,
+                depths=candidate_depths,
+                pin_in=pin_in,
+                pin_out=pin_out,
+            )
+            if R:
+                depths = candidate_depths
+                break
         if R == 0:
             raise RuntimeError(
                 f"rms_norm: the per-core CB working set for shard spec {sv_in.shard_h}x{sv_in.shard_w} on "
-                f"{len(sv_in.cores)} cores does not fit L1 (C={C} hidden tiles, w_group_size={G})."
+                f"{len(sv_in.cores)} cores does not fit L1 (C={C} hidden tiles, w_group_size={G}); the shard "
+                f"spec pins both, so there is no split left to shrink the working set with."
             )
 
     all_cores = []
@@ -811,12 +872,21 @@ def create_program_descriptor(
     # cannot be used. The residency SOLVE above deliberately still used the full
     # knob (the conservative value), so this only ever lowers the footprint and
     # never changes the chosen (G, C, R) geometry.
-    input_cb_depth = INPUT_CB_DEPTH if max_row_count > R else 1
+    input_cb_depth = depths[0] if max_row_count > R else 1
 
     cbs = [
         _cb(index, all_core_ranges, num_pages, page_size, data_format)
         for index, num_pages, page_size, data_format in _cb_specs(
-            geo, C, G, R, is_rm_out, has_tail_global, input_cb_depth=input_cb_depth, pin_in=pin_in, pin_out=pin_out
+            geo,
+            C,
+            G,
+            R,
+            is_rm_out,
+            has_tail_global,
+            input_cb_depth=input_cb_depth,
+            rm_cb_depth=depths[1],
+            pin_in=pin_in,
+            pin_out=pin_out,
         )
     ]
     if pin_in:
@@ -841,6 +911,7 @@ def create_program_descriptor(
     # stride (the buffer's aligned page size). 0 on every other leg.
     shard_row_bytes_in = sv_in.page_bytes if (sv_in is not None and geo.is_rm_in) else 0
     shard_row_bytes_out = sv_out.page_bytes if (sv_out is not None and is_rm_out) else 0
+    dram_align = _dram_alignment()
 
     for gi, g in enumerate(groups):
         mc = mcasts[gi]
@@ -882,7 +953,13 @@ def create_program_descriptor(
             in_slice_bytes = w_elems * geo.in_elem_bytes
             out_slice_bytes = w_elems * out_elem_bytes
             gamma_slice_bytes = w_elems * geo.gamma_elem_bytes
+            # A DRAM read truncates its source address to the DRAM alignment, so the
+            # ROW_MAJOR gamma leg is handed an ALIGNED read offset plus the leading
+            # bytes to drop. `lead` is 0 on every tile-aligned slice (all interleaved
+            # geometries and all TILE shards), where the read is byte-identical.
             gamma_byte_offset = m["w_start_elems"] * geo.gamma_elem_bytes
+            gamma_read_offset = (gamma_byte_offset // dram_align) * dram_align
+            gamma_lead_bytes = gamma_byte_offset - gamma_read_offset
             in_byte_offset = 0 if sv_in is not None else m["w_start_elems"] * geo.in_elem_bytes
             out_byte_offset = 0 if sv_out is not None else m["w_start_elems"] * out_elem_bytes
 
@@ -904,7 +981,8 @@ def create_program_descriptor(
                 in_slice_bytes,
                 in_byte_offset,
                 gamma_slice_bytes,
-                gamma_byte_offset,
+                gamma_read_offset,
+                gamma_lead_bytes,
                 shard_row_bytes_in,
             ]
             assert len(reader_own_args) == _READER_NUM_ARGS, (
