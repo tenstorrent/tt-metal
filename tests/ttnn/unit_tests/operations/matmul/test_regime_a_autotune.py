@@ -1,44 +1,90 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""User-facing configuration sweep for ttnn.experimental.regime_a_matmul.
+"""Configuration sweep (offline autotuner) for ttnn.experimental.regime_a_matmul.
 
-ONE COMMAND, offline. Tuning is deliberately NOT in the runtime operator: this measures on hardware and emits
-entries for `kTable` in regime_a_matmul_config.cpp, which the shipped picker already consults. The operator
-gains no file I/O, no global state, and no first-call measurement.
+One command. Tuning is OFFLINE BY DESIGN: this measures on hardware and emits entries for `kTable` in
+regime_a_matmul_config.cpp, which the shipped picker already consults. The operator gains no file I/O, no
+global state, and no first-call measurement.
 
-    # tune one or more shapes (MxKxN) and print the winning tuple per shape
+RUN IT
+
+    # tune shapes, print the winning tuple per shape
     REGIME_A_TUNE_SHAPES=512x6144x768,32x6144x6144 \
-      pytest tests/ttnn/unit_tests/operations/matmul/test_regime_a_autotune.py -s
+      scripts/run_safe_pytest.sh --run-all \
+      tests/ttnn/unit_tests/operations/matmul/test_regime_a_autotune.py -q -s
 
-    # widen the shortlist, confirm with more relaunches, and WRITE the kTable patch (shows the diff)
+    # wider shortlist, more confirmation relaunches, and WRITE the kTable patch (prints the diff)
     REGIME_A_TUNE_SHAPES=512x6144x768 REGIME_A_TUNE_TOPK=16 REGIME_A_TUNE_RELAUNCHES=3 \
-      REGIME_A_TUNE_APPLY=1 pytest tests/ttnn/unit_tests/operations/matmul/test_regime_a_autotune.py -s
+      REGIME_A_TUNE_APPLY=1 scripts/run_safe_pytest.sh --run-all \
+      tests/ttnn/unit_tests/operations/matmul/test_regime_a_autotune.py -q -s
 
-    # equivalent direct invocation -- the test is a thin wrapper; prefer this in scripts
+    # direct invocation -- this test is a thin wrapper; prefer this in scripts
     python3 tools/mm_sweep/picker_gen/autotune.py 512x6144x768 --topk 8 --relaunches 2 [--apply]
+
+    env var                      default   meaning
+    REGIME_A_TUNE_SHAPES         (none)    MxKxN[,MxKxN...]; unset => this test skips
+    REGIME_A_TUNE_TOPK           8         shortlist depth PER RANKER (3 rankers, unioned)
+    REGIME_A_TUNE_RELAUNCHES     2         fresh processes used to confirm a win
+    REGIME_A_TUNE_MIN_GAIN       1.5       percent; below this the shipped pick is kept
+    REGIME_A_TUNE_APPLY          unset     write kTable and show the diff
 
 Options are environment variables rather than pytest flags on purpose: custom flags would have to be
 registered in the shared conftest.py for this directory, which every other matmul test also loads.
 
-WHAT IT GUARANTEES, in order:
-  1. FEASIBLE ONLY -- candidates come from autotune_feas.enumerate_full, an exact mirror of the C++
-     pick_plan / compute_cb_sizes rules, so nothing that would TT_FATAL at program build is ever launched.
-  2. CORRECTNESS BEFORE TIMING -- each candidate's first call is untimed and checked: PCC >= 0.999 against a
-     torch reference, AND an explicit zero-non-finite check. A candidate that fails either is discarded
-     before its timing is looked at, so a wrong config can never win on speed. (The two gates catch different
-     things: a handful of NaN/Inf among millions of elements barely moves PCC -- see BUG_rscatter_nonfinite.md.)
-  3. WARM AND REPEATED -- per candidate, 2 blocks x [2 warmup + 12 timed] iterations on resident inputs, with
-     device time from the profiler rather than host wall. The winner is then re-confirmed against the shipped
-     pick across REGIME_A_TUNE_RELAUNCHES fresh processes, because a single reading is not enough on this
-     hardware: that gate rejected 6 of 32 apparent wins during the original campaign.
-  4. THE SHIPPED CONFIG IS ALWAYS A CANDIDATE -- config=None (the production picker) is measured alongside the
-     shortlist, and a winner is reported only if it beats it by more than REGIME_A_TUNE_MIN_GAIN percent. The
-     tool therefore cannot propose something slower than what already ships.
+WHAT IT GUARANTEES
 
-RUNTIME: minutes per shape (each candidate is a fresh process: device open + JIT + 24 timed iterations).
-Budget roughly `shapes x (2*topk + 2*relaunches + 1)` process launches. The repo-wide 300s pytest timeout is
-disabled for this test because of that; per-dispatch hang detection still applies under run_safe_pytest.sh.
+ 1. FEASIBLE CONFIGURATIONS ONLY. Candidates come from autotune_feas.enumerate_full, an exact mirror of the
+    C++ pick_plan / compute_cb_sizes rules, so nothing that would TT_FATAL at program build is ever launched.
+    Keep that mirror in step with the C++: a stale mirror once rejected configs the picker accepts, and a
+    heuristic validated on the resulting restricted set then regressed 4-34%.
+ 2. CORRECTNESS BEFORE TIMING. Each candidate's FIRST call is untimed and gated on PCC >= 0.999 against a
+    torch reference AND an explicit zero-non-finite check. A candidate failing either is discarded before its
+    timing is looked at, so a wrong config can never win on speed. Both gates are needed -- a handful of
+    NaN/Inf among millions of elements barely moves PCC (see picker_gen/BUG_rscatter_nonfinite.md).
+ 3. WARM, REPEATED, AND RELAUNCHED. Per candidate: 2 blocks x [2 warmup + 12 timed] iterations on resident
+    inputs, device time from the profiler rather than host wall. The winner is then re-confirmed against the
+    shipped pick across REGIME_A_TUNE_RELAUNCHES *fresh processes*, and every relaunch must agree. One reading
+    is not enough on this hardware: that gate rejected 6 of 32 apparent wins in the original campaign, and see
+    the worked example below.
+ 4. THE SHIPPED CONFIGURATION IS ALWAYS A CANDIDATE. config=None (the production picker) is measured alongside
+    the shortlist, and a winner is reported only if it beats it by more than MIN_GAIN percent. The tool
+    therefore cannot propose something slower than what already ships.
+ 5. WINNING TUPLE, AND OPTIONALLY A PATCH. Prints the tuple per shape; --apply writes kTable via
+    apply_table.py (which verifies brace shape, updates in place or appends) and shows the diff to review.
+
+WHY MEASURE AT ALL
+
+The analytic picker is a good RANKER and a poor CHOOSER. Held out over ~17,000 timed configs on 27 shapes:
+picking 1 config (what ships) is ~7.8% mean regret vs optimal; measuring its top 4 is ~3.1%, top 8 ~1.6%, top
+16 ~0.6%. Five attempts to improve the chooser formula all failed to generalise, so the leverage is in
+measuring a handful, not in a better formula -- see picker_gen/TIER2_COST_MODEL_ANALYSIS.md.
+
+It also fixes table staleness: 14 of the original 44 kTable rows were measured winners when added and were
+invalidated by later kernel work. Re-running this after a kernel change re-measures instead of letting rows rot.
+
+WORKED EXAMPLE (2026-08-11, bh-glx-120-c02u02, topk=4 relaunches=2, 13m12s)
+
+    [32x2048x2048] 8 shortlisted; shipped pick 21.78 us already best (shortlist best 4,2,1,2,4 @ 22.13 us)
+    [512x6144x768] shortlist 11 measured, best 6,1,2,2,3 @ 51.78 us -- keep shipped pick (-0.3%/+0.1%)
+    # nothing to apply: the shipped pick was within 1.5% on every shape
+
+Both outcomes are successes. The second is the relaunch gate earning its keep: one reading looked like a win,
+two fresh relaunches disagreed in sign (-0.3%, +0.1%), so it was rejected as noise. 6,1,2,2,3 is in fact
+already the kTable entry for that shape -- the tool independently re-derived the shipped pick.
+
+RUNTIME
+
+Minutes per shape. Budget roughly `shapes x (2*topk + 2*relaunches + 1)` process launches; each pays a device
+open plus a JIT compile for a config never built before.
+
+The repo-wide 300s pytest-timeout is disabled for this test (see the marker below) because of that. Hang
+protection is not lost, it moves to where it belongs: run_safe_pytest.sh sets
+TT_METAL_OPERATION_TIMEOUT_SECONDS, which fires per dispatch (~ms for these matmuls) rather than on total wall
+time, and resets the device if it trips.
+
+On Galaxy note that run_safe_pytest.sh resets with `tt-smi -r`, which on bh-glx-120-c02u02 left ethernet links
+down and downgraded the mesh to 8x2 (16 of 32 chips); recovery needed `tt-smi -glx_reset`.
 
 Needs real hardware and TT_METAL_HOME. Opt-in via REGIME_A_TUNE_SHAPES, so a plain pytest run skips.
 """
@@ -51,11 +97,9 @@ import pytest
 TOOL = "tools/mm_sweep/picker_gen/autotune.py"
 
 
-# pytest-timeout is 300s repo-wide, and a tuning sweep is unbounded BY DESIGN: its runtime scales with
-# shapes x shortlist x relaunches, and each candidate pays a fresh device open plus a JIT compile for a config
-# that has never been built. 0 disables the timeout for this test only. Hang protection is not lost -- it moves
-# to where it belongs: run_safe_pytest.sh sets TT_METAL_OPERATION_TIMEOUT_SECONDS, which fires per dispatch
-# (~ms for these matmuls) rather than on total wall time, and resets the device if it trips.
+# A tuning sweep is unbounded by design (shapes x shortlist x relaunches, each a fresh process + JIT), so the
+# repo-wide 300s pytest-timeout would kill it mid-run -- it did, twice, at 301s. 0 disables it here only; see
+# RUNTIME above for where hang detection lives instead.
 @pytest.mark.timeout(0)
 def test_regime_a_config_sweep():
     """Tune every requested shape. Fails only if the sweep itself breaks -- the shipped pick winning is a

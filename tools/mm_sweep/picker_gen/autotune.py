@@ -1,29 +1,15 @@
 #!/usr/bin/env python3
 """AUTOTUNER for ttnn.experimental.regime_a_matmul: rank a shortlist, MEASURE it, cache the winner.
 
-WHY THIS EXISTS
-    The analytic picker is a good RANKER and a poor CHOOSER. Measured over the picker's real search space on
-    27 shapes held out of all fitting (~17,000 timed configs of ground truth):
-
-        pick 1 config (what ships)   ~7.8% mean regret vs optimal
-        measure its top 4            ~3.1%
-        measure its top 8            ~1.6%
-        measure its top 16           ~0.6%
-
-    Five attempts to make the CHOOSER better all failed to generalise (constant refit, a contention term, a
-    strategy-split reduction term, and a from-first-principles physical model both as fitted and refitted).
-    So the leverage is in measuring a handful, not in a better formula. See
-    picker_gen/TIER2_COST_MODEL_ANALYSIS.md.
+USER-FACING DOCUMENTATION lives at the top of the entry point that wraps this script:
+tests/ttnn/unit_tests/operations/matmul/test_regime_a_autotune.py -- how to run it, the env vars, what it
+guarantees, why measuring beats a better cost formula, and a worked example. Kept in ONE place so the two
+cannot drift; what follows is only this script's own internals.
 
 WHAT THE CACHE IS
     kTable in regime_a_matmul_config.cpp. This tool emits ready-to-apply entries; apply_table.py writes them.
     That keeps the runtime picker unchanged (no file I/O, no global state, no first-call measurement inside
     an op) and reuses the cache mechanism that already ships.
-
-WHY IT ALSO SOLVES TABLE STALENESS
-    14 of the original 44 kTable rows were stale -- each a measured winner when added, invalidated by later
-    kernel work. Re-running this tool after a kernel change re-measures and re-emits, instead of the rows
-    silently rotting.
 
 RANKING
     Uses the component-wise PHYSICAL model, which beat the shipped cost model as a ranker at every shortlist
@@ -32,9 +18,9 @@ RANKING
 
 USAGE
     python3 tools/mm_sweep/picker_gen/autotune.py 256x2048x1024 512x6144x768 ...
-    python3 tools/mm_sweep/picker_gen/autotune.py --shapes-file shapes.txt [--topk 8] [--relaunches 2]
-    Emits, per shape, the measured winner and an apply_table.py argument line. Must run from the repo root
-    with TT_METAL_HOME set (the profiler worker needs it).
+    python3 tools/mm_sweep/picker_gen/autotune.py --shapes-file shapes.txt [--topk 8] [--relaunches 2] [--apply]
+    Emits, per shape, the measured winner and an apply_table.py argument line (or applies it with --apply).
+    Must run from the repo root with TT_METAL_HOME set (the profiler worker needs it).
 """
 import argparse, json, os, statistics, subprocess, sys
 
