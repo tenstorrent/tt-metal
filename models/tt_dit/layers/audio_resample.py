@@ -36,7 +36,11 @@ from .audio_ops import (
 )
 from .module import Module
 
-SNAKE_CONV_MAX_CHANNELS = 32
+# L1, not correctness: the parameter CB costs two tiles per channel-tile, so C=512 wants 32 tiles
+# (128 KB) and conv1d's DRAM auto-slice then reports it "requires more memory than available even
+# with maximum slicing" against 1395840 bytes of L1. C=256 fits and is exact (5.459e-08). The C=512
+# stage is the shortest-T one, so excluding it costs the least of any stage.
+SNAKE_CONV_MAX_CHANNELS = int(os.environ.get("MINIMAX_H3_AUDIO_SNAKE_CONV_MAX_C", "256"))
 
 
 def fuse_band_enabled() -> bool:
@@ -402,13 +406,12 @@ class Activation1d(Module):
             return None
         if self.act.parallel_config is not None and getattr(self.act.parallel_config, "factor", 1) > 1:
             return None
-        # One tile of channel width only. The reader fetches the two parameter tiles at column offset
-        # 0 and the compute kernel reads CB tiles 0 and 1 whatever output column it is on, so at C=64
-        # (two tiles wide) columns 32-63 get channel 0-31's parameters -- measured rel_rmse 2.6e-01
-        # against the unfused band, while every C<=32 shape is exact. Lifting this needs the block's
-        # column offset in the reader and a column index in the compute kernel; until then the gate
-        # keeps the fused path on the tail stages, which is where the decode's time is anyway (a row
-        # costs ~4.2 ns almost regardless of width, so the long-T narrow-C bands dominate).
+        # Wider than one tile of channel used to be silently wrong: the reader fetched only column 0
+        # and the compute kernel read CB tiles 0 and 1 whatever output column it was on, so C=64
+        # reapplied channels 0-31's parameters to channels 32-63 (rel_rmse 2.6e-01 against the unfused
+        # band, versus exact at C<=32). The CB now carries every column and compute indexes by its own
+        # output column, so width is no longer a correctness limit -- C=64/128/256 all measure exact.
+        # `SNAKE_CONV_MAX_CHANNELS` is now purely the L1 backstop; see its definition.
         if self.channels > SNAKE_CONV_MAX_CHANNELS:
             return None
         cached = getattr(self, "_snake_conv_ab", None)

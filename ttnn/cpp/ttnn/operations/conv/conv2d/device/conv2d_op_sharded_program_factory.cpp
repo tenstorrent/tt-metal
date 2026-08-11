@@ -932,7 +932,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         // height -- weight_matrix_height is read only by the % TILE_HEIGHT assertion. The reader
         // fetches them into the dedicated CB above, not into the streaming weights CB.
         const uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
+        // Each core holds every column of the parameter rows and picks its own by output column, which
+        // is only well defined while a core's weight block spans the whole matrix width -- true for the
+        // height-sharded depthwise path this rides on. Fail loudly rather than silently apply column
+        // 0's parameters everywhere, which is exactly the bug this replaced.
+        TT_FATAL(
+            weight_block_w_ntiles == weight_matrix_width_ntiles,
+            "Fused snake needs the weight block to span the full matrix width, got {} of {}",
+            weight_block_w_ntiles,
+            weight_matrix_width_ntiles);
         writer_mcast_sender_defines["SNAKE_PARAMS"] = "1";
+        writer_mcast_sender_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
+        compute_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
         writer_mcast_sender_defines["SNAKE_PARAMS_CB_ID"] =
             std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
         writer_mcast_sender_defines["SNAKE_ALPHA_ROW_TILE_ID"] =
@@ -944,6 +955,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["SNAKE_PARAMS"] = "1";
         writer_defines["SNAKE_PARAMS_CB_ID"] =
             std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::SNAKE_PARAMS).index);
+        writer_defines["SNAKE_PARAM_NUM_COLS"] = std::to_string(weight_matrix_width_ntiles);
     }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";

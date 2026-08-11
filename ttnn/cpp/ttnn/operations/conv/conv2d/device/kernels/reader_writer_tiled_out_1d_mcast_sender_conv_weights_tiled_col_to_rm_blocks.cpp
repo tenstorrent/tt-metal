@@ -145,8 +145,10 @@ void kernel_main() {
     // tile and never pops (they are identical across a block, so popping would destroy them for the
     // tiles that follow). Pushing per block would overflow a 2-page CB on the second block.
     //
-    // Column offset 0: the audio tail is C<=32, one tile wide, so a block covers the whole channel
-    // axis. Wider outputs need the block's column offset here.
+    // Every tile-column of the channel axis, alpha's row first and then inv_beta's, so the CB reads
+    // [alpha_col0 .. alpha_colN-1, invbeta_col0 .. invbeta_colN-1] and the compute kernel can index
+    // its own output column. Fetching only column 0 (what this did first) silently reapplied channels
+    // 0-31's parameters to every wider column: rel_rmse 2.6e-01 at C=64, exact at C<=32.
     //
     // Only this core has a weight TensorAccessor, so the receivers cannot fetch the two tiles
     // themselves -- they are mcast here, reusing the weights semaphore pair. This handshake is the
@@ -155,16 +157,19 @@ void kernel_main() {
     {
         DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
         constexpr uint32_t snake_tile_nbytes = get_tile_size(SNAKE_PARAMS_CB_ID);
-        dfb_snake.reserve_back(2);
+        constexpr uint32_t snake_num_tiles = 2 * SNAKE_PARAM_NUM_COLS;
+        dfb_snake.reserve_back(snake_num_tiles);
         uint32_t snake_write_offset = 0;
         for (uint32_t row = 0; row < 2; ++row) {
-            noc.async_read(
-                s_weight,
-                dfb_snake,
-                snake_tile_nbytes,
-                {.page_id = SNAKE_ALPHA_ROW_TILE_ID + row * SNAKE_PARAM_ROW_STRIDE},
-                {.offset_bytes = snake_write_offset});
-            snake_write_offset += snake_tile_nbytes;
+            for (uint32_t col = 0; col < SNAKE_PARAM_NUM_COLS; ++col) {
+                noc.async_read(
+                    s_weight,
+                    dfb_snake,
+                    snake_tile_nbytes,
+                    {.page_id = SNAKE_ALPHA_ROW_TILE_ID + row * SNAKE_PARAM_ROW_STRIDE + col},
+                    {.offset_bytes = snake_write_offset});
+                snake_write_offset += snake_tile_nbytes;
+            }
         }
         noc.async_read_barrier();
 
@@ -178,7 +183,7 @@ void kernel_main() {
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(dfb_snake.get_write_ptr()),
             mcast_ep,
-            2 * snake_tile_nbytes,
+            snake_num_tiles * snake_tile_nbytes,
             weights_mcast_num_cores,
             {},
             mcast_dst,
@@ -194,7 +199,7 @@ void kernel_main() {
             false);
 #endif
 
-        dfb_snake.push_back(2);
+        dfb_snake.push_back(snake_num_tiles);
     }
 #endif
 

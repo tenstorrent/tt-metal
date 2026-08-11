@@ -71,6 +71,9 @@ replicate rule.
 maxdiff 2.533e-07 -- the ~1e-07 bar, and the same 7.6e-08 GELU reaches through this seam. Default
 path unchanged (5 passed). Reproduce with `run_snake_verify.sh`.
 
+**Decode, with the band and the snake-in-conv both on: 1.111 s -> 0.931 s (1.193x)**, PSNR 68.7 dB,
+17/17 gate green. Every channel width up to 256 is fused and exact.
+
 Three bugs stood between the previous session's hang and that number, all fixed on
 `rouzbeh/audio-decode-exact-fp32`. All three are worth knowing because none is specific to the snake
 -- any new CB read with `copy_tile` on this path will hit bugs 2 and 3.
@@ -82,9 +85,9 @@ Three bugs stood between the previous session's hang and that number, all fixed 
    the sender reads a *separate* map (`writer_mcast_sender_defines`), which is why it had nothing.
 2. **`reconfig_data_format_srca` before each parameter `copy_tile`.** `copy_tile_to_dst_init_short` is
    the *short* init -- it re-inits the datacopy MOP but does **not** reconfigure SrcA's data format,
-   despite taking a CB id, so the operand is unpacked with whatever format SrcA last held. The fp32
-   parameter tile was being unpacked with whatever format SrcA last held, so each 4-byte datum was
-   read as two 2-byte ones: high half into the odd channel column, zero low half into the even one.
+   despite taking a CB id, so the operand is unpacked with whatever format SrcA last held. Each 4-byte
+   fp32 datum was then read as two 2-byte ones: the high half into the odd channel column and the zero
+   low half into the even one.
 
    Signature to recognise it again: with `alpha = inv_beta = 1.0`, **odd columns 100% correct, even
    columns exactly untouched**. Proof it is a 16-bit read and nothing else: set the parameters to
@@ -165,11 +168,12 @@ magnitude is.
 ## Widening, step 1: the snake now rides the phase conv (2026-08-11)
 
 `MINIMAX_H3_AUDIO_FUSE_SNAKE_CONV=1` (with `MINIMAX_H3_AUDIO_FUSE_BAND=1`) folds the band's two
-per-phase `snake_beta` calls into the convs that produce the phases. **Decode 1.113 s -> 1.002 s,
-1.110x**, PSNR 68.6 dB against the default output. Per band, against the unfused band:
+per-phase `snake_beta` calls into the convs that produce the phases. **Decode 1.111 s -> 0.931 s,
+1.193x**, PSNR 68.7 dB against the default output. Per band, against the unfused band:
 
-    C=32 T41403   1.12x   5.565e-08
-    C=16 T82806   1.34x   4.421e-08
+    C=64 T20701   1.74x   5.501e-08
+    C=32 T41403   1.02x   5.565e-08
+    C=16 T82806   1.42x   4.421e-08
     C=8  T165606  1.21x   6.541e-08
 
 Verify with `band_snake_conv_verify.py`. Two things this settled that are worth carrying forward:
@@ -177,12 +181,18 @@ Verify with `band_snake_conv_verify.py`. Two things this settled that are worth 
 * **The fused band is no longer a wash.** `fuse_band_enabled`'s docstring said neutral, and it was --
   the decomposition doubled the op count. Deleting the two activations is what tips it. The two flags
   must move together; the band alone is still neutral.
-* **C <= 32 only, for a known reason.** The reader fetches the parameter tiles at column offset 0 and
-  the compute kernel reads CB tiles 0 and 1 whatever output column it is on, so at C=64 columns 32-63
-  get channel 0-31's parameters: rel_rmse **2.6e-01**, against exact for every one-tile-wide shape.
-  The sender kernel's own comment predicted exactly this. **This is the first thing to fix when
-  continuing** -- it needs the block's column offset in the reader and a column index in compute, and
-  it unblocks stages at C=64/128/256/512.
+* **Wider than one tile: fixed (2026-08-11).** The reader fetched the parameter tiles at column
+  offset 0 and the compute kernel read CB tiles 0 and 1 whatever output column it was on, so C=64
+  reapplied channels 0-31's parameters to 32-63: rel_rmse **2.6e-01**. The CB now carries every
+  column (`SNAKE_PARAM_NUM_COLS`, laid out alpha-columns then inv_beta-columns), the reader fetches
+  and mcasts all of them, and `apply_snake_beta` takes the output column -- `c` in the coalesced
+  paths, `i % block_w` in the flat non-coalesced loops. Measured after: C=64 **5.501e-08** (and its
+  best speedup, 1.74x), C=128 5.511e-08, C=256 5.459e-08.
+
+  **C=512 is excluded for L1, not accuracy.** Two tiles per channel-tile means 32 tiles / 128 KB, and
+  conv1d's DRAM auto-slice then reports "requires more memory than available even with maximum
+  slicing" against 1395840 bytes. `MINIMAX_H3_AUDIO_SNAKE_CONV_MAX_C` defaults to 256 for that reason.
+  It is the shortest-T stage, so it is the cheapest one to lose.
 
 ### What is left between here and the resblock chain
 

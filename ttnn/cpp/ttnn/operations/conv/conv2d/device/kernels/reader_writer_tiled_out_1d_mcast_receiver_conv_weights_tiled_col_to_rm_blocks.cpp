@@ -104,13 +104,14 @@ void kernel_main() {
     // and first in sequence on both sides, so the two handshakes stay in step.
     {
         DataflowBuffer dfb_snake(SNAKE_PARAMS_CB_ID);
-        dfb_snake.reserve_back(2);
+        constexpr uint32_t snake_num_tiles = 2 * SNAKE_PARAM_NUM_COLS;
+        dfb_snake.reserve_back(snake_num_tiles);
 
         weights_mcast_receiver_sem.set(INVALID);
         weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
         weights_mcast_receiver_sem.wait(VALID);
 
-        dfb_snake.push_back(2);
+        dfb_snake.push_back(snake_num_tiles);
     }
 #endif
 

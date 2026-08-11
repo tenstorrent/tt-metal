@@ -21,8 +21,16 @@
 
 // Defined below, next to the SFPU accumulate path it was written for, but called from all four
 // accumulate paths -- the earliest of which precedes the definition.
+// How many tile-columns of parameters the CB carries -- one per tile of the channel axis. Defined by
+// the program factory alongside SNAKE_PARAMS_CB_ID; the fallback keeps `apply_snake_beta` compiling
+// when the snake is off, since the macro is expanded in the template's *definition* whether or not it
+// is ever instantiated.
+#ifndef SNAKE_PARAM_NUM_COLS
+#define SNAKE_PARAM_NUM_COLS 1
+#endif
+
 template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
-inline void apply_snake_beta(DataflowBuffer params_dfb);
+inline void apply_snake_beta(DataflowBuffer params_dfb, uint32_t param_col);
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -55,7 +63,11 @@ inline void mul_and_accumulate_block(
     DataflowBuffer out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
-    uint32_t num_taps) {
+    uint32_t num_taps,
+    // Tiles per row of the block, i.e. the channel axis in tiles. The flat loop below walks the block
+    // row-major, so `i % block_w` is the output tile's column -- which is the parameter column the
+    // snake needs. Unused when the snake is off.
+    [[maybe_unused]] uint32_t block_w) {
     const uint32_t in0_cb_id = in0_dfb.get_id();
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
@@ -102,7 +114,7 @@ inline void mul_and_accumulate_block(
         // conv: the shape simply took a different path.
         if (is_last_tap) {
             DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
-            apply_snake_beta<0, 1, 2>(snake_params_dfb);
+            apply_snake_beta<0, 1, 2>(snake_params_dfb, i % block_w);
         }
 #endif
         tile_regs_commit();
@@ -176,10 +188,15 @@ inline void mul_and_accumulate_block(
 // non-coalesced path pops in1 once per tile per tap, so two pops at the last tap would consume
 // `2 * block_num_tiles` per block against one push. See FUSED_BAND_DESIGN.md.
 template <uint32_t dst_acc, uint32_t dst_a, uint32_t dst_b>
-inline void apply_snake_beta(DataflowBuffer params_dfb) {
+inline void apply_snake_beta(DataflowBuffer params_dfb, uint32_t param_col) {
     const uint32_t params_cb_id = params_dfb.get_id();
 
-    params_dfb.wait_front(2);
+    // The CB holds every tile-column of the channel axis: alpha for columns 0..N-1, then inv_beta for
+    // the same columns. `param_col` is the column of the output tile being finished, so a C=64 conv
+    // (two tiles wide) picks up channels 32-63's parameters for its second column instead of
+    // reapplying channels 0-31's -- which is what it did when the CB held one column and this read
+    // tiles 0 and 1 unconditionally (rel_rmse 2.6e-01 at C=64, exact at C<=32).
+    params_dfb.wait_front(2 * SNAKE_PARAM_NUM_COLS);
 
     // `copy_tile_to_dst_init_short` is the *short* init: it re-inits the datacopy MOP but does not
     // reconfigure SrcA's data format, so the params tile is unpacked with whatever format SrcA was
@@ -190,7 +207,7 @@ inline void apply_snake_beta(DataflowBuffer params_dfb) {
     // columns apply at 100%. Force the full reconfig.
     reconfig_data_format_srca(params_cb_id);
     copy_tile_to_dst_init_short(params_cb_id);
-    copy_tile(params_cb_id, 0, dst_a);  // alpha
+    copy_tile(params_cb_id, param_col, dst_a);  // alpha for this output column
     mul_binary_tile_init();
     mul_binary_tile(dst_acc, dst_a, dst_a);  // alpha * x
 
@@ -201,7 +218,7 @@ inline void apply_snake_beta(DataflowBuffer params_dfb) {
 
     reconfig_data_format_srca(params_cb_id);
     copy_tile_to_dst_init_short(params_cb_id);
-    copy_tile(params_cb_id, 1, dst_b);  // inv_beta
+    copy_tile(params_cb_id, SNAKE_PARAM_NUM_COLS + param_col, dst_b);  // inv_beta, same column
     mul_binary_tile_init();
     mul_binary_tile(dst_a, dst_b, dst_a);  // inv_beta * sin^2
 
@@ -218,7 +235,11 @@ inline void mul_and_accumulate_block_sfpu(
     DataflowBuffer out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
-    uint32_t num_taps) {
+    uint32_t num_taps,
+    // Tiles per row of the block, i.e. the channel axis in tiles. The flat loop below walks the block
+    // row-major, so `i % block_w` is the output tile's column -- which is the parameter column the
+    // snake needs. Unused when the snake is off.
+    [[maybe_unused]] uint32_t block_w) {
     const uint32_t in0_cb_id = in0_dfb.get_id();
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
@@ -266,7 +287,7 @@ inline void mul_and_accumulate_block_sfpu(
         // program factory emits the define, so the default path is byte-for-byte unchanged.
         if (is_last_tap) {
             DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
-            apply_snake_beta<DST_ACC, DST_A, DST_B>(snake_params_dfb);
+            apply_snake_beta<DST_ACC, DST_A, DST_B>(snake_params_dfb, i % block_w);
         }
 #endif
         tile_regs_commit();
@@ -351,7 +372,7 @@ inline void mul_and_accumulate_coalesced_block_sfpu(
             // already at the equivalent of the last tap.
             {
                 DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
-                apply_snake_beta<DST_ACC, DST_ACT, DST_ACC + 3>(snake_params_dfb);
+                apply_snake_beta<DST_ACC, DST_ACT, DST_ACC + 3>(snake_params_dfb, c);
             }
 #endif
             tile_regs_commit();
@@ -407,7 +428,7 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
             // Coalesced FPU path: accumulator in dst[0], slots 1 and 2 free.
             {
                 DataflowBuffer snake_params_dfb(SNAKE_PARAMS_CB_ID);
-                apply_snake_beta<0, 1, 2>(snake_params_dfb);
+                apply_snake_beta<0, 1, 2>(snake_params_dfb, c);
             }
 #endif
             tile_regs_commit();
@@ -529,7 +550,8 @@ void kernel_main() {
                     dfb_out,
                     in0_block_num_tiles,
                     in0_block_w_i,
-                    in0_num_blocks_w);
+                    in0_num_blocks_w,
+                    in0_block_w);
             } else {
                 // Accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through dfb_partials, writing
                 // the final tap to dfb_out. The host points dfb_partials at dfb_out for a single height
@@ -541,7 +563,8 @@ void kernel_main() {
                     dfb_out,
                     in0_block_num_tiles,
                     in0_block_w_i,
-                    in0_num_blocks_w);
+                    in0_num_blocks_w,
+                    in0_block_w);
             }
         }
     }

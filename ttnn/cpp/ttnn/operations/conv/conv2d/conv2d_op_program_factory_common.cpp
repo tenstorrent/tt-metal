@@ -220,10 +220,14 @@ std::vector<CBInfo> get_cb_info(
         // Env-gated rather than a Conv2dConfig field because this is a measurement vehicle; if it
         // earns its place it should become a proper field. Zero pages otherwise, so the default path
         // allocates nothing and post_conv2d_op_memory_checks sees no change.
+        //
+        // Two tile-rows (alpha, inv_beta) times one tile per column of the channel axis. A single
+        // column was enough only while C <= 32; wider outputs need every column resident, because each
+        // core computes the whole channel width and indexes the CB by the output tile's column.
         const bool snake_params = is_1d_depthwise_conv && std::getenv("TT_CONV1D_SNAKE_PARAMS") != nullptr;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::SNAKE_PARAMS,
-            .num_pages = snake_params ? 2u : 0u,
+            .num_pages = snake_params ? 2u * per_core_out_matrix_width_ntiles : 0u,
             .page_size = weights_tile_size,
             .data_format = weights_df});
     }
