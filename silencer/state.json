@@ -1,160 +1,171 @@
 {
-    "last_scan_date": "2026-08-10",
-    "scanned_run_ids": [
-        "30387358745",
-        "30493606319",
-        "30515701001",
-        "30582544934",
-        "30586242428",
-        "30587963164",
-        "30618649345",
-        "30675480001",
-        "30765286317",
-        "30789033630",
-        "30227858718",
-        "30737004712",
-        "31197186569",
-        "31229408018",
-        "31249794076",
-        "31197332405",
-        "31285846176",
-        "31362719766"
-    ],
-    "workflows_sampled": [
-        "merge-gate.yaml",
-        "pr-gate.yaml",
-        "runtime-unit-tests.yaml",
-        "sanity-tests.yaml",
-        "galaxy-unit-tests.yaml",
-        "t3000-unit-tests.yaml",
-        "galaxy-sanity.yaml",
-        "single-card-demo-tests.yaml",
-        "t3000-demo-tests.yaml",
-        "models-t3-unit-tests.yaml",
-        "blackhole-sanity-tests.yaml",
-        "vllm-model-tests.yaml",
-        "models-t1-unit-tests.yaml",
-        "galaxy-demo-tests.yaml",
-        "t3000-e2e-tests.yaml"
-    ],
-    "in_flight_prs": [
-        {
-            "number": 51548,
-            "branch": "silencer/matmul-normalize-program-config-2e13238793abc79d",
-            "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
-            "issue": "#48660",
-            "status": "closed-by-maintainer",
-            "asan_build_run_id": "30501808830",
-            "note": "Closed/superseded per maintainer action observed this session. No further Silencer action needed."
-        },
-        {
-            "number": 51849,
-            "branch": "silencer/demote-fabric-initialized-per-device-log",
-            "pattern": "Fabric initialized on Device {} - redundant per-device info log (384-952x per job)",
-            "status": "ci-passed",
-            "note": "PR Gate Status check on run 30732237919 conclusion=success as of 2026-08-02. Awaiting maintainer review/merge."
-        },
-        {
-            "number": 51794,
-            "branch": "silencer/demote-precompiled-firmware-log",
-            "pattern": "Using pre-compiled firmware from: {} - info log firing once per device (384-768x per job)",
-            "status": "open-pr",
-            "note": "Awaiting maintainer review/merge."
-        },
-        {
-            "number": 51643,
-            "branch": "silencer/dedupe-unknown-motherboard-warning",
-            "pattern": "Unknown motherboard warning fires once per chip instead of once per host",
-            "status": "open-pr",
-            "note": "Awaiting maintainer review/merge."
-        },
-        {
-            "branch": "silencer/demote-finalize-dfb-log",
-            "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
-            "status": "ci-passed",
-            "note": "PR Gate Status check on run 30770179479 conclusion=success as of 2026-08-03. Awaiting maintainer review/merge.",
-            "number": 51870
-        },
-        {
-            "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
-            "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
-            "status": "open-pr-no-validation-run-found",
-            "note": "PR #51894 draft, no comments yet. No dedicated single-card-demo-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (1/1 dispatch_workflow budget used elsewhere). Only generic PR Gate Status checks visible. Awaiting maintainer review; re-attempt dispatch next run if still unvalidated.",
-            "number": 51894
-        },
-        {
-            "branch": "silencer/demote-realtime-profiler-sync-log-e588c4c1564539dd",
-            "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
-            "status": "open-pr-no-validation-run-found",
-            "note": "PR #52013 open (title has [skip ci]), mergeable_state clean, codeowners ping posted. No galaxy-sanity run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Trivial log-level demotion, no behavior change. Awaiting codeowner approval/merge.",
-            "number": 52013
-        },
-        {
-            "branch": "silencer/unused-var-groupnorm-out-block-hw-actual-f45a844be7c0d8c8",
-            "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
-            "status": "resolved",
-            "note": "PR #52108 fully resolved: validation run 30981284542 (t3000-demo-tests) build-artifact job succeeded, build logs grepped for out_block_hw_actual (0 occurrences confirmed). Outcome commented and marked ready for review (2026-08-05).",
-            "number": 52108
-        },
-        {
-            "branch": "silencer/groupnorm-unused-vars-clean",
-            "pattern": "-Wunused-but-set-variable: reset_index / output_tile_index in groupnorm compute kernels (72x across 2 files in job sample)",
-            "status": "resolved",
-            "note": "PR #52111 fully resolved: validation run 30946210745 (t3000-demo-tests) succeeded, build logs grepped for reset_index/output_tile_index (0 occurrences confirmed). Outcome commented and marked ready for review in prior run (2026-08-05). No further action needed.",
-            "number": 52111
-        },
-        {
-            "branch": "silencer/demote-watcher-attach-detach-log-546609e8b3fb5e60",
-            "pattern": "Watcher attached device {} / Watcher detached device {} - top LLRuntime info-severity lines (130x each in one job sample), fired unconditionally once per device per attach/detach cycle",
-            "status": "open-pr-no-validation-run-found",
-            "note": "PR #52122 open, mergeable_state behind, 2 codeowner groups pending. No models-t3-unit-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Awaiting codeowner approval/merge.",
-            "number": 52122
-        },
-        {
-            "number": 52249,
-            "branch": "silencer/demote-mock-cluster-descriptor-warning",
-            "pattern": "Currently using mock cluster descriptor - warning fires 71x per mock-mode job",
-            "status": "resolved",
-            "note": "Validation run 31047265933 (runtime-unit-tests) completed/failure - unrelated MeshTensorDeviceTest failure, not the mock-cluster-descriptor line. Outcome commented and marked ready for review (2026-08-07)."
-        },
-        {
-            "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
-            "pattern": "rotary_embedding_llama sequence tile coverage mismatch warning fires every decode step (input_Ht < cos_Ht/sin_Ht by design)",
-            "status": "open-pr",
-            "note": "New PR opened this run. vllm-model-tests dispatched on branch (model=meta-llama/Llama-3.1-8B-Instruct). Awaiting validation."
-        },
-        {
-            "number": 52592,
-            "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
-            "pattern": "rotary_embedding_llama decode seqlen-mismatch log demoted to debug",
-            "status": "reported-inconclusive",
-            "note": "Validation run 31249794076 (vllm-model-tests) overall success except one unrelated infra failure. Sampled tail showed zero occurrences of the op at all -- inconclusive. Comment posted, moved to ready-for-review on 2026-08-09."
-        },
-        {
-            "number": 52631,
-            "branch": "silencer/dedupe-neighbor-pad-capped-links-warning",
-            "pattern": "neighbor_pad_async: Capped num_links... warning fires once per mesh coordinate/device with identical values (2880x in one job sample)",
-            "status": "validation-inconclusive-infra-failure",
-            "note": "Validation run 31278143407 (models-t1-unit-tests) job failure was mesh-sizing TT_FATAL in unrelated test setup; neighbor_pad_async never reached. Comment posted, marked ready for review 2026-08-09."
-        },
-        {
-            "branch": "silencer/deprecate-all-gather-legacy-args-in-sampling",
-            "pattern": "ttnn.all_gather deprecated num_links/topology/chunks_per_sync/... args warning (1376x in one job sample)",
-            "status": "reported-inconclusive-ready-for-review",
-            "note": "Validation run 31305109253 (galaxy-demo-tests) failed at board-reset infra step before test execution - inconclusive. Outcome comment already posted in prior run; marked ready for review this run (2026-08-10).",
-            "number": 52657
-        },
-        {
-            "branch": "silencer/demote-num-routing-planes-override-warning",
-            "pattern": "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override - warning fires on every legacy dispatch-fallback device open (185x in one t3000-e2e-tests job sample)",
-            "status": "resolved",
-            "note": "Validation run 31373536678 (t3000-e2e-tests) completed/failure - unrelated CCL/dispatch-timeout & trace-buffer-overflow failures, not num_routing_planes. Grepped t3k_ccl_tests job 93409757009 logs: 0 occurrences of num_routing_planes confirmed. Outcome commented and marked ready for review (2026-08-10).",
-            "workflow": "t3000-e2e-tests.yaml",
-            "number": 52705
-        }
-    ],
-    "backlog_cursor": {
-        "next_category": 6,
-        "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed. | 2026-08-09: root-caused and fixed all_gather deprecated-args warning (1376x in DeepSeek v3 demo job sample, run 31285846176) via silencer/deprecate-all-gather-legacy-args-in-sampling. ~13 other production call sites (gpt_oss*, gemma4, minimax_m3, mistral_24b, llama3_70b_galaxy, z_image_turbo, sampling_1d.py) still pass these deprecated args -- candidates for a follow-up PR if this one is well received."
+  "last_scan_date": "2026-08-10",
+  "scanned_run_ids": [
+    "30387358745",
+    "30493606319",
+    "30515701001",
+    "30582544934",
+    "30586242428",
+    "30587963164",
+    "30618649345",
+    "30675480001",
+    "30765286317",
+    "30789033630",
+    "30227858718",
+    "30737004712",
+    "31197186569",
+    "31229408018",
+    "31249794076",
+    "31197332405",
+    "31285846176",
+    "31362719766",
+    "31229899895"
+  ],
+  "workflows_sampled": [
+    "merge-gate.yaml",
+    "pr-gate.yaml",
+    "runtime-unit-tests.yaml",
+    "sanity-tests.yaml",
+    "galaxy-unit-tests.yaml",
+    "t3000-unit-tests.yaml",
+    "galaxy-sanity.yaml",
+    "single-card-demo-tests.yaml",
+    "t3000-demo-tests.yaml",
+    "models-t3-unit-tests.yaml",
+    "blackhole-sanity-tests.yaml",
+    "vllm-model-tests.yaml",
+    "models-t1-unit-tests.yaml",
+    "galaxy-demo-tests.yaml",
+    "t3000-e2e-tests.yaml",
+    "galaxy-e2e-tests.yaml"
+  ],
+  "in_flight_prs": [
+    {
+      "number": 51548,
+      "branch": "silencer/matmul-normalize-program-config-2e13238793abc79d",
+      "pattern": "allowed_worker_cores not populated / normalize_program_config missing in CCL matmul ops",
+      "issue": "#48660",
+      "status": "closed-by-maintainer",
+      "asan_build_run_id": "30501808830",
+      "note": "Closed/superseded per maintainer action observed this session. No further Silencer action needed."
+    },
+    {
+      "number": 51849,
+      "branch": "silencer/demote-fabric-initialized-per-device-log",
+      "pattern": "Fabric initialized on Device {} - redundant per-device info log (384-952x per job)",
+      "status": "ci-passed",
+      "note": "PR Gate Status check on run 30732237919 conclusion=success as of 2026-08-02. Awaiting maintainer review/merge."
+    },
+    {
+      "number": 51794,
+      "branch": "silencer/demote-precompiled-firmware-log",
+      "pattern": "Using pre-compiled firmware from: {} - info log firing once per device (384-768x per job)",
+      "status": "open-pr",
+      "note": "Awaiting maintainer review/merge."
+    },
+    {
+      "number": 51643,
+      "branch": "silencer/dedupe-unknown-motherboard-warning",
+      "pattern": "Unknown motherboard warning fires once per chip instead of once per host",
+      "status": "open-pr",
+      "note": "Awaiting maintainer review/merge."
+    },
+    {
+      "branch": "silencer/demote-finalize-dfb-log",
+      "pattern": "Finalize dfb: dfb_offset == base_offset: {}, dfb size: {}, return value: {} - info log in finalize_dfbs() firing once per programmable-core-type per program (165x in one job sample)",
+      "status": "ci-passed",
+      "note": "PR Gate Status check on run 30770179479 conclusion=success as of 2026-08-03. Awaiting maintainer review/merge.",
+      "number": 51870
+    },
+    {
+      "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
+      "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #51894 draft, no comments yet. No dedicated single-card-demo-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (1/1 dispatch_workflow budget used elsewhere). Only generic PR Gate Status checks visible. Awaiting maintainer review; re-attempt dispatch next run if still unvalidated.",
+      "number": 51894
+    },
+    {
+      "branch": "silencer/demote-realtime-profiler-sync-log-e588c4c1564539dd",
+      "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #52013 open (title has [skip ci]), mergeable_state clean, codeowners ping posted. No galaxy-sanity run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Trivial log-level demotion, no behavior change. Awaiting codeowner approval/merge.",
+      "number": 52013
+    },
+    {
+      "branch": "silencer/unused-var-groupnorm-out-block-hw-actual-f45a844be7c0d8c8",
+      "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
+      "status": "resolved",
+      "note": "PR #52108 fully resolved: validation run 30981284542 (t3000-demo-tests) build-artifact job succeeded, build logs grepped for out_block_hw_actual (0 occurrences confirmed). Outcome commented and marked ready for review (2026-08-05).",
+      "number": 52108
+    },
+    {
+      "branch": "silencer/groupnorm-unused-vars-clean",
+      "pattern": "-Wunused-but-set-variable: reset_index / output_tile_index in groupnorm compute kernels (72x across 2 files in job sample)",
+      "status": "resolved",
+      "note": "PR #52111 fully resolved: validation run 30946210745 (t3000-demo-tests) succeeded, build logs grepped for reset_index/output_tile_index (0 occurrences confirmed). Outcome commented and marked ready for review in prior run (2026-08-05). No further action needed.",
+      "number": 52111
+    },
+    {
+      "branch": "silencer/demote-watcher-attach-detach-log-546609e8b3fb5e60",
+      "pattern": "Watcher attached device {} / Watcher detached device {} - top LLRuntime info-severity lines (130x each in one job sample), fired unconditionally once per device per attach/detach cycle",
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #52122 open, mergeable_state behind, 2 codeowner groups pending. No models-t3-unit-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Awaiting codeowner approval/merge.",
+      "number": 52122
+    },
+    {
+      "number": 52249,
+      "branch": "silencer/demote-mock-cluster-descriptor-warning",
+      "pattern": "Currently using mock cluster descriptor - warning fires 71x per mock-mode job",
+      "status": "resolved",
+      "note": "Validation run 31047265933 (runtime-unit-tests) completed/failure - unrelated MeshTensorDeviceTest failure, not the mock-cluster-descriptor line. Outcome commented and marked ready for review (2026-08-07)."
+    },
+    {
+      "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
+      "pattern": "rotary_embedding_llama sequence tile coverage mismatch warning fires every decode step (input_Ht < cos_Ht/sin_Ht by design)",
+      "status": "open-pr",
+      "note": "New PR opened this run. vllm-model-tests dispatched on branch (model=meta-llama/Llama-3.1-8B-Instruct). Awaiting validation."
+    },
+    {
+      "number": 52592,
+      "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning",
+      "pattern": "rotary_embedding_llama decode seqlen-mismatch log demoted to debug",
+      "status": "reported-inconclusive",
+      "note": "Validation run 31249794076 (vllm-model-tests) overall success except one unrelated infra failure. Sampled tail showed zero occurrences of the op at all -- inconclusive. Comment posted, moved to ready-for-review on 2026-08-09."
+    },
+    {
+      "number": 52631,
+      "branch": "silencer/dedupe-neighbor-pad-capped-links-warning",
+      "pattern": "neighbor_pad_async: Capped num_links... warning fires once per mesh coordinate/device with identical values (2880x in one job sample)",
+      "status": "validation-inconclusive-infra-failure",
+      "note": "Validation run 31278143407 (models-t1-unit-tests) job failure was mesh-sizing TT_FATAL in unrelated test setup; neighbor_pad_async never reached. Comment posted, marked ready for review 2026-08-09."
+    },
+    {
+      "branch": "silencer/deprecate-all-gather-legacy-args-in-sampling",
+      "pattern": "ttnn.all_gather deprecated num_links/topology/chunks_per_sync/... args warning (1376x in one job sample)",
+      "status": "reported-inconclusive-ready-for-review",
+      "note": "Validation run 31305109253 (galaxy-demo-tests) failed at board-reset infra step before test execution - inconclusive. Outcome comment already posted in prior run; marked ready for review this run (2026-08-10).",
+      "number": 52657
+    },
+    {
+      "branch": "silencer/demote-num-routing-planes-override-warning",
+      "pattern": "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override - warning fires on every legacy dispatch-fallback device open (185x in one t3000-e2e-tests job sample)",
+      "status": "resolved",
+      "note": "Validation run 31373536678 (t3000-e2e-tests) completed/failure - unrelated CCL/dispatch-timeout & trace-buffer-overflow failures, not num_routing_planes. Grepped t3k_ccl_tests job 93409757009 logs: 0 occurrences of num_routing_planes confirmed. Outcome commented and marked ready for review (2026-08-10).",
+      "workflow": "t3000-e2e-tests.yaml",
+      "number": 52705
+    },
+    {
+      "number": null,
+      "branch": "silencer/fabric-1d-rx-log-noise",
+      "pattern": "log_info -> log_debug for per-iteration Rx launch/status tracing in test_basic_1d_fabric.cpp (>2200/3675 info lines in sample)",
+      "source_run_id": "31229899895",
+      "source_job_id": "93040818652",
+      "status": "pr-opened-pending-ci",
+      "note": "PR just created this run (draft, safeoutputs create_pull_request); dispatched galaxy-e2e-tests on the branch for validation. Number to be filled in once known from GitHub."
     }
+  ],
+  "backlog_cursor": {
+    "next_category": 6,
+    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed. | 2026-08-09: root-caused and fixed all_gather deprecated-args warning (1376x in DeepSeek v3 demo job sample, run 31285846176) via silencer/deprecate-all-gather-legacy-args-in-sampling. ~13 other production call sites (gpt_oss*, gemma4, minimax_m3, mistral_24b, llama3_70b_galaxy, z_image_turbo, sampling_1d.py) still pass these deprecated args -- candidates for a follow-up PR if this one is well received."
+  }
 }
