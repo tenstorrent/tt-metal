@@ -158,6 +158,18 @@ void kernel_main() {
         cb_pop_front(cb_stat_partial, rows_t);
         if constexpr (W_GROUP_SIZE > 1) {
             if (!is_root) {
+                // Ordered behind the write barrier above, so the partial has
+                // landed before the root can observe the count.
+                //
+                // No atomic barrier follows: this increment and the
+                // `consumer_ready` increment that ReceiverPipe::receive() issues
+                // a few lines below are two independent non-posted atomics to the
+                // same core, and they may arrive in either order. That is safe
+                // because the ROOT drains them in a fixed order — wait_min() on
+                // THIS counter strictly precedes send()'s wait on consumer_ready
+                // — so an early consumer_ready arrival can never let the root run
+                // ahead of the gather. Preserve that ordering on the root if this
+                // handshake is ever restructured.
                 gather_sem.up(noc, root_x, root_y, 1);
             }
         }

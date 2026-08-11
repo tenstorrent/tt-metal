@@ -194,6 +194,8 @@ def _cb_bytes(geo, C, G, R, is_rm_out, has_tail):
     has_gamma = 1 if geo.has_gamma else 0
     nc_max = 1 + has_tail  # cb_stat_sq columns per tile-row
 
+    # The output CBs use T_in too: create_program_descriptor asserts the output
+    # dtype matches the input's, so tile_size(out_dtype) == T_in by construction.
     # cb_input_tiles + cb_normed + (RM out) cb_output_tiles ... then the stat CBs:
     #   cb_stat_sq(nc_max) + cb_stat_partial + cb_stat_sum + cb_rstd_send + cb_rstd + cb_stat_gather(G)
     per_row_bytes = T_in * C * (INPUT_CB_DEPTH + has_gamma + rm_out) + FP32_TILE_BYTES * (4 + nc_max + G)
@@ -314,6 +316,25 @@ def create_program_descriptor(
 ):
     device = input_tensor.device()
     geo = _Geometry(input_tensor, gamma)
+
+    # The whole work split — tile-row numbering, per-core row ranges and the
+    # row-major stick range every core drains — is derived ONCE, from the INPUT
+    # tensor's layout (a TILE tensor pads each image's H to 32 independently; a
+    # ROW_MAJOR one does not, so the two give different tile-row counts for the
+    # same shape). The writer replays that mapping, so it is only valid while the
+    # output shares the input's layout. The public entry point always allocates
+    # the output that way; assert it here so a future caller that passes a
+    # differently-laid-out output gets a loud failure instead of a silently
+    # unwritten buffer.
+    if output_tensor.layout != input_tensor.layout:
+        raise ValueError(
+            f"rms_norm: output layout ({output_tensor.layout}) must match the input layout "
+            f"({input_tensor.layout}) — the per-core row mapping is derived from the input."
+        )
+    if output_tensor.dtype != input_tensor.dtype:
+        raise ValueError(
+            f"rms_norm: output dtype ({output_tensor.dtype}) must match the input dtype " f"({input_tensor.dtype})."
+        )
 
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = int(grid.x), int(grid.y)

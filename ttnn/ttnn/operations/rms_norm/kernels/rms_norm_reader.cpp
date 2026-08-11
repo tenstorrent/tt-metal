@@ -25,6 +25,20 @@
 // The (CB_W_TILES - core_w) trailing pad pages are pushed but never read by the
 // statistics phases, which walk `core_w` columns at row stride CB_W_TILES.
 //
+// UNINITIALIZED L1 IN THE BLOCK, and the invariant that makes it safe. Two
+// regions of a pushed block are never written by this reader: the pad columns
+// above, and the stale rows of a ragged final 32-row group (H % 32 != 0). Both
+// DO reach the FPU (tilize and the apply phases cover the whole uniform block).
+// This is safe ONLY because every math phase over this block is row-independent:
+// the statistics are a REDUCE_ROW (each output row folds only its own row's
+// columns) and the apply phases are element-wise, so a stale Inf/NaN cannot
+// migrate into a valid row, and the writer never stores those bytes to DRAM.
+// The pad COLUMNS inside the last VALID hidden tile are a different matter and
+// are NOT left to chance — mask_tail_block zeroes them numerically, which is
+// what the pad_poison cases test. If a phase over cb_input_tiles ever crosses
+// rows or columns (a REDUCE_COL / REDUCE_SCALAR / DestAccumulation::WholeShape),
+// this reader must zero-fill both regions first.
+//
 // Helper substitutions (raw NoC instead of a kernel_lib helper), with reasons:
 //   * load_block on the TILE path uses raw noc_async_read_tile over a
 //     TensorAccessor. read_sticks_for_tilize is ROW-MAJOR ONLY: it derives a

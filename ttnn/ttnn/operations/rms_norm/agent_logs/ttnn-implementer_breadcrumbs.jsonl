@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-static-analyzer","description":"Structural analysis of rms_norm kernels","ts":"2026-08-11T19:06:14+00:00"}
+{"event":"test_run","suite":"final","result":"pass","acceptance":"82/82","adversarial_shapes":"92/92","golden_cartesian_interleaved":"840/840","golden_loose":"3 pass / 384 xfail","regression":"15/15","perf_total_vs_reference":"1.65x","ts":"2026-08-11T19:12:19+00:00"}
