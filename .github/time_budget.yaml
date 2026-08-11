@@ -153,6 +153,7 @@ train:
   unit:
     bh_p100: 90
     bh_p150b_civ2: 90
+    bh_quietbox_2: 35
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400

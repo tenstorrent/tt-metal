@@ -38,6 +38,17 @@
   owner_id: U07K00A281X # Kevin Wu
   team: train
 
+- name: tt-train cpp distributed unit tests
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_MESH_GRAPH_DESC_PATH=tt-train/configs/mgd/bh_galaxy_1_2_line_line.textproto
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
 - name: tt-train python unit tests
   cmd: python -m pytest tt-train/tests/python
   skus:
@@ -45,5 +56,7 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 20
+    bh_quietbox_2:
+      timeout: 10
   owner_id: U07K00A281X # Kevin Wu
   team: train

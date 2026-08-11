@@ -313,6 +313,11 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
 )
 
+# Needed for calls from tt::tt_metal::MetalContext
+if(TARGET Metalium::Metal)
+    target_include_directories(ttml PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+endif()
+
 # Add include directory for TTNN::Core's generated flatbuffer headers
 # These are needed because tensor_flatbuffer.hpp includes tensor_generated.h
 if(TARGET TTNN::Core)
