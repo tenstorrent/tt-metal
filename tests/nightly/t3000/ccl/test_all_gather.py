@@ -1106,6 +1106,10 @@ def _dram_nd_sharded(
         # matched, output page slot smaller than the input's aligned page (m=1,s=1,k=1): 272B content
         # pads to 288B in DRAM (32B align) but stays 272B in L1 (16B align).
         ([1, 1, 256, 136], 2, _dram_nd_sharded([1, 1, 32, 136], 1), _l1_nd_sharded([1, 1, 32, 136])),
+        # composite: the per-device row (384/8=48) is narrower than the 64-wide shard, so the input is
+        # padded on the gather dim. The composite's sharded_to_interleaved must drop that padding -
+        # an interleaved row-major page is one logical row, and all_broadcast/concat size off it.
+        ([1, 1, 32, 384], -1, _l1_width_sharded(32, 64, 1), ttnn.DRAM_MEMORY_CONFIG),
     ],
     ids=[
         "matched",
@@ -1123,6 +1127,7 @@ def _dram_nd_sharded(
         "split_padded_output",
         "matched_sharded_to_interleaved_padded",
         "matched_out_page_smaller_than_in_aligned",
+        "composite_shard_wider_than_row",
     ],
 )
 @pytest.mark.parametrize(
@@ -1239,10 +1244,6 @@ def test_all_gather_page_indexing(
             ttnn.ROW_MAJOR_LAYOUT,
             _l1_nd_sharded([1, 1, 8, 64]),
             _l1_nd_sharded([1, 1, 8, 64]),
-            marks=pytest.mark.xfail(
-                reason="composite all_broadcast/concat ops are buggy for a row-major input padded on the gather dim",
-                strict=True,
-            ),
         ),
         ([1, 1, 32, 256], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 32, 32]), _l1_nd_sharded([1, 1, 32, 96])),
     ],
