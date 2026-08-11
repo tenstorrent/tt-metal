@@ -37,12 +37,6 @@ IN0_ROWS = [1, 2, 4, 8]
 # `constexpr std::uint32_t face_r_dim = 8` / an 8-row dest step, so 8 is the only shape they implement.
 IN0_ROWS_SDPA = 8
 
-# K-aware absolute floor for the goldens below. A single LoFi MVMUL accumulates the K-deep sum in a bf16
-# dest, so noise grows ~linearly per K-tile -- a floor that Float16_b's default atol (0.05) is too tight
-# for at large kt. Same calibration as compressed_utils.run_compressed; PCC remains the real gate.
-FLOAT16B_DEFAULT_ATOL = 0.05
-ACC_ATOL_PER_KT = 0.005
-
 
 def matmul_grid(ct_dims=None, kt_dims=None, in0_rows=None):
     """The (ct_dim, kt_dim, in0_rows) sweep shared by the custom_mm-style tests."""
@@ -52,14 +46,6 @@ def matmul_grid(ct_dims=None, kt_dims=None, in0_rows=None):
             for rows in in0_rows if in0_rows is not None else IN0_ROWS:
                 combos.append((ct, kt, rows))
     return combos
-
-
-def matmul_acc_atol(golden, kt_dim):
-    """Scale the absolute tolerance by kt * mean|nonzero golden| (never below the format default)."""
-    active = golden.abs().flatten()
-    active = active[active > 0]
-    mean_active = active.mean().item() if active.numel() else 0.0
-    return max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt_dim * mean_active)
 
 
 def pack_in0_faces(in0, kt_dim, stimuli_format):
