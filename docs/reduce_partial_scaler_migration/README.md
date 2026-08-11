@@ -75,3 +75,4 @@ support), not a migration. Those eight are documented and deliberately left alon
 | 8 | `moreh_softmax_backward` small kernels — full mask removal; why the `_large` ones cannot follow | [step-8-moreh-softmax-backward.md](step-8-moreh-softmax-backward.md) |
 | 9 | `moreh_softmax_{h,w}_large` — max phase only (exp/sum phase blocked by step 8) | [step-9-moreh-softmax-large-max-phase.md](step-9-moreh-softmax-large-max-phase.md) |
 | 10 | remaining single-axis mask kernels: `moreh_bias_backward_h` migrated, the rest blocked | [step-10-phase3-single-axis-inventory.md](step-10-phase3-single-axis-inventory.md) |
+| 11 | `moreh_{sum,mean}_w` (matmul scaler) and the generic MIN kernels | [step-11-phase4-analyses.md](step-11-phase4-analyses.md) — **blocked, no code change** |
