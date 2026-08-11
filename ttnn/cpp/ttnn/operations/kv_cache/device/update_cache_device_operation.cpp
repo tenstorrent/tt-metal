@@ -132,20 +132,16 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Cache tensor batch size ({}) must be <= input tensor height ({})",
             cache_tensor.padded_shape()[0],
             input_tensor.padded_shape()[-2]);
-        // Decode update processes input batch in TILE_HEIGHT-wide groups. When Bcache > TILE_HEIGHT
-        // and is not a multiple of TILE_HEIGHT, the last group is still treated as a full tile and
-        // wraps modulo Bcache, silently re-updating earlier users (see #52671). Reject that case
-        // until short last-group support lands; pad cache batch to the next multiple of TILE_HEIGHT.
+        // Decode update processes input batch in TILE_HEIGHT-wide groups. When Bcache > 32 and is
+        // not a multiple of 32, the last group is still treated as a full tile and wraps modulo
+        // Bcache, silently re-updating earlier users (see #52671). Reject that case until short
+        // last-group support lands; pad cache batch to the next multiple of 32.
         {
             const uint32_t Bcache = cache_tensor.padded_shape()[0];
             TT_FATAL(
-                Bcache < TILE_HEIGHT || (Bcache % TILE_HEIGHT) == 0,
-                "update_cache does not support cache batch {} (>={} and not a multiple of {}). "
-                "Pad the cache batch dim to the next multiple of {}.",
-                Bcache,
-                TILE_HEIGHT,
-                TILE_HEIGHT,
-                TILE_HEIGHT);
+                Bcache <= 32 || Bcache % 32 == 0,
+                "update_cache requires the cache batch to be at most 32 or a multiple of 32, got {}",
+                Bcache);
         }
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {

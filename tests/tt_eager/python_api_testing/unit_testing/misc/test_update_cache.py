@@ -196,7 +196,7 @@ def test_update_cache_decode_rejects_non_tile_batch(num_users, num_heads, device
         x = torch.cat((x, torch.zeros(pad_users - num_users, num_heads, 1, head_dim)), dim=0)
     xt = ttnn.Tensor(x.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    with expect_error(RuntimeError, "does not support cache batch"):
+    with expect_error(RuntimeError, "at most 32 or a multiple of 32"):
         ttnn.update_cache(cachett, xt, cache_idx, batch_offset=0)
 
 
