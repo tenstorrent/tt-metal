@@ -383,7 +383,9 @@ class TtHCA(_TtHCABase):
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
-        self._tail_tile_cache = {}
+        self._shift_cache = {}
+        self._take_cache = {}
+        self._carry_index = {}
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
         """Size the state once for the longest context this layer will serve, so its shape is fixed for
@@ -399,11 +401,16 @@ class TtHCA(_TtHCABase):
         # forward must build no host tensors, so every one-hot the write can ever need is built here. The
         # slab width is fixed -- it is part of the program shape, so the no-recompile contract already
         # forbids it moving -- but r_e reaches every value once chunks carry differing real lengths, so a
-        # chunked state needs the whole TILE_SIZE set. Single-shot writes once, at r_e = 0.
+        # chunked state needs the whole TILE_SIZE set. Single-shot writes once, at r_e = 0, and keeps no
+        # tail, so it needs no take matrices at all.
+        width = -(-int(chunk) // self.compressor.compress_rate)
         self._build_tail_tile_matrices(
-            -(-int(chunk) // self.compressor.compress_rate),
+            width,
             range(ttnn.TILE_SIZE) if chunk_tokens is not None else (0,),
+            range(ttnn.TILE_SIZE + width) if chunk_tokens is not None else (),
         )
+        if chunk_tokens is not None:
+            self._build_carry_index(chunk)
         return TtHCAState(
             compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -575,6 +582,8 @@ class TtHCA(_TtHCABase):
         position_ids: torch.Tensor,
         carry=None,
         kv_actual: int = 0,
+        real_len: int | None = None,
+        need_carry: bool = True,
     ):
         """SP-gathers sliding_kv to full S, concats ``[carry | sliding | compressed | pad]``, runs
         per-chip SDPA, then undoes V's RoPE. ``carry`` is the previous chunk's raw KV tail (None in
@@ -600,11 +609,21 @@ class TtHCA(_TtHCABase):
                 cluster_axis=self.sp_axis,
             )
 
-        next_carry = ttnn.slice(
-            sliding_kv,
-            [0, 0, seq_len - self.sliding_window, 0],
-            [batch, 1, seq_len, self.head_dim],
-        )
+        # The next chunk's sliding window reaches back into this one, so the carry has to be this chunk's
+        # last REAL keys -- rows [real_len - sliding_window, real_len) -- not the last rows of the padded
+        # slab. Those differ whenever real_len < seq_len, and a plain slice cannot express it: slice_start
+        # is hashed (slice_device_operation.cpp:306), so a new real_len would compile a new program.
+        # The tensor-args overload takes the start from a device tensor instead, and hashes only its shape
+        # (:327), so every offset reuses one program. Verified on 8x4: +1 program on the first call, +0 for
+        # every offset after.
+        #
+        # Skipped entirely when no chunk follows: single-shot's state is thrown away, so the slice and the
+        # index table it needs would be pure cost -- and alloc_state runs inside forward there, which put
+        # the table's tilize/typecast straight into the measured region.
+        next_carry = None
+        if need_carry:
+            start, end = self._carry_index[self._carry_key(real_len if real_len is not None else seq_len)]
+            next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
 
         # Pad Sk to a multiple of 32 explicitly: SDPA tile-pads a non-aligned Sk with zeros, and a
         # provided mask's pad columns default to 0 (= attend), which pollutes the softmax. _attn_mask
@@ -640,7 +659,7 @@ class TtHCA(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1), next_carry
 
-    def _write_compressed(self, state, new_entries):
+    def _write_compressed(self, state, new_entries, n_new, keep_tail=True):
         """Append this call's entries to the cache at row ``state.entry_count``.
 
         One entry is one row, so the append offset advances by ``chunk/compress_rate`` per chunk --
@@ -658,9 +677,9 @@ class TtHCA(_TtHCABase):
             f"compressed cache full: writing {width} entries at {state.entry_count} exceeds capacity "
             f"{state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
         )
-        self._write_tail_tile(state, new_entries, width)
+        self._write_tail_tile(state, new_entries, width, n_new, keep_tail)
 
-    def _write_tail_tile(self, state, new_entries, width):
+    def _write_tail_tile(self, state, new_entries, width, n_new, keep_tail):
         """fill_cache keeps update_idx out of its program hash but needs it tile-aligned, so this writes at
         the tile boundary below entry_count and supplies that tile's whole content -- the entries already
         in it come from ``state.tail``, which carries them across chunks right-aligned.
@@ -674,14 +693,17 @@ class TtHCA(_TtHCABase):
         all of them -- so a shift that crosses a tile boundary is not a special case."""
         tile = ttnn.TILE_SIZE
         f, r_e = divmod(state.entry_count, tile)
-        shift, take = self._tail_tile_matrices(r_e, width)
+        shift, take = self._tail_tile_matrices(r_e, width, n_new if keep_tail else None)
 
         src = ttnn.concat([state.tail, new_entries], dim=2)  # [B, 1, tile + width, head_dim]
         merged = ttnn.matmul(shift, src, memory_config=self.memory_config)
         ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, merged, 0, update_idx=f * tile)
-        state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
+        # The tail is only ever read by the NEXT chunk's write, so single-shot skips it -- and with it
+        # the one-hot table, which alloc_state would otherwise build inside forward.
+        if keep_tail:
+            state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
-    def _build_tail_tile_matrices(self, width, r_es):
+    def _build_tail_tile_matrices(self, width, r_es, take_steps):
         """Every one-hot pair the write can need, for one slab width. Called from alloc_state, never from
         forward: building a pair costs ~0.9 ms of host time that device perf does not measure, and forward
         is required to touch no host tensors.
@@ -695,25 +717,58 @@ class TtHCA(_TtHCABase):
             rows = torch.arange(r_e + width)
             shift = torch.zeros(1, 1, buf, tile + width)
             shift[0, 0, rows, rows + (tile - r_e)] = 1.0
+            self._shift_cache[(r_e, width)] = self._from_torch(shift)
 
-            # lift the next open tile back out of merged, right-aligned. Rows before its first live entry
-            # stay zero -- that is what lets the next chunk's shift skip them by construction.
-            live = (r_e + width) % tile
-            rows = torch.arange(tile - live, tile)
+        # Lifting the next open tile back out of merged is keyed on r_e + n_new, NOT r_e + width: the
+        # whole padded width is written, but entry_count only advances by the real entries, so a chunk
+        # with real_len < chunk_size leaves the tail right-aligned on a count the state never reaches.
+        # Rows before the open tile's first live entry stay zero -- that is what lets the next chunk's
+        # shift skip them by construction instead of masking them.
+        for s in take_steps:
+            rows = torch.arange(tile - s % tile, tile)
             take = torch.zeros(1, 1, tile, buf)
-            take[0, 0, rows, rows + (r_e + width) - tile] = 1.0
+            take[0, 0, rows, rows + s - tile] = 1.0
+            self._take_cache[s] = self._from_torch(take)
 
-            self._tail_tile_cache[(r_e, width)] = (self._from_torch(shift), self._from_torch(take))
+    def _carry_key(self, real_len):
+        """The carry index is tabulated per whole compression window. A ragged chunk rounds down, which is
+        sound because it can only be the final one -- appending after it is rejected -- so its carry is
+        never read."""
+        rate = self.compressor.compress_rate
+        return max(rate, (int(real_len) // rate) * rate)
 
-    def _tail_tile_matrices(self, r_e, width):
-        """Lookup only. A miss means alloc_state was given a chunk width this call does not match, and
-        building here would put host work back in forward -- so fail instead."""
-        pair = self._tail_tile_cache.get((r_e, width))
-        assert pair is not None, (
-            f"no tail-tile one-hot for (r_e={r_e}, width={width}); alloc_state built "
-            f"{sorted({w for _, w in self._tail_tile_cache})} -- pass chunk_tokens matching the slab width"
+    def _build_carry_index(self, chunk_tokens):
+        """start/end index tensors for the carry slice, one pair per real_len the chunk can carry. Built
+        here rather than in forward, which must touch no host tensors; each pair is 8 uint32s."""
+        rate, sw = self.compressor.compress_rate, self.sliding_window
+        assert sw % ttnn.TILE_SIZE == 0 and rate % sw == 0, (
+            f"the carry slice needs a tile-aligned start and one whole window per step: sliding_window "
+            f"{sw} must be a multiple of {ttnn.TILE_SIZE} and divide compress_rate {rate}"
         )
-        return pair
+
+        def idx(vals):
+            return ttnn.from_torch(
+                torch.tensor(vals, dtype=torch.int32),
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None,
+            )
+
+        for real_len in range(rate, int(chunk_tokens) + 1, rate):
+            self._carry_index[real_len] = (idx([0, 0, real_len - sw, 0]), idx([1, 1, real_len, self.head_dim]))
+
+    def _tail_tile_matrices(self, r_e, width, n_new):
+        """Lookup only. A miss means alloc_state was given a chunk width this call does not match, and
+        building here would put host work back in forward -- so fail instead. ``n_new`` is None when the
+        caller does not keep the tail, in which case no take matrix exists to look up."""
+        shift = self._shift_cache.get((r_e, width))
+        take = self._take_cache.get(r_e + n_new) if n_new is not None else None
+        assert shift is not None and (take is not None or n_new is None), (
+            f"no tail-tile one-hot for (r_e={r_e}, width={width}, n_new={n_new}); alloc_state built widths "
+            f"{sorted({w for _, w in self._shift_cache})} -- pass chunk_tokens matching the slab width"
+        )
+        return shift, take
 
     def _o_proj(self, attn):
         """[B, num_heads/tp, S/sp, head_dim] -> [B, 1, S/sp, hidden/tp], the block's own input layout."""
@@ -774,7 +829,8 @@ class TtHCA(_TtHCABase):
             f"compress_rate {compress_rate}"
         )
 
-        if state is None:
+        single_shot = state is None
+        if single_shot:
             # Sized on the padded slab, not real_len: the write covers the whole padded width, so that is
             # what the tail-tile one-hot has to be built for.
             state = self.alloc_state(seq_pad_global, batch=batch)
@@ -816,7 +872,7 @@ class TtHCA(_TtHCABase):
         )
         # Attention then reads the WHOLE cache every chunk, so its shape stays constant and the mask
         # -infs everything past total_entries.
-        self._write_compressed(state, new_entries)
+        self._write_compressed(state, new_entries, n_new, keep_tail=not single_shot)
 
         attn, next_carry = self._attention(
             q,
@@ -826,6 +882,8 @@ class TtHCA(_TtHCABase):
             pos_padded,
             carry=state.sliding_carry,
             kv_actual=state.kv_actual,
+            real_len=real_len,
+            need_carry=not single_shot,
         )
 
         state.entry_count = total_entries
