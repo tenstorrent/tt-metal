@@ -21,7 +21,6 @@ void check_affine_tensor(const Tensor& tensor, const char* name) {
         tensor.dtype() == DataType::FLOAT32 || tensor.dtype() == DataType::BFLOAT16,
         "reduce_affine_transforms: {} must be FLOAT32 or BFLOAT16",
         name);
-    TT_FATAL(!tensor.is_sharded(), "reduce_affine_transforms: {} must use interleaved memory", name);
 }
 }  // namespace
 
