@@ -32,8 +32,13 @@ void kernel_main() {
     const auto src_in = TensorAccessor(tensor::src);
 
     // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>();
+    if (mask_h < tt::constants::TILE_HEIGHT) {
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>(mask_h);
+    } else {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>();
+    }
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 

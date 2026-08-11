@@ -41,26 +41,21 @@ void kernel_main() {
     // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing.
     std::uint32_t N = get_arg(args::N);
     std::uint32_t Wt = get_arg(args::Wt);
+    constexpr std::uint32_t mask_w = get_arg(args::mask_w);
+    constexpr std::uint32_t TILE_W = 32;
+    constexpr bool do_partial_w = mask_w < TILE_W;
+    constexpr auto max_partial_scaler = do_partial_w
+                                            ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                            : compute_kernel_lib::ReducePartialScaler::none();
 
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
-        if (Wt == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
-
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb_max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_in0, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-
-            // Phase 2: mask the last tile and continue reducing into dfb_max via Accumulate.
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_tmp, dfb_max_scaler, dfb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(1),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/1));
-        }
+        compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_in0, dfb_max_scaler, dfb_max>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{},
+            max_partial_scaler);
 
         // step 1
         for (std::uint32_t w = 0; w < Wt; ++w) {

@@ -46,7 +46,8 @@ from every earlier tile, so zeroing that lane discards real values (measured: pc
 `moreh_softmax_backward_w_large`). Those kernels must keep masking the ragged tile before accumulating.
 
 This rules out the `_large` variants of the moreh softmax family — forward and backward — beyond their
-max phase, and it is now documented on `ReducePartialScaler` itself.
+max phase, and it is now documented on `ReducePartialScaler` itself. Step 9 migrates exactly that max
+phase and leaves the exp/sum phase masked.
 
 ## Reachability of the stated end goal
 
@@ -68,3 +69,4 @@ support), not a migration. Those eight are documented and deliberately left alon
 | 6 | perf comparison vs `main` | [step-6-perf-vs-main.md](step-6-perf-vs-main.md) |
 | 7 | Phase 1 cleanups: `softmax_w` perf fix, a hang in the shared `ttnn` general softmax, dead RT args, `topk_router_gpt` | [step-7-phase1-cleanups.md](step-7-phase1-cleanups.md) |
 | 8 | `moreh_softmax_backward` small kernels — full mask removal; why the `_large` ones cannot follow | [step-8-moreh-softmax-backward.md](step-8-moreh-softmax-backward.md) |
+| 9 | `moreh_softmax_{h,w}_large` — max phase only (exp/sum phase blocked by step 8) | [step-9-moreh-softmax-large-max-phase.md](step-9-moreh-softmax-large-max-phase.md) |
