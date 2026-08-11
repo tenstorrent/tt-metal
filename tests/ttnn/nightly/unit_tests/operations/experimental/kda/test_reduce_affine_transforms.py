@@ -77,6 +77,19 @@ def _to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
+def _height_sharded_memory_config(
+    device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
+) -> ttnn.MemoryConfig:
+    cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        (leading, matrix_height, matrix_width),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def _run(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -119,6 +132,7 @@ def _composed_ttnn_baseline(
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 @pytest.mark.parametrize(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
     [(2, 4, 32, 32), (3, 2, 32, 64)],
@@ -126,6 +140,7 @@ def _composed_ttnn_baseline(
 def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
+    sharded_inputs: bool,
     batch_heads: int,
     groups_per_head: int,
     key_dim: int,
@@ -133,8 +148,17 @@ def test_reduce_affine_transforms_contract_cache_trace_and_determinism(
 ) -> None:
     a, b = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
     expected_a, expected_b = _oracle(a, b, batch_heads, groups_per_head)
-    a_tt = _to_device(a, device, summary_dtype)
-    b_tt = _to_device(b, device, summary_dtype)
+    leading = batch_heads * groups_per_head
+    a_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, value_dim)
+        if sharded_inputs
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
+    b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
     snapshots = (ttnn.to_torch(a_tt).clone(), ttnn.to_torch(b_tt).clone())
 
     first = _run(a_tt, b_tt, groups_per_head)
@@ -196,7 +220,6 @@ def test_reduce_affine_transforms_matches_composed_ttnn_baseline(device: ttnn.De
         ("nonsquare", "a must contain square"),
         ("key_dim", "matching K dimensions"),
         ("unaligned", "K and V must be positive and tile aligned"),
-        ("sharded", "a must use interleaved memory"),
     ],
 )
 def test_reduce_affine_transforms_rejects_invalid_inputs(
@@ -231,15 +254,6 @@ def test_reduce_affine_transforms_rejects_invalid_inputs(
         b_tt = _to_device(b[:, :31], device)
     elif case == "unaligned":
         b_tt = _to_device(b[:, :, :31], device)
-    elif case == "sharded":
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            [128, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-        a_tt = _to_device(a, device, memory_config=sharded)
-
     with expect_error(RuntimeError, message):
         _run(a_tt, b_tt, groups_per_head)
 
