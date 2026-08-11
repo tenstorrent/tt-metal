@@ -10,48 +10,66 @@
 # (llk_math_compressed_custom_mm.h / llk_unpack_AB_compressed_custom_mm.h header banners):
 #   in0 tile shape: [{1, 2, 4, 8}, 32]   (partial-row tile -> SrcB, bf16, reused across output width)
 #   in1 tile shape: [32, 32]             (full tile -> SrcA, BFP-compressed: Bfp8_b / Bfp4_b / Bfp2_b)
-#   rt_dim: 1
-#   ct_dim: any integer from 1 to 16
-#   kt_dim: even number from 2 to 256 (inclusive)
-#   fidelity: LoFi only (math init takes no MathFidelity template)
-#   throttle: not supported
+#   rt_dim: 1;  ct_dim: 1..16;  kt_dim: even 2..256;  fidelity: LoFi only;  throttle: not supported
 #
-# Difference vs custom_mm: BOTH primitives take an extra base_address_meta argument (a buffer of packed 3-bit
-# per-tile compression-format codes). We route it through the harness's optional third operand (buffer_C). For this
-# compile-green advance test the metadata content is a placeholder; exact numerical agreement is validated only on
-# Blackhole hardware.
+# Same two layout facts as custom_mm, and for the same reason -- these are the SAME primitives the silicon-validated
+# test_matmul_custom_compressed.py drives, so this test now mirrors its host side:
+#   - in0 is kt_dim*2 DENSELY packed in0_rows x 16 faces, not a run of padded 32x32 tiles (the unpacker's SrcB counter
+#     stride is one face, datum_size * FACE_C_DIM * face_r_dim). See helpers/custom_mm_utils.pack_in0_faces.
+#   - the output is a partial tile [in0_rows, ct_dim*32], packed with dense_packing (DEST tile stride 32 rows) and read
+#     back through helpers/custom_mm_utils.dense_result_rowmajor.
 #
-# Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is pending
-# Blackhole hardware/CI; this host is Wormhole.
+# Difference vs custom_mm: BOTH primitives take an extra base_address_meta argument (a buffer of packed 3-bit per-tile
+# compression-format codes). We route it through the harness's optional third operand (buffer_C). The codes are CONTROL
+# FLOW, not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math takes the
+# STALLWAIT(SRCB_VLD) branch, so an all-zero meta buffer hangs Math/Packer forever. Every tile here carries the one BFP
+# format under test.
+#
+# The golden folds in1's BFP quantization in rather than charging it against PCC: in1 is packed to the BFP format and
+# then unpacked back to bf16, and that dequantized tensor is what the golden multiplies. This is what
+# compressed_utils.run_compressed does.
+#
+# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
 
 import torch
 from conftest import blackhole_only
 from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
     advance_llk_include_paths,
 )
+from helpers.compressed_utils import FMT_CODE, pack_bfp_tile, unpack_bfp_tile
+from helpers.custom_mm_utils import (
+    dense_result_rowmajor,
+    matmul_acc_atol,
+    matmul_grid,
+    matmul_lofi_golden,
+    pack_in0_faces,
+)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import generate_combination, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
-    IN0_FACE_R_DIM,
+    IN_FACE_DIMS,
     NUM_FACES,
     TILE_COUNT,
 )
-from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 # in0 (SrcB) is bf16; in1 (SrcA) is the BFP-compressed operand. Sweep the three BFP widths the LLK's exponent-section
-# MOP config supports. unpack_A == in0, unpack_B == in1 (same operand->buffer mapping as custom_mm_test.cpp).
+# MOP config supports.
 IN1_COMPRESSED_FORMATS = [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b]
 
-# Kernel per-tile format codes (helpers.compressed_utils.FMT_CODE). 0 == "zero tile" == skip.
-_FMT_CODE = {DataFormat.Bfp8_b: 3, DataFormat.Bfp4_b: 2, DataFormat.Bfp2_b: 1}
+_FMT_CODE = {
+    DataFormat.Bfp8_b: FMT_CODE["bfp8"],
+    DataFormat.Bfp4_b: FMT_CODE["bfp4"],
+    DataFormat.Bfp2_b: FMT_CODE["bfp2"],
+}
+
+TILE_DIM = 32
 
 
 def _encode_meta(fmt_code, ct_dim, kt_dim):
@@ -89,120 +107,145 @@ COMPRESSED_MM_FORMATS = generate_combination(
     ]
 )
 
-# Honor the header contract. ct_dim in the documented allowed set, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
-CT_DIMS = [1, 2, 4, 8, 16]
-KT_DIMS = [2, 4]
-IN0_ROWS = [1, 2, 4, 8]
+
+def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
+    """BFP-pack in1 tile by tile (row-major over the kt x ct grid) and return (bytes, dequantized).
+
+    The dequantized copy is what the golden multiplies, so BFP rounding is folded into the golden
+    rather than charged against PCC -- the same trick compressed_utils.run_compressed uses.
+    """
+    packed = b""
+    dequant = torch.zeros_like(in1)
+    for k in range(kt_dim):
+        for c in range(ct_dim):
+            blk = in1[
+                k * TILE_DIM : (k + 1) * TILE_DIM, c * TILE_DIM : (c + 1) * TILE_DIM
+            ]
+            full = pack_bfp_tile(blk, code, tile_dim=TILE_DIM)
+            packed += full
+            dequant[
+                k * TILE_DIM : (k + 1) * TILE_DIM, c * TILE_DIM : (c + 1) * TILE_DIM
+            ] = unpack_bfp_tile(full, code, tile_dim=TILE_DIM)
+    return packed, dequant
 
 
-def _grid():
-    combos = []
-    for ct in CT_DIMS:
-        for kt in KT_DIMS:
-            for rows in IN0_ROWS:
-                combos.append((ct, kt, rows))
-    return combos
+class _CompressedMMStimuli(StimuliConfig):
+    """StimuliConfig that writes pre-packed in1 bytes and the meta buffer verbatim.
+
+    in1 is BFP-compressed, so its L1 image is produced by pack_bfp_tile rather than by the harness's
+    float path; buffer_A (dense in0 faces) and buffer_Res stay on the normal path.
+    """
+
+    def __init__(
+        self, in0_faces, in0_format, packed_b, meta_bytes, kt_dim, ct_dim, res_format
+    ):
+        super().__init__(
+            buffer_A=in0_faces,
+            stimuli_A_format=in0_format,
+            tile_count_A=kt_dim,
+            buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder, see write()
+            stimuli_B_format=DataFormat.Bfp8_b,
+            tile_count_B=kt_dim * ct_dim,
+            buffer_C=torch.zeros(1, dtype=torch.int32),  # placeholder, see write()
+            stimuli_C_format=DataFormat.UInt32,
+            tile_count_C=(len(meta_bytes) + 4095) // 4096,
+            stimuli_res_format=res_format,
+            tile_count_res=ct_dim,
+        )
+        self.packed_b = packed_b
+        self.meta_bytes = meta_bytes
+
+    def write(self, location: str = "0,0"):
+        from helpers.device_io import write_to_device
+
+        super().write(location)
+        write_to_device(location, self.buf_b_addr, self.packed_b)
+        write_to_device(location, self.buf_c_addr, self.meta_bytes)
 
 
 @blackhole_only
 @parametrize(
     formats=COMPRESSED_MM_FORMATS,
-    ct_kt_rows=_grid(),
+    ct_kt_rows=matmul_grid(),
 )
 def test_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
 ):
+    import numpy as np
+
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
     output_tile_cnt = rt_dim * ct_dim
 
     torch_format = format_dict[formats.output_format]
-
-    # in0 is [rt_dim*32, kt_dim*32] (partial rows modeled inside the LLK; host feeds full 32-row tiles and the kernel
-    # only unpacks the top in0_rows rows of each in0 face). in1 is [kt_dim*32, ct_dim*32].
-    input_A_dimensions = [rt_dim * 32, kt_dim * 32]
-    input_B_dimensions = [kt_dim * 32, ct_dim * 32]
-
     in0_format = formats.unpack_A_src  # bf16
     in1_format = formats.unpack_B_src  # BFP-compressed
 
+    in0_dimensions = [in0_rows, kt_dim * TILE_DIM]
+    in1_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
+
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=in0_format,
-        input_dimensions_A=input_A_dimensions,
-        stimuli_format_B=in1_format,
-        input_dimensions_B=input_B_dimensions,
+        input_dimensions_A=in0_dimensions,
+        stimuli_format_B=in0_format,  # generate in1 in bf16; BFP packing happens below
+        input_dimensions_B=in1_dimensions,
         spec_A=spec,
         spec_B=spec,
     )
 
-    # LoFi golden: standard matmul with the compressed-format rounding of in1 (input_B_format = the BFP format) and
-    # bf16 (LoFi) rounding of in0. NOTE: this does not model compressed_custom_mm's exact packed output tile layout
-    # (split_acc/dense_packing are off here). Exact numerical agreement is validated only on Blackhole hardware.
-    generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
-        tilize=True,
-        input_A_format=in0_format,
-        input_B_format=in1_format,
+    in0 = src_A.reshape(in0_dimensions).to(torch_format)
+    in1 = src_B.reshape(in1_dimensions).to(torch_format)
+
+    code = _FMT_CODE[in1_format]
+    packed_b, in1_dequant = _pack_in1_bfp(in1, kt_dim, ct_dim, code)
+
+    # Golden multiplies the DEQUANTIZED in1, so BFP rounding is folded in rather than charged against PCC.
+    golden_tensor = matmul_lofi_golden(
+        in0, in1_dequant, formats, in0_dimensions, in1_dimensions
     )
 
-    tilized_A = tilize_block(
-        src_A, dimensions=input_A_dimensions, stimuli_format=in0_format
-    )
-    tilized_B = tilize_block(
-        src_B, dimensions=input_B_dimensions, stimuli_format=in1_format
-    )
-
-    # Per-tile compression metadata buffer read by both primitives as base_address_meta. The codes are CONTROL FLOW,
-    # not just numerics: code 0 means "zero tile", for which the unpacker emits no UNPACR at all and math takes the
-    # STALLWAIT(SRCB_VLD) branch. An all-zero buffer therefore hangs Math/Packer forever. Every tile here is the one
-    # BFP format under test.
-    meta_words = _encode_meta(_FMT_CODE[in1_format], ct_dim, kt_dim)
-    meta_buffer = torch.zeros(1024, dtype=torch.int64)
-    meta_buffer[: len(meta_words)] = torch.tensor(meta_words, dtype=torch.int64)
+    in0_faces = pack_in0_faces(in0, kt_dim, torch_format)
+    meta_bytes = np.array(_encode_meta(code, ct_dim, kt_dim), dtype=np.uint32).tobytes()
 
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",
         formats,
         runtimes=[
-            NUM_FACES(),
+            # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
+            # unpB / unpA slots. num_faces is the pack count.
+            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
             TILE_COUNT(output_tile_cnt),
             CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
-            IN0_FACE_R_DIM(in0_rows),
+            IN_FACE_DIMS(in0_face_r_dim=in0_rows),
         ],
-        variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+        variant_stimuli=_CompressedMMStimuli(
+            in0_faces,
             in0_format,
-            tilized_B.flatten(),
-            in1_format,
+            packed_b,
+            meta_bytes,
+            kt_dim,
+            ct_dim,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=output_tile_cnt,
-            buffer_C=meta_buffer,
-            stimuli_C_format=DataFormat.UInt32,
-            tile_count_C=1,
         ),
         dest_acc=DestAccumulation.No,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
+    res_tensor = dense_result_rowmajor(
+        torch.tensor(res_from_L1, dtype=torch_format), ct_dim, in0_rows
+    )
 
-    assert len(res_from_L1) == len(
-        golden_tensor
+    assert (
+        res_tensor.numel() == golden_tensor.numel()
     ), "Result tensor and golden tensor are not of the same length"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor.flatten(),
+        res_tensor.flatten(),
+        formats.output_format,
+        custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
     ), "Assert against golden failed"

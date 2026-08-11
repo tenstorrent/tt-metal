@@ -86,7 +86,8 @@ static constexpr std::uint32_t OUTPUT_GRANULARITY = 1;
 // sdpa_bcast_col_srca_srcb_reuse_configure_mop's LLK_ASSERT permits; on the MATH side it is the mop's inner-loop
 // count, i.e. the two 8-row ELWMUL chunks that together cover the tile's 16 dest rows (see the banner). It is
 // deliberately NOT params.num_faces, which is 1 here -- the unpack/pack side sees a single 16x16 face.
-static constexpr std::uint32_t NUM_FACES_CT = 2;
+// MATH_NUM_FACES comes from the MATH_NUM_FACES TemplateParameter in the generated build header, so the
+// value lives in python only (see helpers/test_variant_parameters.py:MATH_NUM_FACES).
 
 // This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
 static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
@@ -137,7 +138,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // There is deliberately NO operand unpack into SrcA and no _llk_unpack_A_sdpa_init_ here: the MOP refills SrcA
     // from DEST with MOVD2A before every ELWMUL, so an unpacked SrcA tile would be discarded. The demo agrees --
     // sdpa_bcast_col_srca_srcb_reuse_tiles_init() touches the MATH thread only (sdpa.h:75-78).
-    _llk_unpack_A_init_<BroadcastType::NONE>(0, 0, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
@@ -197,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fused_signalling=true selects the output_granularity loop on the DEMO copy (per-tile FPU_SFPU with
     // OUTPUT_GRANULARITY=1). On promotion the BLAZE execute drops fused_signalling and the granularity loop is
     // unconditional — drop that template arg then; the golden is unaffected either way.
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(NUM_FACES_CT, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
         SDPA_OP,
