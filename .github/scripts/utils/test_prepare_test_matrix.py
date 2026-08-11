@@ -448,9 +448,7 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
     ],
     ids=["legacy_allocation", "exabox_multihost_label", "ordinary_runner"],
 )
-def test_multihost_flag_from_sku_config(
-    tmp_path: Path, sku_name: str, sku_yaml: str, expected_multihost: bool
-):
+def test_multihost_flag_from_sku_config(tmp_path: Path, sku_name: str, sku_yaml: str, expected_multihost: bool):
     """Legs with allocation or an exabox-multihost* runs_on label are multihost."""
     tests = tmp_path / "tests.yaml"
     tests.write_text(
