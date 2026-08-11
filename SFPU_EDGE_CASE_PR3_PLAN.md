@@ -3,98 +3,138 @@
 **Companion to:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md) (the master
 plan; §12 is the backlog this document sequences)
 **Issue:** [tenstorrent/tt-metal#49739](https://github.com/tenstorrent/tt-metal/issues/49739)
-**Written:** 2026-08-11, against `ldjurovic/sfpu_edge_cases_2` @ `2d4e3f2`
+**Written:** 2026-08-11 against `ldjurovic/sfpu_edge_cases_2` @ `2d4e3f2`
+**Revised:** 2026-08-11 against `f6d752e`, after §0 and half of §1 landed in #52416
 
 ## Where the quest stands
 
 | PR | Phases | State |
 |---|---|---|
-| [#52172](https://github.com/tenstorrent/tt-metal/pull/52172) | 0–1 — point the sweeps at the per-op registered domains | in merge queue |
-| [#52416](https://github.com/tenstorrent/tt-metal/pull/52416) | 2–4 — metadata, one builder, three sweeps | open; unary + binary + int done, ternary + scalar not |
-| **PR 3 (this document)** | **finish Phase 4, and verify Phases 2–4 on Blackhole** | **not started** |
+| [#52172](https://github.com/tenstorrent/tt-metal/pull/52172) | 0–1 — point the sweeps at the per-op registered domains | **merged** |
+| [#52416](https://github.com/tenstorrent/tt-metal/pull/52416) | 2–4 — metadata, one builder, four sweeps | open; rebased onto post-#52172 main, and now carries the whole of §0 plus three of §1's items |
+| **PR 3 (this document)** | **Blackhole verification, and ternary edges** | **not started** |
 | PR 4+ | Phase 5 — cat B goldens, incrementally | not started |
 
-Phase 4 planned four family wrappers. Two shipped. **PR 3's job is the other two plus the
-arch verification that everything already shipped is currently missing** — after which the edge
-mechanism is complete and the remaining work is all golden-side.
+The first revision of this document planned PR 3 as "finish Phase 4 plus the arch verification".
+Most of it turned out to be cheaper to do inside #52416 than to hand to a follow-up, so **PR 3 is
+now two items**: the one that needs hardware, and the one that needs a data-model change.
 
 ---
 
-## §0. Prerequisite — the rebase, and two collisions to resolve deliberately
+## §0. The rebase — done, with one collision this document did not predict
 
-`sfpu_edge_cases_2` forked from `sfpu_edge_cases_1` **before that branch's last ten commits**, so
-once #52172 merges this branch needs a rebase onto main. It will not be clean, and two of the
-conflicts are the same fix made twice on both branches. **Keep this branch's version in both
-cases** — they are supersets, not alternatives:
+Recorded rather than planned, because the parts worth keeping are the ones that were surprises.
 
-| Collision | Why this branch wins |
+`sfpu_edge_cases_2` forked from `sfpu_edge_cases_1` before that branch's last ten commits, so
+once #52172 merged this branch needed a rebase onto main. **Eight of its twenty commits dropped
+out as already-upstream** — in every case main carried the same idea in a later form, so the
+resolution was consistently "take main":
+
+| Superseded on this branch | What main has instead |
 |---|---|
-| **fp8 range ceilings** (`helpers/sfpu_domains.py`) | Both branches fix the transposed `MxFp8R`/`MxFp8P` entries. This branch *also* corrects `_FORMAT_MANTISSA_BITS` (e5m2 has 2 bits, e4m3 has 3) and routes `Fp8_e4m3` through named tiers (`_E4M3_FORMATS` / `_E5M2_AND_FLOAT16`) in all four format-sensitive builders. #52172's fix only adds the max-magnitude entry, so there `Fp8_e4m3` still lands in the *wide* default tier of `_exp_spec` / `_exp2_spec` / `_square_spec` |
-| **binary declared-set hole** (`test_sfpu_binary.py`) | Both close it. This branch records a per-op *reason* per classification (`_REGISTERED_DEFAULT_STIMULI_OPS` is a `Dict`, not a set), declares the ops that bypass the shared driver (`_OPS_NOT_USING_SHARED_DRIVER`), and returns the routing decision from the same call that validates it (`_classify_stimuli_source`) so classification and routing cannot drift apart. It also raises `KeyError` rather than asserting, so it survives `python -O`. #52172's `_INT_ONLY_REGISTERED_OPS` should be **deleted**, not merged |
+| Bfp8_b judged on its lattice alone | lattice **or** tolerance, whichever passes, with a short-circuit |
+| `narrowest_range_format()` + `for_op()` | `for_op_pipeline()` |
+| hand-written 63-entry `STANDARD_SWEEP_OPS` | the registry complement of `BROAD_SWEEP_OPS` |
+| a second Bfp4_b op list | Bfp4_b as a *format axis* over the whole broad op list |
+| one flat `_NON_SFPU_UNARY_OPS` | per-family sets composed into it |
 
-Also arriving from #52172 and worth a post-rebase smoke check, since Phases 2–4 sit on top of all
-of it: the vectorised `_bfp_block_aware_compare`, the non-finite lattice fix, Bfp8_b quantization
-before the binary golden, the registry-derived `STANDARD_SWEEP_OPS` (this branch still carries the
-63-entry hand-written list), and the perf sweep's registry drive plus its bounded format axis.
+The two collisions this document called in advance both resolved as predicted — this branch's
+fp8-ceiling superset (the `_E4M3_FORMATS` / `_E5M2_AND_FLOAT16` tiers and the corrected
+`_FORMAT_MANTISSA_BITS`) and its declared-set version, with `_INT_ONLY_REGISTERED_OPS` deleted
+rather than merged. One refinement: main's collection-time totality check against `_SFPU_BINARY_OPS`
+is *complementary* to this branch's driver-side `_classify_stimuli_source()`, not replaced by it,
+so it was kept and re-expressed in this branch's sets.
 
-**Acceptance:** collection across the five SFPU suites is unchanged at 9436, and the registry A/B
-harness used in #52416 (1265 `(op, format)` entries plus a drawn-tensor hash) still reports
-byte-identical stimuli.
+### The collision that was not predicted
+
+`_exp_with_base_spec` computes `exp(0.5*x)`, and its docstring derives its bound as **double
+`_exp_spec`'s**. #52172 rewrote it 32 → 160 against the old range-based ceiling of 80. This branch
+moves `_exp_spec` to 16 for accuracy. Neither change conflicts textually, and the result was exp
+capped at an argument of 16 while `exp_with_base` ran to 80 — the region this branch measured at
+11–13% off golden — and the recalibration commit's own claim that the two share a ceiling became
+false. Applying the docstring's rule to the new ceiling gives 32, which is also the pre-#52172
+value.
+
+**This is the general hazard, and it is worth carrying into §5:** a constant derived from another
+by a rule stated only in prose drifts silently when the source moves. Nothing fails; the two just
+stop agreeing. Same shape as the transposed-fp8 pair, and the reason `_FORMAT_MAX_MAGNITUDE` now
+spreads `MX_FORMAT_MAX_NORMAL` rather than restating it.
+
+### Acceptance, corrected
+
+The first revision asked for "collection unchanged at 9436". That assumed the rebase was a no-op
+merge, and it is not: **main widened two tests this branch also touches** (`eq_ne` 16 → 36,
+`float_comparison` 32 → 72), so the number is **9496**, and the +60 is main's rather than the
+rebase's. Anyone re-running this should expect 9496, or **9516** with §1's scalar wrapper included.
+
+What did hold: no test lost (verified per-test, pre-rebase against post-), and registry stimuli
+byte-identical across every `(op, format)` entry — resolved spec and drawn-tensor hash.
 
 ---
 
-## §1. Recommended scope for PR 3, and why in this order
+## §1. Landed in #52416 rather than deferred
 
-Three items, in this sequence. The sequencing is not arbitrary — **item 1 can invalidate data that
-items 2–3 and all of Phase 5 are built on**, so it goes first even though it writes the least code.
+Three of the four items the first revision assigned to PR 3 were cheaper to land with the rebase.
 
-### 1. Verify Phases 2–4 on Blackhole (do this first)
+**Per-op cat-B opt-in.** `_EDGE_SWEEP_SPECIALS` is gone; `SPECIALS_READY_OPS` replaces it, in
+`sfpu_domains` rather than in the unary suite because it is the golden-side half of a pair —
+`specials_safe()` says the pipeline delivers specials intact, `SPECIALS_READY_OPS` says the golden
+has an answer for them, and both edge sweeps need both. It starts empty, which is exactly the old
+global `False`. **This is what makes Phase 5 tractable**, so PR 4+ can now proceed one op at a
+time; see §3.1.
 
-Everything in #52416 except the reduce xfail and the scalar split was measured on Wormhole n150
-only, and two parts are arch-sensitive *by construction*:
+**`specials_safe()` hardening.** Confirmed live rather than theoretical: `DestAccumulation` is an
+`Enum` whose members wrap `True`/`False`, so `bool(DestAccumulation.No)` is `True`. It now accepts
+either a bool or the member and rejects anything else.
 
-- **`specials_safe()`'s table is a measurement, not a derivation.** Its rules were established by
-  driving the isinf/isnan predicates over the full 5×5 format matrix with no skips, on Wormhole.
-  The unpack paths differ on Blackhole, so the table may be wrong there in either direction — and
-  every later cat-B decision reads it. Re-run the same measurement and either confirm the table or
-  make it arch-keyed.
-- **The two converted xfails exist purely for the Blackhole path.** On Wormhole they are a
-  deliberate no-op, so their reasons are currently unfalsified.
+**Scalar tensor-operand edges — mechanism only, and the framing was wrong.** The first revision
+called this "small, genuinely just pending", implying coverage was waiting on a knob. The knob was
+genuinely missing and is now there (`spec_A` on `_run_sfpu_binop_scalar`, consumed by
+`test_sfpu_binop_scalar_edges`). But **every variant skips, and will until cat B opens**: all five
+ops are `x (+|-|*|/) c` for a compile-time `c`, so they are smooth in `x` — no pole, no knee, and
+`edge_values()` returns nothing from cat A or cat D. The only edges the tensor operand has are the
+cat-B specials. Budget this as scaffolding, not as a coverage gain.
+
+**The two doc slips** the first revision listed are already correct in this branch's copy of
+`SFPU_EDGE_CASES_SUMMARY.md`, which has since been removed from `sfpu_edge_cases_2` entirely —
+the file lives here on the docs branch only, so there is no longer a second copy to keep in sync.
+
+---
+
+## §2. What PR 3 is now
+
+### §2.1 Verify Phases 2–4 on Blackhole (still first, and now the only blocker)
+
+Unchanged from the first revision, and it stays first for the same reason: **`specials_safe()`'s
+table is a measurement, not a derivation.** Its rules were established by driving the isinf/isnan
+predicates over the full 5×5 format matrix with no skips, on Wormhole. The unpack paths differ on
+Blackhole, so the table may be wrong there in either direction — and every later cat-B decision
+reads it. Re-run the same measurement and either confirm the table or make it arch-keyed.
+
+The two converted xfails exist purely for the Blackhole path; on Wormhole they are a deliberate
+no-op, so their reasons are currently unfalsified.
 
 **The highest-information part is a testable prediction.** The `SFPMAD` signed-zero xfails
 (`div(0, -x)`, `fmod`/`remainder` with a negative divisor, `xlogy(0, tiny)`) rest on Blackhole's
 ISA page documenting flush-to-**sign-preserved** zero where Wormhole documents flush-to-**positive**
-zero. They are non-strict xfails precisely so they can XPASS there. So:
+zero. They are non-strict xfails precisely so they can XPASS there:
 
-- If they **XPASS** on Blackhole, the ISA reading is confirmed and those five cells can be narrowed
-  to Wormhole-only, which is a real coverage gain on Blackhole.
-- If they **still fail**, the ISA documentation and the hardware disagree, which is a finding worth
-  more than the rest of this PR combined.
+- If they **XPASS**, the ISA reading is confirmed and those five cells can be narrowed to
+  Wormhole-only, which is a real coverage gain on Blackhole.
+- If they **still fail**, the documentation and the hardware disagree, which is worth more than
+  the rest of this PR combined.
 
 Either outcome is worth having, and it costs one sweep on a p100a.
 
-**Acceptance:** the two edge sweeps run on Blackhole with every non-strict xfail resolved to XPASS
-or FAIL and each outcome recorded; `specials_safe()` either confirmed or arch-keyed; the shift and
-reduce xfails reported.
+**Acceptance:** the three edge sweeps run on Blackhole with every non-strict xfail resolved to
+XPASS or FAIL and each outcome recorded; `specials_safe()` either confirmed or arch-keyed; the
+shift and reduce xfails reported.
 
-### 2. Scalar tensor-operand edges (small, genuinely just pending)
+### §2.2 Ternary edges (needs a data-model change first)
 
-`_run_sfpu_binop_scalar` has no `spec_A` knob — the *scalar* axis is already swept
-(`{0, 1, 2, −2, 8, 0.25}`, split presubmit/nightly in #52416), but the **tensor** operand is stuck
-on the default. Add the parameter and a thin `test_sfpu_binop_scalar_edges` wrapper that passes
-`edge_spec(...)` through it, exactly as the unary wrapper does.
-
-**Explicitly not in scope:** widening the scalar axis to `±large` / `±tiny`. That needs a per-op
-tolerance first (§2.4) — inputs are `uniform(-1, 1)` and `|scalar| ≤ 8` is what keeps every op's
-result inside the range where the default bf16 tolerance means anything.
-
-**Acceptance:** the wrapper collects, and any divergence is recorded as a non-strict xfail with a
-reason, in the same shape as the unary and binary sweeps.
-
-### 3. Ternary edges (needs a data-model change first)
-
-The targets are `addcdiv` / `snake_beta` with `c → 0` — today `c` is pinned to `uniform(1, 2)`, so
-the pole is *deliberately* unreachable — and `lerp` with weight `0`, `1` and `> 1`.
+Unchanged. The targets are `addcdiv` / `snake_beta` with `c → 0` — today `c` is pinned to
+`uniform(1, 2)`, so the pole is *deliberately* unreachable — and `lerp` with weight `0`, `1` and
+`> 1`.
 
 The blocker is that **`OperandSpecs` carries only `spec_A` and `spec_B`**, so there is nowhere to
 register a third operand's singularity. `_ternary_default_specs` already works around it by reusing
@@ -110,55 +150,35 @@ Then `_OP_SINGULARITIES` needs `Operand.C` entries for the divisor of `addcdiv` 
 and `edge_spec(..., operand=Operand.C)` has to resolve through them.
 
 `_run_sfpu_ternary` **already accepts `spec_A` / `spec_B` / `spec_C`**, so once the data model can
-express a third operand the wrapper itself is thin.
+express a third operand the wrapper itself is thin. Unlike the scalar wrapper above, this one has
+real cat-A edges to drive the moment it exists — `c → 0` is a genuine pole.
 
 **Acceptance:** `Operand.C` is expressible end to end (registry → `edge_spec` → driver), the
-accuracy harness still reports the same per-op `signed_ulp_error`, and a
-`test_sfpu_ternary_edges` wrapper drives `c = 0` and the `lerp` weight boundaries.
-
-### Also land in PR 3, cheaply
-
-- **A per-op cat-B opt-in list.** Phase 5 is going to be incremental by nature, and
-  `_EDGE_SWEEP_SPECIALS` is a single global bool — so today the only options are "no specials" and
-  "272 failures". Replace it with a declared set (`_SPECIALS_READY_OPS` or similar): an op enters
-  only once its golden models non-finite inputs, and the sweep injects specials for that op alone.
-  That converts Phase 5 from one impossible commit into a series of one-op commits, and it costs a
-  few lines *now* versus a rework later. This is the single highest-leverage thing PR 3 can do for
-  PR 4+.
-- **Harden `specials_safe()` against the enum-truthiness trap.** It takes `dest_acc: bool`, and
-  `bool(DestAccumulation.No)` is `True` — the member is truthy even though its `.value` is `False`.
-  The one live call site correctly passes `dest_acc == DestAccumulation.Yes`, but
-  `specials_safe_formats()` forwards the argument unchecked and has no callers yet. **Its first
-  callers will be the ternary and scalar wrappers above**, i.e. this PR. Either accept
-  `DestAccumulation` directly or assert the argument is not an enum.
-- **Fix the two doc slips** corrected in this revision: the divergence count is **ten ops / 42
-  cells**, not nine (verified: 5 unary ops over 20 cells, 5 binary over 22), and
-  `SFPU_EDGE_CASES_SUMMARY.md`'s "Everything above is Wormhole" is stale now that the reduce xfail
-  and scalar split were measured on p100a. That file is checked into `sfpu_edge_cases_2` as well as
-  the docs branch, so it needs the same two corrections in both places.
+accuracy harness still reports the same per-op `signed_ulp_error`, and a `test_sfpu_ternary_edges`
+wrapper drives `c = 0` and the `lerp` weight boundaries.
 
 ---
 
-## §2. Deferred to PR 4 and beyond, with what unblocks each
+## §3. Deferred to PR 4 and beyond, with what unblocks each
 
-### 2.1 Cat B — goldens that model non-finite inputs (the largest item by far)
+### 3.1 Cat B — goldens that model non-finite inputs (the largest item by far)
 
-The stimulus side is **finished**: `specials_safe()` says where specials may be injected, and the
-switch exists. Turning it on gives **272 failures out of 564**, because the torch-backed goldens do
-not define a result for non-finite *inputs* — they return `inf` where the answer is `nan`, and so
-on.
-
-This is not a sprinkle of xfails, and it matters more than its position in the backlog suggests:
-**47 of the 97 unary ops are smooth everywhere** — no knee, no pole — so cat B is the *entire*
-edge story for half the op list. Until the goldens model it, those 47 ops have no deliberate edge
-coverage at all.
+The stimulus side is **finished**, and as of #52416 so is the sequencing: `specials_safe()` says
+where specials may be injected, `SPECIALS_READY_OPS` says which ops have a golden that can receive
+them, and an op joins the second set on its own. Turning everything on at once still gives **272
+failures out of 564**, because the torch-backed goldens do not define a result for non-finite
+*inputs* — they return `inf` where the answer is `nan`, and so on.
 
 The right unit of progress is "define the non-finite behaviour of the ten highest-value ops", not
-"make the sweep green". With the per-op opt-in list from §1 in place, each op is its own small,
-reviewable commit: decide the result at `+inf`, `-inf`, `NaN`, `+0.0` and `-0.0`; extend the
-golden; add the op to the ready set; record whatever the hardware then disagrees about.
+"make the sweep green". **47 of the 97 unary ops are smooth everywhere** — no knee, no pole — so
+cat B is the *entire* edge story for half the op list. Each op is now its own small, reviewable
+commit: decide the result at `+inf`, `-inf`, `NaN`, `+0.0` and `-0.0`; extend the golden; add the
+op to `SPECIALS_READY_OPS` with its reason; record whatever the hardware then disagrees about.
 
-### 2.2 Category E — the unary shift amount
+Note that the scalar wrapper from §1 goes live on the same trigger, so its five ops come along for
+free once their goldens are done.
+
+### 3.2 Category E — the unary shift amount
 
 `SHIFT_AMOUNT` is a `constexpr std::uint32_t SHIFT_AMOUNT = 3u` inside
 `call_unary_sfpu_operation` (`helpers/include/sfpu_operations.h:728`), paired with
@@ -167,16 +187,19 @@ golden plumbing — cross-language, not test wiring. The builder and `_shift_ref
 written and reusable once the parameter exists, and `_SHIFT_EDGE_AMOUNTS` already covers
 `{0..31, 32, 33, 40, 63, 100, 1000, −1, −5, −32, −1000}`.
 
-### 2.3 Per-op tolerances for `xlogy` and `pow`
+### 3.3 Per-op tolerances for `xlogy` and `pow`
 
 Both are capped in the registry because their error outruns a fixed tolerance, with the measured
 numbers in the comments: `pow`'s tracks `b·ln a` into the shared exp approximation (`3·ln3 = 3.30`
 clean, `4.83` → 4.9% off, `8.05` → 6.1% off against a 5% rtol), and `xlogy`'s *absolute* error
 scales with `x` against a fixed atol. Their edges cannot be pushed further until the tolerance is
-per-op. Independent of everything else here — `CUSTOM_TOLERANCES` in `test_sfpu_unary.py` is
-already the pattern to follow.
+per-op. `CUSTOM_TOLERANCES` in `test_sfpu_unary.py` is already the pattern to follow.
 
-### 2.4 Category F — genuinely new harnesses
+**This also gates the scalar axis widening** that §1 explicitly left out: `|scalar| > 8` and
+`±tiny` / `±large` on the tensor operand are only meaningful once the result can leave the range
+where the default bf16 tolerance says anything.
+
+### 3.4 Category F — genuinely new harnesses
 
 Unchanged from the master plan §8. High priority five: `welfords`, `int_sum`, `cumsum`,
 `tiled_prod`, `quant`. `generic_moe_gate_topk` is nearly done. Each needs a new C++ source and
@@ -184,10 +207,11 @@ golden, so none of it is reachable by the shared mechanism.
 
 ---
 
-## §3. Two questions for kernel owners, independent of any PR
+## §4. Two questions for kernel owners, independent of any PR
 
 Both are "still open" divergences that the ISA does not explain, and both are cheap for an owner to
-adjudicate and expensive for a test to keep guessing about:
+adjudicate and expensive for a test to keep guessing about. **Neither has been filed** — worth
+doing regardless of PR 3's timing.
 
 1. **`signbit(-0.0)` returns 0**, where the kernel's own docstring promises 1 ("logical-shift the
    fp32 bit pattern right by 31 … incl. `-0.0`"). Unlike `sign` and `heaviside`, this op claims to
@@ -201,10 +225,14 @@ adjudicate and expensive for a test to keep guessing about:
 
 ---
 
-## §4. Traps to know before starting
+## §5. Traps to know before starting
 
 Every one of these has already cost time once.
 
+- **A constant derived from another by a prose rule will drift.** `_exp_with_base_spec` is
+  documented as double `_exp_spec`'s; two branches moved the two halves independently and nothing
+  failed, they just stopped agreeing (§0). If a value is derived, derive it in code or assert the
+  relation — a docstring is not a constraint.
 - **`exclude_intervals()` is not stimulus-neutral.** It always rewrites its result into the
   `intervals` form, and that sampler consumes **two** `torch.rand` draws per element where the
   plain `low`/`high` path consumes one. So `uniform(1, 8)` and `intervals=[(1, 8)]` are the same
@@ -220,6 +248,9 @@ Every one of these has already cost time once.
   through `_get_integer_bounds`, which returns `info.min + 1`, so a spec asking for `INT32_MIN`
   silently yields `INT32_MIN + 1`. Integer edges go through `src_A_override` as a raw tensor —
   `_build_int_extremes_src` and `_build_shift_edge_case_src` are the pattern.
+- **Enum members are not their values.** `DestAccumulation` wraps `True`/`False`, so
+  `bool(DestAccumulation.No)` is `True`. `specials_safe()` is now hardened against this, but the
+  enum is passed around widely and the next `if dest_acc:` will be wrong in the same way.
 - **`format_ulp` returns a lower bound for block-float formats**, because the real step is set by
   the exponent shared across the 16-element block. Safe direction, but a block-float probe *pair*
   cannot be assumed distinct.
@@ -230,19 +261,30 @@ Every one of these has already cost time once.
   two phantom failures during Phase 0 and will recur, because this work is triage-heavy by nature.
   Worth fixing separately: key the artefact root by session, or take the existing
   `/tmp/tt-llk-build-shared.lock` around the rmtree.
+- **The pinned test environment drifts.** `tests/requirements.txt` pins `tt-exalens==0.3.29`; a
+  venv carrying a different one fails at `conftest` import with a missing-symbol `ImportError`
+  (`CallstackEntry`, `ElfFile`), which looks like a broken checkout rather than a stale venv.
+  Check the pin before debugging the tree.
 
 ---
 
-## §5. The one thing that bounds the value of all of it
+## §6. The one thing that bounds the value of all of it
 
 **None of this coverage is guarded by CI.** The broad unary profile runs in **no automated job on
 any architecture**: every LLK pytest job either excludes `nightly` (pr-gate smoke, bit-exact) or
-runs `--coverage`, under which the broad profile is skipped wholesale
-([tt-llk#1435](https://github.com/tenstorrent/tt-llk/issues/1435)). That leaves the large majority
-of the sweep's parametrizations running nowhere.
+runs `--coverage`, under which the broad profile is skipped wholesale. That leaves the large
+majority of the sweep's parametrizations running nowhere.
 
 This predates all three PRs, and it means the coverage they add can regress silently. Either
 `llk-e2e` needs a non-coverage companion group, or the broad profile has to stop being
 coverage-gated. **It is worth filing before PR 3 rather than after** — a PR that adds arch
 verification to a suite no job runs is worth strictly less than the same PR against a suite that is
 actually scheduled.
+
+**One citation to check first.** Both this document's earlier revision and the live skip reason in
+`test_sfpu_unary.py` attribute the coverage-gating to
+[tt-llk#1435](https://github.com/tenstorrent/tt-llk/issues/1435). That issue is open, but its title
+is *"when test_eltwise_unary_sfpu.py is ran after test_eltwise_binary, it fails on missmatch"* —
+test ordering, not coverage. Either the citation is wrong and has propagated into the source, or
+the issue has been repurposed in its comments. Worth resolving before filing anything that cites
+it, since the skip reason in the suite points readers there.

@@ -238,7 +238,7 @@ int→fp32 reciprocal, mul < ~46340, lcm < 2¹⁵, max/min non-negative so signe
 - **Blackhole** — partial. The reduce xfail and the scalar presubmit/nightly split were measured
   on p100a; the two edge sweeps and the cat-B safe matrix were not. The `SFPMAD` signed-zero
   xfails are a testable prediction there (Blackhole documents sign-preserved zero, so they should
-  XPASS). See [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §1.1.
+  XPASS). See [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §2.1.
 
 ---
 

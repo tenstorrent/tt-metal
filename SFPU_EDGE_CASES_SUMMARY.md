@@ -1,7 +1,11 @@
 # SFPU edge-case coverage — what this branch does
 
 Part of [#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
-· branch `ldjurovic/sfpu_edge_cases_2`
+· branch `ldjurovic/sfpu_edge_cases_2` ·
+[PR #52416](https://github.com/tenstorrent/tt-metal/pull/52416), rebased onto post-#52172 main
+
+Sequencing for what comes next is in
+[SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md).
 
 The audit behind this work found that the SFPU test suite fed almost every op a positive-only
 `uniform(0.1, 1.1)`. Four phases follow from that: point the sweeps at the per-op domains that
@@ -31,9 +35,11 @@ wrong one, or an accurate kernel from an inaccurate one:
   dominates far below the block max, approximation error near it — so a result satisfying
   **either** is accepted. That is a strict superset of the old behaviour, so it cannot regress a
   passing test.
-- **Three registry domains were range-correct but accuracy-wrong**: `exp` 80→16, `exp2` 100→23,
-  and `reciprocal` made format-sensitive, because a 1000:1 ratio inside a 16-element block
-  quantizes the smallest elements to zero and sends the golden to `inf`.
+- **Registry domains were range-correct but accuracy-wrong**: `exp` 80→16, `exp2` 100→23, and
+  `exp_with_base` 160→32, which its own docstring derives as double `exp`'s. `reciprocal` was
+  recalibrated here too — a 1000:1 ratio inside a 16-element block quantizes the smallest elements
+  to zero and sends the golden to `inf` — but #52172 landed a strictly better version of that one
+  (a Bfp4_b tier at 25:1 alongside the 10:1), so this branch defers to it.
 
 One genuine kernel limit survived and is recorded rather than tolerated: approximate `exp`
 overshoots by a systematic ~5.7% (peak 6.75%) once its argument passes ~8. The three affected
@@ -77,13 +83,18 @@ first test, pairing went from 1-in-16 tile pairs to all of them.
 
 ---
 
-## Bfp4_b input coverage (not a phase)
+## Bfp4_b input coverage (not a phase, and no longer on this branch)
 
-Two commits enable the seven Bfp4_b unary ops that had been commented out since the list was
-created, and extend the Bfp4_b axis to the whole broad op list. Six of the seven passed as-is;
-`Reciprocal` needed a Bfp4_b-specific domain tier, because 3 mantissa bits cannot hold the 10:1
-window that suffices for Bfp8_b's 7 — ~6% of it quantizes to exactly zero, and the golden then
-computes `1/±0 = ±inf` (sign-preserving) while the SFPU returns `+inf` for both signed zeros.
+Two commits enabled the seven Bfp4_b unary ops that had been commented out since the list was
+created, and extended the Bfp4_b axis to the whole broad op list. **Both dropped out in the rebase
+onto post-#52172 main**, which reached the same place by a better route — Bfp4_b is a second
+*format axis* over the existing op list there, not a second op set. The findings are kept here
+because they are what the work established, not because the commits survive.
+
+Six of the seven passed as-is; `Reciprocal` needed a Bfp4_b-specific domain tier, because 3
+mantissa bits cannot hold the 10:1 window that suffices for Bfp8_b's 7 — ~6% of it quantizes to
+exactly zero, and the golden then computes `1/±0 = ±inf` (sign-preserving) while the SFPU returns
+`+inf` for both signed zeros. That tier is the version main now carries.
 
 **A third commit was dropped from this branch.** "Fold Bfp4_b into the broad format matrix" made
 Bfp4_b an *output* format, creating `Float16 -> Bfp4_b`, which fails **100%** at `dest_acc=No` on
@@ -127,15 +138,23 @@ of 0 against a positive, a negative and a zero numerator are three different cas
 
 **Phase 4 — the sweeps.** A unary edge sweep over all 94 swept ops (752 cases) and a binary one
 over the five ops with a registered pole, both landing green with the divergences below recorded
-as non-strict xfails.
+as non-strict xfails. A scalar wrapper (20 cases) exists for the same shape but skips entirely
+today: all five scalar ops are `x ⊕ c` for a compile-time `c`, so they are smooth in `x` and have
+no cat-A or cat-D edge at all. It is there to make the driver's new `spec_A` knob reachable, and
+goes live on the same trigger as cat B.
 
-Cat B (IEEE specials) is measured and **off by default**. The special-safe `(format, dest_acc)`
+Cat B (IEEE specials) is measured, and gated **per op**. The special-safe `(format, dest_acc)`
 matrix was established first, by driving the isinf/isnan predicates over the full 5×5 matrix with
 no skips: a `Float16` anywhere in the pipeline never preserves specials, and a 16-bit input with
 `dest_acc=Yes` keeps `+inf` but loses `-inf` and `NaN`. Even on the 7 triples that do carry them,
 injecting specials fails **272 of 564** variants — because the goldens do not model non-finite
-*inputs*. That is golden work, not a stimulus change, so it is deferred rather than papered over
-with 270 xfails.
+*inputs*. That is golden work, not a stimulus change.
+
+The gate is therefore two-sided and per op rather than one global bool: `specials_safe()` says the
+*pipeline* delivers specials intact, `SPECIALS_READY_OPS` says the *golden* has an answer for them,
+and both must pass. The mapping starts empty — identical behaviour to the old global `False` — and
+an op joins it carrying its reason once its golden is extended. That makes the remaining cat-B work
+a series of one-op commits rather than one commit that cannot land.
 
 ---
 
@@ -212,6 +231,25 @@ entries — covering `for_op`, `exclude_undefined_pair`, `for_op_pipeline` over 
 formats, and a hash of the actually-drawn tensor — and a per-test junitxml A/B of the binary suite
 shows the same 1081 tests with **0 outcome differences**.
 
+### After the rebase onto post-#52172 main
+
+The same two checks were re-run across the rebase, since eight of the branch's twenty commits
+dropped out as already-upstream and the rest replayed onto a moved base:
+
+- **No test lost**, per-test pre-rebase against post-, and every branch-unique test kept its exact
+  cardinality (unary edges 752, binary edges 40, int extremes 5, the scalar split 20 + 100).
+- **Registry stimuli byte-identical** across every `(op, format)` entry — resolved spec and
+  drawn-tensor hash — once the `exp_with_base` ceiling was carried across (see below).
+- **Collection is 9496, not the 9436 of the pre-rebase branch.** The +60 is main's own widening of
+  two tests this branch also touches (`eq_ne` 16 → 36, `float_comparison` 32 → 72), not a change
+  the rebase made. With the scalar wrapper it is 9516.
+
+One collision was not textual and so did not conflict: `_exp_with_base_spec` derives its bound as
+double `_exp_spec`'s *in prose*, #52172 recomputed it against the old ceiling of 80 while this
+branch moved that ceiling to 16, and nothing failed — the two simply stopped agreeing, leaving
+`exp_with_base` running at arguments this branch had measured at 11–13% off golden. Derived
+constants need to be derived in code or asserted, not described.
+
 **Not verified:**
 
 - **Blackhole — partial.** The reduce xfail's tightening and the scalar presubmit/nightly split
@@ -224,7 +262,14 @@ shows the same 1081 tests with **0 outcome differences**.
   zero, so they should XPASS, and if they do not, the documentation and the hardware disagree.
 - **CI.** The broad unary profile runs in **no automated job on any arch**: every LLK pytest job
   either excludes `nightly` (pr-gate smoke, bit-exact) or runs `--coverage`, under which the
-  broad profile is skipped wholesale (tt-llk#1435). That predates this branch, but it means these
-  coverage gains are currently unguarded. Either `llk-e2e` needs a non-coverage companion group
-  or the broad profile must stop being coverage-gated.
+  broad profile is skipped wholesale. That predates this branch, but it means these coverage gains
+  are currently unguarded. Either `llk-e2e` needs a non-coverage companion group or the broad
+  profile must stop being coverage-gated. Note the attribution to tt-llk#1435 — carried in the
+  suite's own skip reason — looks wrong: that issue is open but is about test *ordering*
+  (`test_eltwise_unary_sfpu.py` failing after `test_eltwise_binary`), not coverage. Worth resolving
+  before anything cites it further.
 - **`WITH_COVERAGE` builds**, and Bfp4_b output formats, which the dropped commit covered.
+- **Everything above the rebase line was measured pre-rebase.** The post-rebase checks were
+  static — collection, registry A/B and module-level assertions — because the host available for
+  the rebase had no Blackhole and a venv whose `tt-exalens` did not match `tests/requirements.txt`.
+  The Wormhole suite numbers have not been re-measured against the rebased tree.

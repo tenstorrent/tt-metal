@@ -649,7 +649,7 @@ five; `generic_moe_gate_topk` is nearly done.
   xfails are a **testable prediction**: Blackhole's ISA documents sign-preserved zero, so they
   should XPASS — and if they do not, the ISA documentation and the hardware disagree, which is
   worth more than the rest of the verification. Sequenced first in
-  [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §1.1 for exactly that reason.
+  [SFPU_EDGE_CASE_PR3_PLAN.md](SFPU_EDGE_CASE_PR3_PLAN.md) §2.1 for exactly that reason.
 - **CI.** The broad unary profile runs in **no automated job on any arch** — every LLK pytest job
   either excludes `nightly` or runs `--coverage`, under which the broad profile is skipped
   wholesale (tt-llk#1435). This predates the branch but means none of this coverage is currently
