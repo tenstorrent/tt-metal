@@ -8,23 +8,8 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement::untilize_codegen {
-
-ImplementationSelector parse_implementation(const std::string& implementation) {
-    if (implementation.empty() || implementation == "auto") {
-        return ImplementationSelector::Auto;
-    }
-    if (implementation == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (implementation == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    TT_FATAL(false, "untilize: unknown implementation '{}' (expected auto|native|codegen)", implementation);
-    return ImplementationSelector::Auto;
-}
 
 // Correctness scope of the ported builders: TILE input, interleaved (non-sharded) input AND
 // requested output memory config, dtype in the nightly sweep's coverage (bfloat16, bfloat8_b).

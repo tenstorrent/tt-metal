@@ -94,14 +94,12 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::string& implementation) {
-    using ttnn::operations::data_movement::untilize_codegen::ImplementationSelector;
+    operations::data_movement::ImplementationSelector implementation) {
+    using operations::data_movement::ImplementationSelector;
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
-    using ttnn::operations::data_movement::untilize_codegen::parse_implementation;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
 
-    const auto selector = parse_implementation(implementation);
     const bool controls_ok = supported_execution_controls(use_multicore, sub_core_grids);
 
     // Route on the same normalized (squeeze_from_ND_to_4D'd) attributes untilize_native applies
@@ -111,21 +109,22 @@ ttnn::Tensor untilize(
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
-        if (selector == ImplementationSelector::Codegen) {
+        if (implementation == ImplementationSelector::Codegen) {
             TT_FATAL(
                 controls_ok,
-                "ttnn.untilize(implementation='codegen') cannot honour use_multicore=false or "
+                "ttnn.untilize(implementation=ImplementationSelector::Codegen) cannot honour use_multicore=false or "
                 "sub_core_grids -- every codegen factory places work over the full "
-                "compute-with-storage grid. Use implementation='native' (or 'auto') for these.");
+                "compute-with-storage grid. Use implementation=ImplementationSelector::Native (or Auto) for these.");
             TT_FATAL(
                 supported_by_codegen(normalized_input, output_mem_config),
-                "ttnn.untilize(implementation='codegen') invoked for a case not supported by the codegen "
+                "ttnn.untilize(implementation=ImplementationSelector::Codegen) invoked for a case not supported by the "
+                "codegen "
                 "implementation (requires TILE-layout, interleaved (non-sharded) input and output, dtype "
                 "bfloat16 or bfloat8_b (bfloat8_b additionally requires a tile-aligned logical shape), and a "
                 "width within the L1 chunking threshold)");
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
         }
-        if (selector == ImplementationSelector::Auto && controls_ok &&
+        if (implementation == ImplementationSelector::Auto && controls_ok &&
             supported_by_codegen(normalized_input, output_mem_config) &&
             !is_demoted(normalized_input, output_mem_config)) {
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);

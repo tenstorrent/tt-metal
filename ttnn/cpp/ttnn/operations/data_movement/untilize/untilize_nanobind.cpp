@@ -8,12 +8,14 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
 
+#include "ttnn/operations/data_movement/common/codegen_types.hpp"
 #include "untilize.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
+
+using ImplementationSelector = ttnn::operations::data_movement::ImplementationSelector;
 
 void bind_untilize(nb::module_& mod) {
     const auto* doc =
@@ -32,7 +34,7 @@ void bind_untilize(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
-                implementation (str, optional): "auto", "native", or "codegen". Defaults to `"auto"`.
+                implementation (ImplementationSelector, optional): Auto (default), Native, or Codegen.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -47,6 +49,6 @@ void bind_untilize(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("implementation") = "auto");
+        nb::arg("implementation") = ImplementationSelector::Auto);
 }
 }  // namespace ttnn::operations::data_movement::detail

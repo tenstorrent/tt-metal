@@ -13,8 +13,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 
-_NATIVE = "native"  # forced-native golden leg
-_ROUTED = "auto"
+_NATIVE = ttnn.ImplementationSelector.Native  # forced-native golden leg
+_ROUTED = ttnn.ImplementationSelector.Auto
 
 
 def _make_input(shape, dtype):
@@ -375,4 +375,6 @@ def test_untilize_forced_codegen_rejects_execution_controls(device, controls, co
     x = torch.rand([64, 128], dtype=torch.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "cannot honour"):
-        ttnn.untilize(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG, **controls, implementation="codegen")
+        ttnn.untilize(
+            xt, memory_config=ttnn.DRAM_MEMORY_CONFIG, **controls, implementation=ttnn.ImplementationSelector.Codegen
+        )
