@@ -656,6 +656,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
+        mm_in0_sender_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
 
         uint32_t worker_core_type;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
@@ -673,7 +674,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
-        in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+        in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_sender_args));
         sender_id++;
     }
 
@@ -681,6 +682,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         std::vector<uint32_t> mm_in0_receiver_args;
+        mm_in0_receiver_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
@@ -690,7 +692,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
-        in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
+        in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
     }
 
     // in0 sender runtime args (idle cores in rect grid)
@@ -702,13 +704,14 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             uint32_t worker_core_type = 0;
             mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
 
-            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_idle_args);
+            in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_idle_args));
         }
     }
 
     // Compute and in1 sender/writer runtime args
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
     uint32_t curr_storage_core_idx = 0;
     uint32_t per_core_N_storage_curr_stride = 0;
 
@@ -740,16 +743,16 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             bool is_worker_core = false;
             std::vector<uint32_t> mm_in1_sender_writer_args;
             mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-            in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
+            in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in1_sender_writer_args));
 
             std::vector<uint32_t> mm_compute_args;
             mm_compute_args.push_back((std::uint32_t)is_worker_core);
-            compute_kernel_desc.runtime_args.emplace_back(core, mm_compute_args);
+            compute_kernel_desc.runtime_args.emplace_back(core, std::move(mm_compute_args));
         } else {
             bool is_worker_core = true;
             std::vector<uint32_t> mm_compute_args;
             mm_compute_args.push_back((std::uint32_t)is_worker_core);
-            compute_kernel_desc.runtime_args.emplace_back(core, mm_compute_args);
+            compute_kernel_desc.runtime_args.emplace_back(core, std::move(mm_compute_args));
         }
     }
 
@@ -760,8 +763,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
         mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-        mm_in1_sender_writer_args.push_back(in1_tensor.address());  // [1]: will be replaced by Buffer*
-        mm_in1_sender_writer_args.push_back(bias.has_value() ? bias->address() : 0u);  // [2]: may be replaced
+        mm_in1_sender_writer_args.push_back(in1_tensor.address());                     // [1] smuggled-rta-ok: rebound
+        mm_in1_sender_writer_args.push_back(bias.has_value() ? bias->address() : 0u);  // [2] smuggled-rta-ok
 
         uint32_t vc = bank_id & 0x3;
         bank_ids.push_back(bank_id);

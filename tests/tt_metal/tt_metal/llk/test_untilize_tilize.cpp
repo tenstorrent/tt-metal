@@ -955,7 +955,8 @@ static void run_quasar_tilize_untilize_test(
     tt::DataFormat input_data_format,
     tt::DataFormat output_data_format,
     std::uint32_t num_faces = 4,
-    std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT) {
+    std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT,
+    bool tilize_cross_tile_rows = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
     IDevice* dev = mesh_device->get_devices()[0];
@@ -991,7 +992,9 @@ static void run_quasar_tilize_untilize_test(
     std::uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    std::uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
+    // tilize_across_tile_rows.cpp waits/reserves the whole block at once instead of streaming
+    // per tile-row, so the DFBs must hold all tiles.
+    std::uint32_t dfb_num_entries = tilize_cross_tile_rows ? num_tiles : std::max(2u, num_tiles_c);
 
     const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
     const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
@@ -1013,9 +1016,7 @@ static void run_quasar_tilize_untilize_test(
     };
     if (tiny_tile) {
         const auto fg = tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
-        if (!is_tilize) {
-            input_dfb_spec.unpack_face_geometry_metadata = fg;
-        }
+        input_dfb_spec.unpack_face_geometry_metadata = fg;
         output_dfb_spec.unpack_face_geometry_metadata = fg;
     }
 
@@ -1045,7 +1046,9 @@ static void run_quasar_tilize_untilize_test(
     experimental::KernelSpec::CompileTimeArgs compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
-            compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
+            compute_kernel = tilize_cross_tile_rows
+                                 ? "tests/tt_metal/tt_metal/test_kernels/compute/tilize_across_tile_rows.cpp"
+                                 : "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
             compute_cta_bindings = {
                 {"per_core_block_cnt", num_tiles_r},
                 {"per_core_block_tile_cnt", num_tiles_c},
@@ -1184,7 +1187,7 @@ static void run_quasar_tilize_untilize_test(
         .face_r_dim = static_cast<int>(face_r_dim),
         .face_c_dim = static_cast<int>(face_c_dim),
         .num_faces = static_cast<int>(num_faces),
-        .tiny_tile = tiny_tile && !is_tilize,
+        .tiny_tile = tiny_tile,
         .datum_bytes = tt::datum_size(input_data_format)};
     auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
                             : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
@@ -1342,6 +1345,56 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
                         input_data_format,
                         fp32_dest_acc_en ? tt::DataFormat::Float32 : input_data_format);
                 }
+            }
+        }
+    }
+}
+
+// Unpack Tilize tiny tile (1x32, 2x32) via tilize_block.
+// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
+    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    for (auto& cfg : test_configs) {
+        for (auto& geo : geometries) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->devices_.at(0),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::TILIZE,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/false,
+                    tt::DataFormat::Float16_b,
+                    tt::DataFormat::Float16_b,
+                    /*num_faces=*/geo[0],
+                    /*face_r_dim=*/geo[1]);
+            }
+        }
+    }
+}
+
+// Unpack Tilize tiny tiles (via tilize_block) with a nonzero input_tile_index per tile-row
+// (tilize_across_tile_rows.cpp), so the cross-tile-row stride in llk_unpack_tilize_block is
+// exercised, like the Blackhole TensixComputeUnpackTilizeTinyTile16x32 test.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCrossTileRows) {
+    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    std::vector<vector<std::uint32_t>> test_configs = {{2, 1}, {2, 2}};
+    for (auto& geometry : geometries) {
+        for (auto& cfg : test_configs) {
+            for (bool dst_full_sync_en : {true, false}) {
+                run_quasar_tilize_untilize_test(
+                    this->devices_.at(0),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::TILIZE,
+                    dst_full_sync_en,
+                    false,
+                    tt::DataFormat::Float16_b,
+                    tt::DataFormat::Float16_b,
+                    geometry[0],
+                    geometry[1],
+                    /*tilize_cross_tile_rows=*/true);
             }
         }
     }

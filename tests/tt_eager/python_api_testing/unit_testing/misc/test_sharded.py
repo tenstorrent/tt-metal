@@ -415,6 +415,65 @@ def test_sharded_partial_op(
     assert passing
 
 
+# Regression: interleaved_to_sharded_partial excludes slice_index from the program-cache hash (it only
+# feeds the runtime read-offset starting_idx_h) and re-applies it on every cache hit via
+# get_dynamic_runtime_args. Two things this guards:
+#   (1) correctness on cache hit -- reading slice N must return slice N's data, not slice 0's (frozen
+#       starting_idx_h). NOTE: this uses DISTINCT per-slice data; the pre-existing test_sharded_partial_op
+#       uses torch.ones, which cannot detect a slice mixup.
+#   (2) perf -- all slices of one partial-slicing loop share a single cached program, so the op must
+#       contribute exactly ONE program-cache entry (a slice_index re-keying regression would make N).
+@pytest.mark.parametrize("H, num_cores, num_slices", [[64, 64, 2], [256, 64, 4]])
+def test_interleaved_to_sharded_partial_program_cache_reuse(device, H, num_cores, num_slices, function_level_defaults):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    grid_size = (8, 8)
+    W = 64
+    in0_shape = [1, 1, H, W]
+    new_height = H // num_slices
+
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    # Distinct data per row so that reading the wrong slice is observable (all-ones would hide it).
+    torch.manual_seed(0)
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttnn.bfloat16)
+
+    height_shard_spec = [new_height, W]
+
+    entries_before = device.num_program_cache_entries()
+    slice_tensors = []
+    for slice_index in range(num_slices):
+        slice_tensors.append(
+            ttnn.interleaved_to_sharded_partial(
+                in0_t,
+                grid_size,
+                height_shard_spec,
+                num_slices,
+                slice_index,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+        )
+
+    # Every slice reused one program; slice_index is not part of the key.
+    assert device.num_program_cache_entries() - entries_before == 1, (
+        f"interleaved_to_sharded_partial should build ONE program for all {num_slices} slices, "
+        f"built {device.num_program_cache_entries() - entries_before} (slice_index must not be hashed)"
+    )
+
+    # Correctness on the cache-hit path: slice N must hold input rows [N*new_height:(N+1)*new_height].
+    for slice_index, slice_t in enumerate(slice_tensors):
+        got = tt2torch_tensor(slice_t)
+        expected = in0[:, :, slice_index * new_height : (slice_index + 1) * new_height, :]
+        passing, output = comp_pcc(expected, got)
+        assert passing, f"slice {slice_index} returned wrong data on cache hit (stale starting_idx_h): {output}"
+
+
 @pytest.mark.parametrize("H, W, num_cores, num_slices", [[32 * 32, 16 * 32, 64, 2], [2816, 16 * 32, 64, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",

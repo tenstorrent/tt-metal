@@ -37,7 +37,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = true);
 
-// Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true) from the
+// Build a DRAM-sender GCB shaped to feed one or more gather-in0 or mcast-in0 1D matmuls from the
 // given weight tensors. The caller supplies `bank_to_receivers` (the same layout the low-level
 // `create_global_circular_buffer_for_tensor_prefetcher` takes); this factory validates it against
 // the matmul program configs and weight shapes and sizes the GCB accordingly.
@@ -52,12 +52,12 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
 //     evenly across receivers; matmul per_core_N == weight per-receiver N. `bank_to_receivers`
 //     shape is checked: num_senders * num_global_cb_receivers == ring_size, every bank owns exactly
 //     num_global_cb_receivers cores. `size` floor is one full layer (ring_size * largest in1 block).
-//   * Receiver-contiguous (NdShardSpec): num_shards == ring_size, each shard (full K, N/ring_size)
-//     owned by one receiver. Validated: num_shards == ring_size, weight K-tiles divisible by
-//     ring_size, per_core_N == per-receiver N. Receivers need NOT be uniform per bank (strided
-//     round-robin). `size` floor is ring_size * largest per-receiver page, relaxed to a
-//     double-buffer window when every config is stream_in1. This layout also permits dual senders
-//     per bank via `support_multi_receiver_shards=false` (see below).
+//   * Receiver-contiguous (NdShardSpec): num_shards == receiver_count, each shard
+//     (full K, N/receiver_count) owned by one receiver. Gather uses receiver_count K-blocks; mcast
+//     uses K_tiles / in0_block_w natural-order blocks. Validated: exact K divisibility and
+//     per_core_N == per-receiver N. Receivers need NOT be uniform per bank. `size` can use a
+//     double-buffer window for streaming gather or mcast FIFO consumers. This layout also permits
+//     dual senders per bank via `support_multi_receiver_shards=false` (see below).
 //
 // All configs must agree on compute_with_storage_grid_size (and, for legacy, num_global_cb_receivers)
 // — the GCB has one receiver rectangle shared across all consumer matmuls. The factory does NOT
@@ -86,19 +86,14 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     std::optional<bool> support_multi_receiver_shards = std::nullopt);
 
 // Compute the validated `block_count` to pair with `weight` in a TensorPrefetcherInput when feeding a
-// gather_in0 1D matmul (`program_config`) from a *receiver-contiguous* DRAM weight via `gcb`. This is the
-// single place that owns the recv-contig prefetcher↔matmul cross-checks that otherwise have to be
-// reproduced (and have drifted) at every call site. It validates, then returns `block_count`:
-//   * block_count == ring_size (the matmul does wait_front(ring_size) per layer);
-//   * the weight is an NdShardSpec DRAM tensor whose num_shards == ring_size (one shard per receiver),
-//     each shard spanning the full K and N/ring_size columns;
-//   * weight K-tiles is divisible by ring_size — otherwise the prefetcher ceil-rounds the K-block width
-//     and over-reads past the receiver's slab while the matmul waits on pages that never come;
+// gather-in0 or mcast-in0 1D matmul from a *receiver-contiguous* DRAM weight via `gcb`. Gather returns
+// the receiver/ring count; mcast returns `weight_K_tiles / program_config.in0_block_w`. It validates:
+//   * the weight is an NdShardSpec DRAM tensor with one full-K, N/receiver_count shard per receiver;
+//   * weight K-tiles divides the consumer's block count exactly;
 //   * the weight's per-receiver N (shard N in tiles) equals program_config.per_core_N — otherwise the
 //     prefetcher's pushed page size and the matmul's in1 remote-CB page size disagree and the page-credit
 //     accounting desyncs.
-// Throws (TT_FATAL) on any mismatch. Mirrors create_global_circular_buffer_for_matmul_1d's K-row-major
-// guards for the receiver-contiguous layout.
+// Mcast uses natural FIFO order and therefore requires `stream_in1=false`.
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,

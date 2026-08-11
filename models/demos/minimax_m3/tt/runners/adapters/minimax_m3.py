@@ -78,7 +78,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     hf_model_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/"
     ttnn_cache_default = ""  # M3 caches under the checkpoint dir (or TT_CACHE_PATH); no separate root
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
-    prefill_trace_default = "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+    prefill_trace_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240"
 
     l1_small_size = 0
 
@@ -190,6 +190,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
+            use_trace=params.use_trace,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,
