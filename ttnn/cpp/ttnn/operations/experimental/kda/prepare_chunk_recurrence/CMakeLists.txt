@@ -25,7 +25,6 @@ target_sources(
         FILES ${TTNN_OP_EXPERIMENTAL_KDA_PREPARE_CHUNK_RECURRENCE_API_HEADERS}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_PREPARE_CHUNK_RECURRENCE_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_kda_prepare_chunk_recurrence PRIVATE TT::Metalium PUBLIC TTNN::Core)

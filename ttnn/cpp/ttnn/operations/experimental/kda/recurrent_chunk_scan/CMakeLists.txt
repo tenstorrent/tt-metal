@@ -22,7 +22,6 @@ target_sources(
         FILES ${TTNN_OP_EXPERIMENTAL_KDA_RECURRENT_CHUNK_SCAN_API_HEADERS}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_RECURRENT_CHUNK_SCAN_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_kda_recurrent_chunk_scan PRIVATE TT::Metalium PUBLIC TTNN::Core)
