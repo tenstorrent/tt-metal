@@ -11,6 +11,11 @@
 #include "llk_defs.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+namespace llk_pack_detail {
+template <auto...>
+inline constexpr bool always_false_v = false;
+}  // namespace llk_pack_detail
+
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
@@ -93,10 +98,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  **/
-template <DstSync DST, bool EN_32BIT_DEST, typename Blocked_ = void>
+template <DstSync DST, bool EN_32BIT_DEST>
 inline void llk_pack_dest_dvalid_section_done() {
     static_assert(
-        sizeof(Blocked_) == 0,
+        llk_pack_detail::always_false_v<DST, EN_32BIT_DEST>,
         "llk_pack_dest_dvalid_section_done belongs to the dest-dvalid sync scheme, should not be mixed with "
         "semaphores which are currently used in tt-metal.");
     _llk_pack_dest_dvalid_section_done_<DST, EN_32BIT_DEST>();
