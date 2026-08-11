@@ -1373,6 +1373,41 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
+class LAST_TILE_W_DATUMS(RuntimeParameter):
+    """Kept width (in datums) of the narrow last tile in the RV_PACR narrow-row test.
+
+    16 packs the whole skip-face-1 face-row (cols 0-15); 8 keeps only the lower half
+    (cols 0-7), relying on the next output row / tile 0 overwriting the spilled upper 8.
+    """
+
+    last_tile_w_datums: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t LAST_TILE_W_DATUMS = {self.last_tile_w_datums};"
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t LAST_TILE_W_DATUMS;", "I"
+
+
+@dataclass
+class RV_WHOLE_TILE(TemplateParameter):
+    """Select the RV_PACR pack mode in the pack_untilize_narrow_rv_quasar test.
+
+    True  -> whole-tile "normal" untilize: one HW-streamed RV_PACR untilize op per tile
+             (untilize=1, tile_dim=16x16x4, inc_mode=1). Single-tile scope.
+    False -> narrow per-face-row: one RV_PACR (untilize=0, tile_dim=16x1x1) per DEST
+             face-row with software addressing (enables narrow / custom-width rows).
+    """
+
+    rv_whole_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RV_WHOLE_TILE = {str(self.rv_whole_tile).lower()};"
+
+
+@dataclass
 class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
     configure_test_run_idx: int = 0
 

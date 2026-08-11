@@ -4366,7 +4366,14 @@ class UntilizeGolden:
         dimensions=[32, 32],
         input_format: Optional[DataFormat] = None,
         tile_dimensions=None,
+        narrow_row_width: Optional[int] = None,
     ):
+        """Untilize `operand` to a row-major [dimensions[0] x dimensions[1]] matrix.
+
+        narrow_row_width: if set, keep only the first `narrow_row_width` columns of each
+        untilized row (the narrow_row output width) and pack them tight, so the golden is
+        dimensions[0] * narrow_row_width datums. None (default) keeps the full width.
+        """
         from helpers.tilize_untilize import untilize_block
 
         operand = quantize_input_to_unpack_format(
@@ -4380,6 +4387,10 @@ class UntilizeGolden:
             tile_dimensions=tile_dimensions,
         )
         result = result.flatten()
+
+        if narrow_row_width is not None:
+            full_w = dimensions[1]
+            result = result.reshape(-1, full_w)[:, :narrow_row_width].flatten()
 
         return result
 
