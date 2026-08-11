@@ -534,7 +534,7 @@ class TestConfig:
             ]
             + hw_specific_includes
             + [
-                # TODO: remove this after kernels get moved into Metal experimental
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
                 "-I../../../ttnn/cpp/ttnn/operations/experimental",
             ]
         )
