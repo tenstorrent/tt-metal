@@ -149,41 +149,6 @@ inline void _generic_moe_gate_top8_sort_half_face_()
     }
 }
 
-template <int num_selected_experts>
-inline void _generic_moe_gate_top8_zero_tail_()
-{
-    if constexpr (num_selected_experts > 4)
-    {
-        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
-        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
-    }
-    else if (num_selected_experts <= 4)
-    {
-        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-    }
-    if constexpr (num_selected_experts != 4 && num_selected_experts != 8)
-    {
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-        if constexpr (num_selected_experts != 7 && num_selected_experts != 3)
-        {
-            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-            if constexpr (num_selected_experts != 6 && num_selected_experts != 2)
-            {
-                TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-            }
-        }
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-    }
-    if constexpr (num_selected_experts > 4)
-    {
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
-    }
-}
-
 template <std::uint32_t face_idx, bool full_face, bool store_result>
 inline void _generic_moe_gate_top8_accumulate_face_()
 {
@@ -244,7 +209,7 @@ inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale)
 
     if constexpr (zero_tail || (normalize && num_selected_experts < 8))
     {
-        _generic_moe_gate_top8_zero_tail_<num_selected_experts>();
+        _generic_moe_gate_zero_tail_lregs_<num_selected_experts>();
     }
 
     _generic_moe_gate_store_8_rows_even_odd_split_<0>();
