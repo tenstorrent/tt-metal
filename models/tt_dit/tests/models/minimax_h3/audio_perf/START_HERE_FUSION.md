@@ -186,13 +186,50 @@ Verify with `band_snake_conv_verify.py`. Two things this settled that are worth 
 
 ### What is left between here and the resblock chain
 
-Per band the chain is now `2 fused phase convs -> 2 pad concats -> 2 down convs -> add`. The two
-concats are the next target and they are large: `PROFILE_2026_08_06.txt` puts Concat at 469 calls and
-**285.3 ms, the single biggest line item**, and 252 of those calls are these per-band `p0`/`p1` builds.
-Each copies the whole M-row phase to prepend 2-3 replicate rows. Widening the upsample window so the
-phase convs emit those rows directly would remove the copy for the interior, leaving only the outermost
-chunk needing the true replicate rule -- which is the same halo-versus-replicate distinction
-`FUSED_BAND_DESIGN.md` already calls the trap.
+Per band the chain is now `2 fused phase convs -> 2 pad concats -> 2 down convs -> add`.
+
+**Correction to an earlier claim in this file:** the `p0`/`p1` concats are *not* part of the 469 in
+`PROFILE_2026_08_06.txt`. That profile is the default path, where `_forward_fused` never runs; its
+concats are the upsampler's replicate pad and interleave and the downsampler's replicate pad. The
+fused band does 3 concats per band (up pad, `p0`, `p1`), so `p0`/`p1` are 252 of 378 -- the count is
+right, the attribution was not.
+
+### Measured: the p0/p1 concats are real but not the biggest thing (`band_concat_cost.py`)
+
+    shape          M        2x concat   2x down conv   concat share
+    s4 C32     41403          0.88 ms        4.74 ms          15.7%
+    s5 C16     82806          1.27 ms        2.82 ms          31.1%
+    s6 C8     165606          2.40 ms        6.88 ms          25.8%
+
+So ~0.9-2.4 ms per band, against 2.8-6.9 ms for the conv pair they feed. **Halving the conv
+invocations is worth more than deleting the concats**, which matters because the two goals conflict.
+
+### Why they cannot simply be deleted
+
+Nothing in the ttnn surface adds rows to a tensor without copying it, and `ttnn.slice_write` is not
+exposed in Python. Three routes were worked through and each reintroduces the same M-row traffic:
+
+1. **conv1d's native padding + edge fix.** `padding=` pads with *zeros*, and the FIR is linear, so
+   `p0 = zeropad(s1) + f*[rows 0..2] + l*[last 2]` and the two correction terms are rank-1, touching
+   only 6 output rows in total. But applying a correction to 6 rows of an M-row tensor needs either an
+   in-place write (not available) or a concat that copies all M.
+2. **Stack the phases along C and use one conv with shifted taps.** Genuinely removes a conv
+   invocation -- taps `even+[0]` on the first C channels and `[0]+odd` on the next C reproduce both
+   phases from one padded buffer, and the stack must go through a `(B,M,1,C)` dim-2 concat rather than
+   a last-dim one (a last-dim concat is lossy in fp32 below 64B rows, i.e. at C=8). But the halves then
+   have to be summed back together, and both ways of doing that -- `sum` over a reshaped dim, or
+   slice-and-add -- cost the M-row traffic the concats were costing.
+3. **Interleave to full length and run one stride-2 conv.** Also removes a conv, also needs an
+   interleave concat plus a replicate pad, so the concat count does not move.
+
+### What actually unblocks this
+
+* **The C<=32 gate, first.** Merging the two *upsample* convs the same way needs 2C channels, which at
+  C=32 crosses the gate and silently drops the snake fusion. The column-offset fix therefore gates the
+  conv-halving win, not just the wide stages.
+* **Then the chunk-wise band kernel** from `FUSED_BAND_DESIGN.md`. Padding that costs nothing is
+  something a kernel gets for free by reading a halo, and it is the only route that removes both the
+  concats and the conv invocations rather than trading one for the other.
 
 ## Build procedure -- this bites
 
