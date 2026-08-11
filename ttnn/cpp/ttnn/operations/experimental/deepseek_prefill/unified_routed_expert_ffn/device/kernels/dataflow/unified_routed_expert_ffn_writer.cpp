@@ -106,6 +106,11 @@ void kernel_main() {
     // matmul never reduces the N-OOB hidden columns, so the `up` read can skip
     // zero-filling them. Derived identically to the reader's down_k_tail_skip.
     constexpr bool down_k_tail_skip = get_compile_time_arg_val(24) != 0;
+    // cb_in1_up's buffering factor, from the program factory that allocated it.
+    // Used below to reconstruct the reader-owned CB write pointer; must not be a
+    // hardcoded literal here or a factory-side change would silently land `up` in
+    // the wrong slot.
+    constexpr uint32_t kUpNumSlots = get_compile_time_arg_val(25);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out (the down matmul copies the
@@ -125,7 +130,7 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 25;
+    constexpr uint32_t out_accessor_offset = 26;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -199,9 +204,9 @@ void kernel_main() {
             if (is_up_sender) {
                 // The CB write pointer is PER-RISC and the reader owns push, so
                 // the writer's get_write_ptr never advances. Replicate the
-                // reader's cadence: cb_in1_up is double-buffered, one push per
-                // K-block, so the live slot is base + (up_seq-1)%2 * slot.
-                constexpr uint32_t kUpNumSlots = 2;
+                // reader's cadence: one push per K-block, so after (up_seq-1)
+                // pushes the live slot is base + ((up_seq-1) % kUpNumSlots) * slot.
+                // kUpNumSlots comes from the factory that sized the CB (CT arg 25).
                 CircularBuffer cb_in1_up_buf(cb_in1_up);
                 const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                 const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;

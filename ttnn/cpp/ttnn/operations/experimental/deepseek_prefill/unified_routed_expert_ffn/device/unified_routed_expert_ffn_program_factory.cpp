@@ -22,6 +22,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operation.hpp"
+// Shared runtime chunk picker. Host-includable by design (pure integer arithmetic,
+// no NoC/CB/reg APIs) so the grid constant it bakes in can be checked against this
+// factory's GRID_Y at compile time — see the static_assert below.
+#include "kernels/adaptive_chunk.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
@@ -103,6 +107,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // silu and multiply).
     constexpr uint32_t kMaxGridX = 11;
     constexpr uint32_t MAX_GRID_Y = 8;
+    // adaptive_chunk.hpp bakes the M-row core count in as kGridY, and all three
+    // kernels derive per_core_M / num_chunks from it. If it ever disagrees with the
+    // grid this factory builds, reader, compute and writer compute per_core_M for a
+    // different grid than the one they run on — they stay mutually consistent, so it
+    // does not hang; it silently maps FFN output onto the wrong token rows. Pin it.
+    static_assert(
+        adaptive_chunk::kGridY == MAX_GRID_Y,
+        "adaptive_chunk::kGridY must match the M-row core count this factory builds");
     // Full 2D grid, always. The short-sequence special case was removed: real
     // dispatch buffers are always in the long-sequence range, and the runtime
     // kernel picker (adaptive_chunk.hpp) already shrinks per_core_M for small
@@ -349,11 +361,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         K_gate_tiles,
         in0_block_w_gu);
 
-    // num_chunks is the compile-time UPPER BOUND on the runtime chunk count used
-    // only to clamp the kernels' loop defensively. The runtime picker may choose
-    // a chunk as small as min(16, chunk_M_tiles) (per_core_M 2), so the worst
-    // case is ceil(M_tiles_full / that min). Matches adaptive_chunk.hpp's
-    // kMinChunkMTiles = 16.
+    // num_chunks is the compile-time UPPER BOUND on the runtime chunk count, used
+    // only to clamp the kernels' loop defensively (all three apply the identical
+    // clamp, so it can never desync them).
+    //
+    // The runtime chunk COUNT is ceil(count_tiles / chunk_M_max) — full chunks are
+    // always chunk_M_max, and only the single trailing chunk shrinks (its per_core_M
+    // can go as low as 1, i.e. a chunk of kGridY tile-rows, so the old claim that
+    // adaptive_chunk.hpp defines a matching kMinChunkMTiles = 16 was never true —
+    // no such constant exists there). The bound below is therefore conservative for
+    // any chunk_M_max >= kMinChunkMTiles and the clamp never binds while
+    // count_tiles <= M_tiles_full.
     constexpr uint32_t kMinChunkMTiles = 16;
     const uint32_t min_chunk = (chunk_M_tiles < kMinChunkMTiles) ? chunk_M_tiles : kMinChunkMTiles;
     const uint32_t num_chunks = (M_tiles_full + min_chunk - 1) / min_chunk;
@@ -489,7 +507,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             tt::tile_size(tt::DataFormat::Float16_b));
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
-    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
+    // UP_SPLIT: the writer cannot use cb_in1_up's write pointer (the reader owns
+    // push, so the writer's per-RISC copy never advances) and instead reconstructs
+    // the live slot as base + ((up_seq-1) % kUpNumSlots) * slot_bytes. That mirror
+    // is only correct if it uses THIS buffering factor, so pass it as a CT arg
+    // rather than letting the kernel hardcode a matching literal.
+    constexpr uint32_t kUpNumSlots = 2;
+    make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * kUpNumSlots, up_tile_size);
     make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
     // Intermediate L1 buffers hold one full per-core block each.
     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
@@ -735,6 +759,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // the writer's `up` read can skip zero-filling them. Must match the
         // reader's identically-derived constexpr.
         static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
+        // 25 up_num_slots: cb_in1_up's buffering factor. The writer needs it to
+        // reconstruct the reader-owned write pointer (see the CB creation above).
+        kUpNumSlots,
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT).

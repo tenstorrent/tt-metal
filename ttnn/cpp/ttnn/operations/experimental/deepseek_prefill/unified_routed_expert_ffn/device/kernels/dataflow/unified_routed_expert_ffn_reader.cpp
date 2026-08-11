@@ -224,9 +224,15 @@ void kernel_main() {
 #endif
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
-    // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
-    // those concurrently with mcast traffic on the kernel's default NoC for
-    // dual-NoC parallelism (see in1_down + activated mcast in phase 4).
+    // `noc_read` pins NoC 0 for DRAM weight/page reads.
+    //
+    // NOTE: these are the SAME NoC. The host builds this kernel with
+    // ReaderDataMovementConfig, whose noc is preferred_noc_for_dram_read() == NOC_0
+    // (kernel_types.cpp), so noc_index is already 0 and noc_read(0) is not a second
+    // engine. Reads and multicasts here serialise on NoC 0; the only real dual-NoC
+    // overlap in this op is the writer's UP_SPLIT `up` read, which runs on NoC 1.
+    // Do not read the phase-4 ordering comments as claiming read/mcast concurrency
+    // within this kernel — the in1_down read and the activated mcast share a NoC.
     Noc noc;
     Noc noc_read(0);
 
@@ -292,6 +298,15 @@ void kernel_main() {
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
     // (if any) are skipped — no DRAM reads, no mcasts, no compute.
     const uint32_t count_tiles = (count_value + 31) / 32;
+    // Bound for x DRAM READS only — deliberately NOT applied to count_tiles itself.
+    // count_tiles drives adaptive_chunk::num_chunks below, and the compute kernel has
+    // no M_tiles_full compile-time arg, so clamping count_tiles here would give the
+    // reader a different effective_chunks than compute/writer and desync the three.
+    // count_value comes from a device-side buffer, so a count larger than this
+    // expert's host-declared region would make the reads below run past its rows into
+    // the next expert's data in a shared x buffer. Rows past this bound are skipped
+    // (stale L1) exactly like rows past count_tiles; the writer drops both.
+    const uint32_t x_read_rows = count_tiles < M_tiles_full ? count_tiles : M_tiles_full;
     // Runtime chunk layout from the actual token count (identical math in the
     // compute and writer kernels, so all three agree on the row mapping). Full
     // chunks span chunk_M_max tile-rows; the tail chunk shrinks per_core_M to the
@@ -478,7 +493,7 @@ void kernel_main() {
                     const uint32_t col_off_bytes = kb * rm_kblock_bytes;
                     for (uint32_t m = 0; m < per_core_M; ++m) {
                         const uint32_t tile_row = this_core_first_row + m;
-                        if (tile_row < count_tiles) {
+                        if (tile_row < x_read_rows) {
                             // Only sticks < count_value are real tokens; the rest of a valid
                             // tile-row is dispatch padding. Read just the real sticks (the
                             // last tile-row is usually partial) and leave the padding sticks
@@ -513,7 +528,7 @@ void kernel_main() {
                 } else {
                     for (uint32_t m = 0; m < per_core_M; ++m) {
                         const uint32_t row = this_core_first_row + m;
-                        const bool row_valid = row < count_tiles;
+                        const bool row_valid = row < x_read_rows;
                         if (row_valid) {
                             for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                                 const uint32_t col = kb * in0_block_w_gu + k;
@@ -538,11 +553,14 @@ void kernel_main() {
                 // count stay stale at receivers and are dropped downstream (same
                 // free-dim-M safety as the skipped reads above). RM trims to the real
                 // token-row sticks; TILE to whole valid tile-rows (a 32-row tile can't
-                // be split). A fully-padding M-row (this_core_first_row >= count_tiles)
+                // be split). A fully-padding M-row (this_core_first_row >= x_read_rows)
                 // sends no data — only the valid sem, so receivers still advance.
+                // Bounded by x_read_rows (not count_tiles) so we never multicast a row
+                // the read loop above deliberately skipped; identical whenever
+                // count_tiles <= M_tiles_full, i.e. every well-formed input.
                 const uint32_t valid_tile_rows =
-                    (this_core_first_row < count_tiles)
-                        ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row)
+                    (this_core_first_row < x_read_rows)
+                        ? ((x_read_rows - this_core_first_row < per_core_M) ? (x_read_rows - this_core_first_row)
                                                                             : per_core_M)
                         : 0;
                 uint32_t mcast_bytes;
@@ -590,6 +608,11 @@ void kernel_main() {
                 x_stage_obj.push_back(g_in0_block_num_tiles);
 
                 noc.async_writes_flushed();
+                // The local set() is the STAGING STORE for the broadcast below:
+                // Semaphore::set_multicast sends the semaphore's own current L1 value
+                // (src_l1_addr = get_l1_addr()), it does not take a value argument. It is
+                // not a redundant self-signal. DEFAULT (not MCAST_INCL_SRC) excludes the
+                // sender from the group, so nothing is in flight to this core's own copy.
                 in0_valid_sem.set(IN0_VALID);
                 in0_valid_sem.set_multicast<NocOptions::DEFAULT>(
                     noc, in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, in0_num_receivers);
@@ -724,6 +747,8 @@ void kernel_main() {
                 }
                 if (in1_num_receivers > 0) {
                     noc.async_writes_flushed();
+                    // set() stages the value the broadcast sends (see the in0 note above);
+                    // DEFAULT excludes the sender, so no self-write is in flight.
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
                         noc,
@@ -792,9 +817,10 @@ void kernel_main() {
                 act_ready_sem.up(noc, sender_nx, sender_ny, 1);
             }
 
-            // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
-            // barriering — reads run concurrently with the activated mcast
-            // below on NoC 1.
+            // Step 2: in1_down sender kicks off DRAM reads without barriering, so
+            // the read latency overlaps the ready-sem handshakes and the
+            // cb_activated wait below. (It does NOT overlap the activated mcast on
+            // a second NoC — both are NoC 0; see the Noc handle note above.)
             uint32_t in1_block_start = 0;
             if (is_in1_sender) {
                 in1_ready_sem.wait(in1_num_receivers);
@@ -829,12 +855,13 @@ void kernel_main() {
             }
 
             // Step 3: in1_down sender finishes — barrier on the DRAM reads it
-            // kicked off in step 2, then mcasts the down-weight block. Reordered
+            // kicked off in step 2, then mcasts the down-weight block. Ordered
             // BEFORE the activated mcast: the down weight has no compute
-            // dependency (DRAM-ready early), so sending it first clears NoC 1 for
-            // the compute-gated activated mcast below. Tradeoff: on the one core
-            // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
-            // longer hidden under the activated wait — measure before keeping.
+            // dependency (DRAM-ready early), so sending it first gets it off the
+            // (shared, NoC-0) wire before the compute-gated activated mcast below.
+            // Tradeoff: on the one core that is BOTH senders (gy==0 && gx==kb) the
+            // DRAM-read barrier is no longer hidden under the activated wait —
+            // measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
@@ -843,7 +870,8 @@ void kernel_main() {
                     const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     // linked=true so the in1_valid-sem multicast is ordered behind
                     // the weight data on the same reserved path (see the activated
-                    // mcast below for the full rationale).
+                    // mcast below for the full rationale). DEFAULT mcast, so unlike
+                    // the activated path the sender is not a destination.
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(in1_block_start),
                         MulticastEndpoint{},
@@ -889,19 +917,23 @@ void kernel_main() {
                 const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
-                // delivered AFTER the data at every receiver. With linked=false
+                // delivered AFTER the data at every destination. With linked=false
                 // the path is released and the valid-sem multicast can overtake
-                // the bulk data multicast at a receiver -> the receiver observes
-                // act_valid, pushes cb_in0_down_full, and compute reads stale L1
-                // -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). The async_writes_flushed() below
-                // does NOT provide this ordering: it only waits for the data to
-                // DEPART this core's NIU, not to land at the receivers. A full
-                // async_write_barrier() would (these multicasts are non-posted
-                // writes and are acked on completion), but at the cost of a
-                // completion round-trip per K-block on the critical path;
-                // path-linking gets the ordering for free. Mirrors the canonical
-                // matmul in0 sender (reader_bmm_tile_layout_in0_sender_padding.cpp).
+                // the bulk data multicast -> the destination observes act_valid,
+                // pushes cb_in0_down_full, and compute reads stale L1 -> that
+                // core's whole down-matmul output block is wrong (run-to-run
+                // nondeterministic). The async_writes_flushed() below does NOT
+                // provide this ordering: it only waits for the data to DEPART
+                // this core's NIU, not to land. A full async_write_barrier()
+                // would (these multicasts are non-posted writes and are acked on
+                // completion), but at the cost of a completion round-trip per
+                // K-block on the critical path; path-linking gets it for free.
+                //
+                // linked=true covers the RECEIVERS. It does NOT cover this core:
+                // "every destination" includes self under MCAST_INCL_SRC, and the
+                // sender's own act_valid is set locally (staging store) rather than
+                // waited on, so path-linking buys it nothing. See the barrier at the
+                // end of this block for how the sender orders itself.
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         CoreLocalMem<uint32_t>(src_l1),
@@ -918,6 +950,9 @@ void kernel_main() {
                 }
                 noc.async_writes_flushed();
 
+                // set() stages the value the broadcast sends: Semaphore::set_multicast
+                // transmits this semaphore's own current L1 value, it takes no value
+                // argument. Removing it would broadcast 0 and hang the whole M-row.
                 act_valid_sem.set(ACT_VALID);
                 act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
@@ -925,9 +960,39 @@ void kernel_main() {
                 if (re_act_tiles > 0) {
                     cb_activated_obj.pop_front(re_act_tiles);
                 }
+
+                // Drain this core's OWN loopback traffic before falling through to
+                // the push below. Unlike every other multicast in this kernel, both
+                // sends above are MCAST_INCL_SRC, so this core is a DESTINATION of
+                // its own writes and neither is ordered by anything else:
+                //
+                //  * The data mcast moves cb_activated -> cb_in0_down_full, two
+                //    DIFFERENT CBs, so the sender genuinely needs its own copy to
+                //    LAND before pushing cb_in0_down_full at step 5. (The canonical
+                //    matmul in0 sender gets away without this only because there
+                //    src == dst, so its loopback rewrites bytes it already has.)
+                //    async_writes_flushed() above is not enough: it waits for
+                //    departure from this NIU, not arrival. Without this barrier the
+                //    down matmul reads stale L1 for its own K-block -> that core's
+                //    whole output block is wrong, run-to-run nondeterministic.
+                //  * The valid-sem mcast writes THIS core's act_valid too. Left in
+                //    flight it can land after the act_valid_sem.set(0) this core
+                //    performs at step 1 of the NEXT K-block, resurrecting a stale
+                //    valid=1 -> the wait at step 5 of that block returns before the
+                //    real sender has multicast anything -> stale cb_in0_down_full
+                //    again, silently.
+                //
+                // Cost is one completion round-trip per core per CHUNK (each core is
+                // the activated sender for exactly one K-block, kb == my_nt_d), not
+                // per K-block, so it is off the hot path. The receivers still get
+                // their ordering for free from linked=true and do NOT barrier.
+                noc.async_write_barrier();
             }
 
-            // Step 5: receivers wait for both valid sems and push.
+            // Step 5: receivers wait for both valid sems and push. The sender does
+            // not wait (its act_valid is already 1 from the staging set above); it
+            // is ordered against its own loopback by the barrier at the end of the
+            // sender block instead.
             if (!is_act_sender) {
                 act_valid_sem.wait(ACT_VALID);
             }
