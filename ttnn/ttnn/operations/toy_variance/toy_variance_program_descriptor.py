@@ -6,8 +6,8 @@ Program descriptor for toy_variance.
 
 Computes per-row population variance Var(x) = E[(x - E[x])^2] using a
 two-pass streaming algorithm:
-    Pass 1: stream x → cb_mean = E[x]            via accumulate_reduce
-    Pass 2: stream x → cb_variance = E[(x-mean)^2] via sub<COL> + square + accumulate_reduce_block
+    Pass 1: stream x → cb_mean = E[x]              via accumulating reduce<>
+    Pass 2: stream x → cb_variance = E[(x-mean)^2] via sub<COL> + square + accumulating reduce<>
 The reduction axis is chunked into NUM_BLOCKS blocks of BLOCK_SIZE tiles each
 so W can be arbitrarily wide (e.g. 32 x 64000) without exceeding L1.
 
