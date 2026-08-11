@@ -1240,8 +1240,8 @@
 #define TT_WAIT_TILES(stall_res, num_tiles, buffer_sel)    ckernel::instrn_buffer[0] = TT_OP_WAIT_TILES(stall_res, num_tiles, buffer_sel)
 #define TTI_WAIT_TILES(stall_res, num_tiles, buffer_sel)   INSTRUCTION_WORD(TT_OP_WAIT_TILES(stall_res, num_tiles, buffer_sel))
 #define TT_OP_WRCFG(GprAddress, wr128b, CfgReg)            TT_OP(0xb0, (((GprAddress) << 16) + ((wr128b) << 15) + ((CfgReg) << 0)))
-#define TT_WRCFG(GprAddress, wr128b, CfgReg)               ckernel::instrn_buffer[0] = TT_OP_WRCFG(GprAddress, wr128b, CfgReg)
-#define TTI_WRCFG(GprAddress, wr128b, CfgReg)              INSTRUCTION_WORD(TT_OP_WRCFG(GprAddress, wr128b, CfgReg))
+#define TT_WRCFG(GprAddress, wr128b, CfgReg)               __builtin_rvtt_wrcfg(GprAddress, wr128b, CfgReg)
+#define TTI_WRCFG TT_WRCFG
 #define TT_OP_ZEROACC(clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where) \
     TT_OP(0x10, (((clear_mode) << 19) + ((use_32_bit_mode) << 18) + ((clear_zero_flags) << 17) + ((addr_mode) << 14) + ((where) << 0)))
 #define TT_ZEROACC(clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where) \

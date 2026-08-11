@@ -948,8 +948,8 @@
 
 #define TT_OP_WRCFG(GprAddress, wr128b, CfgReg)    TT_OP(0xb0, (((GprAddress) << 16) + ((wr128b) << 15) + ((CfgReg) << 0)))
 #define TT_WRCFG_VALID(GprAddress, wr128b, CfgReg) (ckernel::is_valid(GprAddress, 8) && ckernel::is_valid(wr128b, 1) && ckernel::is_valid(CfgReg, 15))
-#define TT_WRCFG(GprAddress, wr128b, CfgReg)       ckernel::instrn_buffer[0] = TT_OP_WRCFG(GprAddress, wr128b, CfgReg)
-#define TTI_WRCFG(GprAddress, wr128b, CfgReg)      INSTRUCTION_WORD(TT_OP_WRCFG(GprAddress, wr128b, CfgReg))
+#define TT_WRCFG(GprAddress, wr128b, CfgReg)       __builtin_rvtt_wrcfg(GprAddress, wr128b, CfgReg)
+#define TTI_WRCFG TT_WRCFG
 
 #define TT_OP_XMOV(Mov_block_selection, Last)    TT_OP(0x40, (((Mov_block_selection) << 23) + ((Last) << 0)))
 #define TT_XMOV_VALID(Mov_block_selection, Last) (ckernel::is_valid(Mov_block_selection, 1) && ckernel::is_valid(Last, 23))
