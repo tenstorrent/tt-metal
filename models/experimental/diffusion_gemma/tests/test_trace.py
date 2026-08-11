@@ -1527,7 +1527,6 @@ def test_vllm_reveal_upshift_recaptures_on_live_session(monkeypatch):
         return emission, adapter, [{"traces_captured": 48}]
 
     wrapper._capture_prefilled_session = capture_prefilled
-    wrapper._reserve_upshift_controller_holes = lambda: events.append("vocab_holes") or ["vocab"]
     wrapper._reserve_cold_recapture_holes = lambda **kwargs: events.append(f"holes@{kwargs.get('span')}") or ["concat"]
     wrapper._release_cold_recapture_holes = lambda reservations: events.append(
         f"released:{reservations[0] if reservations else 'none'}"
@@ -1542,10 +1541,8 @@ def test_vllm_reveal_upshift_recaptures_on_live_session(monkeypatch):
     assert actual is emission
     assert events == [
         "controller_release",
-        "vocab_holes",
         "sync",
         "holes@8192",
-        "released:vocab",
         "capture",
         "released:concat",
     ]
@@ -1581,7 +1578,6 @@ def test_vllm_reveal_upshift_failure_restores_span_and_unpublishes(monkeypatch, 
         raise RuntimeError("capture blew up")
 
     wrapper._capture_prefilled_session = failing_capture
-    wrapper._reserve_upshift_controller_holes = lambda: []
     wrapper._reserve_cold_recapture_holes = lambda **kwargs: []
     wrapper._release_cold_recapture_holes = lambda reservations: None
     monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: None)

@@ -264,6 +264,26 @@ def _copy_materialized_noise(fresh, destination=None, *, label: str):
         fresh.deallocate(True)
 
 
+def _vocab_noise_pool(adapter) -> dict:
+    """Model-lifetime pool for the [canvas, vocab] noise buffers.
+
+    These buffers are span-independent (~134 MB each at the production vocab), so
+    reallocating them on every bucket recapture both churns DRAM and — once
+    heterogeneous rebuilds have fragmented memory — simply stops fitting (the 32K
+    SPEED-Bench admission rebuild OOMed on exactly this allocation, 2026-08-11).
+    Allocated once per model, at startup, while memory is clean; released only
+    with the mesh.
+    """
+    tt_model = getattr(adapter, "tt_model", None)
+    if tt_model is None:
+        return {}
+    pool = getattr(tt_model, "_dg_vocab_noise_pool", None)
+    if pool is None:
+        pool = {}
+        tt_model._dg_vocab_noise_pool = pool
+    return pool
+
+
 def _trace_metric(event: str, **fields) -> None:
     logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
@@ -425,7 +445,9 @@ class UpfrontTracedDenoiseController:
     def _initialize_noise(self, noise_tokens_fn) -> None:
         if noise_tokens_fn is None:
             raise ValueError("up-front traced denoise requires a per-step materialized noise_tokens_fn")
-        self.noise_buf = _copy_materialized_noise(noise_tokens_fn(0), label="renoise step 0")
+        pool = _vocab_noise_pool(self.adapter)
+        self.noise_buf = _copy_materialized_noise(noise_tokens_fn(0), pool.get("noise"), label="renoise step 0")
+        pool["noise"] = self.noise_buf
 
     def _refresh_noise(self, noise_tokens_fn, step: int):
         if noise_tokens_fn is None:
@@ -439,7 +461,9 @@ class UpfrontTracedDenoiseController:
     def _initialize_gumbel(self, gumbel_noise_fn) -> None:
         if gumbel_noise_fn is None:
             raise ValueError("up-front traced denoise requires a per-step materialized gumbel_noise_fn")
-        self.gumbel_buf = _copy_materialized_noise(gumbel_noise_fn(0), label="Gumbel step 0")
+        pool = _vocab_noise_pool(self.adapter)
+        self.gumbel_buf = _copy_materialized_noise(gumbel_noise_fn(0), pool.get("gumbel"), label="Gumbel step 0")
+        pool["gumbel"] = self.gumbel_buf
 
     def _refresh_gumbel(self, gumbel_noise_fn, step: int):
         if gumbel_noise_fn is None:
@@ -545,7 +569,10 @@ class UpfrontTracedDenoiseController:
         # succeeds but the first refresh fails with only ~26 MiB as the largest
         # per-bank free block (the draw needs 32 MiB).
         if int(self.reveal_pmax or 0) >= 65536:
-            self._gumbel_refresh_reserve = ttnn.clone(self.gumbel_buf)
+            pool = _vocab_noise_pool(self.adapter)
+            reserve = pool.get("gumbel_refresh_reserve")
+            self._gumbel_refresh_reserve = reserve if reserve is not None else ttnn.clone(self.gumbel_buf)
+            pool["gumbel_refresh_reserve"] = self._gumbel_refresh_reserve
         self._initialize_noise(noise_tokens_fn)
         if self.consts is None:
             self.consts = make_denoise_constants(
@@ -715,6 +742,7 @@ class UpfrontTracedDenoiseController:
                     f"trace {trace_id}",
                     lambda trace_id=trace_id: ttnn.release_trace(self.mesh, trace_id),
                 )
+            pooled = {id(t) for t in _vocab_noise_pool(self.adapter).values() if t is not None}
             buffers = [
                 ("canvas_buf", self.canvas_buf),
                 ("committed_buf", self.committed_buf),
@@ -722,6 +750,10 @@ class UpfrontTracedDenoiseController:
                 ("gumbel_refresh_reserve", self._gumbel_refresh_reserve),
                 ("noise_buf", self.noise_buf),
             ]
+            # Pool-owned [canvas, vocab] buffers outlive every controller: the next
+            # capture copies into them instead of reallocating 134 MB into whatever
+            # fragments the rebuild left behind.
+            buffers = [(label, t) for label, t in buffers if t is None or id(t) not in pooled]
             if self.halt_bufs is not None:
                 buffers.extend(
                     (f"halt_bufs.{name}", tensor) for name, tensor in zip(self.halt_bufs._fields, self.halt_bufs)

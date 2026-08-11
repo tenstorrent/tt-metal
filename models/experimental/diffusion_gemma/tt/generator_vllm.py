@@ -945,46 +945,6 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             except BaseException as cleanup_error:
                 logger.error(f"failed to release {label} adapter: {cleanup_error}")
 
-    def _reserve_upshift_controller_holes(self) -> list:
-        """Pin two [canvas, vocab] holes for the recaptured controller's noise buffers.
-
-        A mid-request recapture releases the old controller's Gumbel/noise
-        buffers and immediately reallocates same-sized ones — but the capture's
-        many small allocations (masks, RoPE, halt scalars, compile temporaries)
-        run first and can nibble the freed contiguous blocks. At the 256K
-        geometry that turned 134 MB of just-freed space into an 8 MB largest
-        free block and OOMed the new noise buffer (tt-shield 31448367055).
-        Reserving the two vocabulary-wide holes right after the release and
-        dropping them immediately before capture keeps contiguous space the
-        new buffers can land in.
-        """
-        tt_model = self.model[0]
-        text_config = getattr(tt_model.hf_config, "text_config", tt_model.hf_config)
-        vocab_size = int(getattr(text_config, "vocab_size"))
-        shape = [1, 1, int(self.canvas_length), vocab_size]
-        reservations = []
-        try:
-            for _ in range(2):
-                reservations.append(
-                    ttnn.empty(
-                        shape,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=tt_model.mesh_device,
-                    )
-                )
-        except BaseException:
-            for reservation in reservations:
-                reservation.deallocate(True)
-            raise
-        _metric(
-            "reveal_upshift_controller_holes_reserved",
-            buffers=len(reservations),
-            shape=shape,
-            bytes_per_buffer=2 * int(self.canvas_length) * vocab_size,
-        )
-        return reservations
-
     def _reserve_cold_recapture_holes(self, *, span: int | None = None) -> list:
         """Protect the four large holes needed to restart long-context capture.
 
@@ -1040,6 +1000,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         *,
         expected_cache_len: int,
         execution_len: int | None = None,
+        capture_span: int | None = None,
     ):
         """Release the active trace, compile one cold prefill shape, and recapture.
 
@@ -1072,7 +1033,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 execution_len=execution_len,
             )
 
-            recapture_holes = self._reserve_cold_recapture_holes()
+            # Concat holes are sized to the span this capture binds: a ceiling-sized
+            # 4x ~268 MB reservation stops fitting once heterogeneous bucket rebuilds
+            # have fragmented DRAM. The [canvas, vocab] Gumbel/noise buffers need no
+            # holes — they live in the model-lifetime pool and are never reallocated.
+            recapture_holes = self._reserve_cold_recapture_holes(span=capture_span)
             try:
                 cache_len = session.prefill(prompt_tokens)
                 if cache_len != expected_cache_len:
@@ -1122,6 +1087,66 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 execution_len=execution_len,
                 error=repr(rebuild_error),
             )
+            raise
+        finally:
+            self._upfront_rebuild_in_progress = False
+
+    def _rebuild_for_reveal_bucket(self, session, prompt_tokens, *, expected_cache_len: int):
+        """Bucket-only rebuild: prefill FIRST, then release-and-recapture.
+
+        When the prefill shape is already warm the prefill cannot miss the
+        program cache, so it may run while the old traces are still resident —
+        with the full free pool available for its transients (a 32K chunked
+        prefill needs a contiguous 134 MB chunk embedding, which did not fit
+        between hole reservations in the release-first ordering; SPEED-Bench
+        2026-08-11). Only afterwards is the old capture released and the new
+        span captured back-to-back, with no big allocations in between beyond
+        what the release itself just freed (the [canvas, vocab] noise buffers
+        live in the model-lifetime pool).
+        """
+        if getattr(self, "_upfront_rebuild_in_progress", False):
+            raise RuntimeError("concurrent up-front rebuild is unsupported")
+        if getattr(self, "_sessions", {}):
+            raise RuntimeError("reveal-bucket rebuild requires no active serving sessions")
+        self._upfront_rebuild_in_progress = True
+        _metric(
+            "reveal_bucket_rebuild_begin",
+            cache_len=expected_cache_len,
+            rebuild_index=int(getattr(self, "_upfront_rebuilds", 0)) + 1,
+        )
+        try:
+            cache_len = session.prefill(prompt_tokens)
+            if cache_len != expected_cache_len:
+                raise RuntimeError(
+                    f"bucket-rebuild prefill aligned to {cache_len}, expected {expected_cache_len}; "
+                    "refusing to publish a mismatched trace"
+                )
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            self.release_persistent_capture()
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            emission, adapter, trace_stats = self._capture_prefilled_session(session)
+            session._persistent_adapter = adapter
+            self._persistent_adapter = adapter
+            self._upfront_rebuilds = int(getattr(self, "_upfront_rebuilds", 0)) + 1
+            _metric(
+                "reveal_bucket_rebuild_complete",
+                cache_len=cache_len,
+                rebuilds=self._upfront_rebuilds,
+                trace_stats=trace_stats,
+                dram=_dram_snapshot(self.model[0].mesh_device),
+            )
+            return cache_len, emission
+        except BaseException as rebuild_error:
+            adapter = getattr(session, "_logits_fn", None)
+            self._persistent_adapter = None
+            self._release_unpublished_adapter(adapter, label="failed reveal-bucket rebuild")
+            session._logits_fn = None
+            session._persistent_adapter = None
+            try:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+            except BaseException as cleanup_error:
+                logger.error(f"failed to synchronize after reveal-bucket rebuild error: {cleanup_error}")
+            _metric("reveal_bucket_rebuild_failed", cache_len=expected_cache_len, error=repr(rebuild_error))
             raise
         finally:
             self._upfront_rebuild_in_progress = False
@@ -1190,16 +1215,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             if callable(release_masks):
                 release_masks()
             self._persistent_adapter = None  # republished after a successful capture
-            # Pin the just-freed vocabulary-wide blocks BEFORE anything else can
-            # fragment them; released immediately before capture so the new
-            # controller's Gumbel/noise buffers land in the preserved holes.
-            controller_holes = self._reserve_upshift_controller_holes()
-            try:
-                ttnn.synchronize_device(self.model[0].mesh_device)
-                set_active_reveal_pmax(new_bucket)
-                recapture_holes = self._reserve_cold_recapture_holes(span=new_bucket)
-            finally:
-                self._release_cold_recapture_holes(controller_holes)
+            # The [canvas, vocab] Gumbel/noise buffers live in the model-lifetime
+            # pool (traced_denoise._vocab_noise_pool), so the recapture copies into
+            # them instead of reallocating 134 MB into a fragmented heap.
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            set_active_reveal_pmax(new_bucket)
+            recapture_holes = self._reserve_cold_recapture_holes(span=new_bucket)
             try:
                 emission, adapter, trace_stats = self._capture_prefilled_session(session)
             finally:
@@ -1501,6 +1522,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                         self._sessions[row] = session
                         blocks.append(self._stop_block(session))
                         continue
+            bucket_only_rebuild = desired_bucket is not None and not cold_rebuild
             if desired_bucket is not None:
                 cold_rebuild = True
             if upfront and not cold_rebuild:
@@ -1511,12 +1533,26 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     if desired_bucket is not None:
                         set_active_reveal_pmax(desired_bucket)
                     try:
-                        cache_len, emission = self._rebuild_for_cold_prefill(
-                            session,
-                            prompt_tokens,
-                            expected_cache_len=cache_len,
-                            execution_len=execution_len,
-                        )
+                        if bucket_only_rebuild:
+                            # Shape is warm: prefill-first ordering keeps the whole
+                            # free pool available for the prefill's transients.
+                            cache_len, emission = self._rebuild_for_reveal_bucket(
+                                session,
+                                prompt_tokens,
+                                expected_cache_len=cache_len,
+                            )
+                        else:
+                            cache_len, emission = self._rebuild_for_cold_prefill(
+                                session,
+                                prompt_tokens,
+                                expected_cache_len=cache_len,
+                                execution_len=execution_len,
+                                capture_span=(
+                                    desired_bucket
+                                    if desired_bucket is not None
+                                    else getattr(self, "_upfront_reveal_bucket", None)
+                                ),
+                            )
                     except BaseException:
                         if desired_bucket is not None:
                             # The failed capture never published; the next capture must
