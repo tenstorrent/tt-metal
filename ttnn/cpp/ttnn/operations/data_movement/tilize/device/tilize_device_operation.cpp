@@ -4,6 +4,7 @@
 
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
@@ -15,6 +16,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/host_api.hpp>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -55,6 +57,10 @@ bool can_use_sharded_optimized_factories(
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return false;
+    }
+
+    if (input_tensor.layout() == Layout::ROW_MAJOR && operation_attributes.tile.get_height() < tt::constants::TILE_HEIGHT) {
         return false;
     }
 
@@ -189,8 +195,9 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
-        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
+            input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {
@@ -255,7 +262,9 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     }
 
     auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(Layout::TILE, operation_attributes.tile), operation_attributes.output_mem_config);
+        operation_attributes.output_dtype,
+        PageConfig(Layout::TILE, operation_attributes.tile),
+        operation_attributes.output_mem_config);
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
@@ -279,6 +288,17 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
             return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
         }
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
+    }
+
+    // On Blackhole, UINT8 rows narrower than the 64-byte DRAM read granularity can land on a
+    // misaligned DRAM page, causing the NOC to corrupt adjacent L1 data.
+    // TilizeMultiCoreBlockProgramFactory uses reader_unary_pad_multicore_both_dims which has
+    // an alignment-aware staging buffer (c_1) that handles this correctly.
+    // Route all non-sharded UINT8 inputs on Blackhole here regardless of use_multicore;
+    // the combination was broken before this fix so overriding the single-core hint is safe.
+    if (input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE && input_tensor_a.dtype() == DataType::UINT8 &&
+        !input_tensor_a.memory_config().is_sharded()) {
+        return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
@@ -338,31 +358,60 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_runtime_args(
+void TilizeDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the sharded factories are CB-bound (in/out addresses ride on the sharded CBs, no Buffer*
-    // rt-arg). Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the
-    // fast-path so apply_resolved_bindings re-patches the CB base addresses instead of rebuilding
-    // create_descriptor.
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-    const bool is_sharded_tilize = std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(factory);
-    const bool is_sharded_retile = std::holds_alternative<TilizeMultiCoreShardedRetileProgramFactory>(factory);
-    if (!is_sharded_tilize && !is_sharded_retile) {
-        return {};
-    }
-    const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
-    // The reader consumes input-geometry tiles: the sharded retile reader sees the (differing) input
-    // tile shape, whereas the plain sharded tilize reads row-major sticks counted with the op tile.
-    const uint32_t reader_tile_hw = is_sharded_retile ? tensor_args.input_tensor.tensor_spec().tile().get_tile_hw()
-                                                      : operation_attributes.tile.get_tile_hw();
-    return {tt::tt_metal::DynamicRuntimeArg{
-        /*kernel_idx=*/0,
-        corerange_to_cores(shard_spec.grid).front(),
-        /*arg_idx=*/0,
-        shard_spec.shape[0] * shard_spec.shape[1] / reader_tile_hw}};
+    // tilize has no custom compute_program_hash, so every shape-derived arg (work split, tile ids,
+    // page sizes) is keyed and only the buffer addresses move between hits: O(1) per kernel/CB.
+    using namespace tt::tt_metal;
+    const auto& input = tensor_args.input_tensor;
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = tensor_return_value.buffer();
+    const uint32_t src_addr = src_buffer->address();
+    const uint32_t dst_addr = dst_buffer->address();
+    const bool output_is_interleaved =
+        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+
+    // Every factory pushes reader first and writer second, each taking its buffer at slot 0.
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
+    const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
+        for (auto& col : GetRuntimeArgs(program, kernel_idx)) {
+            for (auto& a : col) {
+                if (a.size() > 0) {
+                    a[0] = addr;
+                }
+            }
+        }
+    };
+
+    std::visit(
+        [&](auto&& factory) {
+            using Factory = std::decay_t<decltype(factory)>;
+            if constexpr (
+                std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedProgramFactory> ||
+                std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory>) {
+                // Sharded input rides on a buffer-backed CB, so the reader carries no address. The
+                // writer only does when the output is interleaved; otherwise it is CB-backed too.
+                if (output_is_interleaved) {
+                    patch_slot0(kWriterKernelIdx, dst_addr);
+                }
+                // CBs are matched positionally: src0, [mid, for retile], output.
+                ProgramDescriptor cb_addr_only;
+                cb_addr_only.cbs.push_back(CBDescriptor{.buffer = src_buffer});
+                if constexpr (std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory>) {
+                    cb_addr_only.cbs.push_back(CBDescriptor{});
+                }
+                cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_is_interleaved ? nullptr : dst_buffer});
+                apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+            } else {
+                patch_slot0(kReaderKernelIdx, src_addr);
+                patch_slot0(kWriterKernelIdx, dst_addr);
+            }
+        },
+        select_program_factory(operation_attributes, tensor_args));
 }
 
 ttnn::Tensor tilize(
@@ -370,7 +419,6 @@ ttnn::Tensor tilize(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const Tile& tile,
@@ -380,7 +428,6 @@ ttnn::Tensor tilize(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
             .tile = tile,

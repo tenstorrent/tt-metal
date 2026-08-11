@@ -45,14 +45,14 @@ struct MoveDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    // #48928: the sharded factory re-runs create_descriptor on every cache hit only to recompute the
-    // reader's address-derived rt-args (chunk = dst_addr - src_addr). Recompute just those on a hit.
-    // Defined in move_sharded_program_factory.cpp to reuse its arg arithmetic.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
+    // from the same create_descriptor the miss path uses. See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim

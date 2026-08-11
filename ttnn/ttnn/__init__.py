@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -165,6 +164,7 @@ from ttnn._ttnn.global_circular_buffer import (
 
 from ttnn._ttnn.fabric import (
     FabricConfig,
+    FabricType,
     FabricReliabilityMode,
     FabricTensixConfig,
     FabricUDMMode,
@@ -176,7 +176,9 @@ from ttnn._ttnn.fabric import (
     get_tt_fabric_max_payload_size_bytes,
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
+    get_forwarding_link_indices,
     get_all_fabric_mesh_ids,
+    get_all_mgd_fabric_types,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
@@ -229,11 +231,16 @@ from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
 
+from ttnn._ttnn.layer_ack_service import (
+    LayerAckService,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
     DumpTensorMode,
     uint8,
+    int8,
     uint16,
     int32,
     uint32,
@@ -558,9 +565,30 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
+# RGB -> YUV conversion op
+from ttnn._ttnn.operations.experimental import YUVCoefficients
+from ttnn._ttnn.operations.experimental import YUVColorSpace
+from ttnn._ttnn.operations.experimental import RGBRange
+from ttnn._ttnn.operations.experimental import YUVRange
+from ttnn._ttnn.operations.experimental import YUVFormat
+from ttnn._ttnn.operations.experimental import rgb_to_yuv
+from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
+from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
+
+experimental.YUVCoefficients = YUVCoefficients
+experimental.YUVColorSpace = YUVColorSpace
+experimental.RGBRange = RGBRange
+experimental.YUVRange = YUVRange
+experimental.YUVFormat = YUVFormat
+experimental.rgb_to_yuv = rgb_to_yuv
+experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
+experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+
+transformer.SparseKVFormat = SparseKVFormat
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

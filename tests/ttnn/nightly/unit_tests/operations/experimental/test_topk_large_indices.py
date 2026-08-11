@@ -6,7 +6,10 @@ import pytest
 import numpy as np
 import torch
 import ttnn
+from loguru import logger
 
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = [
@@ -170,6 +173,66 @@ def test_topk_large_indices_row_major_640_rows_51200_k1536(device):
     tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
 
     _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
+
+# Real-time-profiler baselines measured on a Blackhole dev board. The symmetric band catches both
+# regressions and unexpected speedups that should trigger baseline review.
+TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
+    # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
+    ("prefill", 640, 51200, None, 1536, 1_683_850),
+    ("bounded_cache", 2, 102400, 56320, 1536, 316_890),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,num_rows,n,valid_length,k,expected_duration_ns",
+    TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS,
+    ids=[config[0] for config in TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS],
+)
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_topk_large_indices_production_perf_check(
+    device,
+    case_id,
+    num_rows,
+    n,
+    valid_length,
+    k,
+    expected_duration_ns,
+):
+    """Check production-shape duration on the marker-selected host-IOMMU perf runner."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
+
+    torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
+    tt_input = _to_device(torch_input, device)
+
+    def run_topk_large_indices():
+        return ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+
+    measured_out, perf_record = profile_realtime_program(device, run_topk_large_indices)
+    duration_ns = perf_record["duration_ns"]
+    lower = expected_duration_ns * (1 - TOPK_LARGE_INDICES_PERF_MARGIN)
+    upper = expected_duration_ns * (1 + TOPK_LARGE_INDICES_PERF_MARGIN)
+
+    logger.info(
+        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms "
+        f"(expected {expected_duration_ns / 1e6:.3f} ms, band [{lower / 1e6:.3f}, {upper / 1e6:.3f}]), "
+        f"shape=({num_rows}, {n}), valid_length={valid_length}, k={k}, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+
+    del measured_out
+
+    assert lower <= duration_ns <= upper, (
+        f"{case_id} duration {duration_ns / 1e6:.3f} ms outside band "
+        f"[{lower / 1e6:.3f}, {upper / 1e6:.3f}] ms "
+        f"(expected {expected_duration_ns / 1e6:.3f} ms, "
+        f"margin +/- {TOPK_LARGE_INDICES_PERF_MARGIN * 100:.1f}%)"
+    )
 
 
 def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(device):
@@ -390,10 +453,33 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_short_valid_length_emits_sentinels(device, k):
+    # Sparse MLA keeps a fixed maximum top-k shape while its cache is shorter than k.  The valid
+    # prefix supplies the real indices and the remaining output slots must be the sparse-SDPA sentinel.
+    valid_length = 496
+    # Keep one full output-width of finite stale data beyond the requested top-k, so every k exercises
+    # that the runtime prefix bound—not just the sentinel padding—excludes the physical tail.
+    n = 2 * k
+    torch_input = _make_bf16_exact_input(num_rows=1, n=n)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+    _, valid_indices = torch.topk(
+        torch_input[:, :valid_length].float(), valid_length, dim=-1, largest=True, sorted=True
+    )
+    expected = torch.cat(
+        [
+            valid_indices,
+            torch.full((1, k - valid_length), 0xFFFFFFFF, dtype=torch.int64),
+        ],
+        dim=-1,
+    )
+    _assert_indices(tt_indices, expected, [1, k])
+
+
 @pytest.mark.parametrize(
     "k,n,valid_length",
     [
-        (512, 1024, 496),  # valid_length < k
+        (512, 1024, 0),  # valid_length must be positive
         (512, 1024, 2048),  # valid_length > n
     ],
 )

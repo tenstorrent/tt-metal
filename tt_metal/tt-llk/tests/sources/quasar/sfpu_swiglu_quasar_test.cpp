@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*

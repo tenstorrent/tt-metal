@@ -220,8 +220,8 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MetalV2FactoryConcept`
-// factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` /
+// `CustomProgramSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -235,9 +235,14 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<MetalV2FactoryConcept T>(const T&) {
+            [&]<ProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template MetalV2MeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<CustomProgramSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory =
+                    mesh_device_operation_t::template CustomProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -449,6 +454,14 @@ typename device_operation_t::tensor_return_value_t launch(
         const auto& input_tensor = input_tensor_ref.get();
         TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
         TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
+    }
+
+    // Whether the op accepts per-core allocation is a property of the op, not of any one tensor,
+    // so ask it once rather than inside the loop above.
+    if constexpr (!SupportsPerCoreAllocation<device_operation_t>) {
+        for (size_t i = 0; i < input_tensors.size(); ++i) {
+            detail::validate_no_per_core_allocation(input_tensors[i].get(), operation_name, i);
+        }
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);

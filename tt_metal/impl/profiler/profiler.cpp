@@ -494,10 +494,13 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     const std::vector<CoreCoord> logical_dispatch_cores =
         get_logical_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
 
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
     std::vector<CoreCoord> virtual_dispatch_cores;
+    virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -585,6 +588,7 @@ void removeFabricMuxEvents(
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>& coalesced_events,
     const CoreCoord& fabric_mux_core) {
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>> filtered_events;
+    filtered_events.reserve(coalesced_events.size());
     for (const auto& coalesced_event : coalesced_events) {
         if (std::holds_alternative<tracy::TTDeviceMarker>(coalesced_event)) {
             auto event = std::get<tracy::TTDeviceMarker>(coalesced_event);
@@ -1214,7 +1218,8 @@ bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
 }
 
 bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id) {
-    return MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
+    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch() &&
+           MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
            !isGalaxyMMIODevice(mesh_device, device);
 }
 
@@ -2588,7 +2593,9 @@ void DeviceProfiler::pushTracyDeviceResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState(context_id) ||
-        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy()) {
+        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy() ||
+        // TODO: Quasar is CSV-only for now
+        device_arch == tt::ARCH::QUASAR) {
         return;
     }
 
@@ -2931,6 +2938,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Figure out which DRAM profiler addresses need to be read
     std::set<uint8_t> stalled_dram_buffer_indices;
     std::vector<CoreCoord> virtual_cores_with_data;
+    virtual_cores_with_data.reserve(stalled_cores_with_data.size());
     for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
         virtual_cores_with_data.push_back(virtual_core);
         for (const auto& risc_type : risc_types) {
@@ -2967,6 +2975,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Remaining L1 data not flushed to DRAM yet
     if (is_final_poll) {
         std::vector<CoreCoord> cores_with_l1_data;
+        cores_with_l1_data.reserve(virtual_cores.size());
         std::map<CoreCoord, std::set<tracy::RiscType>> riscs_with_l1_data;
 
         for (const auto& virtual_core : virtual_cores) {

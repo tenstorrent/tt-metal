@@ -12,7 +12,6 @@
 #include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 

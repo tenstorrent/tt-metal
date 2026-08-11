@@ -38,6 +38,9 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
-    std::optional<tt::tt_metal::DataType> dtype = std::nullopt);
+    std::optional<tt::tt_metal::DataType> dtype = std::nullopt,
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
+    std::optional<uint32_t> mm_window_blocks = std::nullopt,
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt);
 
 }  // namespace ttnn::experimental

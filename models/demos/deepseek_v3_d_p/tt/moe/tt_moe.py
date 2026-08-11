@@ -211,6 +211,7 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
             self.row_num_links, self.col_num_links = num_links
@@ -223,6 +224,10 @@ class TtMoe(LightweightModule):
             self.row_topology = self.col_topology = topology
 
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
+        # sub-device load/clear go through it so the trace can be split at those boundaries instead of
+        # resetting worker state mid-capture. None => load/clear the mesh device directly.
+        self._trace_controller = None
 
         # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
         # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
@@ -438,12 +443,28 @@ class TtMoe(LightweightModule):
 
         logger.debug("TtMoe initialization complete")
 
+    def set_trace_controller(self, controller):
+        """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
+        dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
+        be split at those boundaries (see utils/sub_device_trace.py)."""
+        self._trace_controller = controller
+
+    def release_sub_device_manager(self):
+        """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
+        before closing the mesh device — leaving managers registered at close has been observed to
+        segfault the teardown. Idempotent."""
+        if getattr(self, "sd_manager_id", None) is not None:
+            self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
+            self.sd_manager_id = None
+
     def forward(
         self,
         x: ttnn.Tensor,
         return_intermediates: bool = False,
         actual_isl: int = None,
         padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata: Optional[tuple] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -453,8 +474,21 @@ class TtMoe(LightweightModule):
                - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
                - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
             return_intermediates: If True, return intermediate tensors for debugging
-            actual_isl: Actual ISL of the sequence (None = no padding)
+            actual_isl: Actual ISL of the sequence (None = no padding). Doubles as the padding-config
+                GUARD: not-None enables padding awareness. On the traced path (`metadata` set) that is
+                its ONLY role — pass the full chunk, since the real per-chunk bound is read on-device
+                from the metadata tensors and this value is unused.
             padding_side: Padding side of the sequence
+            actual_start: chunked-prefill absolute KV position of this chunk's first real token
+                (None/0 = single-shot, sequential SP layout). Required for correct per-chip real-token
+                counts: chunked prefill feeds the KV-pad-aware ROTATED block-cyclic layout, where a
+                chip's real rows are NOT its slice of the natural sequence. See build_padding_config.
+            metadata: the traced path's (slot_id, actual_start, actual_end) tuple of 1-element uint32
+                device tensors. When given, the padding config is built ON DEVICE from them
+                (build_padding_config_device) instead of on host — the host builder's from_torch is
+                illegal inside a trace capture, and a config baked in at capture time would be wrong
+                for every later chunk. Ignored unless padding awareness is active (actual_isl set and
+                a DEVICE_FP32 gate).
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -468,8 +502,6 @@ class TtMoe(LightweightModule):
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
-        # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
-
         # Padding awareness is only validated/safe for RIGHT padding. With right padding,
         # real tokens have the lowest indices, so they are packed first in every expert
         # region and stay within the shortened FFN/dispatch bound. For left padding the
@@ -477,6 +509,12 @@ class TtMoe(LightweightModule):
         # gate modes) are dispatched first, so a shortened bound could drop real tokens.
         # Disable padding awareness for left padding and process the full (always-correct)
         # token range by clearing actual_isl for the rest of this forward.
+        #
+        # Under trace this stays ON: the captured (metadata) forward always passes the FULL chunk as
+        # actual_isl, so build_padding_config yields a single full-range config that the memoization
+        # below builds once during warm-up — the replayed command stream contains no host transfer.
+        # Only the eager/scalar paths pass a partial actual_isl, and that is the rotated-padded path
+        # #51440 fixed.
         if actual_isl is not None and padding_side != "right":
             logger.warning(
                 "[TtMoe.forward] padding-aware MoE is only supported for right padding; "
@@ -490,25 +528,45 @@ class TtMoe(LightweightModule):
         # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
+        #
+        # NOTE on `actual_isl` in this guard: it plays two DIFFERENT roles depending on the path.
+        #   * eager/scalar: it is BOTH the guard (not-None => padding awareness on) AND the actual
+        #     bound handed to the host builder below.
+        #   * traced (metadata set): it is ONLY the guard. The real per-chunk bound is read on-device
+        #     from the metadata tensors, so the caller passes the FULL chunk here (see
+        #     TtPrefillRuntime._forward_traced, actual_isl=chunk_size) purely to say "padding
+        #     awareness is ON" — its VALUE is deliberately unused. That is what keeps the guard
+        #     itself trace-safe: it is a static, capture-time decision (one captured program either
+        #     has the padding-aware ops or it does not), while the values that change per chunk stay
+        #     on-device. A caller that wanted padding awareness OFF under trace would pass
+        #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
         if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
-            padding_config = self.gate.build_padding_config(actual_isl, padding_side)
+            if metadata is not None:
+                # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
+                # the config with the device op. The host builder's from_torch cannot run inside a
+                # capture, and a config baked in at capture time would be wrong for every later chunk.
+                # `actual_isl` is NOT forwarded here — only the guard above consumed it; the op derives
+                # the real bound from actual_start/actual_end itself.
+                # Raises for is_balanced=True (not expressible in the op's closed form).
+                padding_config = self.gate.build_padding_config_device(metadata, padding_side)
+            else:
+                padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
 
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
             actual_isl=actual_isl,
             padding_side=padding_side,
             padding_config=padding_config,
+            actual_start=actual_start or 0,
         )
 
-        signpost(header="moe_gate_calculate_dispatch_offsets")
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
-            seq_len_per_chip=self.seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -560,7 +618,10 @@ class TtMoe(LightweightModule):
 
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(self.sd_manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -586,11 +647,14 @@ class TtMoe(LightweightModule):
             padding_config=padding_config,
         )
         if self.overlap_shared_expert_with_dispatch:
-            self.mesh_device.clear_loaded_sub_device_manager()
-        # padding_config was shared with both the gate and dispatch; free it now that
-        # dispatch (its last consumer) has been issued.
-        if padding_config is not None:
-            ttnn.deallocate(padding_config)
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
+        # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
+        # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
+        # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
         x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)

@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {
@@ -148,19 +149,11 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-build the descriptor for this coord and let the framework copy
-        // its per-core / common runtime args (and patch dynamic CB addresses)
-        // onto the cached Program — same scheme as the legacy
-        // override_runtime_args path, but driven by ProgramDescriptor.  CB
-        // total_size/page_size are not re-applied on cache hit, so any sizing
-        // that varies across calls must be folded into compute_program_hash().
-        std::visit(
-            [&](auto&& program_factory) {
-                using Factory = std::decay_t<decltype(program_factory)>;
-                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-                tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
-            },
-            shared_variables.slice_program_factory);
+        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
+        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
+        // sizing that varies across calls must be in compute_program_hash().
+        ttnn::prim::patch_slice_program_addresses(
+            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
     }
 }
 

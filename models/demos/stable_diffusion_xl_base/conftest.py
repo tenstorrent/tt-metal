@@ -14,7 +14,7 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMAL
 
 @pytest.fixture(autouse=True)
 def set_mm_throttle(request):
-    if is_blackhole() or "clip_encoder" in request.node.nodeid:
+    if is_blackhole() or "clip_encoder" in request.node.nodeid or "test_sdxl_op_unit_test_perf" in request.node.nodeid:
         os.environ["TT_MM_THROTTLE_PERF"] = "0"
     else:
         os.environ["TT_MM_THROTTLE_PERF"] = "5"

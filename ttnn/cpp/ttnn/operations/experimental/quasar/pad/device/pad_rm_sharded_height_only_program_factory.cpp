@@ -30,9 +30,11 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
     if (values.empty()) {
         return chunks;
     }
+    chunks.reserve(values.size());
 
     // Initialize the first chunk
     std::vector<uint32_t> current_chunk;
+    current_chunk.reserve(values.size());
     current_chunk.push_back(values[0]);
 
     for (size_t i = 1; i < values.size(); ++i) {
@@ -92,6 +94,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // figure out the start read stick id for each core, and the start id for each dim
         std::vector<int> stick_ids_per_core;
+        stick_ids_per_core.reserve(num_sticks_per_core_padded);
         int front_pad_stick_id = -2;
         int pad_stick_id = -1;
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
@@ -162,6 +165,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
+        // num_cores + (noc x, noc y, num_chunks) per core + (start id, length) per chunk, where a chunk
+        // holds at least one stick
+        reader_kernel_args.reserve(1 + (3 * core_stick_map.size()) + (2 * num_sticks_per_core_padded));
         reader_kernel_args.push_back(core_stick_map.size());  // num_cores
 
         for (const auto& core_stick_pair : core_stick_map) {
@@ -177,6 +183,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        stick_chunks_per_core.reserve(core_stick_map.size());
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_and_repeated_values(core_stick_pair.second);
             stick_chunks_per_core.push_back(stick_chunks);
@@ -189,7 +196,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             }
         }
 
-        ret_val[i] = {reader_kernel_args, writer_kernel_args};
+        ret_val[i] = {std::move(reader_kernel_args), std::move(writer_kernel_args)};
     }
 
     return ret_val;
@@ -327,7 +334,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
              {"row_major_min_bytes", row_major_min_bytes},
              {"num_sticks_padded_read", static_cast<uint32_t>(stick_size_padded / row_major_min_bytes)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -357,7 +365,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
                   "start_dim_h",
                   "start_dim_c",
                   "start_dim_n"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------

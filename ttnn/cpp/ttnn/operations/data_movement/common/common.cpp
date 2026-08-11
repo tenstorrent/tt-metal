@@ -420,10 +420,13 @@ uint32_t get_estimated_size_of_cbs(
     const Tensor& /*input_tensor_a*/,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
+    const uint32_t num_tiles_per_row,
+    const uint32_t staging_bytes_per_tile,
+    const uint32_t fixed_staging_bytes) {
     uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
     uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
-    return cb_src0_size + cb_output_size;
+    uint32_t cb_staging_size = staging_bytes_per_tile * num_tiles_per_row + fixed_staging_bytes;
+    return cb_src0_size + cb_output_size + cb_staging_size;
 }
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -438,10 +441,17 @@ bool is_enough_space(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
+    const uint32_t num_tiles_per_row,
+    const uint32_t staging_bytes_per_tile,
+    const uint32_t fixed_staging_bytes) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    uint32_t estimated_size_of_cbs =
-        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(
+        input_tensor_a,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        staging_bytes_per_tile,
+        fixed_staging_bytes);
     return max_l1_space > estimated_size_of_cbs;
 }
 
@@ -707,6 +717,19 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     }
     const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
     return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
+}
+
+uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
+    const auto& mc = t.memory_config();
+    if (mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                            mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED)) {
+        const auto& spec = mc.shard_spec().value();
+        return spec.shape[1] * t.element_size();
+    }
+    if (mc.is_sharded()) {
+        return static_cast<uint32_t>(t.buffer()->aligned_page_size());
+    }
+    return row_bytes;
 }
 
 }  // namespace ttnn::operations::data_movement

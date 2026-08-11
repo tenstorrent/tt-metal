@@ -31,6 +31,7 @@ on:
           - shallow-unet
           - gpt-oss-20b
           - sdxl
+          - vit
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -122,7 +123,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:

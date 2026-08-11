@@ -144,7 +144,7 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& 
 {
     const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
     const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS));
-    const std::uint32_t MOP_INNER_LOOP          = to_underlying(MATH_FIDELITY_TYPE) + 1;
+    constexpr std::uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
     constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);

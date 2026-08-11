@@ -167,7 +167,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     // Reader kernel: produces the resident input shard into the borrowed INPUT DFB (fake-push).
     KernelSpec reader{
         .unique_id = S2I_READER,
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     reader.source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
@@ -179,7 +180,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     KernelSpec writer{
         .unique_id = S2I_WRITER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = S2I_OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     writer.dfb_bindings = {ConsumerOf(writer_in_dfb, "out")};
     if (is_tile) {

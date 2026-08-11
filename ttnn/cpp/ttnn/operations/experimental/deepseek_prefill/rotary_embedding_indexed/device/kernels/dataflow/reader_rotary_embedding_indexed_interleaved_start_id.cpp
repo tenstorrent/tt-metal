@@ -5,11 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-// Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE.
+// Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE,
+// on the Metal 2.0 named-arg API.
 //
 // The cos/sin caches are SP-sharded in block-cyclic order keyed by the per-device chunk size
 // (chunk_local == Ht), so each device's shard already holds, in contiguous local-row order, the
@@ -19,55 +21,60 @@
 // (older tokens finishing the current slab block, then newer tokens spilling into the next block)
 // is absorbed by the shard layout, so the read stays contiguous.
 //
-// `kv_actual_global` is a per-call scalar common runtime arg (NOT in the program hash). The op's
-// MeshWorkloadFactory::override_runtime_arguments patches it on cache hits, so successive chunks with
-// different prior KV lengths reuse one cached program while the value is always current.
+// my_sp_coord / sp_factor are baked per-device compile-time args (each device's program is built for
+// its own mesh coordinate). The per-call kv_actual_global reaches the reader one of two ways, selected
+// by the HAS_METADATA compile-time flag (set by the op from whether a metadata tensor was supplied; both
+// keep the value out of the program hash so one cached program is reused across chunks):
+//   - scalar path: a common runtime arg (patched on cache hits by override_runtime_arguments).
+//   - metadata path (HAS_METADATA): NoC-read of element [0] of a 1-element uint32 tensor bound as
+//     tensor::metadata, so a captured trace advances the value via an in-place host update.
 void kernel_main() {
-    uint32_t argrt = 0;
-    uint32_t src_addr = get_arg_val<uint32_t>(argrt++);
-    uint32_t cos_addr = get_arg_val<uint32_t>(argrt++);
-    uint32_t sin_addr = get_arg_val<uint32_t>(argrt++);
-    uint32_t trans_mat_addr = get_arg_val<uint32_t>(argrt++);
-    uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_start = get_arg_val<uint32_t>(argrt++);
-    uint32_t seq_t_end = get_arg_val<uint32_t>(argrt++);
-
-    // Common runtime args (same for all cores on this chip): this chip's index along the SP axis and
-    // the SP extent. Both are structural (per cached program / mesh coord), not per-call values.
-    const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
-    const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
-    // kv_actual_global (prior valid global KV length in tokens) is the only per-call value. It is a
-    // common runtime arg patched on cache hits by MeshWorkloadFactory::override_runtime_arguments, so
-    // it is never stale and stays out of the program hash.
-    const uint32_t kv_actual_global = get_common_arg_val<uint32_t>(2);
-
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t n_heads = get_compile_time_arg_val(4);
-    constexpr uint32_t Ht = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t cos_Ht = get_compile_time_arg_val(8);
-    constexpr uint32_t sin_Ht = get_compile_time_arg_val(9);
-    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(11);
-    constexpr auto input_args = TensorAccessorArgs<12>();
-    constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
-    constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
-
     Noc noc;
-    CircularBuffer input_cb(input_cb_id);
-    CircularBuffer cos_cb(cos_cb_id);
-    CircularBuffer sin_cb(sin_cb_id);
-    CircularBuffer trans_mat_cb(trans_mat_cb_id);
+
+    auto batch_start = get_arg(args::batch_start);
+    auto batch_end = get_arg(args::batch_end);
+    auto seq_t_start = get_arg(args::seq_t_start);
+    auto seq_t_end = get_arg(args::seq_t_end);
+
+    constexpr auto n_heads = get_arg(args::n_heads);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr bool freq_per_head = get_arg(args::freq_per_head) == 1;
+    constexpr auto cos_Ht = get_arg(args::cos_Ht);
+    constexpr auto sin_Ht = get_arg(args::sin_Ht);
+    constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    // Per-device structural constants, baked when this device's program is built for its coordinate.
+    constexpr auto my_sp_coord = get_arg(args::my_sp_coord);
+    constexpr auto sp_factor = get_arg(args::sp_factor);
+
+#ifdef HAS_METADATA
+    // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
+    // #ifdef-gated because tensor::metadata / dfb::meta are bound only on the metadata program.
+    const auto s_meta = TensorAccessor(tensor::metadata);
+    DataflowBuffer dfb_meta(dfb::meta);
+    dfb_meta.reserve_back(1);
+    uint32_t meta_l1_write_addr = dfb_meta.get_write_ptr();
+    noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1_write_addr), 4, {.page_id = 0}, {});
+    noc.async_read_barrier();
+    // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
+    // the host updates its contents in place each chunk. After the NoC writes the fresh value into
+    // this core's dfb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
+    // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
+    // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
+    // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
+    // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
+    // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
+    invalidate_l1_cache();
+    CoreLocalMem<volatile uint32_t> meta(meta_l1_write_addr);
+    const uint32_t kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
+    dfb_meta.push_back(1);
+#else
+    const uint32_t kv_actual_global = get_arg(args::kv_actual_global);
+#endif
 
     // Convert the per-call kv_actual_global (tokens) to tiles.
     const uint32_t kv_actual_global_t = kv_actual_global / tile_height;
-
     // Derive this chip's tile-row offset into its (block-cyclic) cos/sin shard from the global
     // valid KV length. Ht == chunk_local_t (per-device new chunk in tiles); chunk_global == sp*Ht.
     // Identical math to the per-chip kv-cache writer's update_idxt -- see writer_update_padded_kv_cache.
@@ -86,37 +93,38 @@ void kernel_main() {
     const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
 
     constexpr uint32_t onetile = 1;
-    const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const auto s0 = TensorAccessor(input_args, src_addr);
 
-    const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const auto s1 = TensorAccessor(cos_args, cos_addr);
+    const auto s0 = TensorAccessor(tensor::input);
+    const auto s1 = TensorAccessor(tensor::cos);
+    const auto s2 = TensorAccessor(tensor::sin);
+    const auto s3 = TensorAccessor(tensor::trans_mat);
 
-    const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const auto s2 = TensorAccessor(sin_args, sin_addr);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_cos(dfb::cos);
+    DataflowBuffer dfb_sin(dfb::sin);
+    DataflowBuffer dfb_trans_mat(dfb::trans_mat);
 
-    const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-    const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
-
-    uint32_t trans_mat_curr_idx = 0;
+    const uint32_t input_tile_bytes = dfb_input.get_entry_size();
+    const uint32_t cos_tile_bytes = dfb_cos.get_entry_size();
+    const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
+    const uint32_t trans_mat_tile_bytes = dfb_trans_mat.get_entry_size();
 
     // Read transformation matrix in CB (only once, because it will be reused)
-    trans_mat_cb.reserve_back(onetile);
-    uint32_t trans_mat_l1_write_addr = trans_mat_cb.get_write_ptr();
-    noc.async_read(
-        s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = trans_mat_curr_idx}, {});
+    dfb_trans_mat.reserve_back(onetile);
+    uint32_t trans_mat_l1_write_addr = dfb_trans_mat.get_write_ptr();
+    noc.async_read(s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = 0}, {});
     noc.async_read_barrier();
-    trans_mat_cb.push_back(onetile);
+    dfb_trans_mat.push_back(onetile);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         uint32_t sin_l1_write_addr = 0;
         uint32_t cos_l1_write_addr = 0;
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            sin_cb.reserve_back(my_cos_sin_tiles);
-            cos_cb.reserve_back(my_cos_sin_tiles);
-            sin_l1_write_addr = sin_cb.get_write_ptr();
-            cos_l1_write_addr = cos_cb.get_write_ptr();
+            dfb_sin.reserve_back(my_cos_sin_tiles);
+            dfb_cos.reserve_back(my_cos_sin_tiles);
+            sin_l1_write_addr = dfb_sin.get_write_ptr();
+            cos_l1_write_addr = dfb_cos.get_write_ptr();
         }
 #endif
 
@@ -127,14 +135,14 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
-                sin_cb.reserve_back(Wt);
-                cos_cb.reserve_back(Wt);
-                uint32_t sin_l1_write_addr = sin_cb.get_write_ptr();
-                uint32_t cos_l1_write_addr = cos_cb.get_write_ptr();
+                dfb_sin.reserve_back(Wt);
+                dfb_cos.reserve_back(Wt);
+                uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
+                uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
 #endif
 
-                input_cb.reserve_back(Wt);
-                uint32_t input_l1_write_addr = input_cb.get_write_ptr();
+                dfb_input.reserve_back(Wt);
+                uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 // Offset the cos/sin source index by update_idxt: the input local tile `seq_tile`
                 // is rotated by the value at shard row (update_idxt + seq_tile).
@@ -180,19 +188,16 @@ void kernel_main() {
                 }
 
                 noc.async_read_barrier();
-                input_cb.push_back(Wt);
+                dfb_input.push_back(Wt);
 #if RELOAD_IMPL == 1
-                sin_cb.push_back(Wt);
-                cos_cb.push_back(Wt);
+                dfb_sin.push_back(Wt);
+                dfb_cos.push_back(Wt);
 #else
-
                 if (!done_sin_cos) {
-                    sin_cb.push_back(Wt);
-                    cos_cb.push_back(Wt);
-
+                    dfb_sin.push_back(Wt);
+                    dfb_cos.push_back(Wt);
                     // Update sin_cos_row_cnt
                     sin_cos_row_cnt++;
-
                     if (sin_cos_row_cnt == my_rotary_seq_tiles) {
                         done_sin_cos = true;
                     }

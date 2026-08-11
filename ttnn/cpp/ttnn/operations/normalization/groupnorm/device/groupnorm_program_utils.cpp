@@ -4,10 +4,169 @@
 
 #include "groupnorm_program_utils.hpp"
 
+#include <bit>
+#include <cmath>
 #include <limits>
 #include <algorithm>
 
 namespace ttnn::prim {
+
+uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
+    const float sc = 1.0f / std::sqrt(
+                                static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) /
+                                static_cast<float>(padded_hw));
+    return std::bit_cast<uint32_t>(sc);
+}
+
+GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint32_t padded_hw, bool use_welford) {
+    // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
+    // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
+    // non-tile-aligned Welford requests to the two-pass path instead.
+    GroupNormPadCorrection pad;
+    pad.active = !use_welford && (logical_hw != padded_hw);
+    pad.logical_hw = logical_hw;
+    pad.padded_hw = padded_hw;
+    pad.kernel_logical_hw = pad.active ? logical_hw : padded_hw;
+    pad.k_bits = std::bit_cast<uint32_t>(static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f);
+    return pad;
+}
+
+void append_group_norm_pad_correction_cbs(
+    tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs,
+    const GroupNormPadCorrection& pad,
+    std::array<uint32_t, 3> cb_indices,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    tt::DataFormat data_format,
+    uint32_t single_tile_size) {
+    if (!pad.active) {
+        return;
+    }
+    for (uint32_t cb_index : cb_indices) {
+        cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = single_tile_size,
+            .core_ranges = core_ranges,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
+}
+
+bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
+    return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
+        return format != tt::DataFormat::Float16_b;
+    });
+}
+
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt) {
+    // Mirrors how the kernel pads num_out_blocks: a leftover remainder becomes extra full-size blocks.
+    const uint32_t out_block_h_normal = block_ht / num_out_blocks;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    if (block_ht % num_out_blocks != 0) {
+        const uint32_t residual = block_ht - num_out_blocks * out_block_h_normal;
+        num_out_blocks_padded += residual / out_block_h_normal + 1;
+    }
+    return num_out_blocks_padded * out_block_h_normal * block_wt;
+}
+
+uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores) {
+    constexpr uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
+    constexpr uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
+    if (num_virtual_cores == 0) {
+        return 1;
+    }
+    uint32_t heuristic = volume / (HEURISTIC_BLOCK_SIZE_BASE * num_virtual_cores);
+    heuristic = heuristic ? heuristic : 1;
+    uint32_t num_out_blocks = 1;
+    while (num_out_blocks < heuristic && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
+        num_out_blocks <<= 1;
+    }
+    return num_out_blocks;
+}
+
+bool groupnorm_legacy_rm_input_fits_l1(
+    uint32_t Ht,
+    uint32_t W,
+    uint32_t per_batch_hw,
+    uint32_t num_batches,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t num_groups,
+    int num_out_blocks_arg,
+    uint32_t tile_width,
+    uint32_t single_tile_size,
+    bool has_gamma,
+    bool has_beta,
+    bool tilize_in,
+    bool untilize_out,
+    uint64_t available_l1) {
+    // Grid geometry, same formulas as the program factory.
+    uint32_t num_virtual_cols = std::min(grid_x, num_groups);
+    while (num_virtual_cols > 0 && ((W / num_virtual_cols) % tile_width != 0 || (num_groups % num_virtual_cols) != 0)) {
+        num_virtual_cols -= 1;
+    }
+    if (num_virtual_cols == 0) {
+        return false;  // Invalid grid; report "does not fit" (fall back to the composite path)
+    }
+    const uint32_t num_virtual_rows = (grid_x / num_virtual_cols) * grid_y;
+    if (num_virtual_rows == 0 || Ht < num_virtual_rows) {
+        return false;
+    }
+    const uint32_t per_core_Mt = Ht / num_virtual_rows;
+    const uint32_t per_core_N = W / num_virtual_cols;
+    const uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
+    const uint32_t num_channels_per_group = W / num_groups;
+
+    const uint32_t block_wt = find_max_tile_span(per_core_N, num_channels_per_group).first;
+    // Per-core tile height: many batches per core, or one batch split across rows.
+    const uint32_t block_ht = (num_batches >= num_virtual_rows) ? (Ht / num_batches) : per_core_Mt;
+    if (block_ht == 0) {
+        return false;
+    }
+
+    // num_out_blocks: -1 means use the factory's power-of-two heuristic.
+    uint32_t num_out_blocks;
+    if (num_out_blocks_arg < 0) {
+        num_out_blocks = groupnorm_heuristic_num_out_blocks(per_batch_hw * W, num_virtual_cols * num_virtual_rows);
+    } else {
+        num_out_blocks = num_out_blocks_arg == 0 ? 1 : static_cast<uint32_t>(num_out_blocks_arg);
+    }
+    num_out_blocks = std::min(num_out_blocks, block_ht);
+
+    // CB footprint: seven per-out-block CBs, the resident group, and an allowance for the small ones.
+    const uint64_t in0_block_tiles = static_cast<uint64_t>(block_ht / num_out_blocks) * block_wt;
+    const uint64_t per_out_block_cb = in0_block_tiles * single_tile_size;
+    // Only a row-major input allocates the resident group.
+    const uint64_t resident_cb =
+        tilize_in ? static_cast<uint64_t>(groupnorm_tilized_group_tiles(block_ht, num_out_blocks, block_wt)) *
+                        single_tile_size
+                  : 0;
+
+    uint64_t est =
+        resident_cb + 7 * per_out_block_cb + static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+    if (has_gamma) {
+        est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+    }
+    if (has_beta) {
+        est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+    }
+    // Mask CB; a mask is always allocated. Assumes bf16 tiles, which over-estimates on purpose.
+    est += static_cast<uint64_t>(block_wt) * single_tile_size * 2;
+    if (untilize_out) {
+        est += 2 * per_out_block_cb;  // c_30 untilize out + c_20 reread
+    }
+
+    return est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
+}
+
+bool groupnorm_legacy_rm_prefer_composite_for_perf(
+    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches) {
+    const bool imbalanced =
+        num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
+    return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
+}
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
@@ -22,7 +181,7 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     return 1;
 }
 
-bool is_rectangle_grid(const std::vector<CoreCoord>& core_coords) {
+bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords) {
     if (core_coords.empty()) {
         return true;
     }
@@ -43,17 +202,17 @@ bool is_rectangle_grid(const std::vector<CoreCoord>& core_coords) {
 }
 
 void split_and_form_rectangle_grids(
-    std::vector<CoreCoord>& group,
-    std::vector<CoreCoord>& mcast_group_first,
-    std::vector<CoreCoord>& mcast_group_mid,
-    std::vector<CoreCoord>& mcast_group_last) {
+    std::vector<tt::tt_metal::CoreCoord>& group,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_mid,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_last) {
     size_t remove_front = 0;
     size_t remove_back = 0;
     size_t min_total_removal = group.size();
 
     for (size_t front = 0; front <= group.size(); ++front) {
         for (size_t back = 0; front + back <= group.size(); ++back) {
-            if (is_rectangle_grid(std::vector<CoreCoord>(group.begin() + front, group.end() - back))) {
+            if (is_rectangle_grid(std::vector<tt::tt_metal::CoreCoord>(group.begin() + front, group.end() - back))) {
                 size_t total_removal = front + back;
                 if (total_removal < min_total_removal) {
                     min_total_removal = total_removal;
