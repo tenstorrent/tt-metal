@@ -181,6 +181,14 @@ inline void apply_snake_beta(DataflowBuffer params_dfb) {
 
     params_dfb.wait_front(2);
 
+    // `copy_tile_to_dst_init_short` is the *short* init: it re-inits the datacopy MOP but does not
+    // reconfigure SrcA's data format, so the params tile is unpacked with whatever format SrcA was
+    // last set to. Measured symptom when it is stale: with alpha=inv_beta=1.0 the snake lands on odd
+    // channel columns only and even columns come back untouched, because a 4-byte fp32 datum is being
+    // consumed as two 2-byte ones -- the high half reads as the value and the zero low half as 0.
+    // Proof: setting the parameters to 0x3F803F80 (both 16-bit halves = bf16 1.0) makes the even
+    // columns apply at 100%. Force the full reconfig.
+    reconfig_data_format_srca(params_cb_id);
     copy_tile_to_dst_init_short(params_cb_id);
     copy_tile(params_cb_id, 0, dst_a);  // alpha
     mul_binary_tile_init();
@@ -191,6 +199,7 @@ inline void apply_snake_beta(DataflowBuffer params_dfb) {
     mul_binary_tile_init();
     mul_binary_tile(dst_a, dst_a, dst_a);  // sin^2
 
+    reconfig_data_format_srca(params_cb_id);
     copy_tile_to_dst_init_short(params_cb_id);
     copy_tile(params_cb_id, 1, dst_b);  // inv_beta
     mul_binary_tile_init();
