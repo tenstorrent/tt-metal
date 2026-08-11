@@ -99,6 +99,12 @@ CPMAddPackage(
         protobuf_noreturn.patch
 )
 
+# Conda's Clang searches the Pixi prefix before SYSTEM includes. Compile component-owned
+# protobuf against its own headers, not a different protobuf installed in that prefix.
+foreach(target libprotobuf-lite libprotobuf libprotoc protoc)
+    set_target_properties(${target} PROPERTIES SYSTEM FALSE)
+endforeach()
+
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
     # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
@@ -485,3 +491,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+
+# Pinned ELFIO uses uint*_t before including cstdint with current libstdc++.
+target_compile_options(ttexalens_elf PRIVATE -include cstdint)

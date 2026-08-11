@@ -144,8 +144,10 @@ add_dependencies(tt_metal hw_toolchain)
 set_target_properties(
     tt_metal
     PROPERTIES
+        BUILD_RPATH
+            "${TT_ULFM_PREFIX}/lib"
         INSTALL_RPATH
-            "/opt/openmpi-v5.0.7-ulfm/lib;${PROJECT_BINARY_DIR}/lib;$ORIGIN"
+            "${TT_ULFM_PREFIX}/lib;${PROJECT_BINARY_DIR}/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
