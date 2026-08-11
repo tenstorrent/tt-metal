@@ -260,6 +260,7 @@ class TtIndexer:
         slot_num: int = 1,
         layer_num: int = 1,
         first_layer_idx: int | None = None,
+        full_mesh_ring: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -275,9 +276,26 @@ class TtIndexer:
         self.mesh_device = mesh_device
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
+        if full_mesh_ring:
+            assert (
+                self.sp_axis == 0 and self.tp_axis == 1
+            ), "full_mesh ring_indexer_score_dsa integration assumes the canonical sp_axis=0, tp_axis=1 layout"
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
         self.tp_factor = mesh_shape[tp_axis]
+        self.full_mesh_ring = full_mesh_ring
+        self.ring_cluster_axis = None if full_mesh_ring else sp_axis
+        self._full_mesh_sequence_topology = None
+        if full_mesh_ring:
+            full_shape = ttnn.MeshShape(mesh_shape[0], mesh_shape[1])
+            self._full_mesh_sequence_topology = ttnn.TensorTopology(
+                full_shape,
+                [ttnn.PlacementShard(2), ttnn.PlacementShard(2)],
+                [
+                    ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+                    for coord in ttnn.MeshCoordinateRange(full_shape)
+                ],
+            )
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
@@ -296,6 +314,7 @@ class TtIndexer:
         # under an X-only torus (TP Ring, SP has no physical wrap) — mirrors ttMLA.
         self.sp_ccl_topology = sp_ccl_topology
         self.tp_ccl_topology = tp_ccl_topology
+        self.ring_ccl_topology = ttnn.Topology.Ring if full_mesh_ring else sp_ccl_topology
         # Indexer geometry comes from the config with no defaults: a sparse config that omits any of these
         # fields fails loudly here rather than silently binding a wrong-shaped indexer.
         _required = ("index_n_heads", "index_head_dim", "index_topk", "index_rope_interleave")
@@ -578,8 +597,16 @@ class TtIndexer:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+        if self.full_mesh_ring:
+            # K is TP-replicated after the hidden-dimension reduction. Split each SP slab over TP so
+            # canonical row-major device rank (sp_rank * tp + tp_rank) owns one unique sequence slab.
+            k_sp = k
+            k = ttnn.mesh_partition(k, dim=2, cluster_axis=self.tp_axis)
+            ttnn.deallocate(k_sp)
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
+        if self.full_mesh_ring:
+            k.update_tensor_topology(self._full_mesh_sequence_topology)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             index_kbuf,
             k,
@@ -587,7 +614,7 @@ class TtIndexer:
             layer_idx=cache_layer_idx,
             num_layers=self._index_cache_layers,
             kv_actual_global=start_pos,
-            cluster_axis=self.sp_axis,
+            cluster_axis=self.ring_cluster_axis,
         )
         ttnn.deallocate(k)
 
@@ -694,6 +721,9 @@ class TtIndexer:
             )  # release the full-S slabs once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
             weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),1]
+            if self.full_mesh_ring:
+                q_dev.update_tensor_topology(self._full_mesh_sequence_topology)
+                weights.update_tensor_topology(self._full_mesh_sequence_topology)
             ttnn.deallocate(q_full)
             ttnn.deallocate(weights_full)
             sq_local = seq_len // self.tp_factor
@@ -722,23 +752,23 @@ class TtIndexer:
         # Pass the persistent multi-slot ND-sharded cache directly. The fused gather selects only
         # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
         # by kv_len; the score reader addresses its own shard directly in the original ND cache.
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
+        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, cluster_axis=self.ring_cluster_axis)
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
             weights,
             index_kv_cache,
-            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            cluster_axis=self.sp_axis,
-            topology=self.sp_ccl_topology,
+            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.ring_cluster_axis),
+            cluster_axis=self.ring_cluster_axis,
+            topology=self.ring_ccl_topology,
             num_links=self.ccl_num_links,
             chunk_start_idx=start_pos,
             program_config=cfg,
-            seq_subshard_axis=self.tp_axis if tpsp else None,
+            seq_subshard_axis=self.tp_axis if (tpsp and not self.full_mesh_ring) else None,
             cache_batch_idx=cache_batch_idx,
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,
+            block_cyclic_sp_axis=None if self.full_mesh_ring else self.sp_axis,
+            block_cyclic_chunk_local=seq_len // self.tp_factor if self.full_mesh_ring else seq_len,
             kv_len=end_pos,
         )
         if host_start is not None:

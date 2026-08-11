@@ -82,6 +82,9 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
+    # Explicit experimental opt-in. Dense MLA uses a full-mesh ring_mla cache/layout; sparse DSA
+    # keeps the primary sparse-SDPA cache on SP and moves only the indexer ring/cache to full mesh.
+    full_mesh_ring: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -131,6 +134,14 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        if config.full_mesh_ring:
+            mesh_rows, mesh_cols = config.mesh_shape
+            assert mesh_rows > 1 and mesh_cols > 1, "full_mesh_ring requires a 2D mesh with both dimensions > 1"
+            assert mesh_rows * mesh_cols <= 32, "full_mesh_ring currently supports at most 32 devices"
+            assert (mesh_rows % 2 == 0) or (mesh_cols % 2 == 0), "full_mesh_ring requires an even mesh dimension"
+            assert (
+                config.chunk_size % (ttnn.TILE_SIZE * mesh_rows * mesh_cols) == 0
+            ), "full_mesh_ring chunk_size must be divisible by TILE_SIZE * mesh_size"
 
         self.model_built = False
         self.compiled = False
@@ -165,7 +176,8 @@ class TtPrefillRuntime:
             f"num_layers={self.config.num_layers}, first_layer_idx={self.config.first_layer_idx}, "
             f"is_first_rank={self.config.is_first_rank}, is_last_rank={self.config.is_last_rank}, "
             f"max_seq_len={self.config.max_seq_len}, mesh_shape={self.config.mesh_shape}, "
-            f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}"
+            f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}, "
+            f"full_mesh_ring={self.config.full_mesh_ring}"
         )
         model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
@@ -222,6 +234,7 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            full_mesh_ring=self.config.full_mesh_ring,
         )
         self.model_built = True
 
@@ -578,6 +591,11 @@ class TtPrefillRuntime:
         assert (
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+        if self.config.full_mesh_ring:
+            assert actual_start % self.config.chunk_size == 0, (
+                "full_mesh_ring currently requires fixed, chunk-aligned scheduling; "
+                f"got actual_start={actual_start}, chunk_size={self.config.chunk_size}"
+            )
 
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
@@ -799,6 +817,11 @@ class TtPrefillRuntime:
         ``2 * num_kv_heads`` further named configs (see the gate below)."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
+        assert not self.config.full_mesh_ring, (
+            "KV migration tables do not yet encode full-mesh row-major cache ownership; disable "
+            "PREFILL_FULL_MESH_RING for migration qualification"
+        )
+
         # DFlash: register the drafter's context K/V as further configs of the same merged table, so a
         # device-less consumer (prefill_producer) can read them back per (layer, head) and PCC them
         # against the golden trace exactly like the verifier's caches. Only when this rank actually owns
@@ -856,10 +879,11 @@ class TtPrefillRuntime:
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
         """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor
-        ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica), in the raw on-device (block-cyclic) layout —
-        not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
-        ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
-        read-back."""
+        ``[num_layers, 1, seq_cache, kvpe]``. Axis mode selects one TP replica; dense full-mesh mode
+        composes every canonical row-major sequence shard. The result remains in the raw on-device
+        (block-cyclic) layout, not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is
+        REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes
+        the DRAM core on host read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
@@ -867,9 +891,17 @@ class TtPrefillRuntime:
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
         # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        # Full-mesh composition differs per cache. Dense full-mesh redistributes the primary (KVPE)
+        # cache over every mesh coordinate, while sparse full-mesh indexer mode leaves the primary
+        # cache on the SP axis and redistributes only the indexer's index cache. Compose each with
+        # its own predicate rather than one shared flag.
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_sequence_cache_mesh_composer
 
-        def _slot_block(tensor, rows_per_slot: int):
+        has_indexer = self.model._has_indexer
+        primary_full_mesh = self.config.full_mesh_ring and not has_indexer
+        index_full_mesh = self.config.full_mesh_ring and has_indexer
+
+        def _slot_block(tensor, rows_per_slot: int, full_mesh: bool):
             """This slot's rows of a user-major cache, gathered to host as one TP replica:
             [rows_per_slot, 1, seq_cache, row]. `rows_per_slot` differs per cache — see below."""
             s = list(tensor.shape)
@@ -879,11 +911,18 @@ class TtPrefillRuntime:
                 [(slot + 1) * rows_per_slot, s[1], s[2], s[3]],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            host = ttnn.to_torch(sl, mesh_composer=composer)[:, :1]
+            # The composer collapses the replica axis itself (dims=(2, -1)), so the trailing [:, :1]
+            # is a no-op guard rather than the replica selection it performed with ConcatMesh2dToTensor.
+            host = ttnn.to_torch(
+                sl,
+                mesh_composer=create_sequence_cache_mesh_composer(
+                    mesh_device, self.config.sp_axis, full_mesh=full_mesh
+                ),
+            )[:, :1]
             ttnn.deallocate(sl)
             return host
 
-        physical = _slot_block(kvpe.storage, num_layers)
+        physical = _slot_block(kvpe.storage, num_layers, primary_full_mesh)
         blocks = [kvpe.unpack_host(physical).to(torch.float32)]  # [num_layers, 1, seq_cache, kvpe_logical]
         if kv_caches.index is not None:
             # Sparse/DSA second cache (the lightning-indexer keys). Returned so a slot-vs-slot
@@ -897,7 +936,7 @@ class TtPrefillRuntime:
             # dequantizes on to_torch).
             index = kv_caches.index
             rows_per_slot = index.shape[0] // self.config.num_users
-            blocks.append(_slot_block(index, rows_per_slot).to(torch.float32))
+            blocks.append(_slot_block(index, rows_per_slot, index_full_mesh).to(torch.float32))
         return blocks
 
     def kv_cache_pcc_check(

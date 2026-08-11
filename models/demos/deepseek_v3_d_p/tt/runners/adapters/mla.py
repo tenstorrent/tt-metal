@@ -104,6 +104,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                full_mesh=params.full_mesh_ring,
             )
         )
 
@@ -144,6 +145,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            full_mesh_ring=params.full_mesh_ring,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

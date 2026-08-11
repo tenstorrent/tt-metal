@@ -38,7 +38,12 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     partition_iters,
     resolve_traces,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    create_sequence_cache_mesh_composer,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -470,6 +475,23 @@ def test_ds_mla(
 # users -- for a trace that is not the variant's registered one.
 MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
 
+
+def _full_mesh_model_test_cases():
+    """Use the complete physical mesh so FABRIC_2D does not train links outside an opened submesh."""
+    mesh_by_devices = {4: (2, 2), 8: (2, 4), 32: (8, 4)}
+    num_devices = ttnn.get_num_devices()
+    if num_devices in mesh_by_devices:
+        mesh = mesh_by_devices[num_devices]
+        return [pytest.param(mesh, id=f"{mesh[0]}x{mesh[1]}")]
+    return [
+        pytest.param(
+            (1, max(num_devices, 1)),
+            marks=pytest.mark.skip(reason=f"no full-mesh model-test shape for {num_devices} devices"),
+            id=f"unsupported-{num_devices}",
+        )
+    ]
+
+
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
 # (sp=8, chunk_local=640, chunk=5120). Each cumulative kv_actual lands on a distinct rotation edge:
 # which chip the boundary falls on (0..7), chip-aligned vs mid-chip straddle (offset != 0), single vs
@@ -525,6 +547,7 @@ def _run_chunked_prefill(
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
+    full_mesh_ring=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -553,6 +576,7 @@ def _run_chunked_prefill(
         topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
+    cache_sp = mesh_device.get_num_devices() if full_mesh_ring else sp
     tile = ttnn.TILE_SIZE
     chunk_local = chunk_size_global // sp
 
@@ -652,6 +676,7 @@ def _run_chunked_prefill(
         active_seq_len=chunk_size_global,
         slot_num=num_users,
         layer_num=1,
+        full_mesh_ring=full_mesh_ring,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
@@ -666,6 +691,7 @@ def _run_chunked_prefill(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=num_users,
+        full_mesh=full_mesh_ring,
     )
 
     hidden_shard_dims = [None, None]
@@ -675,7 +701,10 @@ def _run_chunked_prefill(
     out_concat_dims[tp_axis] = -1
     out_concat_dims[sp_axis] = -2
     cache_shard_dims = [None, None]
-    cache_shard_dims[sp_axis] = 2
+    if full_mesh_ring:
+        cache_shard_dims = [2, 2]
+    else:
+        cache_shard_dims[sp_axis] = 2
 
     # ---- preload the prior prefix (trace or random) into each slot, block-cyclic ----
     if prefill_len > 0:
@@ -692,7 +721,9 @@ def _run_chunked_prefill(
                 kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
                     pe.shape[0], d
                 )
-            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, sp, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
+            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, cache_sp, chunk_size_global, seq_len_cache, kvpe_dim)[
+                0, 0
+            ]
         cache_host_tt = ttnn.from_torch(
             cache_host,
             dtype=ttnn.bfloat8_b,
@@ -853,11 +884,9 @@ def _run_chunked_prefill(
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
             tt_kvpe_cache.storage,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        ).to(torch.float32)[
-            :, :1
-        ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
-        p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
+            mesh_composer=create_sequence_cache_mesh_composer(mesh_device, sp_axis, full_mesh=full_mesh_ring),
+        ).to(torch.float32)
+        p = blockcyclic_positions(cache_sp, chunk_size_global, seq_len_cache)
         kv_lora = config.kv_lora_rank
         d = kvpe_dim - kv_lora
         for u in range(num_users):
@@ -1024,4 +1053,34 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     assert lower <= total_ns <= upper, (
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
         f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [fabric2d_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", _full_mesh_model_test_cases(), indirect=True)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True)
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.timeout(0)
+def test_mla_chunked_prefill_full_mesh_model_integration(
+    request, mesh_device, device_params, variant, use_metadata_tensor
+):
+    """Focused Step-8 model test: SPxTP boundaries, full-mesh cache/ring, cache reuse, and CPU PCC."""
+    if not is_blackhole():
+        pytest.skip("full-mesh ring_mla model integration is currently Blackhole-only")
+    chunk_size = max(512, ttnn.TILE_SIZE * mesh_device.get_num_devices())
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        iters_isl=[chunk_size, chunk_size],
+        reference="cpu",
+        chunk_size_global=chunk_size,
+        # The full-mesh ring_mla call selects Ring internally. TP-axis redistributions remain Linear
+        # on FABRIC_2D because this mesh has no direct wrap link along each four-device row.
+        topology=ttnn.Topology.Linear,
+        use_metadata_tensor=use_metadata_tensor,
+        full_mesh_ring=True,
     )

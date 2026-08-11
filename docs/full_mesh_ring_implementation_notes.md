@@ -670,3 +670,212 @@ The commit hook required the new MLA negative test to use the repository
 passed (1 passed, 158 deselected). A patient Claude Opus follow-up reviewed the
 fixture implementation, all three exception types and message patterns, and the
 runtime cleanup path, then reported **STEP 7 FOLLOW-UP PASS**.
+
+## Step 8: opt-in model integration
+
+Model adoption is implemented behind `PREFILL_FULL_MESH_RING=1`; the default
+axis-ring layout and behavior remain unchanged. The option is propagated from
+the prefill adapters through transformer/block construction into `ttMLA` and is
+rejected for cache migration, which still assumes SP-axis shards with TP
+replicas. Full-mesh mode explicitly requires the canonical `sp_axis=0,
+tp_axis=1` layout, a legal 2D mesh of at most 32 devices with at least one even
+dimension, and fixed chunk-aligned starts.
+
+Dense `ring_mla` integration:
+
+- The model boundary remains SP-by-TP. Q is redistributed with a TP
+  all-to-all from TP-head shards to additional sequence shards; KV is partitioned
+  across TP. Both are stamped with an explicit row-major
+  `Shard(2), Shard(2)` topology before entering the full-mesh ring.
+- The persistent MLA cache is sequence-sharded across every physical mesh
+  coordinate. `update_padded_kv_cache(cluster_axis=None)` preserves that exact
+  topology and derives the cache rank from the declared tensor coordinates.
+- After `ring_mla`, the inverse TP all-to-all restores the existing TP-head
+  layout before `wkv_b2`, so downstream model boundaries do not change.
+
+Sparse `ring_indexer_score_dsa` integration:
+
+- Sparse MLA attention and its primary KV cache stay on the SP axis. Only the
+  indexer's Q, per-row weights, K update, index cache, and fused indexer ring are
+  redistributed over the complete mesh.
+- Full-mesh indexer mode uses `cluster_axis=None`, no named sequence-subshard or
+  block-cyclic SP axis, and a per-device block-cyclic chunk of
+  `chunk_size / tp_factor`. Top-k results are gathered back across TP before the
+  unchanged sparse-attention path consumes them.
+- Full-mesh sequence caches compose in canonical row-major device order; axis
+  composition now asserts its existing `sp_axis=0` assumption.
+
+The current model integration deliberately accepts only fixed, chunk-aligned
+starts. Although the operations support arbitrary rotated starts, an SP-rotated
+model input cannot in general be evenly re-partitioned across TP into the
+canonical full-mesh rotated chunks without another rotation-aware exchange.
+Both the runtime and MLA (including KV-only scalar calls) fail early instead of
+silently producing a different token ownership. The device-metadata path relies
+on the runtime's host-side alignment check because its start remains on-device.
+
+Focused model and cache coverage is box-adaptive: 4-device hosts use 2x2,
+8-device hosts use 2x4, and 32-device hosts use 8x4. Unsupported or one-dimensional
+systems skip instead of constructing an illegal full-mesh ring. Direct cache-op
+coverage checks a nonzero rotated start through both scalar and metadata
+signatures and verifies that an axis/replicated cache topology is rejected.
+
+Validation on the complete physical 2x4 Blackhole host:
+
+```text
+./build_metal.sh --release
+PASS
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill_full_mesh_model_integration
+PASS (2 passed: scalar and metadata; output PCC 0.998758/0.998755;
+      k_nope PCC 0.999878, k_pe PCC 0.999884)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py::test_sparse_mla_chunked_full_mesh_indexer_model_integration
+PASS (1 passed: five 1K chunks; output PCC 0.996701;
+      primary cache PCC 0.999909, index cache PCC 0.999881)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py \
+  -k 'full_mesh_rotated or full_mesh_rejects_axis_topology'
+PASS (3 passed: scalar rotated, metadata rotated, invalid topology rejection)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill \
+  -k 'aligned_min and cpu and 2x4 and fabric2d and dsv3 and scalar'
+PASS (1 passed; rotated axis-mode output PCC 0.998219; cache PCC >0.99987)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py::test_sparse_mla_chunked \
+  -k 'glm_5_1 and 2x4 and kv_bf16 and c1k'
+PASS (1 passed; default sparse output PCC 0.996701)
+
+scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py
+PASS (15 passed)
+
+Black 23.10.1, clang-format 19.1.4, compileall, and git diff --check
+PASS
+```
+
+The model harness is an accuracy/contract test, not a performance benchmark.
+On the warm 2x4 run, dense MLA signposts were about 18 ms (scalar) and 7 ms
+(metadata) after first-use compilation; sparse steady-state MLA signposts were
+about 29-31 ms. The scalar dense first-use signpost was about 226 ms, while a
+fresh metadata fixture incurred about 6.5 seconds of JIT work. The 2x4 planner
+selects the direct row snake and Blackhole requests two links, but route hashes
+and per-model program-cache deltas are not exposed by this harness. No
+performance improvement or Galaxy qualification is claimed; the option remains
+experimental until a separate 8x4 memory/performance run records those values.
+
+The initial Claude Opus Step 8 review reported two blockers: the sparse test's
+anchor selected an illegal 1x4 full mesh on a four-device host, and the changed
+Python/C++ files were not fully formatted. It also requested KV-only alignment
+validation, explicit axis guards, and direct full-mesh cache-update coverage.
+All five items were addressed before the final re-review.
+
+Final Claude Opus Step 8 review result: **PASS; no blocking findings; Step 8
+may be committed and force-pushed**. Opus independently checked row-major
+ownership through both TP redistributions, RoPE ordering, the full-mesh indexer
+parameter combination, cache-hit topology validation and program hashing,
+in-place cache topology preservation, default axis equivalence, sparse primary
+cache isolation, box-adaptive tests, and the documented qualification boundary.
+
+One non-blocking review finding was folded in before publication: the block's
+test/debug `return_kv_cache` path now passes the MLA SP axis and dense-only
+full-mesh predicate to `kv_cache_to_host`. Dense full-mesh therefore composes
+every canonical shard, while sparse full-mesh indexer mode continues composing
+one TP replica of its SP-axis primary cache. A targeted patient Opus follow-up
+reviewed dense, sparse, and KV-only control flow and returned **PASS; Step 8
+remains safe to commit and force-push**.
+
+Review commands used the required form:
+
+```text
+claude --dangerously-skip-permissions --model opus 'Final Step 8 re-review ...'
+claude --dangerously-skip-permissions --model opus 'Targeted post-PASS follow-up review ...'
+```
+
+Step 8 gate status: **complete**.
+
+## Post-rebase integration gate
+
+The completed branch was rebased again onto `origin/main` commit
+`856217be915`. This mainline update overlapped the implementation in two
+important places: high-bandwidth all-gather gained runtime-selected input-slot
+and gathered-prefix controls, and MLA/indexer gained `active_seq_len`, Kimi K3
+output-gate support, and additional high-bandwidth gathers. The conflict
+resolution preserves both sets of behavior. The high-bandwidth gather kernels
+use the upstream runtime page geometry and fixed worst-case output slots while
+appending the full-mesh snake mapping arguments consistently in the host
+factory, reader, writer, and shared iterator.
+
+A final cache-key audit found that the upstream custom
+`compute_program_hash` did not explicitly include the newly added full-mesh
+mode, orientation, resolved link count, or mesh dimensions. Those five stable
+structural values are now hashed. Runtime slot and valid-prefix *values* remain
+excluded intentionally while their presence is hashed and their bounds are
+revalidated on cache hits.
+
+Post-rebase validation on the complete physical 2x4 Blackhole host:
+
+```text
+./build_metal.sh --release
+PASS
+
+scripts/run_safe_pytest.sh \
+  tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py \
+  --maxfail=1 -s
+PASS (11 passed, 14 expected hardware/opt-in skips)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill_full_mesh_model_integration \
+  models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py::test_sparse_mla_chunked_full_mesh_indexer_model_integration \
+  --maxfail=1 -s
+PASS (3 passed: dense scalar, dense metadata, sparse; dense output PCC
+      0.998773, sparse output PCC 0.996701)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py::test_update_padded_kv_cache_full_mesh_rotated \
+  models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py::test_update_padded_kv_cache_full_mesh_rejects_axis_topology \
+  --maxfail=1 -s
+PASS (3 passed)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill \
+  -k 'aligned_min and cpu and 2x4 and fabric2d and dsv3 and scalar and no_determinism' \
+  --maxfail=1 -s
+PASS (1 passed; rotated axis-mode output PCC 0.998219)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py::test_sparse_mla_chunked \
+  -k 'glm_5_1 and 2x4 and kv_bf16 and c1k' --maxfail=1 -s
+PASS (1 passed; default sparse output PCC 0.996701)
+
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py \
+  --maxfail=1 -s
+PASS (15 passed)
+```
+
+The required patient post-rebase review used:
+
+```text
+claude --dangerously-skip-permissions --model opus \
+  'Act as the final post-rebase correctness reviewer ...'
+```
+
+Claude Opus reviewed for about fifteen minutes and returned **PASS** with no
+blocking correctness findings. It independently traced every merged
+compile/runtime argument index, runtime page geometry and cache reuse,
+transport-rank versus tensor-rank ownership, direct-neighbor topology proof,
+cache-update topology preservation, active-sequence and Kimi output-gate
+coexistence, dense/sparse layout transitions, and default axis behavior. It
+confirmed that the five-field program-hash correction closes the remaining
+structural cache-key gaps.
+
+The principal qualification limitation remains unchanged: real 32-rank 8x4
+Galaxy execution is unavailable on this host. The route is host-validated and
+the option stays opt-in, but an 8x4 accuracy/memory/performance run under the
+appropriate torus fabric remains required before production rollout.
+
+Post-rebase integration gate status: **complete**.

@@ -256,6 +256,7 @@ class TtPrefillBlock(LightweightModule):
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
+        full_mesh_ring: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -327,6 +328,7 @@ class TtPrefillBlock(LightweightModule):
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
+            full_mesh_ring=full_mesh_ring,
         )
 
         if kv_only:
@@ -741,7 +743,16 @@ class TtPrefillBlock(LightweightModule):
                 return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
-        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        kv_cache = (
+            ttMLA.kv_cache_to_host(
+                kvpe_cache,
+                self.mesh_device,
+                sp_axis=self.mla.sp_axis,
+                full_mesh=self.mla._full_mesh_ring_mla,
+            )
+            if return_kv_cache
+            else None
+        )
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache

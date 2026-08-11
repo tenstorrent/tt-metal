@@ -166,7 +166,8 @@ def kv_cache_pcc_check(
 
     cfg = pipeline.config
     mesh_device = pipeline.mesh_device
-    sp = cfg.sp_factor
+    primary_full_mesh = cfg.full_mesh_ring and not pipeline.model._has_indexer
+    sp = cfg.mesh_shape[0] * cfg.mesh_shape[1] if primary_full_mesh else cfg.sp_factor
     chunk_size = cfg.chunk_size
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
@@ -209,10 +210,12 @@ def kv_cache_pcc_check(
 
     # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
     # validation compatible with both cache formats without allocating a BF16 cache on device.
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_sequence_cache_mesh_composer
+
+    composer = create_sequence_cache_mesh_composer(mesh_device, cfg.sp_axis, full_mesh=primary_full_mesh)
 
     def _to_host(tensor):
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        return ttnn.to_torch(tensor, mesh_composer=composer)
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 

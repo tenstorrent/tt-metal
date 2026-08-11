@@ -82,6 +82,10 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
+    # Experimental MLA/DSA adoption: keep model boundaries SPxTP, but redistribute the target
+    # ring operation's sequence shards over the complete 2D mesh. Off by default until accuracy,
+    # memory, and performance qualification is complete.
+    full_mesh_ring: bool = False
 
     @property
     def sp_factor(self) -> int:

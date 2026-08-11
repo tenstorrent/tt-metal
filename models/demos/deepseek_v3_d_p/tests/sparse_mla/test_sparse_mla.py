@@ -34,7 +34,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    create_sequence_cache_mesh_composer,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -178,7 +183,7 @@ SPARSE_ACCURACY_CASES = _sparse_accuracy_cases()
 SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
 
 
-def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
+def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1, full_mesh=False):
     """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
     ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory).
 
@@ -196,10 +201,11 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
         num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=slot_num,
         dtype=ttnn.bfloat8_b,
+        full_mesh=full_mesh,
     )
 
 
-def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=0):
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=0, full_mesh=False):
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 
@@ -208,10 +214,10 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
     (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
     to half-split (interleaved_to_halfsplit_perm) before comparing; the non-RoPE dims match directly."""
-    sp = mesh_device.shape[0]
+    sp = mesh_device.get_num_devices() if full_mesh else mesh_device.shape[0]
     cache_sr = ttnn.to_torch(
         tt_index_kv_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=create_sequence_cache_mesh_composer(mesh_device, 0, full_mesh=full_mesh),
     ).to(torch.bfloat16)[cache_batch_idx : cache_batch_idx + 1, :1]
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
@@ -364,7 +370,17 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+    full_mesh_ring=False,
 ):
     """Sparse chunked prefill on nonzero user slot: compare ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
@@ -400,7 +416,9 @@ def run_sparse_mla_chunked_case(
         num_users=num_users,
     )
 
-    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users)
+    tt_index_kv_cache = _init_index_kv_cache(
+        config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users, full_mesh=full_mesh_ring
+    )
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
     mla_tt = ttMLA(
         config,
@@ -415,6 +433,7 @@ def run_sparse_mla_chunked_case(
         slot_num=num_users,
         layer_num=1,
         sparse_kv_cache_format=cache_format,
+        full_mesh_ring=full_mesh_ring,
     )
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
@@ -478,13 +497,18 @@ def run_sparse_mla_chunked_case(
     index_cache_batch_idx = cache_user_id * index_cache_layers
     index_cache_host = ttnn.to_torch(
         tt_index_kv_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=create_sequence_cache_mesh_composer(mesh_device, sp_axis, full_mesh=full_mesh_ring),
     )
     assert (
         torch.count_nonzero(index_cache_host[:index_cache_layers]) == 0
     ), "sparse MLA wrote index keys into unselected user slot 0"
     idx_nat = _collect_index_cache_natural(
-        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx
+        tt_index_kv_cache,
+        mesh_device,
+        config,
+        chunk,
+        cache_batch_idx=index_cache_batch_idx,
+        full_mesh=full_mesh_ring,
     )
     _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
     logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
@@ -900,6 +924,61 @@ def test_sparse_mla_chunked(
 ):
     run_sparse_mla_chunked_case(
         variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    )
+
+
+def _sparse_full_mesh_cases():
+    """One legal 2D full-mesh shape per supported physical box."""
+    num_devices = detect_num_devices()
+    mesh = {4: (2, 2), 8: (2, 4), 32: (8, 4)}.get(num_devices)
+    if mesh is None:
+        return [
+            pytest.param(
+                "glm_5_1",
+                (1, max(num_devices, 1)),
+                SPARSE_SEQS_ANCHOR[0],
+                marks=pytest.mark.skip(reason=f"no supported 2D full-mesh case for {num_devices} devices"),
+                id=f"glm_5_1-unsupported-{num_devices}dev",
+            )
+        ]
+    return [pytest.param("glm_5_1", mesh, SPARSE_SEQS_ANCHOR[0], id=f"glm_5_1-{mesh[0]}x{mesh[1]}-full")]
+
+
+SPARSE_FULL_MESH_CASES = _sparse_full_mesh_cases()
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_FULL_MESH_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize(
+    "device_params", [fabric2d_device_params(worker_l1_size=_worker_l1_size())], ids=["fabric2d"], indirect=True
+)
+@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_chunked_full_mesh_indexer_model_integration(
+    mesh_device,
+    seq_len,
+    chunk,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+):
+    """Focused Step-8 model test: full-mesh indexer cache/ring with SP-axis sparse MLA unchanged."""
+    run_sparse_mla_chunked_case(
+        variant,
+        config_only,
+        mesh_device,
+        seq_len,
+        chunk,
+        MlaKvCacheFormat.BF16_RM,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        ds_input,
+        full_mesh_ring=True,
     )
 
 

@@ -268,20 +268,23 @@ class TT_CCL:
             )
         return self.mla_high_bw_all_gather_buffers[key]
 
-    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+    def get_indexer_ring_k_buffer(self, *, local_k, cluster_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.
 
         ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
-        only the selected slot over ``sp_axis`` into [1,1,T,D] while scoring arriving bands. All layers
-        execute serially and share the same index-cache geometry, so one stable-address scratch buffer
-        per shape/dtype is sufficient for the whole model instead of allocating a full gathered cache
-        per layer.
+        only the selected slot over the selected axis or complete mesh into [1,1,T,D] while scoring
+        arriving bands. All layers execute serially and share the same index-cache geometry, so one
+        stable-address scratch buffer per shape/dtype is sufficient for the whole model instead of
+        allocating a full gathered cache per layer.
         """
         import torch
 
         local_shape = tuple(local_k.shape)
-        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
-        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
+        sequence_factor = (
+            self.mesh_device.get_num_devices() if cluster_axis is None else self.mesh_device.shape[cluster_axis]
+        )
+        global_seq_len = local_shape[2] * sequence_factor
+        key = (global_seq_len, local_shape[3], local_k.dtype, cluster_axis)
         if key not in self.indexer_ring_k_buffers:
             self.indexer_ring_k_buffers[key] = ttnn.from_torch(
                 torch.zeros(1, 1, global_seq_len, local_shape[3]),
