@@ -304,3 +304,79 @@ gap it is the expected outcome.
 - **Why the perturbation grows with prefill length rather than shrinking.** Measured, not derived; the sign was the
   opposite of my prediction (ERROR 18).
 - **Whether `full_attention`'s margin is wide or its perturbation small.** Its logit gap was not dumped.
+
+
+---
+
+# 7. The two open items closed: path decomposition, and a dense control that needs a different explanation
+
+## 7a. The routing flip is the amplifier, and the attention path contributes 0.6 %
+
+§6e left open whether the flip was the *only* amplifier. Decomposed it by dumping the final `routing` vector and
+pinning it, so each path can be varied alone:
+
+| | decode PCC | 1 − PCC | added over baseline |
+|---|---:|---:|---:|
+| **A** interleaved (baseline) | 0.9996280142258483 | 3.720 × 10⁻⁴ | — |
+| **B** 88c decode-only — full effect | 0.9943716809625597 | 5.628 × 10⁻³ | 5.256 × 10⁻³ |
+| **C** 88c decode-only **+ interleaved routing pinned** | **0.9995947698880301** | 4.052 × 10⁻⁴ | **3.3 × 10⁻⁵ — 0.6 %** |
+| **D** interleaved **+ sharded routing pinned** | **0.9943362923697102** | 5.664 × 10⁻³ | **5.292 × 10⁻³ — 100 %** |
+
+**The router path alone reproduces the entire drop** — D is even marginally worse than the full effect B — and the
+attention path contributes **0.6 %**. So the chain in §6c is complete and the flip is not merely *a* mechanism, it
+is *the* mechanism. Freezing the routing to the incumbent's expert set recovers 99.4 % of the loss while leaving
+every sharded placement in force.
+
+**Which makes the fix menu wider than §5 suggested.** Anything that stops the selection moving works: phase
+consistency, `drop_index=1`, or pinning the routing — and the last is a hint that the real defect may be a
+**router that is not robust to 1 ULP**, since its 8th/9th logit gap is 0.015625 against a perturbation of 0.046875.
+
+## 7b. A dense model with a bigger drop — so the flip cannot be the general cause
+
+Checked the corpus's fully dense model. **phi-3.5-mini is `Phi3ForCausalLM`, no experts, no router, no `topk`** —
+and it carries the corpus's largest PCC drop. Ran its own oracle
+(`optimized_decoder_perf.py::test_profile_traced_decode`, batch 32, `PHI35_REAL_WEIGHTS=1`, weights cached
+locally):
+
+| tree / policy | PCC | mean_ms | |
+|---|---:|---:|:--|
+| v3, `final` (rope L1 off) | 0.9989930042363637 | 0.789394 | ✅ incumbent |
+| **v3, `advisor_rope_l1` (as shipped-off)** | **0.9849538521359096** | *(failed before perf)* | ❌ |
+| **v2, `advisor_rope_l1_chain` ON** | **0.9989930042363637** | **0.749102** | ✅ **−5.2 %, bit-identical PCC** |
+| v2, same tree, chain OFF | 0.9989930042363637 | 0.790101 | ✅ |
+| **v2's implementation ported into v3's tree** | **0.9989930042363637** | **0.749474** | ✅ **−5.1 %, recovers the win** |
+
+**v2's rope L1 chain is a genuinely free win**: engaged (proved by the 0.749 vs 0.790 timing, not inferred),
+**−5.2 %**, and **bit-identical PCC with the knob on and off**. v3's implementation of the same idea costs
+**1.4 × 10⁻²** of PCC and fails.
+
+So the dense case has a **third, distinct cause**: not a routing flip (no router), not the phase asymmetry (both
+versions are decode-only here), but **v3's rope code**. And porting v2's 25 lines into v3's tree recovers the
+entire win — **−1,284.9 µs/model, phi `nofuse-noadvise`, v3's second-largest loss.**
+
+## 7c. ⚠ RETRACTED: the "two lines" explanation for phi
+
+[`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §2.3 attributed phi's 0.917 to two specific lines — the key returned in
+the query's memory config, and interleaved rather than sharded arithmetic — and said *"the second is the
+correctness suspect and is one line."* **Both were patched individually and both are no-ops: PCC stayed
+0.9849538521359096 to sixteen digits.** The difference is in the *combination*, and the untested element was v3's
+extra `value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)` at the top of `apply_l1` together with
+multiplying by **interleaved** `cos`/`sin`, where v2 keeps `value` in the query's 32-way height shard and reshards
+`cos`/`sin` to match. Most likely a broadcast that resolves differently sharded versus interleaved — **not
+isolated to a single line, and I am not claiming one.** What is established is that **v2's implementation is
+correct and free and v3's is not**, and the remedy is a known-good replacement rather than a line edit.
+
+Also noted: my re-run of v3's config gives **0.9849539** where the cell recorded **0.9173130**. Both fail, but they
+are not the same number, so the cell's oracle differed from this one in some way its artefacts do not record —
+which is the [`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) provenance gap again, on a second model.
+
+## 7d. Recoverable total
+
+| cell | fix | measured | µs/model |
+|---|---|---|---:|
+| gemma-4-26B `-onA` sliding | 88 cores + `drop_index=1` | PCC 0.9996227, −11.47 %/layer | **−5,260** |
+| phi-3.5 `nofuse-noadvise` | port v2's rope L1 chain | PCC 0.9989930, −5.1 %/layer | **−1,285** |
+| | | | **−6,545** |
+
+Against v3's shipped −6,769 and its 8,408 µs shortfall to v2, **two known-good changes recover 78 % of the gap**,
+and neither is a search or judgement improvement — both are defects in code v3's own cells wrote.

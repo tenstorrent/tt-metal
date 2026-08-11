@@ -222,9 +222,12 @@ exactly two places, and each place explains one of the two gaps:**
   interleaved and then converts. v2's profile shows it directly — `BinaryNgDeviceOperation` ×6 at
   **`L1_HEIGHT_SHARDED`, 13.25 µs**, where the incumbent had ×7 at `DRAM_INTERLEAVED`, 25.71 µs. v3's path
   cannot produce that row.
-- **the 0.917:** v2 captures `key_memory_config` before the transform and restores the key to **it**. v3 returns
-  **both** query and key in `rope_memory_config` — the query's. A consumer reading the key under the wrong shard
-  spec is the shape of a 0.917, and it is one line.
+- **the 0.917:** ⚠ **RETRACTED.** This read *"a consumer reading the key under the wrong shard spec … and it is one
+  line."* **Patched and measured: it is not.** Restoring the key to its own memory config leaves the PCC
+  bit-identical, as does moving the arithmetic into the sharded config. The cause is the *combination* — v3
+  additionally converts `value` to L1-interleaved and multiplies by interleaved `cos`/`sin`, where v2 keeps both in
+  the query's 32-way height shard. **Porting v2's 25 lines into v3's tree recovers PCC 0.9989930 and −5.1 %**, so
+  the remedy is a replacement, not a line edit. [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) §7b–7c.
 
 ## 2.4 What v2's change did per op, for scale
 

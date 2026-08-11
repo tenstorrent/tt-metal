@@ -470,3 +470,23 @@ rather than from what the system actually runs.
 > **The question:** *is the input to my reconstruction the input the system uses, or one I made up?* If made up —
 > **go and capture the real one.** Dumping the real activation took one patched line and one 31-second run, and it
 > overturned a published claim that three earlier experiments had been built on.
+
+## ERROR 19 — I named the guilty line from a diff, without patching it
+
+Published that phi's PCC 0.917 came from one line — the key returned in the query's memory config — on the strength
+of *reading* the diff between the two implementations and picking the line that looked causal. **Patching it changes
+nothing: the PCC stays 0.9849538521359096 to sixteen digits. Patching the other candidate line changes nothing
+either.** The cause is a combination, and the element I never mentioned (v3 converting `value` to L1-interleaved and
+multiplying by interleaved `cos`/`sin`) is part of it.
+
+The port test is the one that worked: **drop v2's whole implementation into v3's tree.** PCC 0.9989930, −5.1 %,
+win recovered. It cost one run.
+
+> **A diff shows differences; it does not rank them.** When two implementations disagree on an outcome, the cheap
+> decisive move is to **transplant the working one wholesale** and then bisect *if* the attribution matters. I did
+> the expensive thing first (reason about which line) and got it wrong, twice in the same function.
+
+That is the third time in this session that reasoning stood in for a four-minute experiment — ERROR 16 (run the
+other tree), ERROR 18 (vary the fixture), and now this. **The pattern is not that my reasoning is unusually bad; it
+is that in this codebase the experiments are unusually cheap**, and every time I chose to reason instead, the
+reasoning was wrong in the direction that made my analysis more interesting.
