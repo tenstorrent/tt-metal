@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -35,8 +36,8 @@ class KDAConfig:
                 raise ValueError(f"{name} must be positive, got {value}")
         if self.conv_kernel_size != 4:
             raise ValueError(f"KDA currently requires conv_kernel_size=4, got {self.conv_kernel_size}")
-        if self.norm_eps <= 0:
-            raise ValueError(f"norm_eps must be positive, got {self.norm_eps}")
+        if not math.isfinite(self.norm_eps) or self.norm_eps <= 0:
+            raise ValueError(f"norm_eps must be finite and positive, got {self.norm_eps}")
         if self.gate_lower_bound is not None and not -5.0 <= self.gate_lower_bound < 0.0:
             raise ValueError(f"gate_lower_bound must be in [-5, 0), got {self.gate_lower_bound}")
 

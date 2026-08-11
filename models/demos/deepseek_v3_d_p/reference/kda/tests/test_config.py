@@ -59,6 +59,9 @@ def test_config_rejects_invalid_numerical_policy(expect_error) -> None:
         KDAConfig(**(values | {"conv_kernel_size": 3}))
     with expect_error(ValueError, "norm_eps"):
         KDAConfig(**(values | {"norm_eps": 0.0}))
+    for norm_eps in (float("nan"), float("inf")):
+        with expect_error(ValueError, "norm_eps"):
+            KDAConfig(**(values | {"norm_eps": norm_eps}))
     with expect_error(ValueError, "gate_lower_bound"):
         KDAConfig(**(values | {"gate_lower_bound": 0.0}))
 
