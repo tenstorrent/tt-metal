@@ -8,31 +8,28 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 }  // namespace
 
-class N300CommOpsTest : public ::testing::Test {
+class Mesh1x2CommOpsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
+
+        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+        ttml::autograd::ctx().open_device(kMeshShape);
         ttml::autograd::ctx().set_seed(42);
     }
 
@@ -41,7 +38,7 @@ protected:
     }
 };
 
-TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestAllReduceNotFullyTiled) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -98,7 +95,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
         /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
+TEST_F(Mesh1x2CommOpsTest, TestAllReduceNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -155,7 +152,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
         /* atol */ 2e-2));
 }
 
-TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestAllReduceFullyTiled) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -211,7 +208,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
         /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestAllGatherNotFullyTiled) {
     // Test failing with watcher enabled, github issue #36312
     SKIP_FOR_WATCHER();
 
@@ -261,7 +258,7 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
         /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestAllGatherFullyTiled) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -309,7 +306,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
         /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestScatterNotFullyTiled) {
     // Test failing with watcher enabled, github issue #36312
     SKIP_FOR_WATCHER();
 
@@ -360,7 +357,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 }
 
-TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
+TEST_F(Mesh1x2CommOpsTest, TestScatterFullyTiled) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
