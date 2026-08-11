@@ -236,7 +236,56 @@ X280_TOOLCHAIN=/path/to/tt-llm-engine/x280/toolchain ./build.sh
 TT_LLM_ENGINE=/path/to/tt-llm-engine ./build.sh
 ```
 
-## Running it on hardware — read this first
+## Hardware: probed, staged, not yet executed
+
+A **read-only** probe of device 0 on this host ([`l2cpu/hw/probe_l2cpu.py`](l2cpu/hw/probe_l2cpu.py),
+no writes of any kind) found the tile in an ideal state:
+
+```
+enabled_l2cpu bitmask = 0xf
+  L2CPU0 @ NOC(8, 3): ENABLED   ... L2CPU3 @ NOC(8, 7): ENABLED
+  L2CPU0: HELD IN RESET         ... L2CPU3: HELD IN RESET
+  L2CPU0 NOC(8,3) LIM+0x0 : 0x4108400296af1731 0x39c288a39736a7fe ...
+  L2CPU0: WayEnable = 0x0  (LIM intact)
+```
+
+All four X280 clusters are present and unharvested, all are idle in reset, and
+`WayEnable = 0` means LIM is still SRAM. The random LIM contents are exactly the
+"fresh ASIC reset, uninitialised ECC" state `prime_lim_ecc` describes.
+
+That let [`l2cpu/hw/run_on_hardware.py`](l2cpu/hw/run_on_hardware.py) take the
+**least invasive** sequence that can work, which is deliberately *not* what
+`boot_idle_x280.py` does:
+
+| Step | `boot_idle_x280.py` | this script | why |
+| --- | --- | --- | --- |
+| `arc_msg(0x52)` AICLK ramp | yes | **no** | flagged as an open hardware-policy question on Galaxy |
+| `WayEnable = 0xF` | yes | **no** | one-way door: converts L3/LIM to cache until ASIC reset |
+| `clock.set_l2cpu_pll` | yes | **no** | chip-wide clock change; we need the core to execute, not to be fast |
+| firmware location | DRAM | **LIM `0x08001000`** | the binary's real link address, and LIM is intact |
+
+Everything it writes is LIM scratch SRAM on an idle tile, the per-hart reset
+vectors, and the L2CPU reset register — all undone by re-asserting reset, which
+the script does on the way out. It refuses to start if `WayEnable != 0` or if the
+tile is not in reset. It pre-zeroes the region with full-width NOC writes so the
+firmware's byte-granular console writes land on lines with valid ECC, then loads,
+verifies the readback, points all four harts' reset vectors at `0x08001000`,
+releases reset, polls the sentinel, and reads the console block back over the NOC.
+
+**It has not been run.** The sandbox's permission classifier blocked the
+invocation. To run it:
+
+```bash
+cd tests/tt_metal/tt_metal/x280_freedom_e_sdk/l2cpu
+./build.sh                                  # produces build/out/hello_x280_lim.bin
+<tt-metal python_env>/bin/python3 hw/probe_l2cpu.py       # read-only, safe
+TT_DEVICE=0 X280_L2CPU=0 <python_env>/bin/python3 hw/run_on_hardware.py
+```
+
+It needs `ttexalens` (present in tt-metal's `python_env`) and must **not** share a
+process with UMD/tt-metal or pyluwen.
+
+## The destructive path, for reference — read this first
 
 `build.sh` does not touch hardware. Unlike the Quasar target, this one *can*
 actually run: Blackhole silicon is present on this host. But there is a real
