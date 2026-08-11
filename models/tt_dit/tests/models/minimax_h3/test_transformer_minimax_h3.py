@@ -37,8 +37,8 @@ from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3 import adaln_precompute as ap
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
-from .common import randomize_norm_weights
+from ....utils.test import skip_if_unsupported_num_links
+from .common import dit_mesh_params, randomize_norm_weights
 
 # MiniMax-H3 config, shared by the `transformer/` (t2va) and `transformer_ref/` partitions. Only
 # `num_layers` is reduced: the torch reference of all 50 layers is far too slow on CPU, and 2 layers
@@ -169,11 +169,7 @@ def _modality_metadata(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -626,11 +622,7 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -904,11 +896,7 @@ def _packed_position_ids(T: int, H: int, W: int) -> torch.Tensor:
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -1105,11 +1093,7 @@ def _packed_layout(num_text: int, num_audio: int, num_video: int) -> tuple[torch
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -1290,11 +1274,7 @@ def test_minimax_h3_transformer_block(
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -1456,13 +1436,10 @@ class _SingleLayerTable:
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "is_fsdp", "topology"),
-    [
-        pytest.param((4, 8), 1, 0, 2, False, ttnn.Topology.Ring, id="4x8sp1tp0nl2_ring_is_fsdp0"),
-    ],
-    indirect=["mesh_device"],
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    dit_mesh_params(),
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [ring_params_req_exact_devices], indirect=True)
 @pytest.mark.parametrize(("num_text", "num_audio", "num_video"), [pytest.param(512, 256, 1280, id="small_s2048")])
 def test_precomputed_adaln_matches_projected_path(
     mesh_device: ttnn.MeshDevice,

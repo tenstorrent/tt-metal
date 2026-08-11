@@ -45,6 +45,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.module import Module
+from ....utils.tensor import fast_device_to_host
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
@@ -96,22 +97,27 @@ class MiniMaxH3VaeConfig:
         return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
-# How many mesh-sized waves' worth of *chunks* to decode before stitching and releasing them.
+# How many decoded *tiles* to hold on host before stitching a group and releasing them.
 #
-# **1, measured.** A decoded tile is 22 MB of fp32 pixels and a group's tiles are all held on host
-# until the group is stitched. At 4 (a 5-chunk group, 140 tiles, ~3.1 GB) the readback degraded from
-# 89 ms for the first wave to 215-277 ms for later ones -- host allocator pressure, not transfer:
+# **32, measured.** A decoded tile is 22 MB of fp32 pixels and a group's tiles are all held until the
+# group is stitched. At 140 tiles (~3.1 GB) the readback degraded from 89 ms for the first wave to
+# 215-277 ms for later ones -- host allocator pressure, not transfer:
 #
-#   5 chunks/group   readback per wave [92 223 277 218 223 274 215]  median 223 ms
-#   1 chunk/group    readback per wave [88  89 148 101  89  99  86]  median  89 ms
+#   140 tiles in flight   readback per wave [92 223 277 218 223 274 215]  median 223 ms
+#    28 tiles in flight   readback per wave [88  89 148 101  89  99  86]  median  89 ms
 #
 # 89 ms is the true cost of the transfer, confirmed by an isolated measurement of the same volume.
 # Device time is identical either way -- the wave count is set by the total unit count and every wave
 # pads to the mesh size regardless -- so the smaller group is free. Stage: 4.3 -> 3.8 s.
 #
-# Note the arithmetic below floors rather than ceils: `ceil(1 * 32 / 28) = 2` could never express one
-# chunk per group, which is the setting that keeps the held pile to a single chunk.
-_DECODE_WAVES_IN_FLIGHT = 1
+# Denominated in tiles, not waves, because a wave is `get_num_devices()` and so the same "1 wave"
+# means 28 tiles on a 4x8 mesh but 112 on a 4x32 -- one notch below the setting measured slow above.
+# 32 is the 4x8 wave, i.e. the configuration the numbers were taken at.
+#
+# The floor at one wave in the arithmetic below is not a tuning choice: a group smaller than a wave
+# still pays a full wave's readback, because every wave pads to the mesh size. Note it floors rather
+# than ceils -- `ceil` could never express one chunk per group, which is what 4x8 wants.
+_DECODE_TILES_IN_FLIGHT = 32
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -202,10 +208,16 @@ class MiniMaxH3Vae(Module):
         tile_overlap: int = DEFAULT_TILE_OVERLAP,
         use_tiling: bool = True,
         weight_loader=None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
+        # Only ever used to read a wave back (`_read_wave_units`); this VAE has no tensor
+        # parallelism and runs no collectives in its forward. Optional because the standalone
+        # numerics tests build the VAE on a 1x1 mesh with no fabric configured, where a CCL
+        # would be both unnecessary and unopenable.
+        self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
@@ -247,6 +259,27 @@ class MiniMaxH3Vae(Module):
             "readback_each": [],
             "device_each": [],
         }
+
+    def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
+        """Read a ``wave_size``-way dim-0 fracture back to host in unit order.
+
+        Both readers are correct; the choice is cost. ``ConcatMeshToTensor`` works on any mesh --
+        on multi-host, ``MeshToTensor::compose`` MPI-broadcasts every shard this host does not
+        own -- but that means each rank pulls the whole wave over MPI on top of its own DMA, and
+        allocates roughly another wave in host scratch doing it. ``fast_device_to_host`` moves
+        the inter-host hop onto the fabric instead and then DMAs only local shards.
+
+        ``concat_dims=[0, 0]`` names dim 0 for *both* mesh axes. That is not two independent
+        per-axis concats -- this tensor is one dim fractured row-major over the whole mesh by
+        ``ShardTensorToMesh(dim=0)``, so both mesh indices fold into a single linearised block
+        offset, which ``_reassemble_2d`` handles in its ``d0 == d1`` branch. An earlier attempt at
+        this call predates that branch and silently returned `[24..31, 0, ... 0]`, one mesh row of
+        real data with the rest left unwritten; the two are now pinned bit-for-bit against each
+        other by ``tests/unit/test_fast_device_to_host.py::TestLinearisedShardReadback``.
+        """
+        if self.ccl_manager is None:
+            return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager)
 
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
@@ -388,6 +421,11 @@ class MiniMaxH3Vae(Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
+            # Stays on the composer rather than `_read_wave_units`, unlike the decode side. This
+            # output is rank 5, and `CCLManager.all_gather` only reshapes rank < 4 up to the rank 4
+            # the async op accepts, so the fabric path would need a flatten and un-flatten around
+            # it. A whole encode wave is ~31 MB against the decode wave's 1.4 GB, so the MPI
+            # broadcast the composer does on multi-host is not worth working around here.
             out = ttnn.to_torch(
                 encoder(x_device),
                 mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
@@ -554,22 +592,7 @@ class MiniMaxH3Vae(Module):
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            # `ConcatMeshToTensor`, **not** `fast_device_to_host`.
-            #
-            # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
-            # `vae_ltx.py` and `vae_wan2_1.py` use, and it measured 39 % faster -- but it is a misuse
-            # of that API and returns garbage here. `concat_dims` names, per mesh axis, the tensor
-            # dimension to concatenate along, and it is meant for a tensor fractured on *different*
-            # dims per axis (LTX shards H on one axis and W on the other). This tensor is fractured
-            # 32 ways along dim 0 by `ShardTensorToMesh(dim=0)`, so passing dim 0 for both axes is not
-            # a valid spec: measured, it returns `[24..31, 0, 0, ... 0]` where the correct order is
-            # `[0..31]` -- one mesh row of real data and the rest left unwritten.
-            #
-            # It was *faster* precisely because it was not moving the data. Nothing in the per-shard
-            # numerics suite catches this (every shard is individually correct, and the roundtrip
-            # tests run on a 1x1 mesh where the spec is trivially right); the e2e CLIP
-            # prompt-alignment gate did, dropping 37.37 -> 19.58.
-            out = ttnn.to_torch(decoded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            out = self._read_wave_units(decoded)
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
             profile["readback_each"].append(elapsed)
@@ -729,6 +752,10 @@ class MiniMaxH3Vae(Module):
 
         mark = time.perf_counter()
         # One replica: the gather made every device identical, which amendment 105 asserts.
+        # Multi-host-safe as written, and deliberately not `local_device_to_torch`:
+        # `get_device_tensors` on a device tensor already returns this host's shards only, so `[0]`
+        # is local by construction, whereas `local_device_to_torch` zips the *global* coordinate
+        # list against that local list and so picks the wrong index on any rank but 0.
         out = ttnn.to_torch(ttnn.get_device_tensors(canvas)[0]).float()
         elapsed = time.perf_counter() - mark
         profile["readback"] += elapsed
@@ -855,11 +882,16 @@ class MiniMaxH3Vae(Module):
             # so a group never straddles a stitch boundary.
             # Floor, not ceil, and tunable: a group's decoded tiles are all held on host until the
             # group is stitched, and the readback slows down as that pile grows -- measured 92 ms for
-            # the first wave against 215-277 ms for later ones when a group is 5 chunks (140 tiles,
-            # ~3.1 GB of fp32 pixels). Ceil could never express "one chunk per group", which is the
-            # setting that keeps the pile at one chunk's worth.
-            waves_in_flight = int(os.environ.get("MINIMAX_H3_DECODE_WAVES_IN_FLIGHT", _DECODE_WAVES_IN_FLIGHT))
-            chunks_per_group = max(1, waves_in_flight * wave_size // tiles_per_chunk)
+            # the first wave against 215-277 ms for later ones at 140 tiles (~3.1 GB of fp32 pixels).
+            # Ceil could never express "one chunk per group", which is what a 4x8 mesh wants.
+            #
+            # Floored at one wave because a group below that pays a full wave's readback anyway --
+            # every wave pads to the mesh size. On a 4x32 mesh that floor is what decides the group:
+            # 128 // 28 == 4 chunks, above the tile budget and not a choice. If the profile's
+            # `readback_each` shows that pile hurting, the fix is a smaller payload (the device-stitch
+            # path, or uint8 pixels), not a smaller group.
+            budget = int(os.environ.get("MINIMAX_H3_DECODE_TILES_IN_FLIGHT", _DECODE_TILES_IN_FLIGHT))
+            chunks_per_group = max(1, max(budget, wave_size) // tiles_per_chunk)
             clips = []
             for group_start in range(0, num_chunks, chunks_per_group):
                 group = chunk_latents[group_start : group_start + chunks_per_group]

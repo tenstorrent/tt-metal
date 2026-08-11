@@ -52,7 +52,8 @@ from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
-from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import skip_if_unsupported_num_links
+from .common import dit_mesh_params, mesh_params
 
 # The production working point, identical to the correctness gate's.
 HEIGHT, WIDTH = 768, 1344
@@ -90,18 +91,12 @@ DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 # point is to notice a collapse (a lost cache, a fallback kernel) rather than to police seconds.
 EXPECTED_TOTAL_S = 400.0
 
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 65536},
-        id="4x8",
-    )
-]
+MESHES = mesh_params()
 
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("num_frames", DURATIONS)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_warm_latency(mesh_device, reset_seeds, num_frames):
     base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
     missing = [p for p in ("transformer", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]
@@ -133,10 +128,16 @@ def test_t2va_warm_latency(mesh_device, reset_seeds, num_frames):
     num_forwards = NUM_INFERENCE_STEPS - 1
     aligned_frames = align_num_frames(num_frames)
 
+    # Read off the pipeline, not written out: "a number without its mesh shape is not a measurement",
+    # and a hardcoded 4x8 in this line would mislabel every 4x32 row rather than fail.
+    shape = tuple(mesh_device.shape)
     logger.info(
-        f"MEASUREMENT t2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "
+        f"MEASUREMENT t2va fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
+        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links "
         f"| {WIDTH}x{HEIGHT}, {aligned_frames} frames @ {MINIMAX_H3_FPS} fps "
-        f"({aligned_frames / MINIMAX_H3_FPS:.2f} s), {num_forwards} forwards "
+        f"({aligned_frames / MINIMAX_H3_FPS:.2f} s), {num_forwards} forwards, "
+        f"packed {pipeline.last_padded_len} padded ({pipeline.last_padded_len // pipeline.sp_factor}/device) "
         f"| warm window: one full warmup generation, prepares and export excluded"
     )
     for label, seconds in rows:
@@ -174,7 +175,7 @@ def _fl2va_keyframe():
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_warm_latency(mesh_device, reset_seeds):
     """Fully-warm `fl2va` latency, by the same method as the t2va row so the two are comparable.
 
@@ -264,13 +265,7 @@ def test_fl2va_warm_latency(mesh_device, reset_seeds):
 # reference goes through the video VAE's taps=3 encoder, whose static circular buffers clash with L1
 # above 16384 (am. 124/126). The mesh and every other device parameter are unchanged, so the
 # ref2va row stays comparable to the other two on everything that affects the denoise loop.
-REF2VA_MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 16384},
-        id="4x8",
-    )
-]
+REF2VA_MESHES = mesh_params(l1_small_size=16384)
 
 # The three shapes gated end to end, by their measured padded packed length. `padded_len`
 # is what every program in the 50-block stack is keyed on, so it is the identity of a perf row here.
@@ -295,7 +290,7 @@ def _ref2va_references(case: str):
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESHES, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize(("case", "expected_padded_len"), REF2VA_CASES)
 def test_ref2va_warm_latency(mesh_device, case, expected_padded_len, reset_seeds):
     """Fully-warm `ref2va` latency, by the same method as the t2va and fl2va rows.
@@ -462,7 +457,14 @@ def _packed_sizes(duration_s: float) -> dict:
     )
     num_frames = align_num_frames(int(duration_s * MINIMAX_H3_FPS))
     latent_frames = video_latent_num_frames(num_frames)
+    # Audio latents are *per channel*: `build_packed_sequence` lays the two channels out as
+    # `num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS` consecutive rows, so the latent count is half
+    # the row count. Getting this wrong does not fail anything here -- it just makes every packed
+    # length in this file a few hundred rows short of the pipeline's, which silently moves the
+    # per-device sequence length the SDPA chunk table is keyed on and stops the table from ever
+    # hitting in production.
     num_audio = audio_latent_num_frames(num_frames)
+    num_audio_rows = num_audio * MINIMAX_H3_AUDIO_CHANNELS
     num_video = latent_frames * tokens_per_latent_frame
     return {
         "height": height,
@@ -473,8 +475,9 @@ def _packed_sizes(duration_s: float) -> dict:
         "grid_w": width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2],
         "num_video": num_video,
         "num_audio": num_audio,
+        "num_audio_rows": num_audio_rows,
         "num_text": NUM_TEXT_TOKENS,
-        "seq_len": NUM_TEXT_TOKENS + num_audio + num_video,
+        "seq_len": NUM_TEXT_TOKENS + num_audio_rows + num_video,
     }
 
 
@@ -485,7 +488,8 @@ def _packed_metadata(sizes: dict, padded_len: int) -> tuple[torch.Tensor, torch.
     timestep 0 (clean conditioning) and everything else at timestep 1. The values do not affect
     device timing, but keeping them realistic avoids degenerate index patterns.
     """
-    n_text, n_audio, n_video = sizes["num_text"], sizes["num_audio"], sizes["num_video"]
+    # Rows, not latents: the two audio channels each occupy their own row.
+    n_text, n_audio, n_video = sizes["num_text"], sizes["num_audio_rows"], sizes["num_video"]
     frame = sizes["grid_h"] * sizes["grid_w"]
 
     def clock(n: int) -> torch.Tensor:
@@ -526,11 +530,7 @@ def _packed_metadata(sizes: dict, padded_len: int) -> tuple[torch.Tensor, torch.
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            (4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"
-        ),
-    ],
+    dit_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -541,12 +541,29 @@ def _packed_metadata(sizes: dict, padded_len: int) -> tuple[torch.Tensor, torch.
         pytest.param(15.0, id="15s_768p"),
     ],
 )
+# Which AdaLN path the profiled window exercises. `cachedadaln` is what the pipeline runs
+# (`precompute_adaln` defaults on): the six modulation tables are built once and handed to every
+# forward, so `_modulation_tables`' SiLU and projection matmul never appear in the step. `projadaln`
+# projects `temb` per block, which is what a profile of this test measured before this axis existed.
+#
+# The projection is sequence-independent -- it is keyed on `num_timesteps` -- so it is a fixed cost
+# per block that shrinks as a share of a longer sequence. Both are measured rather than argued.
+#
+# The tables here come from the block's own `_modulation_tables` run once outside the window rather
+# than from a host-built checkpoint table. For a *timing* A/B that is equivalent: the op mix inside
+# the window is identical to production's. It does leave `adaln_proj` resident, so this axis says
+# nothing about the 26 GB/device the real cache exists to free.
+@pytest.mark.parametrize(
+    "adaln_cached",
+    [pytest.param(False, id="projadaln"), pytest.param(True, id="cachedadaln")],
+)
 def test_minimax_h3_transformer_block_perf(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
     num_links: int,
     duration_s: float,
+    adaln_cached: bool,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -640,6 +657,12 @@ def test_minimax_h3_transformer_block_perf(
         mesh_axes=[..., sp_axis, None],
     )
 
+    # Built once, OUTSIDE the profiled window, standing in for the host-built cache the pipeline
+    # uploads once per request. `None` leaves `forward` on its own projection path.
+    modulation_tables = tt_block._modulation_tables(tt_temb) if adaln_cached else None
+    if adaln_cached:
+        ttnn.synchronize_device(mesh_device)
+
     def run_block() -> ttnn.Tensor:
         out = tt_block(
             tt_spatial,
@@ -649,10 +672,14 @@ def test_minimax_h3_transformer_block_perf(
             adaln_indices=tt_adaln,
             rope_cos=tt_rope_cos,
             rope_sin=tt_rope_sin,
+            modulation_tables=modulation_tables,
         )
         ttnn.synchronize_device(mesh_device)
         return out
 
+    logger.info(
+        f"AdaLN path: {'precomputed tables (as the pipeline runs)' if adaln_cached else 'per-block projection'}"
+    )
     logger.info("iteration 1: compiling kernels and populating the program cache")
     run_block()
 

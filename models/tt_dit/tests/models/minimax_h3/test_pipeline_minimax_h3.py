@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end `t2va`: a prompt in, an mp4 with a soundtrack out, at the production working point.
+"""End-to-end `t2va`: a prompt in, an mp4 with a soundtrack out, at 768P for 5 s and 15 s.
 
-There is no torch reference for a whole generation -- 50 layers over 38222 rows for 49 steps is not
-a CPU computation -- so correctness here is established by the tiers that do not need one, in the
-order they catch things:
+There is no torch reference for a whole generation -- 50 layers over 37749 rows (109101 at 15 s) for
+49 steps is not a CPU computation -- so correctness here is established by the tiers that do not need
+one, in the order they catch things:
 
   tier 4  reference-free sanity: geometry, finiteness, range, spatial variance, inter-frame motion
           (`tests/models/wan2_2/common.py`), plus the audio analogue and an A/V sync check
@@ -19,7 +19,9 @@ order they catch things:
 
 Per-component numerics are gated elsewhere and are not repeated here: the conditioner in
 `test_text_encoder_minimax_h3.py`, the DiT in `test_transformer_minimax_h3.py`, both VAEs in
-`test_vae_*` and `test_audio_minimax_h3.py`, all at this same 768P/5s working point.
+`test_vae_*` and `test_audio_minimax_h3.py`, all at the 768P/5s working point. Nothing gates a
+*component* at 15 s, so the 15 s case here is the only thing standing between a 15 s request and
+whatever it produces -- which is why its tier-4 and tier-5 checks assert rather than log.
 
 Artifacts are written to a stable path so the output can be *looked at*. Every numeric gate below
 can pass on video that is visibly wrong, and the two failure modes whole-tensor statistics hide best
@@ -41,18 +43,39 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
+
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
 from ..wan2_2.common import check_output_sanity
+from .common import MESH_PARAMS
 from .common_av import check_audio_sanity, check_av_sync, check_spatial_seams, log_spectral_flatness
 
-# The production working point, and the only one gated: 1344x768 at 16:9, 124 frames @ 24 fps
-# (5.17 s), 50 scheduler steps -> 49 forwards.
+# The production working point: 1344x768 at 16:9, 124 frames @ 24 fps (5.17 s), 50 scheduler
+# steps -> 49 forwards.
 HEIGHT, WIDTH = 768, 1344
 NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
+
+# The durations gated end to end. `align_num_frames(round(duration * MINIMAX_H3_FPS))` under the
+# model's 17n + 5 rule gives 124 and 362, i.e. n = 7 and n = 21. The frame counts are written out
+# rather than computed so the test ids are stable and greppable.
+#
+# 15s is here because it is the case the wider mesh exists for -- 107 latent frames pack to 109101
+# rows, which is 13664 per device at SP=8 but only 3424 at SP=32 -- and because the perf suite has
+# had a 15s row for a while with no correctness gate under it.
+#
+# **Only 5s is tier-6 gated.** `CLIP_THRESHOLD` and `VBENCH_THRESHOLDS` were calibrated with `PROMPT`
+# as a matched pair at 124 frames; reusing those numbers at 362 would be asserting a bar nobody
+# measured, and `imaging_quality` in particular has swung 0.6896 -> 0.4884 between two
+# correct-looking scenes. The 15s case therefore *measures and logs* tier 6 and gates on tiers 4
+# and 5, which are prompt- and duration-independent. Set the 15s bars from the logged numbers once
+# there are a few runs to set them from.
+DURATIONS = [
+    pytest.param(NUM_FRAMES, id="5s"),
+    pytest.param(362, id="15s"),
+]
 
 # Dense: a moving camera, a reflective wet surface, several independent light sources at
 # different colour temperatures, volumetric haze, and foreground/background motion at different depths.
@@ -76,18 +99,6 @@ PROMPT = (
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
 DEFAULT_WEIGHTS = "/data/cglagovich/MiniMax-H3-diffusers"
 ARTIFACT_ENV = "MINIMAX_H3_ARTIFACT_DIR"
-
-# The pipeline's CCLManager runs ring collectives, so the fabric must be FABRIC_1D_RING. Taken from
-# the shared helper rather than hand-written: on a plain FABRIC_1D (line) fabric a ring collective
-# cannot resolve a forwarding direction and fails as
-# `TT_FATAL fabric.cpp:174 forwarding_direction.has_value()`, which reads like a CCL bug.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 65536},
-        id="4x8",
-    )
-]
 
 
 def _weights_dir():
@@ -376,11 +387,20 @@ def _temporal_seam_score(frames: np.ndarray, period: int) -> float:
     return float(at_boundary.mean() / elsewhere.mean())
 
 
-@pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-def test_t2va_end_to_end(mesh_device, reset_seeds):
+@pytest.mark.timeout(14400)
+@pytest.mark.parametrize("num_frames", DURATIONS)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_t2va_end_to_end(mesh_device, reset_seeds, num_frames):
     weights_dir = _weights_dir()
     artifacts = _artifact_dir()
+
+    # On a multi-host mesh every rank runs this function. Device work is collective and must happen
+    # on all of them, but the host-side artifacts must not: four ranks writing the same mp4 over NFS
+    # race, and scoring it four times is three wasted VBench interpreters.
+    is_root = not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
+
+    # Tier 6 is calibrated at 5s against `PROMPT` only; see `DURATIONS`.
+    tier6_calibrated = num_frames == NUM_FRAMES
 
     run_vbench = os.environ.get("RUN_VBENCH", "1") in ("1", "true", "True")
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
@@ -404,14 +424,14 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir)
     output = pipeline(
         prompt,
-        num_frames=NUM_FRAMES,
+        num_frames=num_frames,
         height=HEIGHT,
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
     )
 
-    expected_frames = align_num_frames(NUM_FRAMES)
+    expected_frames = align_num_frames(num_frames)
     logger.info(
         f"generated {output.num_frames} frames ({output.video_seconds:.3f} s) and "
         f"{output.audio_seconds:.3f} s of audio at {output.sampling_rate} Hz"
@@ -448,7 +468,16 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
 
     # ---- tier 5: the written file, not just the tensor ----
-    paths = _write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts)
+    # Root only, so the ranks do not race on the same paths. Tiers 4 and 6 are pure reads of tensors
+    # every rank already holds, but tier 5 is *about* the file, so on a non-root rank there is
+    # nothing to check rather than something being skipped.
+    if not is_root:
+        logger.info(f"rank {ttnn.distributed_context_get_rank()}: not root, skipping artifacts and scoring")
+        assert sync["video_seconds"] > 0
+        return
+
+    stem = "t2va" if num_frames == NUM_FRAMES else f"t2va_{num_frames}f"
+    paths = _write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
     if "mp4" in paths:
         streams = _probe_streams(paths["mp4"])
         if streams:
@@ -478,27 +507,43 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     # ---- tier 6: generative quality ----
     if run_clip:
         alignment = _clip_prompt_alignment(frames, prompt)
+        bar = f"bar {CLIP_THRESHOLD}" if tier6_calibrated else "uncalibrated at this duration"
         logger.info(
             f"CLIP prompt alignment: mean={alignment['mean']:.2f} "
-            f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {CLIP_THRESHOLD})"
+            f"min={alignment['min']:.2f} max={alignment['max']:.2f} ({bar})"
         )
-        assert (
-            alignment["mean"] >= CLIP_THRESHOLD
-        ), f"CLIP mean {alignment['mean']:.2f} < {CLIP_THRESHOLD}; the video does not match the prompt"
+        if tier6_calibrated:
+            assert (
+                alignment["mean"] >= CLIP_THRESHOLD
+            ), f"CLIP mean {alignment['mean']:.2f} < {CLIP_THRESHOLD}; the video does not match the prompt"
     else:
         logger.info("RUN_CLIP=0, skipping the CLIP prompt-alignment gate")
 
     if run_vbench:
         assert "mp4" in paths, "RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce"
         scores = _run_vbench(paths["mp4"], prompt, VBENCH_THRESHOLDS.keys())
-        for dimension, bar in VBENCH_THRESHOLDS.items():
+        for dimension, threshold in VBENCH_THRESHOLDS.items():
             # A requested dimension with no returned score is an *ungated* dimension, not a pass.
             assert dimension in scores, f"VBench returned no score for {dimension}"
-            logger.info(f"VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
-        failures = [f"{d} = {scores[d]:.4f} < {bar:.4f}" for d, bar in VBENCH_THRESHOLDS.items() if scores[d] < bar]
-        assert not failures, "VBench below threshold: " + "; ".join(failures)
+            bar = f"bar {threshold}" if tier6_calibrated else "uncalibrated at this duration"
+            logger.info(f"VBench {dimension} = {scores[dimension]:.4f} ({bar})")
+        if tier6_calibrated:
+            failures = [
+                f"{d} = {scores[d]:.4f} < {threshold:.4f}"
+                for d, threshold in VBENCH_THRESHOLDS.items()
+                if scores[d] < threshold
+            ]
+            assert not failures, "VBench below threshold: " + "; ".join(failures)
     else:
         logger.info("RUN_VBENCH=0, skipping the VBench gate")
+
+    if not tier6_calibrated:
+        logger.info(
+            f"tier 6 measured but not gated at {num_frames} frames: the CLIP and VBench bars are "
+            f"calibrated against PROMPT at {NUM_FRAMES} frames only. Set the bars for this duration "
+            "from the numbers above once there are enough runs to separate signal from the +/-8% "
+            "run-to-run variance."
+        )
 
     logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
     logger.info(

@@ -77,11 +77,23 @@ class MiniMaxH3Attention(Module):
 
     # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
     # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
-    # 4768 / 9216 / 13632 are 768P at 5s / 10s / 15s, packed and padded, divided by SP=8.
+    #
+    # 768P at 5s / 10s / 15s, packed and padded, divided by SP=8, for the 39-token prompt the gates
+    # use and for the 512-token cap. Both are listed because the packed length depends on the prompt
+    # and an exact-match lookup that misses falls back to the generic rule below.
+    #
+    # These keys were previously 4768 / 9216 / 13632, taken from a helper that counted audio
+    # *latents* where the packed sequence holds two rows per latent (one per channel). Those lengths
+    # do not occur, so the table never hit in production and every real run silently took the
+    # fallback. The sweep itself ran at those lengths, which are within 1% of the real ones, so the
+    # measured (q, k) carry over; the keys are what moved.
     measured_sdpa_chunk_sizes = {
-        4768: (320, 384),
-        9216: (256, 512),
-        13632: (256, 512),
+        4736: (320, 384),
+        4800: (320, 384),
+        9184: (256, 512),
+        9248: (256, 512),
+        13664: (256, 512),
+        13728: (256, 512),
     }
 
     def __init__(
@@ -244,6 +256,14 @@ class MiniMaxH3Attention(Module):
         `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table`
         (model configs `minimax_h3_{5s,10s,15s}_768p`) on 4x8 Blackhole Galaxy, TP=4 / SP=8. Anything
         else falls back to the generic rule below.
+
+        **SP=32 is unswept.** On a 4x32 quad the same three durations give 1184 / 2304 / 3424 rows per
+        device, none of which are in the table, so all three take the generic fallback of
+        (256, 512). That is a plausible starting point and not a measured one -- at 3424 rows the slot
+        arithmetic that picks q=320 over 256 at 4736 goes the other way (q=256 gives 196 work items
+        over 110 cores against q=320's 154, so 11% waste against 28%) -- but it wants the sweep run at
+        ring_size 32 before any of it is claimed. Extending the 5s entry downwards would be a guess
+        dressed as a measurement, which is how the wrong keys above survived in the first place.
 
         The optimum depends on the *local* sequence length, which is why this is keyed on it rather
         than on the mesh shape the way `WanAttention.sdpa_chunk_size_map` is. At long sequences there

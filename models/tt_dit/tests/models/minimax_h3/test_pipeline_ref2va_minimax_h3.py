@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on the 4x8 mesh.
+"""MiniMax-H3 ``ref2va`` end to end: omni-reference conditioning on a Blackhole mesh.
 
 A separate file from the ``t2va`` / ``fl2va`` e2e gates so it defaults to its own
 process: a ref2va request is 1.2x-3.0x t2va's packed length (am. 114), and one process
@@ -49,7 +49,7 @@ from PIL import Image
 
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
+from .common import mesh_params
 from .common_av import check_audio_sanity, check_av_sync, check_spatial_seams
 from .test_pipeline_fl2va_minimax_h3 import create_fractal_image
 from .test_pipeline_minimax_h3 import _clip_prompt_alignment, _run_vbench, _write_artifacts
@@ -100,13 +100,7 @@ _L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
 # The same ring params the t2va and fl2va e2e gates use: the DiT attends in a ring on the SP axis,
 # and a LINE fabric config fails its CCL ops with `fabric.cpp:174 forwarding_direction.has_value()`.
 # Only `l1_small_size` differs.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL},
-        id="4x8",
-    )
-]
+MESHES = mesh_params(l1_small_size=_L1_SMALL)
 
 
 def _weights_dir() -> Path:
@@ -304,7 +298,7 @@ def _references(case: str) -> list[MiniMaxH3Reference]:
 
 
 @pytest.mark.timeout(9000)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("case", list(CASES), ids=list(CASES))
 def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     """A full ref2va generation: video plus its synchronized soundtrack.
@@ -358,7 +352,7 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
 
 
 @pytest.mark.timeout(9000)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     """The discriminator, against a floor measured in this same test.
 
@@ -444,7 +438,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
 
 
 @pytest.mark.timeout(9000)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_reference_order_changes_the_request(mesh_device, reset_seeds):
     """Reordering the same two references is a different request, and must generate differently.
 

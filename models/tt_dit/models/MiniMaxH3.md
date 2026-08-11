@@ -258,17 +258,39 @@ error. First run populates ~68 GB of cache.
 
 ## Working point
 
-The gates run at one shape and it is the one the perf log is tuned for:
+The perf log is tuned for 768P/5s, and that is the shape every *component* gate runs at. The e2e
+`t2va` gate additionally runs 15 s (see `test_pipeline_minimax_h3.py`'s `DURATIONS`), which is the
+only thing covering a long request end to end.
 
-| | |
-|---|---|
-| canvas | 1344x768 (16:9, the widest 768P canvas `resolve_canvas_size` yields) |
-| frames | 124 @ 24 fps (5.17 s) -> 37 video latent frames, 207 audio latents |
-| packed sequence | 37749 rows for a 39-token prompt (38222 at 512 tokens), padded to a multiple of SP x TILE |
-| mesh | 4x8 Blackhole Galaxy, TP=4 axis 0, SP=8 axis 1, ring, 2 links |
+| | 5 s | 15 s |
+|---|---|---|
+| canvas | 1344x768 (16:9, the widest 768P canvas `resolve_canvas_size` yields) | same |
+| frames | 124 @ 24 fps (5.17 s) -> 37 video latent frames, 207 audio latents | 362 (15.08 s) -> 107 latent frames, 603 audio latents |
+| packed sequence | 37749 rows for a 39-token prompt (38222 at 512 tokens) | 109101 rows (109574 at 512 tokens) |
 
-Note the video VAE tiles this canvas **4x6 = 24** ways, and `test_performance_vae_minimax_h3.py`'s
-`WORK_UNITS` table says 28. The projections in that file are slightly optimistic as a result.
+Audio latents occupy **two rows each**, one per channel, so a row count is `2 x latents`. Padding is
+to a multiple of `SP x TILE`, which is 256 at SP=8 but **1024 at SP=32** — so the padded length, and
+therefore every program in the 50-layer stack, is keyed differently on the two meshes.
+
+### Meshes
+
+| mesh | TP | SP | topology | links | rows/device at 5 s / 15 s |
+|---|---|---|---|---|---|
+| 4x8 Blackhole Galaxy | 4, axis 0 | 8, axis 1 | ring | 2 | 4736 / 13664 |
+| 4x32 quad BH Galaxy, 4 MPI hosts | 4, axis 0 | 32, axis 1 | ring | 2 | 1184 / 3424 |
+
+TP stays at 4 and SP absorbs the extra devices, following Wan2.2's `_PRESETS_BH`. TP is intra-host on
+the quad and does a collective per layer, so it has to stay local and cheap; SP hides its KV
+all-gather inside ring attention and tolerates the inter-host hop. The per-shape defaults live in
+`_PRESETS_BH` in `pipelines/minimax_h3/pipeline_minimax_h3.py`.
+
+Not yet swept at SP=32: the ring-SDPA chunk sizes in `MiniMaxH3Attention.measured_sdpa_chunk_sizes`,
+which is keyed on the per-device length. At 4x32 all three durations miss and take the generic
+(256, 512) fallback.
+
+The video VAE tiles this canvas **4x7 = 28** ways at both durations (`split_tiles` with the real
+`DEFAULT_TILE_OVERLAP = 64`; an assumed 32 gives 4x6, which is where an earlier note here got it
+wrong). `test_performance_vae_minimax_h3.py`'s `WORK_UNITS` table agrees at 28.
 
 ## Fully-warm latency
 
@@ -341,7 +363,7 @@ targets a different one of the three error sources the default 10.5 % is made of
 complementary — the chain error is set by whichever source is worst, so enabling one moves the total far
 less than enabling all three:
 
-| `MINIMAX_H3_AUDIO_CONV_SPLIT` | `..._DEPTHWISE_MAC` | `..._TAP_MATMUL` | rel RMSE | PCC | PSNR | warm |
+| `MINIMAX_H3_AUDIO_CONV_SPLIT` | `..._DEPTHWISE_MAC` (removed; see below) | `..._TAP_MATMUL` | rel RMSE | PCC | PSNR | warm |
 |---|---|---|---|---|---|---|
 | `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
 | `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
@@ -358,10 +380,14 @@ fidelity can help. Elementwise fp32 ops, by contrast, are exact.
 - **`CONV_SPLIT`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
   residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`DEPTHWISE_MAC`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This was the single largest source: one `Activation1d` injected 1.54e-03, *all* of it
-  from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
-  exact — 1.5e-03 → 5.3e-08.
+- **`DEPTHWISE_MAC`** — **removed.** The anti-aliased resample filters now always use
+  `ttnn.experimental.depthwise_fir1d`, which is fp32-exact (6–8e-08 across every production shape)
+  *and* 3–12x faster than the shift-multiply-add form, so there is no trade-off left to expose. This
+  was the single largest error source: one `Activation1d` injected 1.54e-03, *all* of it from its
+  downsampler, against ~7e-08 for `snake_beta` and the upsampler. The cause was two roundings in
+  `ttnn.conv1d` — the on-device tilize takes the activation to tf32, and the FPU multiply is 5b x 7b
+  so even HiFi4 sees 9 significand bits of SrcA. `depthwise_fir1d` avoids both: it never tilizes, and
+  it accumulates the taps on the SFPU. Audio decode 4.837 s → 1.483 s at equal accuracy.
 - **`TAP_MATMUL`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
   splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
   conv.

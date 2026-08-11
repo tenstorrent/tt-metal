@@ -18,7 +18,8 @@ frame of conditioning rows pinned at `t = 0.999` for every denoising step.
 What runs where
 ---------------
 The packed sequence holds all three modalities at once and is denoised by one 50-layer stack on
-the mesh (TP=4 x SP=8). Everything that decides *which* row gets which treatment is host-side and
+the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH`).
+Everything that decides *which* row gets which treatment is host-side and
 already gated bit-exact against the reference --- the layout, the fp64 rotary grid, the per-row
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
 where a reassociation is a silent desync between audio and video, and they cost nothing on host.
@@ -135,6 +136,40 @@ AUDIO_SHIFT = 3.0
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
 
+# Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. A table rather
+# than bare keyword defaults because these are *measured per shape*, and a shape absent from it is a
+# shape nobody has run -- better a named error than silently ring-collectiving over a line fabric.
+#
+# The invariant that makes 4x32 work at all: **TP stays on axis 0 at factor 4 and SP absorbs every
+# extra device.** TP does a per-layer AllGather/ReduceScatter and has to be cheap, and on the quad
+# galaxy axis 0 is intra-host while axis 1 spans all four hosts; SP hides its KV all-gather inside
+# ring attention, so it is the axis that tolerates the inter-host hop. TP=4 is also what the shapes
+# want: 56 heads // 4 = 14, and 5376 % (32 * 4) == 0 for the distributed norms. Going 4x8 -> 4x32
+# changes exactly one number, sp 8 -> 32, and every model reads it off `mesh_device.shape`.
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    # One Blackhole Galaxy. The measured working point for everything in MiniMaxH3.md.
+    (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring},
+    # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, same links, same topology -- SP goes
+    # 8 -> 32. The consequence to remember is that the SP alignment becomes 32 * TILE_SIZE = 1024
+    # instead of 256, so every packed length and therefore every program in the 50-block stack is
+    # re-keyed; see the padding contract in `__call__`.
+    (4, 32): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring},
+}
+
+
+def resolve_mesh_preset(mesh_device: ttnn.MeshDevice) -> dict:
+    """The measured defaults for this mesh shape."""
+    shape = tuple(mesh_device.shape)
+    preset = _PRESETS_BH.get(shape)
+    if preset is None:
+        known = ", ".join(str(s) for s in _PRESETS_BH)
+        msg = (
+            f"no MiniMax-H3 preset for mesh shape {shape}; known shapes are {known}. Pass tp_axis, "
+            "sp_axis, num_links and topology explicitly to run an untuned shape."
+        )
+        raise ValueError(msg)
+    return preset
+
 
 def draw_request_latents(
     generator: torch.Generator,
@@ -207,15 +242,22 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Anything left unset comes from the per-shape preset; anything passed wins over it, so a
+        # test can still sweep an untuned configuration on a known shape.
+        preset = resolve_mesh_preset(mesh_device)
+        tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
+        sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
+        num_links = preset["num_links"] if num_links is None else num_links
+        topology = preset["topology"] if topology is None else topology
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -295,13 +337,17 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike | None = None,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         task: str = "t2va",
     ) -> "MiniMaxH3Pipeline":
-        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`."""
+        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
+
+        The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
+        `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
+        """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_DIFFUSERS_DIR")
         if not weights_dir:
             raise ValueError(
@@ -1033,7 +1079,14 @@ class MiniMaxH3Pipeline:
         want_encoder = encode_shape is not None
         if self._vae is None:
             logger.info("building the video VAE")
-            self._vae = MiniMaxH3Vae(self.vae_config, mesh_device=self.mesh_device, weight_loader=self._cache_submodel)
+            # `ccl_manager` is only used for the wave readback. It is what keeps the video decode
+            # off the MPI path on a multi-host mesh; the VAE's forward runs no collectives.
+            self._vae = MiniMaxH3Vae(
+                self.vae_config,
+                mesh_device=self.mesh_device,
+                weight_loader=self._cache_submodel,
+                ccl_manager=self.ccl_manager,
+            )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
             if want_encoder:
