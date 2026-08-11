@@ -354,13 +354,16 @@ def reference_stream(reference, audio: torch.Tensor, *, L: int, dec_chunk_size: 
 def convert_stage(args: argparse.Namespace) -> dict:
     """Device stage: convert wavs, time streaming, score token-level accuracy."""
     import ttnn
+    from models.demos.llvc.tt.config import LLVC_L1_SMALL_SIZE, LLVC_TRACE_REGION_SIZE
     from models.demos.llvc.tt.model import create_llvc
     from models.demos.llvc.tt.state_io import load_llvc_config_and_model
 
     if not (args.config and args.checkpoint):
         raise ValueError("--stage convert needs --config and --checkpoint")
 
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=23887872)
+    device = ttnn.open_device(
+        device_id=args.device_id, l1_small_size=LLVC_L1_SMALL_SIZE, trace_region_size=LLVC_TRACE_REGION_SIZE
+    )
     device.enable_program_cache()
     try:
         config, reference = load_llvc_config_and_model(args.config, args.checkpoint)
@@ -389,8 +392,9 @@ def convert_stage(args: argparse.Namespace) -> dict:
             ref_out = reference_stream(
                 reference, audio, L=config.L, dec_chunk_size=config.dec_chunk_size, chunk_factor=args.chunk_factor
             )
-            stream_out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
+            stream_out, metrics = model.stream(audio, chunk_factor=args.chunk_factor)
             tt_out = stream_out
+            rtf, latency = metrics.rtf, metrics.latency_ms
 
             corr, n_voiced, n_frames = per_frame_pcc(tt_out, ref_out, hop)
             frame_corrs.append(corr)
@@ -410,10 +414,11 @@ def convert_stage(args: argparse.Namespace) -> dict:
             source_paths.append(os.path.abspath(fname))
             converted_paths.append(os.path.abspath(out_path))
             logger.info(
-                "[%s] RTF=%.3f latency=%.2fms raw_pcc=%.4f lag=%d aligned_pcc=%.4f aligned_si_sdr=%.1fdB",
+                "[%s] e2e_RTF=%.3f e2e_latency=%.2fms device_RTF=%.3f raw_pcc=%.4f lag=%d aligned_pcc=%.4f aligned_si_sdr=%.1fdB",
                 os.path.basename(fname),
                 rtf,
                 latency,
+                metrics.device_rtf,
                 global_pccs[-1],
                 lag,
                 apcc,

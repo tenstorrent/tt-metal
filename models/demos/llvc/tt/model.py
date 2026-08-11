@@ -39,6 +39,21 @@ class LLVCState:
     out_buf: ttnn.Tensor
 
 
+@dataclass(frozen=True)
+class StreamMetrics:
+    """Per-chunk streaming timing.
+
+    ``rtf`` / ``latency_ms`` are end-to-end: they include per-chunk host→device
+    upload and device→host download. ``device_rtf`` / ``device_latency_ms`` cover
+    device execution only (after input upload, before output download).
+    """
+
+    rtf: float
+    latency_ms: float
+    device_rtf: float
+    device_latency_ms: float
+
+
 def _to_device(t: torch.Tensor, *, device, dtype, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
     return ttnn.from_torch(t.contiguous(), device=device, dtype=dtype, layout=layout)
 
@@ -497,17 +512,19 @@ class LLVCModel:
             audio = waveform.reshape(-1)
         else:
             audio = waveform
-        out, _, _ = self.stream(audio, chunk_factor=1)
+        out, _ = self.stream(audio, chunk_factor=1)
         return out
 
-    def stream(self, waveform: torch.Tensor, *, chunk_factor: int = 1) -> tuple[torch.Tensor, float, float]:
+    def stream(self, waveform: torch.Tensor, *, chunk_factor: int = 1) -> tuple[torch.Tensor, StreamMetrics]:
         """Streaming conversion mirroring KoeAI ``infer_stream``.
 
         Splits ``waveform`` ([T] or [1, T]) into chunks of
         ``dec_chunk_size * L * chunk_factor`` samples, prepends a 2*L lookahead
         context from the previous chunk, and threads ``LLVCState`` across chunks.
 
-        Returns ``(converted [1, 1, T], rtf, per_chunk_latency_ms)``.
+        Returns ``(converted [1, 1, T], StreamMetrics)``. Primary ``rtf`` /
+        ``latency_ms`` are end-to-end (include per-chunk H2D upload and D2H
+        download); ``device_*`` fields isolate device execution only.
         """
         cfg = self.config
         L = cfg.L
@@ -529,19 +546,28 @@ class LLVCModel:
         state = self.init_state(1)
         # Trace needs at least one warmup + one capture chunk before it can replay.
         if cfg.use_trace and len(prepped) >= 3:
-            outputs, times = self._stream_traced(prepped, state)
+            outputs, device_times, e2e_times = self._stream_traced(prepped, state)
         else:
-            outputs, times = self._stream_eager(prepped, state)
+            outputs, device_times, e2e_times = self._stream_eager(prepped, state)
 
         out = torch.cat(outputs, dim=2)[:, :, :original_len]
-        avg_time = float(sum(times) / max(1, len(times)))
+        avg_device = float(sum(device_times) / max(1, len(device_times)))
+        avg_e2e = float(sum(e2e_times) / max(1, len(e2e_times)))
         # Standard RTF = processing_time / audio_duration (lower is faster; the
         # bounty target is RTF < 0.3), so it drops as larger chunks amortise
-        # the fixed per-chunk dispatch overhead.
+        # the fixed per-chunk overhead.
         chunk_audio_s = chunk_len / cfg.sample_rate
-        rtf = avg_time / max(chunk_audio_s, 1e-9)
-        e2e_latency_ms = ((2 * L + chunk_len) / cfg.sample_rate + avg_time) * 1000.0
-        return out, rtf, e2e_latency_ms
+        device_rtf = avg_device / max(chunk_audio_s, 1e-9)
+        e2e_rtf = avg_e2e / max(chunk_audio_s, 1e-9)
+        # Chunk latency = algorithmic buffering (lookahead + chunk) + compute.
+        device_latency_ms = ((2 * L + chunk_len) / cfg.sample_rate + avg_device) * 1000.0
+        e2e_latency_ms = ((2 * L + chunk_len) / cfg.sample_rate + avg_e2e) * 1000.0
+        return out, StreamMetrics(
+            rtf=e2e_rtf,
+            latency_ms=e2e_latency_ms,
+            device_rtf=device_rtf,
+            device_latency_ms=device_latency_ms,
+        )
 
     def _host_chunk(self, chunk: torch.Tensor) -> ttnn.Tensor:
         """A single prepped chunk as a host ``[1, T, 1]`` ROW_MAJOR tensor."""
@@ -549,9 +575,15 @@ class LLVCModel:
         return ttnn.from_torch(x, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def _stream_eager(self, prepped: list[torch.Tensor], state: LLVCState):
-        """One host-dispatched ``forward_chunk`` per chunk (no trace)."""
-        outputs, times = [], []
+        """One host-dispatched ``forward_chunk`` per chunk (no trace).
+
+        Times both device-only (after upload, before download) and end-to-end
+        (upload + compute + download) so RTF can reflect a real streaming deploy.
+        """
+        outputs, device_times, e2e_times = [], [], []
         for chunk in prepped:
+            ttnn.synchronize_device(self.device)
+            e2e_start = time.perf_counter()
             x_btc = _to_device(
                 chunk.reshape(1, 1, -1).transpose(1, 2),
                 device=self.device,
@@ -559,12 +591,14 @@ class LLVCModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             ttnn.synchronize_device(self.device)
-            start = time.time()
+            device_start = time.perf_counter()
             wav = self.forward_chunk(x_btc, state)
             ttnn.synchronize_device(self.device)
-            times.append(time.time() - start)
+            device_times.append(time.perf_counter() - device_start)
             outputs.append(ops.to_torch(wav).float().transpose(1, 2))
-        return outputs, times
+            ttnn.synchronize_device(self.device)
+            e2e_times.append(time.perf_counter() - e2e_start)
+        return outputs, device_times, e2e_times
 
     def _stream_traced(self, prepped: list[torch.Tensor], state: LLVCState):
         """Capture ``forward_chunk`` once, then replay it per chunk with no host dispatch.
@@ -581,7 +615,7 @@ class LLVCModel:
         in_dev = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, seq_len, 1]), self.dtype, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
         )
-        outputs, times = [], []
+        outputs, device_times, e2e_times = [], [], []
 
         # chunk 0 — eager warmup (JIT + conv-weight prep so capture has no host->device moves)
         ttnn.copy_host_to_device_tensor(self._host_chunk(prepped[0]), in_dev)
@@ -599,37 +633,28 @@ class LLVCModel:
             ttnn.end_trace_capture(dev, tid, cq_id=0)
         outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
 
-        # chunks 2..N — replay
+        # chunks 2..N — replay (time H2D + execute + D2H for e2e; execute alone for device)
         try:
             for chunk in prepped[2:]:
-                ttnn.copy_host_to_device_tensor(self._host_chunk(chunk), in_dev)
+                host = self._host_chunk(chunk)
                 ttnn.synchronize_device(dev)
-                start = time.time()
+                e2e_start = time.perf_counter()
+                ttnn.copy_host_to_device_tensor(host, in_dev)
+                ttnn.synchronize_device(dev)
+                device_start = time.perf_counter()
                 ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
                 ttnn.synchronize_device(dev)
-                times.append(time.time() - start)
+                device_times.append(time.perf_counter() - device_start)
                 outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
+                ttnn.synchronize_device(dev)
+                e2e_times.append(time.perf_counter() - e2e_start)
         finally:
             ttnn.release_trace(dev, tid)
 
-        if not times:
-            times = [0.0]
-        return outputs, times
-
-    def _pad_input(self, waveform: torch.Tensor):
-        cfg = self.config
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0).unsqueeze(0)
-        elif waveform.dim() == 2:
-            waveform = waveform.unsqueeze(1)
-        original_len = waveform.shape[-1]
-        mod = 0
-        if waveform.shape[-1] % cfg.L != 0:
-            mod = cfg.L - (waveform.shape[-1] % cfg.L)
-        waveform = torch.nn.functional.pad(waveform, (0, mod))
-        if cfg.lookahead:
-            waveform = torch.nn.functional.pad(waveform, (cfg.L, cfg.L))
-        return waveform, mod, original_len
+        if not device_times:
+            device_times = [0.0]
+            e2e_times = [0.0]
+        return outputs, device_times, e2e_times
 
 
 def create_llvc(

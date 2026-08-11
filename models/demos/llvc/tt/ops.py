@@ -9,10 +9,10 @@ Conventions
 * Activations flow as ``[B, T, C]`` on device.
 * Convolutions consume/emit ROW_MAJOR ``[B, T, C]``; matmul/attention/layernorm
   consume/emit TILE ``[B, T, C]``.
-* ``mac_causal_conv1d`` does *streaming causal* convolution by prepending the
-  cached context frames along ``T`` (kernel-1 tap shifted multiply-accumulate),
-  which mirrors the reference's per-layer ring buffers exactly and avoids the
-  L1 pressure of ``ttnn.conv1d`` on long sequences.
+* Streaming causal convolution uses :func:`causal_window` + :func:`apply_taps`
+  (kernel-tap shifted multiply-accumulate), which mirrors the reference's
+  per-layer ring buffers and avoids the L1 pressure of ``ttnn.conv1d`` on long
+  sequences.
 """
 
 from __future__ import annotations
@@ -24,13 +24,18 @@ import torch
 
 import ttnn
 
+from models.demos.llvc.tt.config import TILE_SIZE
+
+# Additive mask fill for SDPA key-padding (fused kernel ignores structural causality).
+_SDPA_PAD_MASK_VALUE = -1e4
+
+# Device masks cached by shape so fused SDPA stays trace-safe (no host upload in
+# ``forward_chunk`` after the warmup chunk has populated the cache).
+_SDPA_PAD_MASK_CACHE: dict[tuple, ttnn.Tensor] = {}
+
 
 def to_torch(x: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(x)
-
-
-def from_torch_btc(x: torch.Tensor, *, device, dtype: ttnn.DataType, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
-    return ttnn.from_torch(x, device=device, dtype=dtype, layout=layout)
 
 
 def as_row_major(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -240,9 +245,8 @@ def causal_window(
 
     ``x_ext = concat(ctx, x)`` is the input a causal conv consumes with
     ``padding=0``; ``new_ctx`` is the trailing ``buf_len`` frames to carry to the
-    next chunk. Split out from :func:`mac_causal_conv1d` so that several tap sets
-    (e.g. the prenet's filter *and* gate) can share one window build instead of
-    rebuilding the concat/slice/tilize per path.
+    next chunk. Several tap sets (e.g. the prenet's filter *and* gate) can share
+    one window build instead of rebuilding the concat/slice/tilize per path.
     """
     x_ext = concat_time(ctx_btc, x_btc)  # [B, buf_len + T, Cin]
     new_ctx = slice_time(x_ext, x_ext.shape[1] - buf_len, x_ext.shape[1])
@@ -271,28 +275,6 @@ def apply_taps(
         term = ttnn.linear(window, taps[j], bias=bias, transpose_b=True)
         out = term if out is None else ttnn.add(out, term)
     return out
-
-
-def mac_causal_conv1d(
-    x_btc: ttnn.Tensor,
-    ctx_btc: ttnn.Tensor,
-    taps: list[ttnn.Tensor],
-    biases: Optional[list[ttnn.Tensor]],
-    *,
-    dilation: int,
-    buf_len: int,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Streaming causal 1x1-style conv with kernel taps via shifted matmul-accumulate.
-
-    For a conv with kernel ``K`` and ``dilation``, the layer keeps the previous
-    ``buf_len = (K-1)*dilation`` frames as context. Returns ``(y[B, T, Cout], new_ctx)``.
-
-    This mirrors the reference ring-buffer semantics exactly and stays in TILE
-    layout throughout (cheap for the K=3 kernels LLVC uses).
-    """
-    x_ext_tile, new_ctx = causal_window(x_btc, ctx_btc, buf_len=buf_len)
-    out = apply_taps(x_ext_tile, x_btc.shape[1], taps, biases, dilation=dilation)
-    return out, new_ctx
 
 
 def depthwise_causal_conv1d(
@@ -353,6 +335,61 @@ def merge_heads(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(x, (b, t, h * hd))
 
 
+def _pad_heads_seq(x: ttnn.Tensor, *, seq_dim: int = 2) -> tuple[ttnn.Tensor, int]:
+    """Right-pad ``[B, H, S, D]`` along ``S`` to a TILE_SIZE multiple. Returns (padded, orig_S)."""
+    seq_len = int(x.shape[seq_dim])
+    pad = (TILE_SIZE - (seq_len % TILE_SIZE)) % TILE_SIZE
+    if pad == 0:
+        return as_tile(x), seq_len
+    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    padding = [(0, 0)] * len(x_rm.shape)
+    padding[seq_dim] = (0, pad)
+    x_rm = ttnn.to_memory_config(x_rm, ttnn.DRAM_MEMORY_CONFIG)
+    x_rm = ttnn.pad(x_rm, padding, value=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return as_tile(x_rm), seq_len
+
+
+def _sdpa_key_pad_mask(
+    *,
+    batch: int,
+    n_heads: int,
+    q_padded: int,
+    k_len: int,
+    k_padded: int,
+    device,
+    dtype: ttnn.DataType,
+) -> Optional[ttnn.Tensor]:
+    """Additive mask ``[B, H, Qpad, Kpad]`` that suppresses padded key positions.
+
+    Cached on device after first build so later (traced) calls do no host upload.
+    """
+    if k_padded == k_len:
+        return None
+    cache_key = (id(device), batch, n_heads, q_padded, k_len, k_padded, dtype)
+    cached = _SDPA_PAD_MASK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    mask = torch.zeros((batch, n_heads, q_padded, k_padded), dtype=torch.float32)
+    mask[:, :, :, k_len:] = _SDPA_PAD_MASK_VALUE
+    dev_mask = ttnn.from_torch(mask, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    _SDPA_PAD_MASK_CACHE[cache_key] = dev_mask
+    return dev_mask
+
+
+def _manual_scaled_dot_product_attention(
+    qh: ttnn.Tensor,
+    kh: ttnn.Tensor,
+    vh: ttnn.Tensor,
+    *,
+    scale: float,
+) -> ttnn.Tensor:
+    """Fallback matmul+softmax SDPA (no pad) for configs the fused kernel rejects."""
+    scores = ttnn.matmul(qh, ttnn.permute(kh, (0, 1, 3, 2)))
+    scores = ttnn.mul(scores, scale)
+    probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+    return ttnn.matmul(probs, vh)
+
+
 def scaled_dot_product_attention(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -361,16 +398,47 @@ def scaled_dot_product_attention(
     n_heads: int,
     head_dim: int,
 ) -> ttnn.Tensor:
-    """Multi-head SDPA (no mask). Inputs are ``[B, Tq/Tk, D]`` TILE tensors."""
+    """Multi-head SDPA via fused ``ttnn.transformer.scaled_dot_product_attention``.
+
+    Causality is structural (decoder windows already encode history); no causal
+    mask is applied. Sequence dims are padded to ``TILE_SIZE`` for the fused
+    kernel; padded key slots are masked out so numerics match the unpadded case.
+    Falls back to manual matmul+softmax if the fused op rejects the shapes
+    (e.g. tiny CI configs with ``head_dim < TILE_SIZE``).
+    Inputs are ``[B, Tq/Tk, D]`` TILE tensors.
+    """
     qh = split_heads(as_tile(q), n_heads)
     kh = split_heads(as_tile(k), n_heads)
     vh = split_heads(as_tile(v), n_heads)
-
     scale = 1.0 / math.sqrt(head_dim)
-    scores = ttnn.matmul(qh, ttnn.permute(kh, (0, 1, 3, 2)))
-    scores = ttnn.mul(scores, scale)
-    probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
-    ctx = ttnn.matmul(probs, vh)
+
+    # Fused SDPA wants tile-aligned head_dim and sequence pads; keep the old path
+    # for the small CI config (head_dim=16) so PCC/perf tests still run.
+    if head_dim % TILE_SIZE != 0:
+        return merge_heads(_manual_scaled_dot_product_attention(qh, kh, vh, scale=scale))
+
+    qh_p, q_len = _pad_heads_seq(qh)
+    kh_p, k_len = _pad_heads_seq(kh)
+    vh_p, _ = _pad_heads_seq(vh)
+    attn_mask = _sdpa_key_pad_mask(
+        batch=int(qh_p.shape[0]),
+        n_heads=n_heads,
+        q_padded=int(qh_p.shape[2]),
+        k_len=k_len,
+        k_padded=int(kh_p.shape[2]),
+        device=q.device(),
+        dtype=q.dtype,
+    )
+    ctx = ttnn.transformer.scaled_dot_product_attention(
+        qh_p,
+        kh_p,
+        vh_p,
+        attn_mask=attn_mask,
+        is_causal=False,
+        scale=scale,
+    )
+    if int(ctx.shape[2]) != q_len:
+        ctx = ttnn.slice(ctx, [0, 0, 0, 0], [ctx.shape[0], ctx.shape[1], q_len, ctx.shape[3]])
     return merge_heads(ctx)
 
 

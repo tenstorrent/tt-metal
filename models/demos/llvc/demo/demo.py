@@ -26,7 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llvc.tt.config import LLVCConfig
+from models.demos.llvc.tt.config import LLVC_L1_SMALL_SIZE, LLVC_TRACE_REGION_SIZE, LLVCConfig
 from models.demos.llvc.tt.model import create_llvc
 from models.demos.llvc.tt.state_io import load_llvc_config_and_model
 
@@ -110,14 +110,24 @@ def run_demo(args: argparse.Namespace, *, device: ttnn.Device) -> None:
             latencies.append(latency)
     if rtfs:
         logger.info(
-            "Mean RTF: {:.3f}  Mean chunk latency: {:.2f} ms", sum(rtfs) / len(rtfs), sum(latencies) / len(latencies)
+            "Mean e2e RTF: {:.3f}  Mean e2e chunk latency: {:.2f} ms",
+            sum(rtfs) / len(rtfs),
+            sum(latencies) / len(latencies),
         )
 
 
 def _run_one(model, audio, sr, args, *, out_name):
     if args.stream:
-        out, rtf, latency = model.stream(audio, chunk_factor=args.chunk_factor)
-        logger.info("[{}] streaming RTF={:.3f} chunk_latency={:.2f}ms", out_name, rtf, latency)
+        out, metrics = model.stream(audio, chunk_factor=args.chunk_factor)
+        rtf, latency = metrics.rtf, metrics.latency_ms
+        logger.info(
+            "[{}] streaming e2e_RTF={:.3f} e2e_latency={:.2f}ms (device_RTF={:.3f} device_latency={:.2f}ms)",
+            out_name,
+            rtf,
+            latency,
+            metrics.device_rtf,
+            metrics.device_latency_ms,
+        )
     else:
         out = model(audio)
         rtf, latency = None, None
@@ -144,7 +154,9 @@ def main() -> None:
     args = parse_args()
     # conv1d's halo step allocates config tensors in the L1-small region, so it
     # must be non-zero; a trace region is reserved for Stage-2 trace capture.
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=23887872)
+    device = ttnn.open_device(
+        device_id=args.device_id, l1_small_size=LLVC_L1_SMALL_SIZE, trace_region_size=LLVC_TRACE_REGION_SIZE
+    )
     device.enable_program_cache()
     try:
         run_demo(args, device=device)

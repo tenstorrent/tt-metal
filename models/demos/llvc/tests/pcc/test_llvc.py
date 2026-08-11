@@ -108,10 +108,13 @@ class TestLLVCEndToEnd:
         model = LLVCModel(cfg, ref, device=device)
 
         wav = torch.randn(cfg.dec_chunk_size * cfg.L * 4) * 0.2
-        stream_out, rtf, latency = model.stream(wav, chunk_factor=1)
+        stream_out, metrics = model.stream(wav, chunk_factor=1)
         assert torch.isfinite(stream_out).all()
-        assert rtf > 0.0
-        print(f"streaming RTF={rtf:.3f} latency={latency:.2f}ms")
+        assert metrics.rtf > 0.0
+        print(
+            f"streaming e2e_RTF={metrics.rtf:.3f} e2e_latency={metrics.latency_ms:.2f}ms "
+            f"(device_RTF={metrics.device_rtf:.3f})"
+        )
 
 
 if __name__ == "__main__":

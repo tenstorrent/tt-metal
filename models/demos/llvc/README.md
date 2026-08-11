@@ -32,11 +32,11 @@ models/demos/llvc/
 
 | LLVC block | Reference (`[B, C, T]`) | TTNN (`[B, T, C]`) |
 |---|---|---|
-| Cached conv prenet | 12 gated (`tanh·sigmoid`) residual `Conv1d(1,1,k=3)` with ring buffers | `ops.mac_causal_conv1d` (shifted matmul-accumulate) per block |
+| Cached conv prenet | 12 gated (`tanh·sigmoid`) residual `Conv1d(1,1,k=3)` with ring buffers | `ops.causal_window` + `ops.apply_taps` (shifted matmul-accumulate) per block |
 | Input conv | `Conv1d(1, enc_dim, k=3L, stride=L)` + ReLU | `ttnn.conv1d` with fused ReLU |
 | Dilated causal encoder | 8× depthwise-separable conv (`groups=enc_dim`, dilation 2ⁱ) + LN + ReLU, residual | depthwise `ttnn.conv1d(dilation=2ⁱ)` + `ttnn.layer_norm`; pointwise 1×1 as `ttnn.linear` |
 | e2d / d2e projections | grouped `Conv1d(k=1, groups=dec_dim)` + ReLU | `ttnn.conv1d(kernel=1, groups=…)` |
-| Causal transformer decoder | `nn.TransformerDecoderLayer` over unfolded chunks | `ttnn.matmul`/`ttnn.softmax` SDPA + `ttnn.linear` FFN, windowed via slices |
+| Causal transformer decoder | `nn.TransformerDecoderLayer` over unfolded chunks | `ttnn.transformer.scaled_dot_product_attention` + `ttnn.linear` FFN, windowed via slices |
 | Output synthesis ("vocoder") | `ConvTranspose1d(enc_dim,1,k=(out_buf_len+1)L,stride=L)` + `tanh` | `ttnn.conv_transpose2d` (singleton height) + `ttnn.tanh` |
 
 The label embedding takes a constant zero label, so its output is precomputed on
@@ -89,8 +89,14 @@ pytest models/demos/llvc/tests/perf/test_perf.py -v -s
 ```
 
 `create_llvc(config, device=..., checkpoint_path=...)` is the entry point;
-`LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, rtf, latency_ms)`
+`LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, StreamMetrics)`
 and `LLVCModel(waveform)` does non-streaming conversion.
+
+`StreamMetrics.rtf` / `.latency_ms` are **end-to-end**: each timed chunk includes
+host→device input upload and device→host output download, which a real streaming
+deployment pays every chunk. `.device_rtf` / `.device_latency_ms` isolate device
+execution only (after upload, before download) for comparison. Perf tests assert
+the Stage-1 targets against the e2e figures.
 
 `stream()` captures `forward_chunk` as a device **trace** and replays it per
 chunk (this is what removes the per-chunk host-dispatch overhead — see below).
@@ -139,29 +145,39 @@ the harness logs a skip line and still reports the pure-torch metrics.
 
 | Metric | Target | Measured (full-size, `chunk_factor=2`) | Where checked |
 |---|---|---|---|
-| Streaming RTF | < 0.3 | 0.217 | `tests/perf/test_perf.py` |
-| Per-chunk latency | < 100 ms | 33.6 ms | `tests/perf/test_perf.py` |
+| Streaming e2e RTF | < 0.3 | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
+| Per-chunk e2e latency | < 100 ms | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
 | Accuracy vs PyTorch | PCC > 0.90 | 0.9997 | `tests/pcc/test_llvc.py` |
 
-Full-size streaming RTF (real KoeAI weights, trace): 0.404 at `chunk_factor=1`,
-**0.217** at `chunk_factor=2`. Eager (no trace) was 2.77 — trace gives ~7× by
-removing per-chunk host dispatch, with identical numerics.
+Previously published full-size figures (device-only timer, real KoeAI weights,
+trace): RTF **0.217** / 33.6 ms at `chunk_factor=2`, RTF 0.404 at `chunk_factor=1`.
+Eager (no trace) was 2.77 — trace gives ~7× by removing per-chunk host dispatch,
+with identical numerics. Re-run the demo/perf tests to fill e2e numbers (they
+will be slightly higher once H2D/D2H is included).
 
 ## Notes, limitations, and optimization roadmap
 
 - **Streaming path** assumes the per-chunk encoder-frame count is a multiple of
   `dec_chunk_size` (guaranteed by `LLVCModel.stream`). The decoder unfold is done
   with slices; for `chunk_factor=1` there is exactly one attention window.
+- **RTF transfer-cost caveat**: published Stage-1 numbers and the perf-test gate
+  use e2e RTF/latency (upload + execute + download per chunk). Device-only RTF
+  will look better because it omits H2D/D2H; both are reported by `stream()` /
+  the demo so the gap is visible. Overlapping the next chunk's upload with
+  compute (2-CQ) would shrink that gap further.
 - **Device trace (implemented)**: the per-chunk cost was host dispatch, not
   device math. `LLVCState` holds persistent ring buffers updated in place with
   `ttnn.copy`, so `forward_chunk` (a fixed shape across the streaming loop) is
   captured once and replayed via `ttnn.execute_trace`. Conv weights *and* biases
   are cached on device after the warmup chunk so capture does no host→device
-  writes. This is the change that meets the RTF target.
+  weight writes. This is the change that meets the RTF target.
+- **Trace region**: `LLVC_TRACE_REGION_SIZE` (`tt/config.py`) is sized from the
+  full-model `forward_chunk` capture footprint on N300 (~22.8 MiB); demo, eval,
+  and tests share that constant.
 - **Further opportunities** (not required to hit target; would bring
   `chunk_factor=1` under 0.3 too): fuse the encoder LN + ReLU, keep encoder
   activations sharded in L1 across layers, fold the output transpose-conv, and
   2-CQ double-buffering to overlap the input upload with compute.
 - The cached-conv prenet uses per-tap matmul-accumulate (exact vs the reference
-  ring buffers); for `enc_dim`-wide depthwise convs `ttnn.conv1d(groups=…)` is
-  used instead.
+  ring buffers); for `enc_dim`-wide depthwise convs a shifted per-channel MAC is
+  used instead (`ttnn.conv1d` cannot shard these depthwise layers).

@@ -13,6 +13,15 @@ import ttnn
 
 TILE_SIZE = 32
 
+# Trace capture of full-size ``forward_chunk`` (enc_dim=512, 8 encoder layers,
+# traced streaming) needs ~22.8 MiB of dedicated DRAM on N300. Measured during
+# Stage-2 bring-up by raising the region until ``begin_trace_capture`` succeeded
+# without OOM; kept as a named constant so demo/eval/tests stay in lockstep.
+LLVC_TRACE_REGION_SIZE = 23_887_872
+
+# conv1d halo config tensors live in the L1-small region; must be non-zero.
+LLVC_L1_SMALL_SIZE = 32_768
+
 
 def align_to_tile(value: int) -> int:
     return int(math.ceil(value / TILE_SIZE) * TILE_SIZE)
@@ -66,7 +75,6 @@ class LLVCConfig:
     use_sharded: bool = True
     use_program_cache: bool = True
     use_trace: bool = True  # capture forward_chunk once and replay it per streaming chunk
-    attn_mask_value: float = -1e4
 
     def __post_init__(self):
         if self.dec_dim % self.nhead != 0:
@@ -75,11 +83,6 @@ class LLVCConfig:
     @property
     def kernel_size_in_conv(self) -> int:
         return 3 * self.L if self.lookahead else self.L
-
-    @property
-    def enc_buf_len(self) -> int:
-        """Total context length held by the dilated causal encoder."""
-        return (3 - 1) * (2**self.num_enc_layers - 1)
 
 
 def get_ttnn_dtype(dtype: str) -> ttnn.DataType:
