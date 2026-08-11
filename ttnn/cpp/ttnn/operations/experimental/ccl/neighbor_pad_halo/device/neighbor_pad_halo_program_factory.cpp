@@ -251,6 +251,8 @@ struct NpHaloWSetup {
     KernelHandle w_writer_kernel_id = 0;
     CoreRangeSet occ_w_workers;
     CoreRangeSet occ_wmux;
+    // The mux path re-homes the W senders onto the worker cores, so this comes back out.
+    CoreRangeSet w_fabric_core_range;
 };
 
 // W-axis (2D padding) fabric kernels: the mux path when the W send is coalesced across several
@@ -300,7 +302,8 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
     const uint32_t w_section_wright_base = p.w_section_wright_base;
     const auto& w_fabric_logical_cores = p.w_fabric_logical_cores;
     const auto& w_fabric_virtual_cores = p.w_fabric_virtual_cores;
-    const auto& w_fabric_core_range = p.w_fabric_core_range;
+    out.w_fabric_core_range = p.w_fabric_core_range;
+    CoreRangeSet& w_fabric_core_range = out.w_fabric_core_range;
     const auto& mux_worker_logical = p.mux_worker_logical;
     const auto& mux_core_logical = p.mux_core_logical;
     const auto& mux_worker_virtual = p.mux_worker_virtual;
@@ -856,7 +859,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     // Inc B: batch-align H partition so each (direction, link) owns whole T-batches
     const uint32_t h_pb = progress_t_batch_size;
-    const uint32_t h_total_batches = (h_pb > 0) ? ((outer_dim_size + h_pb - 1) / h_pb) : 0;
+    // h_pb is 0 for the halo-only op, so the divisor is a literal zero the compiler folds even
+    // though the branch is dead; the clamp keeps -Wdivision-by-zero off it.
+    const uint32_t h_total_batches = (h_pb > 0) ? ((outer_dim_size + h_pb - 1) / std::max(h_pb, 1u)) : 0;
     const uint32_t h_batches_per_link = (h_total_batches > 0) ? ((h_total_batches + num_links - 1) / num_links) : 0;
     const uint32_t h_dims_per_link = h_batches_per_link * h_pb;
 
@@ -1442,6 +1447,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     const KernelHandle w_writer_kernel_id = w_setup.w_writer_kernel_id;
     occ_w_workers = w_setup.occ_w_workers;
     occ_wmux = w_setup.occ_wmux;
+    w_fabric_core_range = w_setup.w_fabric_core_range;
 
     // ------------------------------------------------------------------------ Padded-output fused mode: copy
     const NpHaloScatterSetup scatter = setup_interior_scatter(
