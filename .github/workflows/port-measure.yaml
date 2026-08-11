@@ -159,6 +159,11 @@ jobs:
       ref: ${{ github.sha }}
       platform: "Ubuntu 22.04"
       build-type: Release
+      # The default checkout fetches 500 commits of history for every one of ~1300 tags, which is
+      # >3GB of trees and blobs nobody here reads, and it has been taking 8-20 minutes against a
+      # 20 minute step timeout. tree:0 still fetches the tags `git describe` needs for the wheel
+      # version and still materialises the full worktree; it only defers historical trees.
+      checkout-filter: "tree:0"
 
   # Skipped for `build`, where a green build-artifact job is the entire answer and a card would only
   # add queue time to a question that does not need one.
