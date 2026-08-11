@@ -191,7 +191,7 @@ Full test suite:
 ```bash
 python -m pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py \
     -q --no-header --junitxml=models/autoports/meta_models_muse_glimmer_30b/doc/functional_decoder/test_results.xml
-# 73 passed in 521.20s   -> logs/full_test_run.log, test_results.xml
+# 73 passed in 396.92s   -> logs/full_test_run.log, test_results.xml
 ```
 
 Full-context subset (also runs inside the suite above):
@@ -223,8 +223,8 @@ python -m pytest "$T::test_prefill_pcc[12345-sliding]" "$T::test_prefill_pcc[123
   "$T::test_batched_prefill_decode_pcc[13-sliding]" "$T::test_batched_prefill_decode_pcc[4-full]" \
   "$T::test_multi_chunk_prefill_nonzero_user[sliding]" "$T::test_decode_sdpa_sliding_window_semantics[2049]" \
   "$T::test_prefill_seq_len_equals_max_and_chunk[sliding]" -q --no-header
-# 14 passed in 164.36s  -> logs/watcher_run.log, watcher/watcher.log.gz
-# watcher.log: 18340 lines, 17 dumps, 0 x {Watcher detected, tripped, sanitize, TT_ASSERT, DEBUG_ASSERT, fault}
+# 14 passed in 104.67s  -> logs/watcher_run.log, watcher/watcher.log.gz
+# watcher.log: 11867 lines, 11 dumps, 0 x {Watcher detected, tripped, sanitize, TT_ASSERT, DEBUG_ASSERT, fault}
 
 # Watcher writes $D/watcher/generated/watcher/. The repo-root .gitignore excludes any
 # path component named "generated", so watcher.log and kernel_names.txt were moved up
@@ -278,6 +278,15 @@ were also applied: limitation 6 now names HF-reference tractability (not DRAM)
 as the reason batch 32 x 131072 was not run, and the three op-level probe logs
 were regenerated so none predates the final implementation file.
 
+### Artifact regeneration after the pre-commit hooks
+
+`black`/`isort` reformatted the four Python sources when the stage was first
+committed (whitespace and import order only; no statement changed).  To keep the
+evidence strictly newer than the code it exercises, the **entire** evidence set —
+full suite, fallback and full-context subsets, watcher run, all six Tracy
+windows, and the three op-level probes — was regenerated against the committed,
+formatted sources and the numbers below updated accordingly.
+
 ## 6. Results
 
 * 73/73 tests pass; 194 PCC checks, minimum **0.99742** (bar 0.995).
@@ -292,9 +301,9 @@ were regenerated so none predates the final implementation file.
 * Caller-chunked (`start_pos > 0`) prefill validated against a single-shot HF
   prefill for both kinds, plus a decode past the continuation.
 * FP32 HF control matches the BF16 control to ~1e-3.
-* Warmed prefill (8192 tok): 101.37 ms sliding / 99.47 ms full device time.
+* Warmed prefill (8192 tok): 101.23 ms sliding / 99.38 ms full device time.
   Warmed traced decode (drop-free 8-replay captures, both ends of the context):
-  sliding **3.161 / 3.160 ms/token** at 2048 / 131071 (its SDPA is window-capped);
+  sliding **3.163 / 3.160 ms/token** at 2048 / 131071 (its SDPA is window-capped);
   full **3.080 ms/token** at 2048 and **3.575 ms/token** at 131071.
 
 ## 7. Not done in this stage (by scope)

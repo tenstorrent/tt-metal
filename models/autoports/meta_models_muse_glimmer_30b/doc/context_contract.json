@@ -129,12 +129,12 @@
     {
       "command": "python models/autoports/meta_models_muse_glimmer_30b/tests/functional_decoder_capacity_probe.py --seq-len 131072 --layer 0 --decode",
       "log": "doc/functional_decoder/logs/capacity_probe_131072_layer0.log",
-      "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=1.9 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
+      "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=2.0 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
     },
     {
       "command": "python models/autoports/meta_models_muse_glimmer_30b/tests/functional_decoder_capacity_probe.py --seq-len 131072 --layer 3 --decode",
       "log": "doc/functional_decoder/logs/capacity_probe_131072_layer3.log",
-      "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=4.7 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
+      "result": "CAPACITY_PROBE_PASS mode=prefill seq_len=131072 output_shape=(1, 1, 131072, 6656) tail_finite=True seconds=4.8 / CAPACITY_PROBE_PASS mode=decode cur_pos=131071"
     }
   ],
   "byte_budget_at_full_context": {
@@ -148,16 +148,16 @@
   "performance": {
     "note": "Warmed, signposted Tracy windows; Device Time column from tt-perf-report --csv, microseconds. 8 trace replays per decode window; all six captures are free of dropped profiler markers.",
     "prefill_8192_tokens_batch1_ms": {
-      "sliding": 101.37,
-      "full": 99.47
+      "sliding": 101.23,
+      "full": 99.38
     },
     "traced_decode_ms_per_token": {
-      "sliding@2048": 3.161,
+      "sliding@2048": 3.163,
       "sliding@131071": 3.16,
       "full@2048": 3.08,
       "full@131071": 3.575
     },
-    "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 35.9 us -> 529.8 us between 2048 and 131071."
+    "context_scaling": "sliding decode is context-independent (SDPA reads at most the 2048 window); full (NoPE) decode SDPA goes 35.7 us -> 529.7 us between 2048 and 131071."
   },
   "tests": {
     "total": 73,

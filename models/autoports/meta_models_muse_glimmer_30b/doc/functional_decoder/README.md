@@ -305,8 +305,8 @@ prefill including the short-tail 64+100 case, traced decode replay both kinds,
 batch-13 (fallback head-concat) and batch-4 prefill/decode, the non-zero
 cache-slot multi-chunk prefill, the decode sliding-window control, and the
 `seq_len == max_seq_len == chunk` regression).
-`watcher/watcher.log.gz` (18340 lines, gzipped to stay under the repo's 500 KB file-size hook) contains only the legend,
-`k_ids:` lines, 17 periodic dumps with
+`watcher/watcher.log.gz` (11867 lines, gzipped to stay under the repo's 500 KB
+file-size hook) contains only the legend, `k_ids:` lines, 11 periodic dumps with
 stack-usage summaries, and attach/detach lines — zero occurrences of
 `Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`, CB/L1/NOC
 out-of-bounds or hardware-fault messages.  Console log: `logs/watcher_run.log`.
@@ -332,17 +332,17 @@ grep -c "markers were dropped" doc/functional_decoder/logs/tracy_*.log   # all 0
 
 | kind | mode | context | window | ops/iter | device time / iter | incl. op-to-op gaps |
 | --- | --- | --- | --- | --- | --- | --- |
-| sliding | prefill, 8192 tokens, batch 1 | — | `PERF_PREFILL` | 42 | 101.37 ms (80.8 k tok/s of layer throughput) | 101.40 ms |
-| full | prefill, 8192 tokens, batch 1 | — | `PERF_PREFILL` | 24 | 99.47 ms (82.4 k tok/s) | 99.48 ms |
-| sliding | traced decode, batch 1 | 2048 | `PERF_DECODE` | 64 | **3.161 ms/token** | 3.223 ms |
-| sliding | traced decode, batch 1 | **131071** | `PERF_DECODE` | 64 | **3.160 ms/token** | 3.222 ms |
+| sliding | prefill, 8192 tokens, batch 1 | — | `PERF_PREFILL` | 42 | 101.23 ms (80.9 k tok/s of layer throughput) | 101.26 ms |
+| full | prefill, 8192 tokens, batch 1 | — | `PERF_PREFILL` | 24 | 99.38 ms (82.4 k tok/s) | 99.39 ms |
+| sliding | traced decode, batch 1 | 2048 | `PERF_DECODE` | 64 | **3.163 ms/token** | 3.226 ms |
+| sliding | traced decode, batch 1 | **131071** | `PERF_DECODE` | 64 | **3.160 ms/token** | 3.223 ms |
 | full | traced decode, batch 1 | 2048 | `PERF_DECODE` | 32 | **3.080 ms/token** | 3.114 ms |
 | full | traced decode, batch 1 | **131071** | `PERF_DECODE` | 32 | **3.575 ms/token** | 3.608 ms |
 
 Decode is measured at both ends of the advertised context because the two kinds
 scale differently: the `sliding` layer's SDPA reads at most its 2048-token
-window, so 2048 and 131071 are identical (35.9 vs 35.4 µs of SDPA); the `full`
-(NoPE) layer reads the whole prefix, so its SDPA goes 35.9 µs → 529.8 µs and the
+window, so 2048 and 131071 are identical (36.1 vs 35.1 µs of SDPA); the `full`
+(NoPE) layer reads the whole prefix, so its SDPA goes 35.7 µs → 529.7 µs and the
 step costs +0.49 ms.  The long-context windows advance `current_pos` without a
 131071-token prefill — decode cost depends on how many KV tokens the op reads,
 not on their contents, and a profiled long prefill would overflow the marker
@@ -352,9 +352,9 @@ Decode device-time split (per token, sliding@2048 / full@131071):
 
 | share | op | cores | note |
 | --- | --- | --- | --- |
-| 80.1 % / 70.8 % | 6 x `MatmulDeviceOperation` (2530 µs) | 64–104 | weight-bandwidth bound: one step reads `(6656*4608 + 6656*4096 + 4096*6656 + 3*6656*19968) * 2 B = 967,835,648 B ≈ 968 MB`, ≈2.5 ms at the observed effective DRAM bandwidth |
+| 80.1 % / 70.8 % | 6 x `MatmulDeviceOperation` (2533 / 2531 µs) | 64–104 | weight-bandwidth bound: one step reads `(6656*4608 + 6656*4096 + 4096*6656 + 3*6656*19968) * 2 B = 967,835,648 B ≈ 968 MB`, ≈2.5 ms at the observed effective DRAM bandwidth |
 | 14.1 % / 12.5 % | 6 x `LayerNormDeviceOperation` (447 µs) | **1** | `ttnn.rms_norm` picks a single core for the `[1,1,1,6656]` decode-shaped tensors (the same op runs on 110 cores in prefill).  Not a correctness issue, but it is the largest non-matmul cost and a named target for the optimized-decoder stage — it is *not* a bandwidth effect |
-| 1.1 % / 14.8 % | `SdpaDecodeDeviceOperation` (35.9 / 529.8 µs) | 110 | the only op that scales with context |
+| 1.1 % / 14.8 % | `SdpaDecodeDeviceOperation` (36.1 / 529.7 µs) | 110 | the only op that scales with context |
 | ~4.7 % / ~1.9 % | everything else (heads split/concat, paged update, RoPE gather, elementwise) | mixed | |
 
 Lowering weight precision, DRAM-sharding the matmuls and giving the decode
