@@ -292,24 +292,28 @@ inline void bitonic_top8_ph0_to_ph3() {
     {
         constexpr bool start_transpose = true;
         constexpr bool end_transpose = false;
+        constexpr int phase_replay_count = 2 + (int)start_transpose + (int)end_transpose;
         bitonic_topk_ph0_st1_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 1
     {
         constexpr bool start_transpose = false;
         constexpr bool end_transpose = true;
+        constexpr int phase_replay_count = 4 + (int)start_transpose + (int)end_transpose;
         // Odd Columns
         bitonic_topk_ph1_st2_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 2
     {
         constexpr bool end_transpose = true;
+        constexpr int phase_replay_count = 7 + (int)end_transpose;
         // Even Columns
         bitonic_topk_ph2_st3_to_1_single_face<end_transpose>();
     }
     // Modified Phase 3 for top8
     {
         constexpr bool end_transpose = true;
+        constexpr int phase_replay_count = 8 + (int)end_transpose;
         bitonic_top8_ph3_st4_to_1<idir, end_transpose>();
     }
 }
@@ -324,6 +328,10 @@ void reverse_sort_order() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _deepseek_moe_gate_sum_top2() {
     constexpr bool idir = false;  // Sort descending order
+    constexpr int load_store_replay_count = 8;
+    constexpr int load_replay_offset = 0;
+    constexpr int store_replay_offset = load_replay_offset + load_store_replay_count;
+    constexpr int phase_replay_offset = store_replay_offset + load_store_replay_count;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPCONFIG(0x4, 0xF, 1);
