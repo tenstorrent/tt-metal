@@ -202,11 +202,8 @@ def read_wait_globals(
             processor_index = location.noc_block.risc_names.index(risc_name)
             triage_states = kernel_elf.get_global("dispatch_s_triage_state", loc_mem_access)
             triage_state = None
-            for channel_index in range(2):
-                try:
-                    candidate = triage_states[channel_index]
-                except Exception:
-                    break
+            for channel_index in range(len(triage_states)):
+                candidate = triage_states[channel_index]
                 try:
                     candidate_dm_index = int(candidate.dm_index)
                 except Exception:
