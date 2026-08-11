@@ -168,11 +168,11 @@ jobs:
 
       - name: Setup multihost job
         uses: ./.github/actions/setup-multihost-job
+        timeout-minutes: 90
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-pipeline-dir: "false"
-          reset-timeout-minutes: "45"
 
       # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
       # job, tests run under mpirun): on dispatch stall the runtime runs

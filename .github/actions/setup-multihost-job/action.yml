@@ -57,10 +57,6 @@ inputs:
     description: Max ttop-ipmi-reset + validation attempts (arg 2 to ttop-recovery)
     required: false
     default: "10"
-  reset-timeout-minutes:
-    description: Timeout for the ttop-recovery step
-    required: false
-    default: "30"
 
 runs:
   using: "composite"
@@ -142,13 +138,9 @@ runs:
         # shellcheck disable=SC2086 # intentional word-split of EXTRA_PIP_PACKAGES
         mpirun --pernode uv pip install "${ttnn_wheels[@]}" ${EXTRA_PIP_PACKAGES}
 
-    # Recovery lives in the multihost-ci runner ConfigMap (ttop-recovery +
-    # ttop-ipmi-reset), not inlined here: IPMI reset via /run/ttop-ipmi/reset and
-    # cluster validation with the unpacked binary.
     - name: Reset cards and validate cluster
       shell: bash
       working-directory: /tmp
-      timeout-minutes: ${{ fromJSON(inputs.reset-timeout-minutes) }}
       env:
         CLUSTER_VALIDATION: ${{ inputs.cluster-validation-bin }}
         MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
@@ -167,7 +159,6 @@ runs:
           exit 1
         fi
         echo "Running ttop-recovery with cluster validation: $CLUSTER_VALIDATION"
-        # Args: <run_cluster_validation> <max_retries> <cabling> <deployment>
         ttop-recovery \
           "$CLUSTER_VALIDATION" \
           "$MAX_RECOVERY_ATTEMPTS" \

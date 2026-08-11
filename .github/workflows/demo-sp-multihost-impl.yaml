@@ -112,6 +112,7 @@ jobs:
 
       - name: Setup multihost job
         uses: ./.github/actions/setup-multihost-job
+        timeout-minutes: 90
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
