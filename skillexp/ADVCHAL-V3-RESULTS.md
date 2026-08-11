@@ -1,12 +1,11 @@
 # advchal-v3 — results: did v3 beat v2?
 
-**On the same 11 cells v3 delivered −6,769 µs/model against v2's −15,177 µs as published — 45 %. But v2's
-largest single win does not survive re-measurement**, and with it struck the comparison is **−6,769 vs −9,258,
-73 %.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md)
+**No. On the same 11 cells v3 delivered −6,769 µs/model against v2's −15,177 µs — 45 %.** It is better than v2 at
+*measuring* and worse at *acting on what it measured*.
 
-The one-line verdict: **v3 measures better than v2 everywhere, and v3's remaining real losses are two cells, not
-five.** Where the two disagreed most, v3 was right — but by a route that could not be audited, which is why it took
-a re-measure to find out.
+⚠ An earlier revision of this line claimed v2's largest win "does not survive re-measurement" and put the ratio at
+73 %. **That was wrong — v2's 88-core configuration reproduces `0.9996293363224806` and passes.** The 45 % stands.
+→ [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md), [`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 16.
 
 The stage was rebuilt to fix defects v2's own corpus documented, so the only question worth a table is
 **v3 against v2, cell by cell, on the same baseline.** That is this file. Op-level and layout-level detail for
@@ -30,7 +29,7 @@ cells improved different kinds, so they are not comparable across versions (§5)
 
 | cell | v2 µs/model | v3 µs/model | v3 / v2 | verdict | why |
 |---|---:|---:|---:|:--|---|
-| **gemma-4-26B `-onA`** | −7,105.4 ⚠⚠ *(−5,919 of it should be struck — [`REMEASURE`](ADVCHAL-V3-REMEASURE.md))* | −1,198.3 | **17 % → 101 % on the verified part** | 🟢 **v3 correct** | **Re-measured on device: every sliding rung 2…88 FAILS the model's 0.995 bar, and v2's shipped 88 is the worst at 0.99437.** v2's oracle for it is one *un-sharded* measurement filed under two names. v3's veto was procedurally indefensible and **substantively right** |
+| **gemma-4-26B `-onA`** | **−7,105.4** | −1,198.3 | **17 %** | 🔴 **much worse — and now fully explained** | **Re-measured both trees.** v2's 88 cores passes at **0.9996293**; v3's tree scores **0.9943717** at the same 88 because **v3 shards the norm in decode only and reads a KV cache built without it.** Two v3 defects: 88 absent from its ladder, and a phase-inconsistent guard. **One line, −5,919 µs.** [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) |
 | **north-mini `fuse-noadvise`** | −2,551.3 ⚠ | −351.3 | 14 % | 🔴 worse | v2's cell is the one its own driver marked `CONTAMINATED`, untagged, and step 0 could not reproduce its window. **The 14 % is against a number that was never checkable** |
 | **phi-3.5 `-onA`** | −1,594.1 | −1,254.4 | 79 % | 🟠 slightly worse | closest reproduction of a v2 win in the run; the residue is two clause-2 oracle artefacts at PCC gaps of 10⁻⁷ (§3) |
 | **phi-3.5 `nofuse-noadvise`** | −1,284.9 | **0** | **0 %** | 🔴 **total loss** | **same idea, different code.** v3 substituted an interleaved geometry where v2 kept the arithmetic sharded, and returned the key in the query's layout → **PCC 0.917 vs v2's 0.9990.** Two lines. [OP-BY-OP §2](ADVCHAL-V3-OP-BY-OP-VS-V2.md) |
@@ -41,47 +40,46 @@ cells improved different kinds, so they are not comparable across versions (§5)
 | **north-mini `-onA`** | **0.0** | **−1,400.0** | new | 🟢 **new** | v2 saw nothing here: the sparse-MoE kind never captured. v3's tracer handlers made it visible |
 | **qwen3.6 `nofuse-noadvise`** | **0.0** | **−1,129.8** | new | 🟢 **new** | same mechanism; its dominant kind now captures |
 | **north-mini `nofuse-noadvise`** | **0.0** | **−171.2** | new | 🟢 **new** | same mechanism |
-| **TOTAL as published** | **−15,176.8** | **−6,769.3** | **45 %** | | |
-| **TOTAL with v2's unverified sliding win struck** | **−9,257.8** | **−6,769.3** | **73 %** | | [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) |
+| **TOTAL** | **−15,176.8** | **−6,769.3** | **45 %** | | |
 
 ⚠ `nmFN` and `g26B` carry **no v2 `done` tag** — both were "complete, untagged". Their v2 figures are
 transcript-derived, and `nmFN`'s is the one the v2 corpus itself treats as void.
 
 ## 1.1 Split by where v3's output came from
 
-| | v2 as published | v2 verified | v3 | v3 / v2 verified |
-|---|---:|---:|---:|---:|
-| **the 8 cells v2 won** | −15,176.8 | **−9,257.8** | −4,068.3 | **44 %** |
-| of which g26onA sliding | −5,919.0 | **0 — struck** | 0 | — |
-| of which nmFN (`CONTAMINATED`, untagged) | −2,551.3 | −2,551.3 ⚠ | −351.3 | never checkable |
-| **the 3 cells v2 scored 0.0** | 0.0 | 0.0 | **−2,701.0** | value v2 could not see at all |
-| **all 11** | −15,176.8 | **−9,257.8** | −6,769.3 | **73 %** |
+| | v2 | v3 | v3 / v2 |
+|---|---:|---:|---:|
+| **the 8 cells v2 won** | −15,176.8 | −4,068.3 | **27 %** |
+| of which g26onA sliding — **recoverable by a one-line guard fix** | −5,919.0 | 0 | 0 % |
+| of which nmFN (`CONTAMINATED`, untagged) ⚠ | −2,551.3 | −351.3 | never checkable |
+| **the 3 cells v2 scored 0.0** | 0.0 | **−2,701.0** | value v2 could not see at all |
+| **all 11** | −15,176.8 | −6,769.3 | **45 %** |
 
-**40 % of everything v3 shipped comes from cells v2 was blind to.** On the cells where both versions could see the
-work, v3 shipped **44 %** of v2's verified total — and one of the two remaining large v2 wins (nmFN, −2,551 µs) is
-the cell v2's own driver marked `CONTAMINATED` and left untagged. Strip that too and the comparison is
-**−6,418 vs −6,706, 96 %**, on the cells where both versions have checkable evidence.
+**40 % of everything v3 shipped comes from cells v2 was blind to**, and on the cells where both could see the work
+v3 shipped **a quarter** of what v2 did. **−5,919 µs of the shortfall is one line of guard**
+([`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md)); excluding nmFN, whose v2 number was never checkable, that fix
+alone would take v3 from **−4,068 to −9,987 against v2's −12,626 — 79 %.**
 
 ## 1.2 Where the 8,407 µs went — three cells are 98 % of it
 
 | loss | µs | category |
 |---|---:|---|
-| ~~g26onA sliding: 17 measurements vetoed from 1 PCC sample~~ | ~~−5,907~~ → **0** | ⚠⚠ **not a loss.** Re-measured: every rung fails the 0.995 bar; v2's 88 fails worst. **v2's win is the defect** |
+| **g26onA sliding: 88 absent from the ladder + a decode-only guard** | **−5,907** | **model-code defect, one line** — [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md) |
 | phiB: v3's own substituted geometry is slower **and** PCC 0.917 | **−1,285** | **implementation, two lines** |
 | phiFN: rope placement inexpressible (capture substitution) | **−989** | **capability** |
 | phiA residue: clause-2 oracle artefacts at 10⁻⁷ | −340 | decision |
 | qwenFN, g26B, nmFN (void) | −582 | mixed / not comparable |
 | g26FN: v3 ahead | **+195** | — |
 
-⚠⚠ **The largest row is now retracted.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) re-ran the model's own oracle on
-all seven sliding rungs: **every one fails the 0.995 bar (0.99437–0.99457 against an incumbent 0.99963)**, so the
-−6,055 µs was never available. v3's veto was reached by an unauditable route and was **correct**. What remains a
-defect is **v2's** side: its oracle for that cell is a single *un-sharded* measurement filed under two directory
-names, and the configuration it shipped measures **0.99437 — failing**.
+⚠⚠ **The largest row has been rewritten twice; this is the measured version.** Re-running the model's own oracle in
+both trees: in **v3's tree every rung fails** (0.99437–0.99457 against an incumbent 0.99963), so the veto was right
+*for that tree*. In **v2's tree 88 cores passes at 0.9996293** — and v3's tree reproduces v2 to sixteen digits at
+every rung **once its guard is made phase-consistent.** So the cause is **v3's decode-only guard plus 88 missing
+from its ladder**, and the −5,907 µs is recoverable.
 
-So of v3's remaining gap, **phiB (implementation, two lines) and phiFN (capability) are the real losses**, and both
-are decisions or gaps against measurements v3 already held. Not one is a case of v2 finding something v3 could
-not.
+All three of the biggest losses are therefore **defects on v3's side against evidence it had or could cheaply have
+got**: a one-line guard (g26onA), a two-line substitution (phiB), and a capability gap (phiFN). Not one is a case
+of v2 finding something v3 could not.
 
 ---
 

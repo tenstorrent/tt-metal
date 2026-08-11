@@ -186,14 +186,18 @@ The actual defect: all 17 carry `verdict = rejected_kind_by_absolute_oracle`, an
 > **The performance search was complete and correct. The correctness verdict was extrapolated from one
 > configuration to sixteen that were never measured.**
 
-⚠⚠ **And the extrapolation turned out to be right.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) ran the model's own
+⚠⚠ **The extrapolation was right about v3's tree, and the tree was the defect.** [`REMEASURE`](ADVCHAL-V3-REMEASURE.md) ran the model's own
 oracle on every rung: **2/4/8/11/22/44/88 all fail the 0.995 bar**, 0.99437–0.99457 against an incumbent 0.99963,
 with **88 — the advised grid and v2's shipped grid — the worst.** My earlier caveat that 8 and 22 "may well pass"
-is **falsified**; the −6,055 µs was never available. The process defect stands in full (one rung measured, verdict
-hardcoded as `kind == "full_attention"`, no oracle log) — but **a correct answer reached by an unauditable route
-is indistinguishable from a lucky one, which is exactly why the re-measure was needed.** And the same re-measure
-shows **v2's oracle for that cell is one un-sharded measurement filed under two names**, so the −5,919 µs it
-booked should be struck.
+is **falsified** — for v3's tree. The process defect stands in full (one rung measured, verdict hardcoded as
+`kind == "full_attention"`, no oracle log): **a correct answer reached by an unauditable route is
+indistinguishable from a lucky one, which is exactly why the re-measure was needed.**
+
+**But the tree is the real defect.** Running v2's tree, **88 cores passes at 0.9996293**, and v3's tree reproduces
+v2 to sixteen digits at every rung once its guard is made phase-consistent. v3 shards the norm in **decode only**
+and therefore reads a KV cache built with interleaved norms. So **the −5,919 µs is recoverable by one line**, 88
+belongs on the ladder, and v2's win stands — [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md),
+[`PITFALLS`](ADVCHAL-V3-ANALYST-PITFALLS.md) ERROR 16.
 
 **−242.2 µs/layer × 25 layers = −6,055 µs/model**, on a cell that shipped −1,198. **73 % of the whole v3-vs-v2
 gap.**

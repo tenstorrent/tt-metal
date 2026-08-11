@@ -63,7 +63,7 @@ differ by a handful of flipped expert selections. The routing discontinuity is t
 
 Not numerical. **Both runs failed to verify the same change, in opposite directions.**
 
-## v2 never exercised the change it shipped
+## v2's oracle bookkeeping is sloppy — but it *did* exercise the change
 
 v2's `final.json` cites `oracle_artifacts: ["oracle/shipped_default/pcc_layer0_sliding_attention_shared1.json", …]`
 and reports `oracle_passed: true`. Those files say:
@@ -78,10 +78,8 @@ and reports `oracle_passed: true`. Those files say:
 **The "88-core candidate" and the "shipped default" files are byte-identical, for both layers.** One oracle run,
 filed under two directory names, and both `provenance.exact_command` fields are empty strings.
 
-And that single number is **1.3 × 10⁻⁶ from v3's *interleaved incumbent* (0.9996280142258483) and
-5.3 × 10⁻³ from every sharded rung measured above.** Since the two trees' norm implementations are bit-identical
-(measured — [`PCC-DROP-ISOLATION`](ADVCHAL-V3-PCC-DROP-ISOLATION.md) §2), a genuinely engaged 88-core sharding in
-v2's tree would have read ≈0.9944, as it does here.
+And that single number is **1.3 × 10⁻⁶ from v3's *interleaved incumbent* (0.9996280142258483)** — which is what
+made it look like an un-sharded measurement.
 
 > ⚠⚠ **RETRACTED.** This paragraph read: *"The only reading consistent with the numbers is that v2's oracle ran
 > with the norm sharding inactive… v2's −7,105.4 µs/model rests on it."* **It is wrong.** Running v2's tree at 88
@@ -106,16 +104,14 @@ needed to settle.
 
 | | v2 | v3 |
 |---|---|---|
-| sliding grid | 88 | none shipped |
-| µs/model claimed | **−5,919.0** | 0 |
-| its own oracle | 0.99963 — **an un-sharded measurement, filed twice** | hardcoded literal, **but the real value is 0.99457** |
-| **measured PCC of the config it shipped** | **0.99437 — FAILS the 0.995 bar** | n/a (shipped nothing) |
-| verdict | **the win should be struck** | **the rejection stands** |
+| sliding grid | **88** | none shipped; **88 never on the ladder** |
+| µs/model | **−5,919.0** | 0 |
+| guard | shards in **prefill + decode** | **decode only** |
+| **re-measured PCC of 88 in its own tree** | **0.9996293363224806 — PASSES** | **0.9943716809625597 — FAILS** |
+| verdict | **the win stands, and is correctness-established** | **the rejection was right for its tree; the tree was wrong** |
 
-**v3 did not lose 5,907 µs to a bad decision on this cell. v2 booked 5,919 µs for a change that fails the
-model's own correctness bar and whose oracle never tested it.** Every table in this corpus that compares the two
-on gemma-4-26B `-onA` needs that caveat, including
-[`RESULTS`](ADVCHAL-V3-RESULTS.md) §1 and [`OP-BY-OP`](ADVCHAL-V3-OP-BY-OP-VS-V2.md) §1.
+**v3 lost 5,919 µs on this cell to two defects of its own** — 88 absent from the ladder, and a decode-only guard
+that would have failed 88 anyway. Full derivation in [`GUARD-FINDING`](ADVCHAL-V3-GUARD-FINDING.md).
 
 ---
 
