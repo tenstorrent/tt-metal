@@ -583,6 +583,29 @@ def scatter_sampling_params_to_slots(
     return SamplingParams(**kwargs)
 
 
+def slice_sampling_params(sampling_params, start: int, stop: int):
+    """Take the ``[start, stop)`` requests out of a prefill-ordered SamplingParams.
+
+    For callers that split one prefill batch into several forward passes: each pass
+    must carry its own requests' params, not the first ``stop - start`` of the batch.
+    List fields are sliced, scalars are shared. Falls back to dataclass defaults for
+    missing attributes so vLLM's ``TTSamplingParams`` works transparently.
+    """
+    if sampling_params is None:
+        return None
+    sliced = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        try:
+            value = getattr(sampling_params, field_name)
+        except AttributeError:
+            if hasattr(SamplingParams, field_name):
+                value = getattr(SamplingParams, field_name)
+            else:
+                raise
+        sliced[field_name] = value[start:stop] if isinstance(value, list) else value
+    return SamplingParams(**sliced)
+
+
 def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
     """
     Chunk a SamplingParams (or duck-type-compatible object) into ``sampling_dp`` pieces.

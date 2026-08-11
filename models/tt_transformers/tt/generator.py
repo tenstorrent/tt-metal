@@ -54,11 +54,41 @@ def batched_prefill_padded_batch(batch_size, empty_slots, max_batch_size):
     value. The batch must therefore span the highest slot in use, not just the
     request count: vLLM hands out the slot that already owns a request's per-slot
     state, so a batch of N requests can legitimately land on slots above N.
+
+    A span no bucket covers returns at least the span itself, so the caller's
+    ``padded_batch > max_batch_size`` guard fires and sends the batch down the
+    sequential path. Reporting ``max_batch_size`` there would re-enable the very
+    out-of-bounds slot write this bound exists to prevent.
     """
     span = batch_size
     if empty_slots is not None and len(empty_slots) > 0:
         span = max(span, max(int(s) for s in empty_slots) + 1)
-    return next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= span), max_batch_size)
+    return next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= span), max(span, max_batch_size))
+
+
+def gather_batched_prefill_samples(
+    empty_slots,
+    tokens_host,
+    tt_log_probs,
+    plain_log_probs_host,
+    output_tokens,
+    output_log_probs,
+):
+    """Move a batched prefill's sampled rows back into the caller's prefill order.
+
+    The device sampled row ``empty_slots[i]`` for request ``i`` (batched prefill is
+    laid out by physical slot), while ``output_tokens``/``output_log_probs`` are sized
+    by the request count and returned in prefill order. Read by slot, write by
+    position: indexing the outputs by slot overflows them once a slot reaches the
+    request count, and silently hands one request another's token before that.
+    """
+    for local_idx, slot in enumerate(empty_slots):
+        slot = int(slot)
+        output_tokens[local_idx] = tokens_host[slot]
+        if isinstance(tt_log_probs, LogProbsResult):
+            output_log_probs[local_idx] = tt_log_probs.extract_user(slot)
+        elif plain_log_probs_host is not None:
+            output_log_probs[local_idx] = plain_log_probs_host[slot]
 
 
 # Position of the page table within the decode input tuple produced by
@@ -954,14 +984,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         if tt_log_probs is not None and not isinstance(tt_log_probs, LogProbsResult)
                         else None
                     )
-                    # Device rows are physical slots; the returned arrays are in the
-                    # caller's prefill order, so read by slot and write by local_idx.
-                    for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[local_idx] = tokens_host[slot]
-                        if isinstance(tt_log_probs, LogProbsResult):
-                            output_log_probs[local_idx] = tt_log_probs.extract_user(slot)
-                        elif plain_log_probs_host is not None:
-                            output_log_probs[local_idx] = plain_log_probs_host[slot]
+                    gather_batched_prefill_samples(
+                        empty_slots,
+                        tokens_host,
+                        tt_log_probs,
+                        plain_log_probs_host,
+                        output_tokens,
+                        output_log_probs,
+                    )
                 else:
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot

@@ -29,6 +29,7 @@ from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     Generator,
     batched_prefill_padded_batch,
+    gather_batched_prefill_samples,
     max_prefill_chunk_size_cutoff,
 )
 
@@ -466,12 +467,14 @@ class GemmaMultimodalGenerator(Generator):
                         if tt_log_probs is not None
                         else None
                     )
-                    # Device rows are physical slots; the returned arrays are in the
-                    # caller's prefill order, so read by slot and write by local_idx.
-                    for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[local_idx] = tokens_host[slot]
-                        if log_probs_host is not None:
-                            output_log_probs[local_idx] = log_probs_host[slot]
+                    gather_batched_prefill_samples(
+                        empty_slots,
+                        tokens_host,
+                        None,
+                        log_probs_host,
+                        output_tokens,
+                        output_log_probs,
+                    )
                 else:
                     for local_idx, slot in enumerate(empty_slots):
                         user_logits = logits[slot : slot + 1, :, :, :]
