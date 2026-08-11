@@ -252,6 +252,20 @@ class Transformer(LightweightModule):
         )
         return self._apply_norm_and_lm_head(user_tokens)
 
+    def _apply_final_logit_softcapping(self, logits):
+        """Gemma-2 final logit soft-capping: logits -> tanh(logits / cap) * cap.
+
+        No-op unless args.final_logit_softcapping is set (only Gemma-2 sets it), so
+        this leaves every other model's output path unchanged.
+        """
+        cap = self.args.final_logit_softcapping
+        if cap is None or cap <= 0:
+            return logits
+        logits = ttnn.multiply(logits, 1.0 / cap)
+        logits = ttnn.tanh(logits)
+        logits = ttnn.multiply(logits, cap)
+        return logits
+
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
         x = self.norm(
@@ -261,6 +275,7 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
+        logits = self._apply_final_logit_softcapping(logits)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
@@ -943,6 +958,7 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        x = self._apply_final_logit_softcapping(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
