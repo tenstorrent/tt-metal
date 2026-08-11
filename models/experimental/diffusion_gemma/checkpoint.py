@@ -317,6 +317,31 @@ def build_tt_model_from_checkpoint_inputs(
         model_kwargs = dict(model_kwargs)
         model_kwargs["num_layers"] = _validate_num_layers(model_kwargs["num_layers"])
 
+    # The served KV layout is the DEFAULT layout: bounded sliding windows, full span
+    # only on the global-attention layers. A caller asking for a KV cache without its
+    # own paged config gets exactly what serving runs (this is also what lets a 256K
+    # max_seq_len fit at all — the contiguous 30-layer full-length cache does not).
+    # DG_MODEL_OWNED_HYBRID_KV=0 stays the explicit contiguous rollback, and callers
+    # that pass their own paged_attention_config keep full control.
+    attach_hybrid_kv = False
+    if (
+        model_kwargs.get("create_kv_cache", True)  # the backbone default builds a KV cache
+        and "paged_attention_config" not in model_kwargs  # caller owns its layout
+        and model_kwargs.get("max_seq_len")
+        and int(model_kwargs.get("max_batch_size", 1)) == 1
+    ):
+        from models.experimental.diffusion_gemma.tt.hybrid_kv import (
+            model_owned_hybrid_kv_enabled,
+            model_owned_hybrid_kv_model_kwargs,
+        )
+
+        if model_owned_hybrid_kv_enabled():
+            model_kwargs = dict(model_kwargs)
+            # The hybrid layout supersedes the legacy bounded-sliding knob.
+            model_kwargs.pop("bounded_sliding_kv_cache", None)
+            model_kwargs.update(model_owned_hybrid_kv_model_kwargs(max_seq_len=int(model_kwargs["max_seq_len"])))
+            attach_hybrid_kv = True
+
     if remap_fn is None:
         from models.experimental.diffusion_gemma.weight_mapping import remap_state_dict
 
@@ -339,6 +364,12 @@ def build_tt_model_from_checkpoint_inputs(
     # Keep the DiffusionGemma-owned model instance on that exact scalar rather
     # than multiplying embeddings by the unrounded Python sqrt(hidden_size).
     tt_model.embed_scale = torch.tensor(tt_model.hidden_size**0.5, dtype=torch.bfloat16).item()
+    if attach_hybrid_kv:
+        from models.experimental.diffusion_gemma.tt.hybrid_kv import attach_model_owned_hybrid_kv
+
+        # Page tables and full-layer views land on the model itself; consumers
+        # fall back to them when no explicit tables are passed (generate.py).
+        attach_model_owned_hybrid_kv(tt_model, max_seq_len=int(model_kwargs["max_seq_len"]))
     return CheckpointModelInputs(
         tokenizer=checkpoint_inputs.tokenizer,
         state_dict=checkpoint_inputs.state_dict,

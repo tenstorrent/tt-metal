@@ -219,7 +219,13 @@ class BlockDiffusionServingSession:
         self.config = DiffusionConfig() if config is None else config
         self.canvas_length = self.config.canvas_length
         self.page_table = page_table
-        self.page_tables_per_layer = page_tables_per_layer
+        # The model-owned hybrid cache attaches its identity page tables to the model;
+        # a caller without its own tables (demo, tests) serves against those directly.
+        self.page_tables_per_layer = (
+            page_tables_per_layer
+            if page_tables_per_layer is not None
+            else getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
+        )
         self.prefill_execution_len = None if prefill_execution_len is None else int(prefill_execution_len)
         self.gumbel_mode = gumbel_mode
         # ``None`` selects ordinary eager denoise. The vLLM wrapper passes only the

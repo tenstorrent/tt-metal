@@ -434,7 +434,11 @@ def prefill_prompt_tokens(
             input_ids_torch=prefill_tokens,
             get_last_token=((prompt_len - 1) // 32) * 32,
             page_table=page_table,
-            page_tables_per_layer=page_tables_per_layer,
+            page_tables_per_layer=(
+                page_tables_per_layer
+                if page_tables_per_layer is not None
+                else getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
+            ),
         )
     if discarded is not None:
         discarded.deallocate(True)

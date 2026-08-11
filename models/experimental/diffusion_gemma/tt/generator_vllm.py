@@ -840,7 +840,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             max_model_len=self._max_model_len,
         )
         cache_span = (
-            int(self._max_model_len)
+            # Direct-construction callers (tests, benches) have no vLLM max_model_len;
+            # the hybrid attachment records the allocated span on the model itself.
+            int(self._max_model_len or self.model[0]._dg_hybrid_max_seq_len)
             if bool(getattr(self.model[0], "_dg_model_owned_hybrid_kv", False))
             else min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
         )

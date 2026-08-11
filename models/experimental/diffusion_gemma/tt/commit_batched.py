@@ -1191,6 +1191,11 @@ def commit_canvas_tokens_batched(
             "batched commit does not support a legacy/shared page_table; use the sequential "
             "commit unless DG model-owned per-layer hybrid page tables are attached"
         )
+    if page_tables_per_layer is None:
+        # A hybrid-cache model without explicit tables (demo, tests) commits against
+        # its own attached identity page tables; the contiguous writer below is only
+        # for the DG_MODEL_OWNED_HYBRID_KV=0 rollback layout.
+        page_tables_per_layer = getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
     paged_writes = None
     if page_tables_per_layer is not None:
         if not getattr(tt_model, "_dg_model_owned_hybrid_kv", False):
