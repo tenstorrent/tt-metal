@@ -22,7 +22,6 @@ target_sources(
         FILES ${TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_API_HEADERS}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_kda_qkv_causal_conv1d_silu PRIVATE TT::Metalium PUBLIC TTNN::Core)

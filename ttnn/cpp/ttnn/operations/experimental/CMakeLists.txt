@@ -33,12 +33,7 @@ add_subdirectory(reduction)
 # metalium-developers-sdpa
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
-add_subdirectory(kda/affine_exclusive_scan)
-add_subdirectory(kda/prepare_chunk_recurrence)
-add_subdirectory(kda/qkv_causal_conv1d_silu)
-add_subdirectory(kda/reduce_affine_transforms)
-add_subdirectory(kda/recurrent_chunk_scan)
-add_subdirectory(kda/sigmoid_gated_rms_norm)
+add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
@@ -96,6 +91,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
+        TTNN::Ops::Experimental::KDA::Shared
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
         TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
@@ -152,6 +148,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::Shared>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>

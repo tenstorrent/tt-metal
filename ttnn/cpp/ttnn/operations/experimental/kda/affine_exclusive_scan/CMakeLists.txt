@@ -22,7 +22,6 @@ target_sources(
         FILES ${TTNN_OP_EXPERIMENTAL_KDA_AFFINE_EXCLUSIVE_SCAN_API_HEADERS}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_AFFINE_EXCLUSIVE_SCAN_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_kda_affine_exclusive_scan PRIVATE TT::Metalium PUBLIC TTNN::Core)
