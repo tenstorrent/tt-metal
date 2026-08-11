@@ -198,6 +198,9 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # Which group of 8 L1 client interfaces the L1 counters observe. The mux routes interfaces into the
+    # counters as they count, so one run sees one group; sweep this to cover all of them.
+    PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     DUMP_RAW_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_METRICS: ClassVar[bool] = False
     DUMP_CSV_COUNTERS: ClassVar[bool] = False
@@ -239,28 +242,6 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
-
-    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
-    PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
-    )
-
-    # Trailing metadata written by PerfCounterManager (must match counters.h):
-    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
-    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
-        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
-    )
-
-    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
-    PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS * 4
-        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
-        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
-    )
-
-    # Legacy alias — sums per-zone bytes for back-compat with old callers
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -529,6 +510,7 @@ class TestConfig:
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
             "-I../../hostdevcommon/api",
+            "-I../../tools/profiler",  # perf_counters.hpp: PerfCounterType enum for hw_counters.h
         ] + hw_specific_includes
 
     @staticmethod
@@ -995,7 +977,7 @@ class TestConfig:
                 # Only compile BRISC with counter support when counters are enabled,
                 # otherwise BRISC arms counter hardware which adds monitoring overhead.
                 perf_cnt_flag = (
-                    "-DPERF_COUNTERS_COMPILED "
+                    f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                     if TestConfig.ENABLE_PERF_COUNTERS
                     else ""
                 )
@@ -1298,7 +1280,7 @@ class TestConfig:
                     TestConfig.ENABLE_PERF_COUNTERS
                     and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 ):
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
