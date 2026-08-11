@@ -115,15 +115,25 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------------------
 # p150 REVERSALS. Each of these was the SHIPPED choice on the N150 and is wrong here.
 # ---------------------------------------------------------------------------------------
-def test_no_width_sharded_norms_anywhere():
-    """Both blocks' decode RMSNorms are the plain interleaved op. Width-sharding them wins ~4.4
-    ms/frame on Wormhole and LOSES ~4.5 on Blackhole: the reshard is the tax (6.9's phrase), and
-    the p150's interleaved kernel made the reduction cheap enough that the tax stops paying for
-    itself. It is also CLOSER to fp32 truth here, not further. STATUS.md 6.39/6.40."""
-    for mod in (gpt, flow):
-        assert not hasattr(mod, "_NORM_SHARD"), f"{mod.__name__}: sharded norm is back -- 6.39/6.40"
-        assert not hasattr(mod, "_NORM_PRG")
-    assert not hasattr(gpt.TtVoxtralGPT, "_norm_dec"), "decode norm split back out -- 6.39"
+def test_sharded_norm_is_decode_only_and_legally_shaped():
+    """The decode RMSNorm is width-sharded AGAIN, worth +5.693 ms/frame. 6.39/6.40 rejected it at
+    +4.4 ms WORSE, and were right eagerly: the cost was the RESHARD, which 6.65's trace removed.
+    Fifth stale rejection of the same kind. STATUS.md 6.67.
+
+    Two invariants, both load-bearing:
+      * DECODE ONLY. The shard spec fixes the height at one tile, so prefill -- [1, Sp, 3072] with
+        Sp up to 1024 -- fails outright with "Shard height 32 must match physical height 384".
+        sharded_norm falls back to interleaved above one tile of rows.
+      * cores * block_w == 96. 3072 wide is 96 tiles and a tile is indivisible (6.39's rule, which
+        is a property of the TENSOR and did not change)."""
+    nc = gpt._NORM_GRID[0] * gpt._NORM_GRID[1]
+    assert nc * gpt._NORM_PRG.block_w == gpt.DIM // gpt.TILE, (
+        f"{nc} cores x block_w {gpt._NORM_PRG.block_w} != {gpt.DIM // gpt.TILE} tiles")
+    assert gpt._NORM_PRG.block_h == 1, "the shard assumes one tile of rows"
+    import inspect
+    src = inspect.getsource(gpt.sharded_norm)
+    assert "x.shape[-2] > TILE" in src, "the prefill fallback is gone -- prefill will fail"
+    assert flow.TtVoxtralFlow._norm.__module__ == flow.__name__
 
 
 def test_wo_does_not_get_the_n150_hand_tuned_config_back():

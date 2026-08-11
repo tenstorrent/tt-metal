@@ -17,7 +17,7 @@ from models.experimental.voxtral_tts.reference.voxtral_flow_ref import (
 
 # Block 2 has Block 1's dims exactly, so the decode matmul program configs are shared rather
 # than duplicated -- NOTES.md [flow-23]. gpt does not import flow, so this cannot cycle.
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import DECODE_PRG
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import DECODE_PRG, sharded_norm
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     DEFAULT_CKPT,
     EMPTY_AUDIO_ID,
@@ -116,9 +116,8 @@ class TtVoxtralFlow:
     # One bidirectional block over the 3-token sequence
     # ----------------------------------------------------------------------------------
     def _norm(self, x, gamma):
-        """RMSNorm, interleaved. NOT width-sharded on this fork -- see NOTES.md [flow-07]."""
-        return ttnn.rms_norm(x, weight=gamma, epsilon=FM_NORM_EPS,
-                             compute_kernel_config=COMPUTE_CONFIG)
+        """RMSNorm, width-sharded on the decode path -- NOTES.md [flow-07], [gpt-28]."""
+        return sharded_norm(x, gamma, FM_NORM_EPS, _L1)
 
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
