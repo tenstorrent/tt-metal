@@ -9,7 +9,8 @@ taken until now to write v3's.
 | | |
 |---|---|
 | **v3 vs v2, same 11 cells** | **−6,769 µs/model against −15,177 — 45 %** ([`RESULTS`](ADVCHAL-V3-RESULTS.md)) |
-| **why** | v3 improved the *rigour* of its measurement without changing its *scope*; the defect class it needed to see is created by that scope and hidden by it ([`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)) |
+| **why** | **v3's defect was detected and v2's was not, and v3 could not attribute what it detected — so it discarded the win instead of fixing the bug.** Both versions ship the same cross-phase defect; only v2's fixture hid it ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md), which supersedes part of [`CORE-ISSUE`](ADVCHAL-V3-CORE-ISSUE.md)) |
+| **how much is explained** | **64 % of the 11,303 µs lost, with a measured fix. 36 % is not** — largest hole is north-mini `fuse-noadvise` at 2,200 µs, which I dismissed without verifying ([`WHY-WORSE`](ADVCHAL-V3-WHY-WORSE.md) §1) |
 | **the agent's actual error** | it read a diagnostic as a verdict — a placement change that preserves arithmetic to 10⁻⁶ cannot cost 5 × 10⁻³ at layer scope, and that 1000× gap was the signal ([`WHAT-THE-AGENT-GOT-WRONG`](ADVCHAL-V3-WHAT-THE-AGENT-GOT-WRONG.md)) |
 | **recoverable now** | **−6,545 µs** from two measured fixes, i.e. 78 % of the shortfall — neither is a search or judgement improvement, both are code defects |
 
