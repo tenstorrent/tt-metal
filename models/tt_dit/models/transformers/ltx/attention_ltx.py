@@ -546,8 +546,12 @@ class LTXAttention(Module):
         return output
 
     def _gate_is_live(self) -> bool:
-        """True when the gate projection will actually run (and so will gather its input)."""
-        return self.apply_gated_attention and self.to_gate_logits.weight._data is not None
+        """True when the gate projection will actually run (and so will gather its input).
+
+        A fused gate has no projection of its own — it falls out of the QKV/Q matmul — so it neither
+        runs nor gathers, and ``to_gate_logits`` is never built.
+        """
+        return self.apply_gated_attention and not self.fuse_gate and self.to_gate_logits.weight._data is not None
 
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
