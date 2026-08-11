@@ -1,0 +1,14 @@
+# The repo root .gitignore excludes *.csv, *.log and any directory called "generated", but
+# everything under this directory is stage *evidence* and has to be tracked:
+#
+#   *.csv       raw Tracy ops CSVs (their ATTRIBUTES column proves which program configs
+#               actually ran), the filtered tt-perf-report CSVs the perf tables are derived
+#               from, and the core-grid sweep data;
+#   *.log       the console logs for the definitive test/perf runs and the $autofix
+#               localization, plus each Tracy session's pytest log;
+#   generated/  watcher writes its log under <TT_METAL_LOGS_PATH>/generated/watcher/.
+#
+# scripts/render_evidence.py reads the CSVs and gates the committed numbers against them.
+!*.csv
+!*.log
+!generated/

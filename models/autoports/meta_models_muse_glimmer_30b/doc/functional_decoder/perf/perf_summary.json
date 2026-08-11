@@ -1,0 +1,244 @@
+{
+  "records": [
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 3.2231083748683886,
+      "tokens_per_second": 310.25950222379157,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 3.2441064995509805,
+      "tokens_per_second": 308.25128587437274,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 3.5724485937862482,
+      "tokens_per_second": 8957.441698575962,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 3.5641035004421915,
+      "tokens_per_second": 8978.414907431792,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 3.242426156248257,
+      "tokens_per_second": 308.4110329152658,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "batch": 1,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 3.2705510833087224,
+      "tokens_per_second": 305.7588689268626,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 32,
+      "wall_clock_ms_per_iter": 3.4015364062724984,
+      "tokens_per_second": 9407.51359914637,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "decode_traced_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "batch": 32,
+      "context": 4096,
+      "iterations": 12,
+      "wall_clock_ms_per_iter": 3.4189032503491035,
+      "tokens_per_second": 9359.726689175099,
+      "signposts": [
+        "PERF_DECODE",
+        "PERF_DECODE_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 59.632449998753145,
+      "tokens_per_second": 68687.43444358975,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 58.84693740081275,
+      "tokens_per_second": 69604.3019554562,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 98.0996279991814,
+      "tokens_per_second": 83506.94255505597,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "full_nope",
+      "layer_idx": 3,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 96.04945479950402,
+      "tokens_per_second": 85289.39614597689,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 59.1434896006831,
+      "tokens_per_second": 69255.29804979062,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "seq_len": 4096,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 59.43035180098377,
+      "tokens_per_second": 68921.01217432466,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 98.11349640076514,
+      "tokens_per_second": 83495.13879862215,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": false
+    },
+    {
+      "measurement": "prefill_warmed",
+      "kind": "sliding_rope",
+      "layer_idx": 0,
+      "seq_len": 8192,
+      "batch": 1,
+      "iterations": 5,
+      "wall_clock_ms_per_iter": 96.4996581999003,
+      "tokens_per_second": 84891.49239295922,
+      "signposts": [
+        "PERF_PREFILL",
+        "PERF_PREFILL_END"
+      ],
+      "profiled": true
+    }
+  ]
+}

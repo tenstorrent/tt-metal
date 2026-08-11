@@ -1,0 +1,135 @@
+{
+  "hf_model_id": "meta-models/Muse-Glimmer-30B",
+  "stage": "functional_decoder",
+  "stage_number": 1,
+  "hf_advertised_context": 131072,
+  "hf_context_source": "config.json text_config.max_position_embeddings",
+  "current_supported_context": 131072,
+  "capability_reduction": false,
+  "limiting_reason": null,
+  "capacity_evidence": null,
+  "notes": [
+    "Functional decoder-layer stage: one MuseGlimmerTextDecoderLayer on a (1, 1) Blackhole mesh.",
+    "No capability reduction. Prefill and decode were both exercised at the full advertised context.",
+    "The vision tower / projector are a separate stage; their absence is the stage split, not a context or capability reduction."
+  ],
+  "device": {
+    "arch": "blackhole",
+    "board": "p300c",
+    "mesh_shape": [
+      1,
+      1
+    ],
+    "compute_with_storage_grid_size": [
+      11,
+      10
+    ],
+    "dram_bytes_per_bank": 4272341376,
+    "dram_banks": 8,
+    "dram_total_bytes": 34178731008,
+    "l1_bytes_per_core": 1461504
+  },
+  "tested": {
+    "prefill": {
+      "max_seq_len": 131072,
+      "also_tested_seq_lens": [
+        1,
+        7,
+        31,
+        32,
+        100,
+        1000,
+        2048,
+        2080,
+        3000,
+        8192,
+        8256,
+        12345,
+        131071
+      ],
+      "non_aligned_lengths_tested": [
+        1,
+        7,
+        31,
+        100,
+        1000,
+        2080,
+        3000,
+        8256,
+        12345,
+        131071
+      ],
+      "boundaries_covered": [
+        "tile (32)",
+        "page/block (32, 64, 128)",
+        "sliding window (2048 and 2080)",
+        "prefill chunk (8192 and 8256)",
+        "advertised maximum (131072 and 131071)"
+      ],
+      "batch_sizes_tested": [
+        1,
+        4,
+        32
+      ],
+      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_full_context_prefill_and_decode"
+    },
+    "decode": {
+      "max_context": 131072,
+      "max_position_tested": 131071,
+      "ragged_positions_tested": [
+        37,
+        1000,
+        2049,
+        3111
+      ],
+      "batch_sizes_tested": [
+        1,
+        4,
+        32
+      ],
+      "traced": true,
+      "test": "models/autoports/meta_models_muse_glimmer_30b/tests/test_functional_decoder.py::test_full_context_prefill_and_decode"
+    }
+  },
+  "kv_cache": {
+    "paged": true,
+    "dtype": "bfloat16",
+    "block_sizes_tested": [
+      32,
+      64,
+      128
+    ],
+    "bytes_per_token_per_layer": 1024,
+    "bytes_at_full_context_batch1_per_layer": 134217728,
+    "bytes_at_full_context_batch32_per_layer": 4294967296,
+    "comment": "2 KV heads * 128 head_dim * 2 bytes * 2 (K and V) = 1024 B per token per layer; at 131072 tokens that is 128 MiB for batch 1 and 4 GiB for batch 32, both well inside the 34.18 GB device DRAM."
+  },
+  "pcc": {
+    "bar": 0.995,
+    "bar_source": "$functional-decoder default; no model-specific exception claimed",
+    "artifact": "models/autoports/meta_models_muse_glimmer_30b/doc/functional_decoder/pcc/pcc_results.json"
+  },
+  "layer_kinds": {
+    "sliding_rope": {
+      "representative_layer_idx": 0,
+      "layer_type": "sliding_attention",
+      "rope_theta": 500000.0,
+      "sliding_window": 2048
+    },
+    "full_nope": {
+      "representative_layer_idx": 3,
+      "layer_type": "full_attention",
+      "rope_theta": null,
+      "sliding_window": null,
+      "comment": "layer_rope_theta == 0 means NoPE: the HF model passes position_embeddings=None to these layers."
+    }
+  },
+  "continued_prefill": {
+    "full_attention": true,
+    "sliding_attention": false,
+    "reason": "op contract: the windowed prefill SDPA has no paged-cache mode and chunked_scaled_dot_product_attention has no sliding-window mode, so a continued sliding-window segment cannot read the part of its 2048-token window that lives in the paged cache. The layer raises instead of returning a truncated-window answer.",
+    "affects_advertised_context": false,
+    "note": "Not a context reduction: a single prefill_forward call still accepts any length up to the full 131072 advertised context and chunks internally. This restricts only segmented/continued prefill, which later prefix-caching or chunked-prefill serving paths will need.",
+    "test": "tests/test_functional_decoder.py::test_continued_prefill_contract"
+  }
+}

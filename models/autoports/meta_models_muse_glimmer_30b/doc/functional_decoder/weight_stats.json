@@ -1,0 +1,254 @@
+{
+  "hf_model_id": "meta-models/Muse-Glimmer-30B",
+  "note": "per-tensor stats of the real checkpoint; used to build synthetic weights with real shapes/scales",
+  "layers": {
+    "0": {
+      "kind_id": "sliding_rope",
+      "layer_type": "sliding_attention",
+      "rope_theta": 500000.0,
+      "sliding_window": 2048,
+      "tensors": {
+        "input_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 0.3398023843765259,
+          "std": 0.3412225544452667,
+          "absmax": 3.5
+        },
+        "mlp.down_proj.weight": {
+          "shape": [
+            6656,
+            19968
+          ],
+          "dtype": "bfloat16",
+          "mean": 6.400466077138844e-07,
+          "std": 0.006129125598818064,
+          "absmax": 0.453125
+        },
+        "mlp.gate_proj.weight": {
+          "shape": [
+            19968,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 9.478974902776827e-07,
+          "std": 0.006129267625510693,
+          "absmax": 0.1083984375
+        },
+        "mlp.up_proj.weight": {
+          "shape": [
+            19968,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 1.1436351314841886e-06,
+          "std": 0.0061291721649467945,
+          "absmax": 0.166015625
+        },
+        "post_attention_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -0.3321862518787384,
+          "std": 0.21101588010787964,
+          "absmax": 3.34375
+        },
+        "post_feedforward_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -0.23851005733013153,
+          "std": 0.1160932183265686,
+          "absmax": 0.953125
+        },
+        "pre_feedforward_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 0.16966918110847473,
+          "std": 0.25121384859085083,
+          "absmax": 2.859375
+        },
+        "self_attn.gate_proj.weight": {
+          "shape": [
+            4096,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -2.7429596229922026e-06,
+          "std": 0.006129160523414612,
+          "absmax": 0.0712890625
+        },
+        "self_attn.k_proj.weight": {
+          "shape": [
+            256,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 2.395198180238367e-06,
+          "std": 0.006128991022706032,
+          "absmax": 0.06884765625
+        },
+        "self_attn.o_proj.weight": {
+          "shape": [
+            6656,
+            4096
+          ],
+          "dtype": "bfloat16",
+          "mean": -1.3366026223593508e-06,
+          "std": 0.006129262503236532,
+          "absmax": 0.25390625
+        },
+        "self_attn.q_proj.weight": {
+          "shape": [
+            4096,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -7.909026180641376e-07,
+          "std": 0.0061291661113500595,
+          "absmax": 0.11083984375
+        },
+        "self_attn.v_proj.weight": {
+          "shape": [
+            256,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -2.8317674605204957e-06,
+          "std": 0.0061292885802686214,
+          "absmax": 0.04345703125
+        }
+      }
+    },
+    "3": {
+      "kind_id": "full_nope",
+      "layer_type": "full_attention",
+      "rope_theta": null,
+      "sliding_window": null,
+      "tensors": {
+        "input_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 0.4456337094306946,
+          "std": 0.1160418912768364,
+          "absmax": 1.6484375
+        },
+        "mlp.down_proj.weight": {
+          "shape": [
+            6656,
+            19968
+          ],
+          "dtype": "bfloat16",
+          "mean": 1.3754244321262377e-07,
+          "std": 0.006129157729446888,
+          "absmax": 0.314453125
+        },
+        "mlp.gate_proj.weight": {
+          "shape": [
+            19968,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -8.682895469291907e-08,
+          "std": 0.006129180081188679,
+          "absmax": 0.12255859375
+        },
+        "mlp.up_proj.weight": {
+          "shape": [
+            19968,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -6.601764539482247e-07,
+          "std": 0.006129196844995022,
+          "absmax": 0.1630859375
+        },
+        "post_attention_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -0.26373887062072754,
+          "std": 0.07124785333871841,
+          "absmax": 0.62109375
+        },
+        "post_feedforward_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -0.07728565484285355,
+          "std": 0.05311179906129837,
+          "absmax": 1.5703125
+        },
+        "pre_feedforward_layernorm.weight": {
+          "shape": [
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 0.353990763425827,
+          "std": 0.1448037475347519,
+          "absmax": 0.85546875
+        },
+        "self_attn.gate_proj.weight": {
+          "shape": [
+            4096,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -1.8469221686245874e-05,
+          "std": 0.006129227578639984,
+          "absmax": 0.0849609375
+        },
+        "self_attn.k_proj.weight": {
+          "shape": [
+            256,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -2.631996494528721e-06,
+          "std": 0.006129115354269743,
+          "absmax": 0.06591796875
+        },
+        "self_attn.o_proj.weight": {
+          "shape": [
+            6656,
+            4096
+          ],
+          "dtype": "bfloat16",
+          "mean": 1.576562567606743e-06,
+          "std": 0.006129175890237093,
+          "absmax": 0.302734375
+        },
+        "self_attn.q_proj.weight": {
+          "shape": [
+            4096,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": 3.1287495403375942e-06,
+          "std": 0.006129136774688959,
+          "absmax": 0.1162109375
+        },
+        "self_attn.v_proj.weight": {
+          "shape": [
+            256,
+            6656
+          ],
+          "dtype": "bfloat16",
+          "mean": -3.0611295187554788e-06,
+          "std": 0.006129049696028233,
+          "absmax": 0.0400390625
+        }
+      }
+    }
+  }
+}
