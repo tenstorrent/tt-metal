@@ -317,12 +317,12 @@ def build_tt_model_from_checkpoint_inputs(
         model_kwargs = dict(model_kwargs)
         model_kwargs["num_layers"] = _validate_num_layers(model_kwargs["num_layers"])
 
-    # The served KV layout is the DEFAULT layout: bounded sliding windows, full span
-    # only on the global-attention layers. A caller asking for a KV cache without its
+    # The served KV layout is the ONLY build layout: bounded sliding windows, full
+    # span on the global-attention layers. A caller asking for a KV cache without its
     # own paged config gets exactly what serving runs (this is also what lets a 256K
-    # max_seq_len fit at all — the contiguous 30-layer full-length cache does not).
-    # DG_MODEL_OWNED_HYBRID_KV=0 stays the explicit contiguous rollback, and callers
-    # that pass their own paged_attention_config keep full control.
+    # max_seq_len fit at all — a contiguous 30-layer full-length cache does not).
+    # Callers that pass their own paged_attention_config keep full control; the
+    # low-level contiguous writers survive only as unit-test internals.
     attach_hybrid_kv = False
     if (
         model_kwargs.get("create_kv_cache", True)  # the backbone default builds a KV cache
@@ -331,16 +331,14 @@ def build_tt_model_from_checkpoint_inputs(
         and int(model_kwargs.get("max_batch_size", 1)) == 1
     ):
         from models.experimental.diffusion_gemma.tt.hybrid_kv import (
-            model_owned_hybrid_kv_enabled,
             model_owned_hybrid_kv_model_kwargs,
         )
 
-        if model_owned_hybrid_kv_enabled():
-            model_kwargs = dict(model_kwargs)
-            # The hybrid layout supersedes the legacy bounded-sliding knob.
-            model_kwargs.pop("bounded_sliding_kv_cache", None)
-            model_kwargs.update(model_owned_hybrid_kv_model_kwargs(max_seq_len=int(model_kwargs["max_seq_len"])))
-            attach_hybrid_kv = True
+        model_kwargs = dict(model_kwargs)
+        # The hybrid layout supersedes the legacy bounded-sliding knob.
+        model_kwargs.pop("bounded_sliding_kv_cache", None)
+        model_kwargs.update(model_owned_hybrid_kv_model_kwargs(max_seq_len=int(model_kwargs["max_seq_len"])))
+        attach_hybrid_kv = True
 
     if remap_fn is None:
         from models.experimental.diffusion_gemma.weight_mapping import remap_state_dict

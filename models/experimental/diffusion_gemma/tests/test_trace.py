@@ -235,7 +235,6 @@ def test_model_owned_hybrid_kv_advertises_full_scheduler_capacity(monkeypatch, e
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
-    monkeypatch.setenv("DG_MODEL_OWNED_HYBRID_KV", "1")
     assert (
         generator_vllm.DiffusionGemmaForCausalLM.get_max_tokens_all_users(
             max_model_len=262144,
@@ -249,24 +248,6 @@ def test_model_owned_hybrid_kv_advertises_full_scheduler_capacity(monkeypatch, e
             max_model_len=262144,
             max_num_seqs=2,
         )
-
-
-def test_scheduler_capacity_falls_back_when_model_owned_hybrid_kv_is_disabled(monkeypatch):
-    pytest.importorskip("vllm")
-    from models.experimental.diffusion_gemma.tt import generator_vllm
-
-    monkeypatch.setenv("DG_MODEL_OWNED_HYBRID_KV", "0")
-    monkeypatch.delenv("GEMMA4_MAX_TOKENS_ALL_USERS", raising=False)
-    assert (
-        generator_vllm.DiffusionGemmaForCausalLM.get_max_tokens_all_users(
-            max_model_len=262144,
-            max_num_seqs=1,
-        )
-        == 131072
-    )
-
-
-# --- controller lifecycle ----------------------------------------------------
 
 
 def test_controller_accepts_only_released_48_step_schedule(fake_ttnn, expect_error):

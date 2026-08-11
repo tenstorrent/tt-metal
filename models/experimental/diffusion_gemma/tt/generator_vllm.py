@@ -49,7 +49,7 @@ deterministic identity page tables keep the existing one-cache/one-active-sequen
 ownership contract. :meth:`allocate_kv_cache` returns those existing handles (no
 double allocation). This is not vLLM block-pool ownership: routing arbitrary
 per-request block tables for concurrent batched serving remains #47488/#47557.
-Set ``DG_MODEL_OWNED_HYBRID_KV=0`` only as the contiguous-cache rollback.
+The model-owned hybrid KV layout is the only served cache layout.
 
 **Do not edit ``models/demos/gemma4/``.** The backbone is imported and reused
 unchanged; the ``get_kv_cache_spec`` hybrid layer-type logic is copied (not
@@ -71,7 +71,6 @@ from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import fixed_prefill_chunks_enabled, prefill_prompt_tokens
 from models.experimental.diffusion_gemma.tt.hybrid_kv import (
     attach_model_owned_hybrid_kv,
-    model_owned_hybrid_kv_enabled,
     model_owned_hybrid_kv_model_kwargs,
 )
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
@@ -452,7 +451,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         mapped cache and supports one active sequence, so scheduler bookkeeping
         must cover that full served length.
         """
-        if model_owned_hybrid_kv_enabled() and max_model_len is not None:
+        if max_model_len is not None:
             if int(max_num_seqs) != 1:
                 raise ValueError("DG model-owned hybrid KV supports max_num_seqs=1; " f"got {max_num_seqs}")
             return int(max_model_len)
@@ -594,27 +593,21 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             dtype=ttnn.bfloat16,  # full-model policy: bf16 weights + bf16 KV cache
             create_kv_cache=True,  # overridden below with bounded paged KV by default
         )
-        hybrid_kv = model_owned_hybrid_kv_enabled()
-        if hybrid_kv:
-            model_kwargs.update(
-                model_owned_hybrid_kv_model_kwargs(
-                    max_seq_len=max_seq_len,
-                    max_batch_size=max_batch_size,
-                )
+        model_kwargs.update(
+            model_owned_hybrid_kv_model_kwargs(
+                max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
             )
+        )
         if n_layers is not None:
             model_kwargs["num_layers"] = n_layers
 
         build_t0 = time.perf_counter()
         bundle = build_tt_model_from_checkpoint_dir(mesh_device, checkpoint_dir, **model_kwargs)
-        page_tables_per_layer = (
-            attach_model_owned_hybrid_kv(
-                bundle.tt_model,
-                max_seq_len=max_seq_len,
-                max_batch_size=max_batch_size,
-            )
-            if hybrid_kv
-            else None
+        page_tables_per_layer = attach_model_owned_hybrid_kv(
+            bundle.tt_model,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
         ttnn.synchronize_device(mesh_device)
         model_build_s = time.perf_counter() - build_t0
@@ -622,7 +615,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
             f"n_layers={n_layers or 'full'} "
-            f"model_owned_hybrid_kv={hybrid_kv} "
+            f"model_owned_hybrid_kv=True "
             f"gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', DEFAULT_VLLM_GUMBEL_MODE)}"
         )
         _metric(
@@ -632,7 +625,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             model_build_s=round(model_build_s, 6),
             gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", DEFAULT_VLLM_GUMBEL_MODE),
             max_denoise_steps=diffusion_config.max_denoise_steps,
-            model_owned_hybrid_kv=hybrid_kv,
+            model_owned_hybrid_kv=True,
             trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
             selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
             selfcond_logits_l1=os.environ.get("DG_SELFCOND_LOGITS_L1", "chain"),

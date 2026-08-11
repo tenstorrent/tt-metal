@@ -240,7 +240,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Build, prefill, run one denoise logits adapter call, then exit",
     )
     parser.add_argument("--local-files-only", action="store_true", help="Do not fetch tokenizer files from HF hub")
-    parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     parser.add_argument(
         "--disable-eos-stop",
         action="store_true",
@@ -300,7 +299,6 @@ def _run(args) -> int:
             max_batch_size=args.batch,
             max_seq_len=args.max_seq_len,
             num_layers=args.num_layers,
-            bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
         )
         _log_mesh_dram(mesh_device, "post-build")
         if args.build_only:

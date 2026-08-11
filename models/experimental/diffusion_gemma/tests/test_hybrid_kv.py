@@ -3,7 +3,6 @@
 
 from types import SimpleNamespace
 
-import pytest
 
 from models.experimental.diffusion_gemma.tt import hybrid_kv
 
@@ -13,12 +12,11 @@ class _Cache:
         self.shape = shape
 
 
-def test_model_owned_hybrid_kv_is_default_with_explicit_rollback(monkeypatch):
-    monkeypatch.delenv(hybrid_kv.MODEL_OWNED_HYBRID_KV_ENV, raising=False)
-    assert hybrid_kv.model_owned_hybrid_kv_enabled() is True
-
-    monkeypatch.setenv(hybrid_kv.MODEL_OWNED_HYBRID_KV_ENV, "0")
-    assert hybrid_kv.model_owned_hybrid_kv_enabled() is False
+def test_model_owned_hybrid_kv_has_no_rollback_switch():
+    # The hybrid layout is the only build layout; the DG_MODEL_OWNED_HYBRID_KV
+    # rollback was deleted once every entrypoint constructed hybrid by default.
+    assert not hasattr(hybrid_kv, "model_owned_hybrid_kv_enabled")
+    assert not hasattr(hybrid_kv, "MODEL_OWNED_HYBRID_KV_ENV")
 
 
 def test_model_kwargs_enable_bounded_paged_cache():
@@ -30,8 +28,8 @@ def test_model_kwargs_enable_bounded_paged_cache():
     assert kwargs["paged_attention_config"].max_num_blocks == 4096
 
 
-def test_model_kwargs_reject_concurrent_model_owned_sequences():
-    with pytest.raises(ValueError, match="max_batch_size=1"):
+def test_model_kwargs_reject_concurrent_model_owned_sequences(expect_error):
+    with expect_error(ValueError, match="max_batch_size=1"):
         hybrid_kv.model_owned_hybrid_kv_model_kwargs(max_seq_len=4096, max_batch_size=2)
 
 

@@ -1193,8 +1193,8 @@ def commit_canvas_tokens_batched(
         )
     if page_tables_per_layer is None:
         # A hybrid-cache model without explicit tables (demo, tests) commits against
-        # its own attached identity page tables; the contiguous writer below is only
-        # for the DG_MODEL_OWNED_HYBRID_KV=0 rollback layout.
+        # its own attached identity page tables; the contiguous writer below survives
+        # only for unit tests that validate numerics on the simplest layout.
         page_tables_per_layer = getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
     paged_writes = None
     if page_tables_per_layer is not None:

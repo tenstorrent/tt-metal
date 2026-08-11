@@ -15,7 +15,6 @@ there is no vLLM block-pool ownership or concurrent-request claim here.
 from __future__ import annotations
 
 import math
-import os
 
 from loguru import logger
 
@@ -25,13 +24,6 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 DEFAULT_BLOCK_SIZE = 64
-MODEL_OWNED_HYBRID_KV_ENV = "DG_MODEL_OWNED_HYBRID_KV"
-
-
-def model_owned_hybrid_kv_enabled() -> bool:
-    """Whether bounded model-owned paged KV is enabled (default on)."""
-
-    return os.environ.get(MODEL_OWNED_HYBRID_KV_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def model_owned_hybrid_kv_model_kwargs(
@@ -93,13 +85,9 @@ def attach_model_owned_hybrid_kv(
         )
     sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
     if sliding_window <= 0 or sliding_window % block_size != 0:
-        raise ValueError(
-            f"sliding_window must be a positive multiple of block_size={block_size}, got {sliding_window}"
-        )
+        raise ValueError(f"sliding_window must be a positive multiple of block_size={block_size}, got {sliding_window}")
     if len(tt_model.tt_kv_cache) != len(tt_model.layers):
-        raise ValueError(
-            f"hybrid KV cache/layer mismatch: {len(tt_model.tt_kv_cache)} != {len(tt_model.layers)}"
-        )
+        raise ValueError(f"hybrid KV cache/layer mismatch: {len(tt_model.tt_kv_cache)} != {len(tt_model.layers)}")
 
     sliding_mask = [layer_type == "sliding_attention" for layer_type in layer_types]
     unsupported = [
