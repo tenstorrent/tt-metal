@@ -278,15 +278,40 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt, co
     // PREFERABLE to a feasible Sm=1 pick, which is a different question from whether anything fits at all.
     // Behaviour is unchanged whenever an Sm=1 anchor exists, so no deployed pick moves.
     if (anchor_cost == std::numeric_limits<double>::infinity()) {
+        // TWO STRUCTURALLY DIFFERENT REASONS land here, and they need different messages. The bank-interval
+        // constraint is a function of Nt ALONE and pick_plan rejects on it before L1 is ever considered, so
+        // reporting "no config fits L1" for a too-narrow N is simply wrong -- and narrow N is the case users
+        // hit first. Check it explicitly so the error names the real cause and the real remedy.
+        TT_FATAL(
+            plan::nt_width_shard_feasible(Nt),
+            // Report Nt, not a reconstructed N: only the tile count reaches here, and printing
+            // Nt*TILE_WIDTH would quote a PADDED width back at a user who asked for something narrower
+            // (N=8 would be reported as "N=32").
+            "regime_a_matmul cannot serve this N: in1 is DRAM width-sharded across {} banks, which requires "
+            "7*ceil(Nt/8) < Nt so that every bank holds real data. This request rounds up to Nt={} tiles "
+            "({} elements), where the trailing banks would be entirely padding. The smallest workable widths "
+            "are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, 768, 928..). This is a "
+            "SHAPE-DOMAIN limit of Regime-A, not a tuning failure: use a standard matmul for this N.",
+            kNumBanks,
+            Nt,
+            Nt * tt::constants::TILE_WIDTH);
         RegimeAMatmulConfig rescue{};
         const double rescue_cost = best_msplit_config(Mt, Kt, Nt, Nband, fu, rescue);
         TT_FATAL(
             rescue_cost != std::numeric_limits<double>::infinity(),
-            "regime_a_matmul auto-select found no feasible config for Mt={} Kt={} Nt={} (no Sm=1 config fits "
-            "L1 and no M-split config is feasible either)",
+            "regime_a_matmul cannot serve Mt={} Kt={} Nt={}: no Sm=1 config fits L1 ({} KB/core) and no "
+            "M-split config is feasible either. Regime-A keeps the in0 k-slice L1-RESIDENT, so cb0 alone is "
+            "~(Mt/Sm)*(Kt/Pk) tiles, while core feasibility caps 8*Pk*Ns*Sm <= {} cores, i.e. Pk*Ns*Sm <= {}; "
+            "shrinking cb0 needs a larger Sm*Pk than that cap allows, so at large Mt with deep K the two "
+            "cannot both be satisfied (e.g. Mt=152, Kt=128 needs Sm*Pk >~ 32 against Pk*Ns*Sm <= {}). This is "
+            "a SHAPE-DOMAIN limit of Regime-A, not a tuning failure: use a standard matmul for this shape.",
             Mt,
             Kt,
-            Nt);
+            Nt,
+            plan::kL1BudgetBytes / 1024u,
+            plan::kMaxCores,
+            plan::kMaxCores / kNumBanks,
+            plan::kMaxCores / kNumBanks);
         return rescue;
     }
 
