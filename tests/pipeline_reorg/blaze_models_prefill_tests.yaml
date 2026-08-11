@@ -623,6 +623,9 @@
     # Each producer rank drops its PCC verdict here before the shutdown sentinel; mpirun drops buffered
     # stdout when the runner tears down, so this file is the only durable record of the measured PCC.
     PCC_DIR="${MR_DIR}/kv_pcc_verdict"
+    # Per-rank stdout/stderr files (mpirun --output-filename). These survive the teardown
+    # race that truncates forwarded stdout, so their tails are the authoritative debug log.
+    RANKLOGS="${MR_DIR}/ranklogs"
 
     # The runner idles owning the 4-galaxy allocation until the producer's shutdown
     # sentinel; on any early exit (table-publish timeout, producer failure) it must be
@@ -632,6 +635,21 @@
       if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
         kill "${RUNNER_PID}" 2>/dev/null || true
         wait "${RUNNER_PID}" 2>/dev/null || true
+      fi
+      # Dump diagnostics before rm: on every exit path (success, producer failure, table
+      # timeout, step-timeout kill) the live mpirun stdout may be truncated at teardown, so
+      # the durable verdict JSON and per-rank ranklog tails are the authoritative record.
+      echo "==================== KV PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
+      for f in "${PCC_DIR}"/rank*.json; do
+        [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
+        echo "$(basename "$f"): $(cat "$f")"
+      done
+      if [ -d "${RANKLOGS}" ]; then
+        echo "==================== ranklog tails ===================="
+        find "${RANKLOGS}" -type f | sort | while read -r f; do
+          echo "---- ${f#"${RANKLOGS}"/} ----"
+          tail -n 40 "$f" 2>/dev/null || true
+        done
       fi
       rm -rf "${MR_DIR}"
     }
@@ -651,9 +669,10 @@
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
-      --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} -x PATH -x LD_LIBRARY_PATH" \
+      --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
       bash -lc "cd '${TT_METAL_HOME}'; \
         export PYTHONPATH='${TT_METAL_HOME}'; \
+        export PYTHONUNBUFFERED=1; \
         export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
         export MESH_DEVICE=TG; \
         export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
@@ -692,9 +711,11 @@
     set +e
     "${MPIRUN}" \
       --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+      --output-filename "${RANKLOGS}/producer" \
       --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
       bash -lc "cd '${TT_METAL_HOME}'; \
         export PYTHONPATH='${TT_METAL_HOME}'; \
+        export PYTHONUNBUFFERED=1; \
         export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
         export MESH_DEVICE=TG; \
         export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
@@ -710,13 +731,8 @@
     PROD_RC=$?
     set -e
 
-    # Surface the durable per-rank PCC verdicts: the producer's stdout PCC lines are lost when mpirun
-    # tears its output forwarding down alongside the runner, so these files are the captured record.
-    echo "==================== KV PCC verdicts (PROD_RC=${PROD_RC}) ===================="
-    for f in "${PCC_DIR}"/rank*.json; do
-      [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
-      echo "$(basename "$f"): $(cat "$f")"
-    done
+    # The cleanup() EXIT trap dumps the durable PCC verdicts and ranklog tails on every
+    # exit path, so no inline diagnostics are needed here.
 
     # On success the producer already sent the shutdown sentinel; wait for the runner
     # to finish teardown so a hung shutdown surfaces here instead of being orphaned.
