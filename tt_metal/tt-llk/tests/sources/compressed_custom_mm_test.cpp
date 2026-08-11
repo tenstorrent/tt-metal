@@ -41,6 +41,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // NOTE both operand-suffixed face counts are CROSSED below, like every other crossed argument in this call
+    // (unpack_B_src/dst and TILE_SIZE_UNPACK_B go to the unpA slots, in0_face_r_dim goes to unpB_face_r_dim). The
+    // harness defines num_faces_A as "active faces for matrix A", i.e. buffer_A == in0, so num_faces_A belongs in the
+    // unpB slot and num_faces_B in the unpA slot. The silicon-validated matmul_custom_compressed_test.cpp:36-37
+    // crosses them the same way, driven by NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4).
     // in0 goes to SrcB (partial tile [{1,2,4,8}, 32], bf16), in1 goes to SrcA (full [32, 32], BFP-compressed).
     // buffer_A == in0 (SrcB), buffer_B == in1 (SrcA); the primitive's address_a is SrcA and address_b is SrcB, so the
     // SrcA/SrcB arguments are crossed relative to the buffer names below (matches custom_mm_test.cpp).
@@ -52,8 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_dst,
         FACE_R_DIM,
         params.IN0_FACE_R_DIM, // in0 partial-tile face row dim (rows in {1, 2, 4, 8})
-        params.num_faces_A /* unpA_num_faces (in1, full tile) */,
-        params.num_faces_B /* in0 active faces */,
+        params.num_faces_B /* unpA_num_faces: in1, a full 4-face tile */,
+        params.num_faces_A /* unpB_num_faces: in0, only the top two faces */,
         params.TILE_SIZE_UNPACK_B,  // SrcA tile size (in1)
         params.TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 

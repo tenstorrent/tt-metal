@@ -471,17 +471,10 @@ class TestConfig:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
-                # ADVANCE TEST shadow-tree includes for demo-fork experimental LLKs pending promotion
-                # (tt-metal#47554 / tt-blaze#1971). Appended LAST so canonical llk_lib/sfpu headers win on any
-                # name collision; none of the shadow filenames collide with canonical BH headers.
-                # ON PROMOTION into tt_llk_blackhole/{llk_lib,common/inc/sfpu}/experimental/, delete the matching
-                # -I line (the canonical -I../{ARCH_LLK_ROOT}/... below already covers it).
-                #   root 1 — custom_mm, compressed_custom_mm, sdpa_custom_mm, sdpa_custom_mm_reuse_dest_srcb:
-                "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
-                #   root 2 — sdpa_bcast_col_srcb_reuse, sdpa_bcast_col_srca_srcb_reuse, unpack_A_sdpa:
-                "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib",
-                #   root 3 — sdpa_reduce_row (SFPU primitive, sibling of the llk_lib root above):
-                "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu",
+                # NOTE: the demo-fork experimental-LLK ADVANCE TEST shadow roots deliberately do NOT live here.
+                # INCLUDES is a session-wide ClassVar, so a temporary scaffold parked here would land in the
+                # compile command for every Blackhole test. They are appended per test by the
+                # helpers/advance_llk_includes.py autouse fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [

@@ -5,29 +5,43 @@
 # pending promotion. Include path (shadow -I) repoint on promotion. Primitive differs from tt-blaze only in FPU<->SFPU
 # signalling cadence (orthogonal to this numerical golden).
 #
-# sdpa_custom_mm_reuse_dest_srcb documented contract
-# (llk_math_sdpa_custom_mm_reuse_dest_srcb.h / llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h header banners):
-#   - Custom K-reduction matmul that UNPACKS ONLY SrcA (in1, full [32,32] K-tiles) and REUSES SrcB FROM DEST (in0,
-#     the [1,32] partial tile), moving DEST rows into SrcB via MOVD2B each K-iteration.
-#   - Output height and width should be a SINGLE tile with tile shape [1, 32]: ct_dim == 1, rt_dim == 1.
-#   - kt_dim: even number from 2 to 256 (inclusive). nt_dim: 1 to 16 (SrcA tiles per K-iteration).
-#   - fidelity: LoFi (the demo compute API pins MATH_FIDELITY; the demo-fork primitive templates MathFidelity).
-#   - The MATH primitive does t6_semaphore_wait_on_zero<STALL_MATH>(semaphore::UNPACK_MATH_DONE) at the top of every
-#     K-iteration and (only in the signal_output branch) POSTs semaphore::FPU_SFPU. In the isolated compute-only
-#     kernel there is no SFPU op, so the .cpp fakes the SFPU side: the UNPACK thread POSTs UNPACK_MATH_DONE once per
-#     K-tile so MATH's wait clears, and we instantiate signal_output == false so nothing is posted on FPU_SFPU.
+# sdpa_custom_mm_reuse_dest_srcb documented contract, plus the DEST layout measured on p100a:
+#   - A K-reduction matmul that UNPACKS ONLY SrcA (in1, full [32,32] K-tiles) and REUSES SrcB FROM DEST (in0), moving
+#     DEST rows into SrcB via MOVD2B once per K-iteration.
+#   - Every tile it touches -- in0 K-tiles and output tiles alike -- is 16 DEST rows: an 8x32 logical tile packed into
+#     ONE 16x16 face, DEST rows 0-7 holding logical columns 0-15 and rows 8-15 holding columns 16-31. in0 K-tile i is
+#     read from src_index + i*16 and output tile j written at dst_index + j*16, both RAW DEST ROW offsets (the
+#     primitive TT_SETC16s DEST_TARGET_REG_CFG_MATH_Offset directly rather than using a tile index).
+#   - So it computes  out[0:8, :] = in0[0:8, :] @ in1,  in0 being [8, kt_dim*32] and in1 [kt_dim*32, nt_dim*32].
+#   - in0 rows are NOT swept: the addrmod helper steps DEST by 8, so 8 is the only shape it implements.
+#   - kt_dim: even, 2..256 by the header; capped at 4 here because the kernel seeds all K-tiles from the 4 faces of a
+#     single A2D datacopy tile, and because the UNPACK-side semaphore fake posts kt_dim times (SEMPOST saturates at 15).
+#   - nt_dim: 1..16 (SrcA tiles per K-iteration). Pinned to 1 here.
+#   - The MATH primitive does t6_semaphore_wait_on_zero<STALL_MATH>(UNPACK_MATH_DONE) at the top of EVERY K-iteration,
+#     before it retires any MVMUL. In an isolated compute-only kernel there is no SFPU op, so the .cpp fakes the SFPU
+#     side from the UNPACK thread -- and those posts must be issued BEFORE the unpack execute, which otherwise spins in
+#     wait_for_next_context(1) on SrcA banks that only MATH frees. That, the missing in0 unpack, and the SDPA-init /
+#     datacopy-init ordering were the three causes of this file's 8 hanging variants; see the .cpp banner.
 #
-# This advance test exercises nt_dim == 1 (single output tile), LoFi, with the standard MatmulGolden. Like the
-# custom_mm / sdpa_custom_mm analog tests the golden does not model the primitive's exact partial-tile DEST layout;
-# exact numerical agreement is validated only when run on Blackhole hardware.
-#
-# Blackhole-only. Deliverable here is compile-green (compile-producer). On-device numerical verification is
-# pending Blackhole hardware/CI; this host is Wormhole.
+# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
 
 import torch
+from conftest import blackhole_only
+from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
+    advance_llk_include_paths,
+)
+from helpers.custom_mm_utils import (
+    FACE_C_DIM,
+    FACE_R_DIM,
+    IN0_ROWS_SDPA,
+    KT_DIMS,
+    matmul_acc_atol,
+    pack_sdpa_dest_tile,
+    sdpa_dest_tile_golden,
+)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -35,115 +49,126 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
-    IN0_FACE_R_DIM,
+    IN_FACE_DIMS,
     NUM_FACES,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
-# LoFi-only, bf16-natural path. Keep the grid small for the advance test.
+# LoFi-only, bf16-natural path.
 SDPA_REUSE_FORMATS = input_output_formats([DataFormat.Float16_b])
 
-# Honor the header contract. ct_dim == 1 and rt_dim == 1 (single output tile [1,32]) are fixed; kt_dim even (2..256),
-# in0 rows in {1, 2, 4, 8}.
-KT_DIMS = [2, 4]
-IN0_ROWS = [1, 2, 4, 8]
+NT_DIM = 1
 
 
-def _grid():
-    combos = []
-    for kt in KT_DIMS:
-        for rows in IN0_ROWS:
-            combos.append((kt, rows))
-    return combos
-
-
+@blackhole_only
 @parametrize(
     formats=SDPA_REUSE_FORMATS,
-    kt_rows=_grid(),
+    kt_dim=KT_DIMS,
 )
 def test_sdpa_custom_mm_reuse_dest_srcb(
     formats,
-    kt_rows,
+    kt_dim,
     boot_mode=BootMode.DEFAULT,
 ):
-    kt_dim, in0_rows = kt_rows
-    # sdpa_custom_mm_reuse_dest_srcb contract: single output tile.
-    ct_dim = 1
-    rt_dim = 1
-    output_tile_cnt = rt_dim * ct_dim
+    if isinstance(formats, tuple):
+        (formats,) = formats
 
+    in0_rows = IN0_ROWS_SDPA
     torch_format = format_dict[formats.output_format]
 
-    # in0 is the [1,32] partial tile reused from DEST as SrcB (host feeds full 32-row tiles; the kernel uses the top
-    # in0_rows rows). in1 is [kt_dim*32, ct_dim*32] streamed into SrcA.
-    input_A_dimensions = [rt_dim * 32, kt_dim * 32]
-    input_B_dimensions = [kt_dim * 32, ct_dim * 32]
+    in0_dimensions = [in0_rows, kt_dim * 32]
+    in1_dimensions = [kt_dim * 32, NT_DIM * 32]
 
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_A_dimensions,
+        input_dimensions_A=in0_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_B_dimensions,
+        input_dimensions_B=in1_dimensions,
         spec_A=spec,
         spec_B=spec,
     )
 
-    # LoFi golden: standard matmul with bf16 (LoFi) rounding. NOTE: this does not model the reuse primitive's exact
-    # partial-tile DEST layout; exact numerical agreement is validated only when run on Blackhole hardware.
-    generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
-        tilize=True,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
+    in0 = src_A.reshape(in0_dimensions).to(torch_format)
+    in1 = src_B.reshape(in1_dimensions).to(torch_format)
+
+    # in0 goes to L1 as ONE standard 4-face 32x32 tile whose face i is K-tile i in the op's 16x16-face packing.
+    # MATH's single A2D datacopy then lands face i at DEST rows 16*i -- exactly where the execute reads K-tile i.
+    in0_tile = pack_sdpa_dest_tile(in0, kt_dim, torch_format)
+
+    # in1 is the ordinary tilized [kt_dim*32, 32] block: the unpack MOP walks kt_dim contiguous 32x32 tiles
+    # (in1_k_stride == 1, nt_dim == 1).
+    tilized_B = tilize_block(
+        src_B, dimensions=in1_dimensions, stimuli_format=formats.input_format
     )
 
-    tilized_A = tilize_block(
-        src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
-    )
-    tilized_B = tilize_block(
-        src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
-    )
+    # Golden in the same flat DEST-row order the packer writes back. MatmulGolden (not a raw torch matmul) because
+    # the FPU runs LoFi here: it truncates the SrcA/SrcB mantissas before multiplying, which biases a K-deep sum of
+    # positive values low by ~2% -- far outside atol if the golden multiplies at full bf16 precision. Instantiated
+    # directly rather than through get_golden_generator: the harness swaps in a DummyGoldenGenerator during
+    # compile-producer, whose zeros(1024) would break the reshape for this narrow output.
+    matmul_rowmajor = MatmulGolden()(
+        in0,
+        in1,
+        formats.output_format,
+        MathFidelity.LoFi,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
+        tilize=False,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    ).reshape(in0_rows, NT_DIM * 32)
+    golden_tensor = sdpa_dest_tile_golden(matmul_rowmajor, torch_format)
 
     configuration = TestConfig(
         "sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp",
         formats,
         runtimes=[
-            NUM_FACES(),
-            TILE_COUNT(output_tile_cnt),
-            CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
-            IN0_FACE_R_DIM(in0_rows),
+            # num_faces_B is the in1 full-tile count (4) and is CROSSED into the unpA slot by the kernel;
+            # num_faces is the pack count, 1 here because each output tile is a single 16x16 DEST face.
+            NUM_FACES(num_faces=1, num_faces_A=1, num_faces_B=4),
+            TILE_COUNT(NT_DIM),
+            CRK_TILE_DIMM(NT_DIM, 1, kt_dim),
+            IN_FACE_DIMS(in0_face_r_dim=in0_rows),
         ],
         variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+            in0_tile,
             formats.input_format,
             tilized_B.flatten(),
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
+            tile_count_A=1,
             tile_count_B=tile_cnt_B,
-            tile_count_res=output_tile_cnt,
+            tile_count_res=NT_DIM,
         ),
         dest_acc=DestAccumulation.No,
         boot_mode=boot_mode,
     )
 
     res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert len(res_from_L1) == len(
+    # Each output tile is a single 16x16 DEST face written at the start of a full 32x32 L1 tile, so keep that face
+    # and drop the three faces of L1 the kernel never touches. StimuliConfig's num_faces would narrow the readback
+    # for us, but it narrows the buffer_A / buffer_B *writes* too, which would truncate the in1 K-tiles.
+    face_datums = FACE_R_DIM * FACE_C_DIM
+    tile_datums = len(res_tensor) // NT_DIM
+    res_tensor = torch.cat(
+        [
+            res_tensor[n * tile_datums : n * tile_datums + face_datums]
+            for n in range(NT_DIM)
+        ]
+    )
+
+    assert len(res_tensor) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
     ), "Assert against golden failed"
