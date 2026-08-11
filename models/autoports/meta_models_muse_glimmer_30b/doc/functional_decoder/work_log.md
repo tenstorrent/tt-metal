@@ -514,7 +514,7 @@ was pushed.
 | tt-metal | same | `6c3a6236d44` | this section |
 | tt-metal | same | `6b9aa772d56` | round-4 review remediation: `scripts/render_evidence.py` gains the decode-core-count gate and the gzip-aware reader, `tests/test_functional_decoder_perf.py` switches to `decoder.blocks_per_seq`, the doc corrections the review required, and **all** evidence re-collected on the resulting code (both suite logs, watcher, 8 perf artifact sets) |
 | tt-metal | same | `fcba707fe0c` | the `6b9aa772d56` SHA in this table |
-| tt-metal | same | (next row) | the round-5 review's two doc corrections: this table's contents column and §6's grid comparison |
+| tt-metal | same | `ee0b9e5e8a3` | the round-5 review's two doc corrections: this table's contents column and §6's grid comparison |
 | tt-metal | same | `PENDING` | the SHA of the row above (a commit cannot contain its own hash, so the SHA of a doc-only correction always lands one commit later) |
 
 `tt/functional_decoder.py`, `reference/hf_reference.py` and `tests/test_functional_decoder.py`
