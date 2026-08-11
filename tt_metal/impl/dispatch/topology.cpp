@@ -153,16 +153,6 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
-
-    {3, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {4, 5, x, x}, k_quasar_noc},
-    {4, 0, 0, 1, DISPATCH_HD, {3, x, x, x}, {5, x, x, x}, k_quasar_noc},
-    {5, 0, 0, 1, DISPATCH_S, {3, x, x, x}, {4, x, x, x}, k_quasar_noc},
-};
-
-static const std::vector<DispatchKernelNode> quasar_single_chip_2cq_colocated = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 4, x, x}, k_quasar_noc},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, k_quasar_noc},
     {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 4, x, x}, k_quasar_noc},
@@ -475,9 +465,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
         }
         if (is_quasar) {
-            return this->get_dispatch_query_manager_().cq_dispatch_layout().fd_kernels_on_same_core
-                       ? quasar_single_chip_2cq_colocated
-                       : quasar_single_chip_2cq;
+            return quasar_single_chip_2cq;
         }
         if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
             return single_chip_arch_2cq_dispatch_s;
