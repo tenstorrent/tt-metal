@@ -75,6 +75,19 @@ def _to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
+def _height_sharded_memory_config(
+    device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
+) -> ttnn.MemoryConfig:
+    cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        (leading, matrix_height, matrix_width),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def _run(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -124,6 +137,7 @@ def _composed_ttnn_baseline(
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 @pytest.mark.parametrize(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
     [(2, 4, 32, 32), (3, 2, 32, 64)],
@@ -131,6 +145,7 @@ def _composed_ttnn_baseline(
 def test_affine_exclusive_scan_contract_cache_trace_and_determinism(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
+    sharded_inputs: bool,
     batch_heads: int,
     groups_per_head: int,
     key_dim: int,
@@ -138,25 +153,35 @@ def test_affine_exclusive_scan_contract_cache_trace_and_determinism(
 ) -> None:
     a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
     expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
-    a_tt = _to_device(a, device, summary_dtype)
-    b_tt = _to_device(b, device, summary_dtype)
+    leading = batch_heads * groups_per_head
+    a_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, value_dim)
+        if sharded_inputs
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_memory = ttnn.L1_MEMORY_CONFIG if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+    a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
+    b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
     state_tt = _to_device(initial_state, device)
     snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in (a_tt, b_tt, state_tt))
 
-    first = _run(a_tt, b_tt, state_tt, groups_per_head)
+    first = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory)
     assert first.dtype == ttnn.float32
     assert first.layout == ttnn.TILE_LAYOUT
-    assert first.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert first.memory_config() == output_memory
     assert tuple(ttnn.to_torch(first).shape) == (batch_heads * groups_per_head, key_dim, value_dim)
     assert first.buffer_address() not in (a_tt.buffer_address(), b_tt.buffer_address(), state_tt.buffer_address())
 
     cache_entries = device.num_program_cache_entries()
-    repeated = _run(a_tt, b_tt, state_tt, groups_per_head)
+    repeated = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory)
     ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == cache_entries
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = _run(a_tt, b_tt, state_tt, groups_per_head)
+    traced = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     for _ in range(2):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
@@ -205,7 +230,6 @@ def test_affine_exclusive_scan_matches_composed_ttnn_baseline(device: ttnn.Devic
         ("key_dim", "matching K dimensions"),
         ("unaligned", "K and V must be positive and tile aligned"),
         ("state_shape", "initial_state shape must be"),
-        ("sharded", "a must use interleaved memory"),
     ],
 )
 def test_affine_exclusive_scan_rejects_invalid_inputs(
@@ -247,15 +271,6 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
         b_tt = _to_device(b[:, :, :31], device)
     elif case == "state_shape":
         state_tt = _to_device(initial_state[:, :, :31], device)
-    elif case == "sharded":
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            [128, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-        a_tt = _to_device(a, device, memory_config=sharded)
-
     with expect_error(RuntimeError, message):
         _run(a_tt, b_tt, state_tt, groups_per_head)
 
