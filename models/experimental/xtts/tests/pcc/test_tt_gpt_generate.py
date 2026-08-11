@@ -30,7 +30,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_model import reference_gpt_model
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, greedy_generate, wrap_text_ids
 from models.experimental.xtts.reference.xtts_conditioning import (
@@ -44,11 +43,6 @@ from models.experimental.xtts.tt.xtts_generator import TtXttsGenerator
 
 TILE = 32
 MAX_NEW_TOKENS = 16
-
-
-@pytest.fixture(scope="module")
-def xtts_state_dict():
-    return load_xtts_state_dict()
 
 
 @pytest.mark.parametrize("pcc", [0.99])
