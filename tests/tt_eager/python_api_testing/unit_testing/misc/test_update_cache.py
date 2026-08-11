@@ -121,7 +121,7 @@ class TestUpdateCache:
         device,
         expect_error,
     ):
-        if batch_offset != 0 and (num_users >= 32 or (num_users + batch_offset) > 32):
+        if batch_offset != 0 and num_users + batch_offset > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         if cache_dtype != ttnn.bfloat16:
             pytest.skip(
