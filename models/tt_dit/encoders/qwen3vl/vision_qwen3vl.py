@@ -581,7 +581,14 @@ class Qwen3VlVisionAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
                 cu_window_seqlens=cu_window,
             )
-        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (seq_len, self.local_inner))
+        # `nlp_concat_heads` fuses the head-axis transpose + merge that this used to do as a separate
+        # `permute((0,2,1,3)) + reshape`: it takes `(1, num_local_heads, seq_len, padded_head_dim)` and
+        # emits `(1, 1, seq_len, num_local_heads * padded_head_dim)` = `(1, 1, seq_len, local_inner)`.
+        # The trailing reshape just drops the leading unit dims to the `(seq_len, local_inner)` that
+        # row-parallel `proj` expects; the padded head_dim (96) is concatenated as-is, matching the
+        # packed width `_interleave_for_col_parallel` produced on the way in.
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (seq_len, self.local_inner))
         # Row-parallel `proj` consumes exactly this fractured width and reduce-scatters, so gather back.
         return _row_parallel_forward(self.proj, attn, self._p)
 
