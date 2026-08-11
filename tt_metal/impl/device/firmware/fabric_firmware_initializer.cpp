@@ -287,8 +287,27 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
-        log_info(tt::LogMetal, "Skipping fabric initialization for mock/emule devices");
+    // Emule JIT-compiles kernels to x86 and never links a RISC-V erisc binary, so there is
+    // nothing to build and nothing to program.
+    if (skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric initialization for emule devices");
+        return;
+    }
+
+    // Mock stops after the compile. Everything downstream of it -- writing routing tables,
+    // configure_fabric(), and the router handshake in configure() -- is device I/O that UMD's
+    // MockChip drops on the floor. The compile itself is pure host-side work (control-plane
+    // topology from the mock cluster descriptor, then CompileProgram), and it emits erisc
+    // binaries under the same build key real silicon of this arch would use, so running it
+    // here warms the JIT cache on hosts with no hardware attached.
+    if (descriptor_->is_mock_device()) {
+        if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) ||
+            has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+            log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+            compile_fabric_only();
+        } else {
+            log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
+        }
         return;
     }
 
@@ -322,8 +341,10 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
-    // Mock/Emule: skip router sync (init() skips fabric; sync would fatal/timeout — emule never
-    // runs the ERISC router, so the handshake status stays NOT_STARTED).
+    // Mock/Emule: skip router sync. On mock, init() compiled the fabric program but never
+    // programmed a router, and MockChip::read_from_device() is a no-op that leaves the status
+    // buffer untouched, so the handshake would spin to the timeout and throw. Emule never runs
+    // the ERISC router at all, so its status stays NOT_STARTED for the same reason.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
@@ -442,6 +463,22 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+}
+
+void FabricFirmwareInitializer::compile_fabric_only() {
+    std::vector<std::shared_future<void>> events;
+    events.reserve(devices_.size());
+    for (auto* dev : devices_) {
+        events.emplace_back(detail::async([dev]() {
+            if (!dev->compile_fabric()) {
+                // No routers on this device (e.g. a chip with no active fabric links).
+                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+            }
+        }));
+    }
+    for (const auto& event : events) {
+        event.get();
+    }
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
