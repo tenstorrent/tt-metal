@@ -77,9 +77,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_cores_unpadded = num_cores;
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
-
-    CoreCoord end_core = cores[num_cores - 1];
+    CoreCoord end_core;
     if (output.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
         output_unit_size = tt::tile_size(output_cb_data_format);
@@ -106,22 +104,35 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
     }
 
-    // re-calculate end_core in the case shard grid is larger than used grid
-    if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-        num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
-    } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (output.layout() == Layout::TILE) {
-            num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
-        } else {
-            num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
-        }
-    }
-    end_core = cores[num_cores_unpadded - 1];
+    const uint32_t width_shards = output.layout() == Layout::TILE
+                                      ? div_up(num_units_per_row, num_units_per_shard_width)
+                                      : div_up(num_units_per_row, output_unit_size);
+    const uint32_t height_shards = div_up(num_units_height, num_units_per_shard_height);
 
-    // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
-    CoreRangeSet used_cores = num_cores_unpadded < num_cores
-                                  ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
-                                  : all_cores;
+    // Restrict to the cores that actually hold data; a larger grid otherwise causes a NOC error.
+    CoreRangeSet used_cores = all_cores;
+    if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_cores_unpadded = height_shards;
+    } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_unpadded = width_shards;
+    } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED && all_cores.ranges().size() == 1) {
+        // Block sharding needs a sub-rectangle, not a leading run of cores: a grid with more columns
+        // than the data needs leaves whole columns holding only padding, and walking them wraps the
+        // row cursor early so later cores overwrite the next band of rows.
+        const auto& bbox = all_cores.ranges()[0];
+        const uint32_t grid_x = rm_orientation ? width_shards : height_shards;
+        const uint32_t grid_y = rm_orientation ? height_shards : width_shards;
+        used_cores = CoreRangeSet(CoreRange(
+            bbox.start_coord, CoreCoord(bbox.start_coord.x + grid_x - 1, bbox.start_coord.y + grid_y - 1)));
+        num_cores_unpadded = grid_x * grid_y;
+    }
+    if (used_cores == all_cores && num_cores_unpadded < num_cores) {
+        used_cores = select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation);
+    }
+
+    const auto active_cores = corerange_to_cores(used_cores, std::nullopt, rm_orientation);
+    num_cores_unpadded = static_cast<uint32_t>(active_cores.size());
+    end_core = active_cores.back();
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
@@ -208,7 +219,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     uint32_t curr_idx_w = 0;
 
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
-        const auto& core = cores[core_idx];
+        const auto& core = active_cores[core_idx];
         if (input.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;

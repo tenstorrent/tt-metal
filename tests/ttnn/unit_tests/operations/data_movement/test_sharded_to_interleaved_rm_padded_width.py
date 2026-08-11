@@ -81,3 +81,25 @@ def test_s2i_rm_padded_width_no_neighbour_clobber(device, memory_layout, shape, 
 
     assert torch.equal(ttnn.to_torch(output), torch_input)
     assert torch.equal(ttnn.to_torch(guard), torch_guard)
+
+
+# Shard grid with more columns than the data needs: the trailing columns hold only padding.
+@pytest.mark.parametrize("grid_x", [3, 4, 6], ids=["exact", "one_spare_col", "three_spare_cols"])
+def test_s2i_rm_block_sharded_over_provisioned_grid(device, grid_x):
+    shape = [1, 1, 64, 90]
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, 1))
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet({core_range}), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch_input = torch.rand(shape).bfloat16()
+    sharded = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert torch.equal(ttnn.to_torch(sharded), torch_input), "test setup: sharded tensor must round-trip"
+
+    output = ttnn.sharded_to_interleaved(sharded, ttnn.DRAM_MEMORY_CONFIG)
+
+    assert list(output.padded_shape) == shape
+    assert torch.equal(ttnn.to_torch(output), torch_input)
