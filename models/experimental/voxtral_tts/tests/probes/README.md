@@ -36,6 +36,7 @@ in §6.41/§6.43). A probe in `/tmp` cannot be re-run by whoever inherits this.
 | `traced_cost.py` / `traced_ops.py` | what does an op cost INSIDE the trace? | the one that decides: concat 2.6 µs, rms_norm 63.5, heads 6.2, sdpa 22.4 (§6.67, §6.68) |
 | `norm_traced.py` | is the sharded norm faster once traced? | **yes, +5.4 ms/frame** — reverses §6.39/§6.40 (§6.67) |
 | `trace_probe.py` | is the ~68 µs per-op floor device time or host dispatch? | dispatch is **2.8–3.9%**, not 0% and not the ~100 µs others assumed (§6.49) |
+| `seq_len_limits.py` | how long a prompt, how long an utterance, and what does length cost? | prefill has **no ceiling** (clean to 4096; the "~1024" claim was never measured); utterance length is `max_seq_len`, and it costs DRAM, not RTF (§6.69) |
 
 **Read `frame_ab.py` before trusting any block A/B.** A tight loop measures device time with
 dispatch overlapped; the real loop drains at 10 host crossings per frame and can absorb a device
@@ -52,3 +53,9 @@ which STATUS §2 records as breaking `transformers` and taking `score_quality_se
 `trace_probe.py` opens the device with `trace_region_size`, which shifts the allocator enough to
 move a free-running trajectory (`95dc26363f`). It therefore only ever **times**; it never
 generates audio, and its numbers are not comparable to a run opened without the region.
+
+**Idle the box before timing anything here.** A traced frame still does real host work every frame
+(embed lookup, host↔device copies, argmax, FSQ quantize), so CPU contention inflates every frame
+*uniformly and independently of position* — which looks exactly like a hardware effect. §6.69 got
+43 ms/frame instead of 27.7 and had a thermal-droop write-up half drafted before finding the cause
+was a stray `find /` in another shell.
