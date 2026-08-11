@@ -71,6 +71,8 @@ public:
 
     uint32_t prefetch_d_buffer_pages() const;
 
+    uint32_t dispatch_s_buffer_base(uint8_t cq_id) const;
+
     uint32_t dispatch_s_buffer_size() const;
 
     uint32_t dispatch_s_buffer_pages() const;
@@ -112,6 +114,7 @@ private:
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;
     uint32_t dispatch_s_device_print_l1_cache_size_ = 0;
+    uint32_t dispatch_s_buffer_base_ = 0;
     uint32_t dispatch_s_buffer_end_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;

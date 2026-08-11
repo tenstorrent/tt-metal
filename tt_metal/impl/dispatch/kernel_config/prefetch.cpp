@@ -145,21 +145,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         dependent_config_.upstream_cb_sem_id = 0;
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 
-        uint32_t dispatch_s_buffer_base = 0xff;
-        if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
-                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
-                dispatch_s_buffer_base =
-                    dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.dispatch_buffer_pages();
-            } else {
-                // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-                dispatch_s_buffer_base = dispatch_buffer_base;
-            }
-        }
-        static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
+        static_config_.dispatch_s_buffer_base = get_dispatch_query_manager_ref().dispatch_s_enabled()
+                                                    ? my_dispatch_constants.dispatch_s_buffer_base(cq_id_)
+                                                    : 0xff;
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
         static_config_.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
@@ -239,21 +227,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 
-        uint32_t dispatch_s_buffer_base = 0xff;
-        {  // Just to make it match previous implementation
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
-                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
-                dispatch_s_buffer_base =
-                    dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.dispatch_buffer_pages();
-            } else {
-                // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-                dispatch_s_buffer_base = dispatch_buffer_base;
-            }
-        }
-        static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
+        // Unlike the PREFETCH_HD case above, this is set unconditionally, even when dispatch_s is disabled.
+        static_config_.dispatch_s_buffer_base = my_dispatch_constants.dispatch_s_buffer_base(cq_id_);
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
         static_config_.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
