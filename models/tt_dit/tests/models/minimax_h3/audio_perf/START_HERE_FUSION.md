@@ -232,6 +232,41 @@ exposed in Python. Three routes were worked through and each reintroduces the sa
 3. **Interleave to full length and run one stride-2 conv.** Also removes a conv, also needs an
    interleave concat plus a replicate pad, so the concat count does not move.
 
+### Merging the paired convs: measured, and it is a wash (2026-08-11)
+
+The C<=32 gate is gone, so this is now possible. It is still not worth doing, and the two
+measurements that decide it are worth keeping.
+
+**One conv at 2C really is cheaper than two at C** (`band_wide_conv_cost.py`) -- the row effect from
+`row_cost.py` holds, and it is dramatic at the tail:
+
+    shape             2 convs @C   1 conv @2C   ratio
+    C=32  M=41403         4.28 ms      3.85 ms   0.90
+    C=16  M=82806         2.36 ms      1.98 ms   0.84
+    C=8   M=165606        4.98 ms      2.61 ms   0.52
+
+**But folding the halves back to C costs about the same** (`band_reduce_cost.py`):
+
+    shape             sum(dim=2)   slice+add
+    C=32  M=41403         4.49 ms     0.95 ms
+    C=16  M=82806         8.99 ms     1.72 ms
+    C=8   M=165606       18.01 ms     3.79 ms
+
+`ttnn.sum` over a reshaped dim is not an option -- it tilizes. With `slice+add`, the tally at C=8 is
+save 2.37 ms on the upsample pair and 2.37 ms on the downsample pair, pay ~1.2 ms to duplicate x_pad
+to 2C and 3.79 ms to reduce: **net -0.25 ms**. At C=32 it is worse (save 0.86, pay ~1.4).
+
+The reason generalises, and is the rule to carry forward: **removing a full-tensor pass wins; trading
+one full-tensor pass for another does not.** Folding the snake into the conv won 1.19x because it
+deleted a pass outright. Merging convs only saves the ~180 us per-op floor plus the row effect, and
+then spends it again on a duplicate and a reduce.
+
+The one route that could tip it is a grouped conv with a **channel multiplier** -- `in_channels=C,
+out_channels=2C, groups=C` gives both polyphase outputs from one pass with no duplicate, which by the
+tally above would be about +2 ms per band at C=8. It needs the depthwise path to accept out != in, and
+`grouped-conv branch batching` is already in the dead-ends list (0.94-1.11x, lossy at C>=64), so treat
+it as unproven rather than promising.
+
 ### What actually unblocks this
 
 * **The C<=32 gate, first.** Merging the two *upsample* convs the same way needs 2C channels, which at
