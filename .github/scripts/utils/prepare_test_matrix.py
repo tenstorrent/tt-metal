@@ -286,8 +286,10 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
-            # Exabox multihost SKUs: either legacy `allocation` (ttop lifecycle) or the
-            # multihost-ci runner labels (helm chart provisions workers via container.image).
+            # Exabox multihost SKUs: runs_on contains an exabox-multihost* label
+            # (e.g. exabox-multihost-ci-sc4). The multihost-ci runner hook provisions
+            # workers from container.image. A legacy `allocation` block also marks
+            # multihost if present.
             runs_on = sku_entry.get("runs_on") or []
             entry["multihost"] = "allocation" in sku_entry or any(
                 isinstance(label, str) and "exabox-multihost" in label for label in runs_on

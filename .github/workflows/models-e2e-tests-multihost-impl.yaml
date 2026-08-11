@@ -1,11 +1,11 @@
 name: "[internal] Models end-to-end tests multihost (exabox) impl"
 
 # Multihost (exabox) e2e tests. Modeled on the multihost job in
-# demo-sp-multihost-impl.yaml: each leg runs on an exabox-multihost-ci runner with
-# container.image for worker provisioning, fans the build/wheel out with
+# demo-sp-multihost-impl.yaml: each leg runs on an exabox-multihost-ci-* runner with
+# container.image for worker provisioning (runner hook), fans the build/wheel out with
 # `mpirun --pernode`, resets + validates the cluster, then runs the test.
 # Legs are selected by SKU: an entry lands here when prepare_test_matrix.py
-# marks it "multihost": true (exabox-multihost* runs_on and/or allocation block).
+# marks it "multihost": true (SKU runs_on contains an exabox-multihost* label).
 #
 # Split out of models-e2e-tests-impl.yaml so the exabox lifecycle lives in one file.
 # The matrix is computed by load-test-matrix in models-e2e-tests-impl.yaml
@@ -28,8 +28,8 @@ on:
         type: string
         description: "JSON array of exabox multihost legs (models-e2e-tests-impl.yaml matrix_multihost output)."
 
-# ttop cluster auth needs OIDC. Callers must grant id-token: write on the job that `uses` this
-# workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
+# Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
+# `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
 permissions:
   contents: read
   id-token: write

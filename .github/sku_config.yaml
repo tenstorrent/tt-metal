@@ -3,15 +3,13 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+#     Exabox multihost SKUs use dedicated labels (exabox-multihost-ci-sc1 / -sc1-hp /
+#     -sc4 / -sc16). Workers are provisioned by the multihost-ci runner hook from the
+#     job's container.image — there is no ttop allocation block on these SKUs.
 #   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
 #     merge_group. Logical test-list SKUs should set this instead of listing prio
 #     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
-#   allocation: (Optional) Configuration for TTOP allocation
-#     type: "Count" or "MGD"
-#     count: Number of nodes (for Count type)
-#     match_labels: Dictionary of Kubernetes labels
-#     topology_keys: List of topology keys (for MGD type)
-#   mgd: (Optional) MGD configuration text for runtime topology
+#   weights-cache-mode: (Optional) How model weights are mounted for the SKU.
 skus:
   wh_llmbox:
     runs_on:
@@ -185,8 +183,8 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc1
 
-  # Like bh_sc1, but restricts the single-galaxy allocation to nodes labelled
-  # exabox.tenstorrent.com/power=14kw.
+  # Like bh_sc1, but routes to the high-power single-galaxy multihost-ci pool
+  # (exabox-multihost-ci-sc1-hp / nodes labelled exabox.tenstorrent.com/power=14kw).
   bh_sc1_high_power:
     runs_on:
       - exabox-multihost-ci-sc1-hp

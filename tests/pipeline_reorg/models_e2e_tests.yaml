@@ -961,10 +961,7 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
 
-# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4) ───────────────────
-# Same automapper pattern as demo_sp_multihost SC4: --mesh-graph-descriptor + --hosts
-# from /etc/ttop/hostfile. Launch from empty NFS cwd ($PIPELINE_DIR/ttrun-cwd).
-# 32x4 torus MGD matches bh_4x32 / 4x32sp* WAN topologies.
+# ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |

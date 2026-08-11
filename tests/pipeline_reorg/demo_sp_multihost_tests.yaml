@@ -1,5 +1,6 @@
 # This file defines the test matrix for multihost pipeline tests.
-# These tests run on exabox multihost infrastructure with allocation/reset lifecycle.
+# These tests run on exabox-multihost-ci-* runners; workers are provisioned by the
+# runner hook from container.image (not a ttop allocation lifecycle).
 
 # Each entry represents a test with the following keys:
 #   name: The display name for the test in GitHub Actions.

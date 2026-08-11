@@ -96,8 +96,8 @@ jobs:
               | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
           # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
-          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
-          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
+          # tagged with "multihost": true by prepare_test_matrix.py when the SKU runs_on
+          # includes an exabox-multihost* label (e.g. exabox-multihost-ci-sc4).
           SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
           MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
           emit() {  # $1 = output name, $2 = compact JSON array
@@ -218,12 +218,12 @@ jobs:
   # Multihost (exabox) model-unit tests. Extracted into its own reusable workflow so the exabox
   # lifecycle lives in one file (candidate to de-dup against demo-sp / models-e2e multihost impls)
   # without touching the single-host pipeline. Legs are selected by SKU: an entry is routed here
-  # when prepare_test_matrix.py marks it "multihost": true (exabox-multihost* runs_on and/or
-  # allocation block) and load-test-matrix collects into matrix_multihost.
+  # when prepare_test_matrix.py marks it "multihost": true (SKU runs_on contains an
+  # exabox-multihost* label) and load-test-matrix collects into matrix_multihost.
   models-unit-tests-multihost:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
-    # OIDC may still be needed by the runner chart; grant it here rather than workflow-wide.
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than workflow-wide.
     # Job-level permissions replace inherited defaults, so restate reads too.
     permissions:
       contents: read
