@@ -33,13 +33,19 @@ little. No commitment to "incremental."
 
 1. **Warm-incremental CaDiCaL** (seed-diverse, clause-sharing) — one solver, blocking clauses added, learned clauses
    shared. Cheap for near solutions.
-2. **Cold-restart CaDiCaL** (fresh solver + re-encode + replay all blocks each solution) — wins when solutions are far
-   apart (Story 3). Reuses `TT_TOPO_SAT_ENUM_FROMSCRATCH` machinery.
-3. **Phase-hint exploit CaDiCaL** — warm-started (`phase()` / `phase_hint_from_last_gimsatul_model`) from the latest
+2. **Phase-hint exploit CaDiCaL** — warm-started (`phase()` / `phase_hint_from_last_gimsatul_model`) from the latest
    found model → lands on nearby-distinct solutions fast (the cheap near tail).
-4. **Diverse-explore CaDiCaL** (diverse seeds, NO hint) — hunts the rare far-tail solutions.
-5. **gimsatul cold** (Phase 2) — 32-thread, DIMACS round-trip with the current blocks appended; cracks #1 and rare
+3. **Diverse-explore CaDiCaL** (diverse seeds, NO hint) — hunts the rare far-tail solutions.
+4. **gimsatul cold** (Phase 2) — 32-thread, DIMACS round-trip with the current blocks appended; cracks #1 and rare
    hard solutions its cold power finds fast.
+
+**NOT cold-restart from-scratch.** Story 3 showed from-scratch beating a *single* incremental solver at 64/80 stages,
+but only because incremental's *saved phases* point at the just-blocked region and a lone warm solver stalls. Cold
+restart buys a fresh search direction at the price of discarding all **learned clauses** (the expensive knowledge). In a
+portfolio that trade is never worth it: the same "fresh direction" comes for free from (a) diverse-seed workers each
+phase-biased toward a *different* found solution, and (b) **phase-reset on a warm worker** (drop the misleading saved
+phases, KEEP the learned-clause DB + formula — no re-encode). Both dominate cold-restart. Keep the *capability* "unstick
+a stalled worker" as phase-reset-keep-clauses; drop full re-encode/replay.
 
 ## 3. Shared channels (how info moves, and how gimsatul helps CaDiCaL)
 
@@ -54,11 +60,13 @@ little. No commitment to "incremental."
   DON'T hint all workers: hints help the near tail but hurt the far tail (bias at the just-blocked region) → keep
   explore workers un-hinted for diversity.
 
-## 4. The "cold + warm race" (the ask), concretely
+## 4. The race (the ask), concretely
 
-Run warm-incremental AND cold-restart workers **at the same time** on the same frontier. Whoever finds the next distinct
+Run diverse workers **at the same time** on the same frontier: warm-incremental, phase-hint-exploit (biased toward the
+latest solution), and diverse-explore (fresh seeds, and phase-reset when stalled). Whoever finds the next distinct
 solution publishes its block; all advance. This resolves Story 3's no-universal-winner **automatically per instance** —
-no regime detection needed. Same principle extends to gimsatul-vs-CaDiCaL for #1 and the hard tail.
+the "fresh direction" from-scratch used to provide comes from diversity + phase-reset while KEEPING learned clauses, so
+no full cold restart is needed. Same principle extends to gimsatul-vs-CaDiCaL for #1 and the hard tail.
 
 ## 5. Correctness invariants
 
@@ -75,9 +83,9 @@ no regime detection needed. Same principle extends to gimsatul-vs-CaDiCaL for #1
   `intermesh-solve`/`Solver running Ns` heartbeats live) through the portfolio. Today the collaborative enum only
   catches `search_n` leaf sub-solves; nothing hits the real bottleneck until this is done.
 - **Phase 1 — CaDiCaL adaptive portfolio (80/20, all native, low risk).** Heterogeneous CaDiCaL workers: warm-incr +
-  cold-restart + phase-hint-exploit + diverse-explore, sharing blocking + learned clauses on the shared frontier.
-  Reuses `clause-sharing-enum` (pool + collaborative loop) + `TT_TOPO_SAT_ENUM_FROMSCRATCH` + `phase()`. Captures the
-  fast #1 (~9×) + warm/cold-raced tail. **Build this first.**
+  phase-hint-exploit + diverse-explore (+ phase-reset to unstick), sharing blocking + learned clauses on the shared
+  frontier. Reuses `clause-sharing-enum` (pool + collaborative loop) + `phase()`/`unphase()`. Captures the fast #1
+  (~9×) + diverse-raced tail, never discarding learned clauses. **Build this first.**
 - **Phase 2 — gimsatul producer.** Add gimsatul cold worker(s) to the same pool (reuse `gimsatul_solve` DIMACS
   round-trip from `exp-clause-sharing-portfolio`, extend dump to append current blocks). Models → phase hints
   (Channel 2). gimsatul takes #1 + hard rare solutions; CaDiCaL sweeps the cheap ones.
