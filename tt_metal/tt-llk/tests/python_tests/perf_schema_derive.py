@@ -53,7 +53,7 @@ def iter_source_files(include_quasar: bool = True):
 def load_pure_module(module_filename: str):
     """Load a device-free helpers module directly by path.
 
-    perf_schema.py / perf_test_schemas.py hold no device imports, so loading them
+    schema.py / test_schemas.py hold no device imports, so loading them
     by path bypasses the helpers package __init__ (which pulls ttexalens) and
     keeps the gate runnable without hardware.
     """

@@ -89,7 +89,7 @@ def test_run_type_names_match_source():
     live = enum_member_names("llk_params.py", "PerfRunType")
     assert live == set(ps.RUN_TYPE_NAMES), (
         f"PerfRunType members {sorted(live)} drifted from "
-        f"perf_schema.RUN_TYPE_NAMES {sorted(ps.RUN_TYPE_NAMES)}. Update the "
+        f"helpers/perf/schema.py RUN_TYPE_NAMES {sorted(ps.RUN_TYPE_NAMES)}. Update the "
         f"catalog: a run-type name prefixes every metric/counter header."
     )
 
@@ -114,7 +114,7 @@ def test_metric_bases_match_source():
     assert live == set(ps.METRIC_BASES), (
         f"Efficiency metric names drifted. In source but not catalog: "
         f"{sorted(live - set(ps.METRIC_BASES))}; in catalog but not source: "
-        f"{sorted(set(ps.METRIC_BASES) - live)}. Update perf_schema.METRIC_BASES."
+        f"{sorted(set(ps.METRIC_BASES) - live)}. Update helpers/perf/schema.py METRIC_BASES."
     )
 
 

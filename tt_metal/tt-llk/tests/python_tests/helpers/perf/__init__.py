@@ -2,4 +2,4 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLK performance helpers (report, schema, wide_schema, parquet, test_schemas)."""
+"""LLK performance helpers (core, schema, wide_schema, parquet, test_schemas)."""

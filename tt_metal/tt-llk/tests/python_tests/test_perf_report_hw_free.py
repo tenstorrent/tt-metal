@@ -5,7 +5,7 @@
 """Hardware-free test of PerfConfig report generation (#51244).
 
 Runs the real report code with no chip and checks the produced columns against
-perf_wide_schema.OUTPUT_SCHEMA. Two levels:
+helpers.perf.wide_schema.OUTPUT_SCHEMA. Two levels:
   - build_report_frame directly, with synthetic per-run-type stat frames;
   - the full PerfConfig.run(), with the device/build seams stubbed and
     Profiler.get_data returning synthetic events (so the real stat aggregation
@@ -81,7 +81,7 @@ def test_report_columns_conform_to_output_schema():
     # Every produced column must be a known output-schema column.
     unknown = sorted(set(combined.columns) - _SCHEMA_NAMES - DROPPED_COLUMNS)
     assert not unknown, (
-        f"PerfConfig produced columns not in perf_wide_schema.OUTPUT_SCHEMA: "
+        f"PerfConfig produced columns not in helpers.perf.wide_schema.OUTPUT_SCHEMA: "
         f"{unknown}. Either the report changed (add them to OUTPUT_SCHEMA as "
         f"nullable) or a column is malformed."
     )

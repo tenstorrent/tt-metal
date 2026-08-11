@@ -5,7 +5,7 @@
 """Parquet output for LLK performance reports
 
 Publishes a run's per-test reports as one immutable, typed Parquet batch whose
-physical schema is the shared wide schema (perf_wide_schema.DB_SCHEMA).
+physical schema is the shared wide schema (wide_schema.DB_SCHEMA).
 
 Data flow
 ---------
@@ -264,7 +264,7 @@ def convert_csvs_to_parquet(
         name = _test_name_from_csv(path)
         df = pd.read_csv(path)
         # Drop columns the published table intentionally omits (see
-        # perf_wide_schema.DROPPED_COLUMNS), before the unknown-column check so
+        # wide_schema.DROPPED_COLUMNS), before the unknown-column check so
         # they are not flagged as accidental drift.
         df = df.drop(columns=[c for c in DROPPED_COLUMNS if c in df.columns])
         unknown = sorted(set(df.columns) - set(schema_by_name))
